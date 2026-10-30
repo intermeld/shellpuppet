@@ -256,14 +256,28 @@ export class SessionProgramEndedError extends Error {
  *
  * Resolving up front turns both into an immediate, actionable error.
  *
- * On Windows the file found must also be a program Windows starts as one: an
- * `.exe` or a `.com`. Windows hands a batch file (`.bat`, `.cmd`) to cmd.exe
- * on its own, with the arguments quoted for a program's parser, which cmd
- * reads by different rules; anything else, such as a `.ps1` or an
- * extensionless script, fails with error 193 once node-pty has built the
- * terminal. Such a start is refused here, before either happens.
+ * On Windows the file found must be a program Windows starts as one: an
+ * `.exe` or a `.com`. A batch file (`.bat`, `.cmd`) is refused, because
+ * Windows would hand it to cmd.exe with the arguments quoted for a program's
+ * parser, which cmd reads by different rules. A `.ps1` or an extensionless
+ * script is refused too. A path whose file name contains `:` names an
+ * alternate data stream and is refused before anything is opened. A command
+ * that contains a path separator and is not absolute is resolved from the
+ * session's working directory, and that absolute path is what is checked and
+ * what is started.
  */
-function resolveExecutable(command: string, platform: NodeJS.Platform): string {
+
+/**
+ * Whether a Windows path's file name names an alternate data stream.
+ * The last path component holds the stream (`run.cmd:payload.exe`). A drive
+ * prefix (`C:`) is never in that component, so `C:\dir\app.exe` and the
+ * drive-relative `C:app.exe` are false. Strings only: nothing is opened.
+ */
+export function windowsCandidateNamesStream(candidate: string): boolean {
+  return path.win32.basename(candidate).includes(':');
+}
+
+function resolveExecutable(command: string, platform: NodeJS.Platform, cwd: string): string {
   const isWindows = platform === 'win32';
 
   const usable = (candidate: string): boolean => {
@@ -292,20 +306,39 @@ function resolveExecutable(command: string, platform: NodeJS.Platform): string {
   };
 
   const explicitPath = /[\\/]/.test(command) || (isWindows && /^[a-z]:/i.test(command));
+  // A relative command that names a path is taken from the session's cwd, so
+  // the file checked is the file started. A drive-relative command (`D:app.exe`,
+  // `D:dir\app.exe`) keeps its drive and is not rewritten. A bare name is found
+  // on PATH.
+  const rooted =
+    /[\\/]/.test(command) && !path.isAbsolute(command) && !(isWindows && /^[a-z]:/i.test(command))
+      ? path.resolve(cwd, command)
+      : command;
   const searchBases = explicitPath
-    ? [command]
+    ? [rooted]
     : (process.env['PATH'] ?? '')
         .split(path.delimiter)
         .filter((d) => d !== '')
         .map((dir) => path.join(dir, command));
 
+  const described = (candidate: string): string =>
+    candidate === command ? command : `${command} (${candidate})`;
+
   for (const base of searchBases) {
     for (const candidate of candidatesFor(base)) {
+      // Before the file is opened: a stream's stat would succeed and report
+      // a file, and a name ending in `.exe` would then pass the suffix check.
+      if (isWindows && windowsCandidateNamesStream(candidate)) {
+        throw new CommandNotFoundError(
+          `Not a program Windows can start directly: ${described(candidate)}. ` +
+            `With shell:false (--no-shell) a path whose file name contains ':' names an ` +
+            `alternate data stream, and that is refused. The command must be an .exe or .com file.`,
+        );
+      }
       if (!usable(candidate)) continue;
       if (isWindows && !/\.(exe|com)$/i.test(candidate)) {
-        const named = candidate === command ? command : `${command} (${candidate})`;
         throw new CommandNotFoundError(
-          `Not a program Windows can start directly: ${named}. With shell:false (--no-shell) ` +
+          `Not a program Windows can start directly: ${described(candidate)}. With shell:false (--no-shell) ` +
             `the command must be an .exe or .com file. Drop shell:false to run it through the ` +
             `shell, or give its interpreter as the command and the file as an argument.`,
         );
@@ -314,9 +347,10 @@ function resolveExecutable(command: string, platform: NodeJS.Platform): string {
     }
   }
 
+  const shown = rooted === command ? command : `${command} (${rooted})`;
   throw new CommandNotFoundError(
     explicitPath
-      ? `Not an executable file: ${command}.`
+      ? `Not an executable file: ${shown}.`
       : `Command not found on PATH: ${command}. Give an absolute path, or drop ` +
         `shell:false (--no-shell) and let the shell wrapper resolve it.`,
   );
@@ -745,7 +779,12 @@ export class Session implements WaitTarget {
     const wantShell = options.shell ?? this.platform === 'win32';
     if (!wantShell) {
       return {
-        file: resolveExecutable(options.command, this.platform),
+        // The same absolute path is checked and started. See `shell` on SessionOptions.
+        file: resolveExecutable(
+          options.command,
+          this.platform,
+          path.resolve(options.cwd ?? process.cwd()),
+        ),
         fileArgs: options.args ?? [],
       };
     }

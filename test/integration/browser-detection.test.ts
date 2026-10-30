@@ -27,13 +27,31 @@ vi.mock('chrome-launcher', () => ({
 
 describe('browser detection at daemon start', () => {
   it('leaves the daemon answering /health while it runs', async () => {
+    // The well-known paths are cleared so detection cannot return an installed
+    // Chrome before any lookup. Were they left in place, a lookup that had
+    // moved into this process would not be reached, and `lookup.calls` would
+    // stay 0 either way. On Windows the daemon's own detection runs no lookup
+    // at all, because that list is chrome-launcher's whole search; what this
+    // case pins is that `/health` keeps being answered and that this process
+    // never calls the mocked module. A lookup that does run is a child
+    // process, which `browserDetection.test.ts` pins.
+    const names = [
+      'LOCALAPPDATA',
+      'PROGRAMFILES',
+      'PROGRAMFILES(X86)',
+      'CHROME_PATH',
+      'LIGHTHOUSE_CHROMIUM_PATH',
+    ] as const;
+    const saved = Object.fromEntries(names.map((name) => [name, process.env[name]]));
+    for (const name of names) delete process.env[name];
     resetBrowserCache();
     // The test and an in-process daemon share one event loop, so a gap
     // between two answers is time the daemon could not answer in. The gaps
     // are measured from before the start, so a hold anywhere shows.
     const answered = [Date.now()];
-    const td = await startTestDaemon({ viewer: { launchMode: 'isolated-app' } });
+    let td: Awaited<ReturnType<typeof startTestDaemon>> | undefined;
     try {
+      td = await startTestDaemon({ viewer: { launchMode: 'isolated-app' } });
       while (Date.now() - answered[0]! < 5_000) {
         const response = await fetch(`http://127.0.0.1:${String(td.port)}/health`, {
           signal: AbortSignal.timeout(10_000),
@@ -49,7 +67,12 @@ describe('browser detection at daemon start', () => {
       await findBrowser();
       expect(lookup.calls).toBe(0);
     } finally {
-      await td.stop();
+      for (const name of names) {
+        if (saved[name] === undefined) delete process.env[name];
+        else process.env[name] = saved[name];
+      }
+      resetBrowserCache();
+      await td?.stop();
     }
   }, 30_000);
 });

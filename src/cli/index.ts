@@ -52,7 +52,9 @@ Usage:
       a known width.
       --purpose says what the session is FOR; it titles the viewer window.
       --no-shell starts the command without a shell; on Windows it must then
-      be an .exe or .com, so start a script through the shell.
+      be an .exe or .com, so start a script through the shell. A command with
+      a path separator is resolved from the session's working directory, and
+      a file name containing ':' is refused as an alternate data stream.
       Options go BEFORE the command; everything after the command is passed
       to it verbatim (so its own --flags survive).
   shellpuppet list                                  List sessions

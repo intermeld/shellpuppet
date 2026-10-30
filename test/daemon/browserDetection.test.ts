@@ -17,8 +17,9 @@ import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import { Launcher } from 'chrome-launcher';
-import { detectBrowser, wellKnownChromePaths } from '../../src/daemon/viewerLauncher.js';
+import { defaultBrowserDetection, detectBrowser, wellKnownChromePaths } from '../../src/daemon/viewerLauncher.js';
 import type { BrowserDetection } from '../../src/daemon/viewerLauncher.js';
+import type { Logger } from '../../src/core/types.js';
 
 const fixture = path.join(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -138,6 +139,44 @@ describe('detectBrowser', () => {
       ),
     ).toBeNull();
   });
+
+  it('logs a failed lookup once, and does not log a lookup that finds nothing', async () => {
+    const warnings: string[] = [];
+    const logger: Logger = {
+      debug: () => undefined,
+      info: () => undefined,
+      warn: (message) => {
+        warnings.push(message);
+      },
+      error: () => undefined,
+    };
+    const failed = await detectBrowser(
+      detection({
+        wellKnown: [missing],
+        lookupModule: lookup('hang'),
+        lookupTimeoutMs: 400,
+        extra: [],
+      }),
+      logger,
+    );
+    expect(failed).toBeNull();
+    expect(warnings).toEqual(['browser lookup failed']);
+
+    warnings.length = 0;
+    const empty = await detectBrowser(
+      detection({ wellKnown: [missing], lookupModule: lookup('empty'), extra: [] }),
+      logger,
+    );
+    expect(empty).toBeNull();
+    expect(warnings).toEqual([]);
+  });
+
+  it.runIf(process.platform === 'win32')(
+    'does not run a child lookup on Windows, where the well-known list is the whole search',
+    () => {
+      expect(defaultBrowserDetection().lookupModule).toBe('');
+    },
+  );
 });
 
 describe('wellKnownChromePaths', () => {
