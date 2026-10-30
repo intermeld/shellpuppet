@@ -5,7 +5,9 @@
  * - The catch-all 500 says daemon.log records the error. The daemon's file
  *   logger is wired here as `src/daemon/index.ts` wires it, a request is made
  *   to fail inside `handleRequest`, and daemon.log is read at the moment the
- *   response is ended: the error line must already be there.
+ *   response is ended: the error line must already be there. The line holds
+ *   the error's stack, the request's method and its path, and nothing from
+ *   the query, the headers or the body, any of which can carry a credential.
  * - A value flag given no value is refused by the CLI parser before any
  *   daemon contact, with exit code 2.
  */
@@ -25,6 +27,8 @@ const execFileAsync = promisify(execFile);
 const cliEntry = path.join(repoRoot, 'dist', 'cli', 'index.js');
 const BODY =
   'The daemon hit an unexpected error handling this request. Its daemon.log records the error.';
+/** The stack of the probe's error: its message, then the frames under it. */
+const STACK_OF_PROBE = /^Error: probe failure\n\s+at /;
 
 type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
 
@@ -89,7 +93,7 @@ describe('the catch-all 500 and daemon.log', () => {
     const entry = lines.find((line) => line.message === 'unhandled request error');
     expect(entry).toBeDefined();
     expect(entry?.level).toBe('error');
-    expect(entry?.meta?.error).toBe('Error: probe failure');
+    expect(entry?.meta?.error).toMatch(STACK_OF_PROBE);
 
     // What a CLI user sees: the body, under the status, and exit code 1.
     const listed = await runCli(home, 'list');
@@ -98,6 +102,57 @@ describe('the catch-all 500 and daemon.log', () => {
     // The CLI reached this daemon; nothing else took the state file over.
     expect(readDaemonState(home)?.pid).toBe(process.pid);
     expect(fs.readFileSync(logPath, 'utf8')).not.toContain('deferring');
+  }, 60_000);
+});
+
+describe('the catch-all 500 log line', () => {
+  it('names the method and the path, and leaves out the query, the headers and the body', async () => {
+    const home = makeTempHome('daemon-500-path-');
+    homes.push(home);
+    const logPath = daemonLogPath(home);
+    const daemon = new Daemon({ home, logger: createFileLogger(logPath) });
+    daemons.push(daemon);
+    const { port, token } = await daemon.start();
+
+    // Fail /sessions from inside handleRequest, after reading the body when
+    // there is one, so that the body was in hand when the error was logged.
+    const target = daemon as unknown as { handleRequest: Handler };
+    const original = target.handleRequest.bind(daemon);
+    target.handleRequest = async (req, res) => {
+      const pathname = new URL(req.url ?? '/', 'http://127.0.0.1').pathname;
+      if (pathname !== '/sessions') return original(req, res);
+      for await (const chunk of req) void chunk;
+      throw new Error('probe failure');
+    };
+
+    const asked = await fetch(`http://127.0.0.1:${String(port)}/sessions?vt=query-secret&token=query-token`, {
+      headers: { authorization: `Bearer ${token}`, 'x-probe': 'header-secret' },
+    });
+    expect(asked.status).toBe(500);
+    const posted = await fetch(`http://127.0.0.1:${String(port)}/sessions`, {
+      method: 'POST',
+      headers: { authorization: `Bearer ${token}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ command: 'body-secret' }),
+    });
+    expect(posted.status).toBe(500);
+
+    const log = fs.readFileSync(logPath, 'utf8');
+    const entries = log
+      .split('\n')
+      .filter((line) => line !== '')
+      .map((line) => JSON.parse(line) as { message: string; meta?: Record<string, unknown> })
+      .filter((line) => line.message === 'unhandled request error');
+    expect(entries.map((line) => [line.meta?.['method'], line.meta?.['path']])).toEqual([
+      ['GET', '/sessions'],
+      ['POST', '/sessions'],
+    ]);
+    for (const line of entries) {
+      expect(line.meta?.['error']).toMatch(STACK_OF_PROBE);
+      expect(Object.keys(line.meta ?? {}).sort()).toEqual(['error', 'method', 'path']);
+    }
+    for (const secret of ['query-secret', 'query-token', 'header-secret', 'body-secret', token]) {
+      expect(log).not.toContain(secret);
+    }
   }, 60_000);
 });
 

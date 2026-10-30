@@ -13,6 +13,10 @@ version may change behaviour, and every such change is listed here.
   the top level, read by both `terminal_start`'s `envNames` and `shellpuppet
   start --env-name`. A config that still uses `mcp.passEnv` passes nothing and
   is reported.
+- When the daemon answers a request with its catch-all 500, the line it
+  writes to `daemon.log` holds the error's stack and the request's method and
+  path. The query, the headers and the body are left out: a query can carry a
+  viewer grant, and a header the client token.
 
 ### Fixed
 

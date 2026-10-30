@@ -238,6 +238,15 @@ export class AlreadyRunningError extends Error {
 
 type JsonBody = Record<string, unknown>;
 
+/**
+ * A request target without its query or fragment, for a log line. Split
+ * rather than parsed: a target `new URL` refuses must still be logged, and
+ * never throw inside the error handler.
+ */
+function pathOnly(target: string | undefined): string {
+  return (target ?? '').split(/[?#]/, 1)[0] ?? '';
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
@@ -491,7 +500,14 @@ export class Daemon {
     });
     this.server = http.createServer((req, res) => {
       this.handleRequest(req, res).catch((error: unknown) => {
-        this.logger.error('unhandled request error', { error: String(error) });
+        // What a person needs to find the fault: the stack, and which request
+        // met it by method and path. Never the query, the headers or the
+        // body: a query can carry a viewer grant, a header the client token.
+        this.logger.error('unhandled request error', {
+          method: req.method,
+          path: pathOnly(req.url),
+          error: error instanceof Error ? (error.stack ?? String(error)) : String(error),
+        });
         if (!res.headersSent) json(res, 500, { error: 'The daemon hit an unexpected error handling this request. Its daemon.log records the error.' });
       });
     });
