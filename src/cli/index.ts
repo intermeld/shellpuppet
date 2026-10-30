@@ -36,6 +36,8 @@ Usage:
       --env-name <NAME> (repeatable) --no-viewer
       --no-viewer opens no viewer window, for a short scripted session nobody
       needs to watch; viewer-url still gives a link to it.
+      --cwd sets the folder the session starts in; it defaults to THIS shell's
+      working directory, and a relative --cwd is taken from there.
       A session that runs as an agent CLI receives, from THIS shell's
       environment, the variables listed for that agent in agents.passEnv in
       config.json, with no flag. --env-name copies another variable, for a
@@ -287,7 +289,9 @@ async function main(): Promise<void> {
         ...(parsed.flags.has('agent') ? { agent: String(parsed.flags.get('agent')) } : {}),
         ...(intFlag(parsed, 'cols') !== undefined ? { cols: intFlag(parsed, 'cols') } : {}),
         ...(intFlag(parsed, 'rows') !== undefined ? { rows: intFlag(parsed, 'rows') } : {}),
-        ...(parsed.flags.has('cwd') ? { cwd: String(parsed.flags.get('cwd')) } : {}),
+        // This shell's working directory, or --cwd taken from it: the daemon
+        // runs elsewhere, so a folder is always sent, and always absolute.
+        cwd: resolve(parsed.flags.has('cwd') ? String(parsed.flags.get('cwd')) : '.'),
         ...(parsed.flags.has('ready-text')
           ? { readyText: String(parsed.flags.get('ready-text')) }
           : {}),

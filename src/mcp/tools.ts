@@ -212,7 +212,7 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
       inputSchema: params({
         command: z.string().describe('The program to run: the real command, not a shell wrapper.'),
         args: z.array(z.string()).optional().describe('Arguments. Under the default shell wrap these are shell text, so quote as the shell requires.'),
-        cwd: z.string().optional().describe('Working directory (defaults to the daemon\'s).'),
+        cwd: z.string().optional().describe('Working directory. Defaults to this MCP server\'s working directory, normally the folder the agent was started in; a relative path is taken from there.'),
         cols: z.number().int().min(2).max(1000).optional().describe('Screen columns to START at (default 120). Not a freeze: a human watching in a browser reshapes the grid to their window. Pass hold to keep it.'),
         rows: z.number().int().min(2).max(500).optional().describe('Screen rows to START at (default 34).'),
         hold: z.boolean().optional().describe('Hold the grid against the human\'s viewer, so it never reflows. Use only for a run whose output you compare against a known width. The human\'s window then shows bars instead of filling.'),
@@ -225,8 +225,11 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
         envNames: z.array(z.string()).optional().describe('Names of variables to copy from THIS MCP server\'s environment into the session\'s, for a program that is not one of the agent CLIs and needs a key the session would not otherwise see. Only names on the human\'s envNames list in config.json are allowed; any other name refuses the start. A session that runs as an agent CLI needs no envNames: it receives the variables the human listed for that agent in agents.passEnv, and any name off that list refuses the start. A listed name that is not set here is reported and not passed. Values are never shown, logged or audited; names are.'),
       }),
     },
-    async ({ envNames, ...args }) =>
+    async ({ envNames, ...given }) =>
       run(async () => {
+        // This server's working directory, or `cwd` taken from it: the daemon
+        // runs elsewhere, so a folder is always sent, and always absolute.
+        const args = { ...given, cwd: resolvePath(given.cwd ?? '.') };
         let body: Body = args;
         const lists = options.readPassLists?.() ?? {
           envNames: options.envNames ?? [],
