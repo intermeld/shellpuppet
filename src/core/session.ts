@@ -199,7 +199,11 @@ export function bracketedPasteAfter(scan: string, current: boolean): boolean {
 /** One short of the longest mode sequence: enough to rejoin any split of one. */
 const MODE_SCAN_TAIL_CHARS = PASTE_MODE_ON.length - 1;
 
-/** A bare command name that is not on PATH: a caller error, mapped to 400. */
+/**
+ * A command that cannot be started as given: a bare name not on PATH, a path
+ * that is not an executable file, or on Windows a script started without the
+ * shell. A caller error, mapped to 400.
+ */
 export class CommandNotFoundError extends Error {
   constructor(message: string) {
     super(message);
@@ -235,6 +239,13 @@ export class SessionInputFailedError extends Error {
  *   arrive.
  *
  * Resolving up front turns both into an immediate, actionable error.
+ *
+ * On Windows the file found must also be a program Windows starts as one: an
+ * `.exe` or a `.com`. Windows hands a batch file (`.bat`, `.cmd`) to cmd.exe
+ * on its own, with the arguments quoted for a program's parser, which cmd
+ * reads by different rules; anything else, such as a `.ps1` or an
+ * extensionless script, fails with error 193 once node-pty has built the
+ * terminal. Such a start is refused here, before either happens.
  */
 function resolveExecutable(command: string, platform: NodeJS.Platform): string {
   const isWindows = platform === 'win32';
@@ -274,7 +285,16 @@ function resolveExecutable(command: string, platform: NodeJS.Platform): string {
 
   for (const base of searchBases) {
     for (const candidate of candidatesFor(base)) {
-      if (usable(candidate)) return candidate;
+      if (!usable(candidate)) continue;
+      if (isWindows && !/\.(exe|com)$/i.test(candidate)) {
+        const named = candidate === command ? command : `${command} (${candidate})`;
+        throw new CommandNotFoundError(
+          `Not a program Windows can start directly: ${named}. With shell:false (--no-shell) ` +
+            `the command must be an .exe or .com file. Drop shell:false to run it through the ` +
+            `shell, or give its interpreter as the command and the file as an argument.`,
+        );
+      }
+      return candidate;
     }
   }
 
