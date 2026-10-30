@@ -305,8 +305,8 @@ export const DEFAULT_ROWS = 34;
 export const DEFAULT_SCROLLBACK = 5000;
 
 /**
- * Wait timeout defaults (design §3.1): agent CLIs take 15 to 50 s to first paint
- * and emit nothing meanwhile, so the default is deliberately generous.
+ * Wait timeout defaults (design §3.1): some agent CLIs take tens of seconds to
+ * first paint and emit nothing meanwhile, so the default is deliberately generous.
  */
 export const DEFAULT_WAIT_TIMEOUT_MS = 60_000;
 export const MAX_WAIT_TIMEOUT_MS = 300_000;
