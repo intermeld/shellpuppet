@@ -13,19 +13,20 @@ so what it holds is decided by that one client, nondeterministically.
 A daemon auto-started by a client running under a secrets manager's wrapper
 holds that client's resolved secrets. If its whole environment were passed on,
 every later session, and every agent of every vendor driving one, could read
-them. `mcp.passEnv` would restrict nothing, because it governs only what a
-client adds. The operator has no sign of any of this.
+them. Config `envNames` would restrict nothing, because it governs only what
+a client adds. The operator has no sign of any of this.
 
 `sessionEnv` has three forms:
 - `"clean"`, a minimal functional set;
 - the list form, the clean set plus named variables;
 - `"passthrough"`, the daemon's whole environment.
 
-A session can also be given variables through `envNames`, checked against the
-human's `mcp.passEnv`. The form that applies when nobody chooses one decides
-what sessions hold wherever nobody has read the configuration reference. A
-clean set is a workable default only if ordinary toolchains run in it, and
-passthrough is a safe choice only if an operator can see what it hands out.
+A session can also be given variables through `terminal_start`'s `envNames`,
+checked against the human's list in config `envNames`. The form that applies
+when nobody chooses one decides what sessions hold wherever nobody has read the
+configuration reference. A clean set is a workable default only if ordinary
+toolchains run in it, and passthrough is a safe choice only if an operator can
+see what it hands out.
 
 ## Decision
 
@@ -71,8 +72,8 @@ passthrough is a safe choice only if an operator can see what it hands out.
 ## Consequences
 
 - A program that needs a setting beyond the baseline gets it by name in the
-  list form. A credential comes through `mcp.passEnv` and `envNames`, to the one
-  session that needs it.
+  list form. A credential comes through config `envNames` and
+  `terminal_start`'s `envNames`, to the one session that needs it.
 - An agent CLI that expands `${VAR}` in its own configuration sees only what
   its session was given.
 - `GET /environment`, behind the client token, reports the mode and, under

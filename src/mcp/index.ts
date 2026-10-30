@@ -12,7 +12,7 @@ import process from 'node:process';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { readMcpConfig } from './config.js';
-import { readDaemonConfig } from '../daemon/config.js';
+import { isEnvNamesProblem, readDaemonConfig } from '../daemon/config.js';
 import { registerTools } from './tools.js';
 import type { PassLists } from './tools.js';
 import { assertNodeVersion, packageVersion } from '../daemon/meta.js';
@@ -32,22 +32,23 @@ async function main(): Promise<void> {
   const home = shellpuppetHome();
   const config = readMcpConfig(home, stderrLogger);
   // The variable lists are read afresh at every terminal_start, so a change
-  // to config applies to the next session with no restart. The agents
-  // section is the daemon's to parse; its problems are reported once each.
+  // to config applies to the next session with no restart. The lists are the
+  // daemon's to parse; their problems are reported once each.
   const reported = new Set<string>();
   const reportOnce = (problem: string): void => {
     if (reported.has(problem)) return;
     reported.add(problem);
     stderrLogger.warn(problem);
   };
-  const onceLogger: Logger = { ...stderrLogger, warn: (message) => reportOnce(message) };
   const readPassLists = (): PassLists => {
-    const agents = readDaemonConfig(home);
-    for (const problem of agents.problems.filter((p) => p.startsWith('agents'))) reportOnce(problem);
+    const parsed = readDaemonConfig(home);
+    for (const problem of parsed.problems) {
+      if (problem.startsWith('agents') || isEnvNamesProblem(problem)) reportOnce(problem);
+    }
     return {
-      passEnv: readMcpConfig(home, onceLogger).passEnv,
-      agentPassEnv: agents.config.agentPassEnv ?? {},
-      agentSignatures: agents.config.agentSignatures ?? [],
+      envNames: parsed.config.envNames ?? [],
+      agentPassEnv: parsed.config.agentPassEnv ?? {},
+      agentSignatures: parsed.config.agentSignatures ?? [],
     };
   };
   readPassLists();

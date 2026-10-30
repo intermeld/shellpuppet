@@ -53,10 +53,10 @@ export interface McpToolOptions extends ClientOptions {
   /** §4.4 framing toggle: config `mcp.untrustedFraming`, default true. */
   untrustedFraming?: boolean;
   /**
-   * Config `mcp.passEnv`: the variables `terminal_start` may pass from this
+   * Config `envNames`: the variables `terminal_start` may pass from this
    * server's environment into a session (§4.6). Empty or absent passes none.
    */
-  passEnv?: readonly string[];
+  envNames?: readonly string[];
   /**
    * Config `agents.passEnv`: the variables each agent's sessions receive from
    * this server's environment, by agent name (§4.6).
@@ -146,14 +146,13 @@ export function viewerLine(payload: Body): string {
 
 /** The lists `terminal_start` passes variables by (§4.6). */
 export interface PassLists {
-  passEnv: readonly string[];
+  envNames: readonly string[];
   agentPassEnv: Readonly<Record<string, readonly string[]>>;
   agentSignatures: readonly AgentSignature[];
 }
 
 export function registerTools(server: McpServer, options: McpToolOptions = {}): void {
   const framing = options.untrustedFraming ?? true;
-  const passEnv = options.passEnv ?? [];
   let cached: DaemonConnection | null = null;
 
   const frame = (screen: string): string =>
@@ -222,14 +221,14 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
         readyText: z.string().optional().describe('Mark the session ready once this text appears on screen.'),
         readyQuiet: z.number().optional().describe('Mark the session ready once the program has painted something and output has then been quiet this many ms. Silence before the first paint does not count: that is "still starting", not "ready".'),
         shell: z.boolean().optional().describe('Shell-wrap the command (default true on Windows, where direct spawns of single-file binaries hang).'),
-        envNames: z.array(z.string()).optional().describe('Names of variables to copy from THIS MCP server\'s environment into the session\'s, for a program that is not one of the agent CLIs and needs a key the session would not otherwise see. Only names the human listed in mcp.passEnv in config.json are allowed; any other name refuses the start. A session that runs as an agent CLI needs no envNames: it receives the variables the human listed for that agent in agents.passEnv, and any name off that list refuses the start. A listed name that is not set here is reported and not passed. Values are never shown, logged or audited; names are.'),
+        envNames: z.array(z.string()).optional().describe('Names of variables to copy from THIS MCP server\'s environment into the session\'s, for a program that is not one of the agent CLIs and needs a key the session would not otherwise see. Only names on the human\'s envNames list in config.json are allowed; any other name refuses the start. A session that runs as an agent CLI needs no envNames: it receives the variables the human listed for that agent in agents.passEnv, and any name off that list refuses the start. A listed name that is not set here is reported and not passed. Values are never shown, logged or audited; names are.'),
       }),
     },
     async ({ envNames, ...args }) =>
       run(async () => {
         let body: Body = args;
         const lists = options.readPassLists?.() ?? {
-          passEnv,
+          envNames: options.envNames ?? [],
           agentPassEnv: options.agentPassEnv ?? {},
           agentSignatures: options.agentSignatures ?? [],
         };
@@ -238,7 +237,7 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
           agent,
           requested: envNames ?? [],
           agentLists: lists.agentPassEnv,
-          adHoc: lists.passEnv,
+          adHoc: lists.envNames,
           environment: options.environment ?? process.env,
           source: "this MCP server's environment",
         });
@@ -257,10 +256,10 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
         const refused = plan.refused;
         if (refused.length > 0) {
           return text(
-            `Not started: ${refused.join(', ')} ${refused.length === 1 ? 'is' : 'are'} not in ` +
-              `mcp.passEnv, the list of variables the human allows this server to pass. Ask ` +
-              `them to add ${refused.length === 1 ? 'it' : 'them'} to ~/.shellpuppet/config.json, ` +
-              `which this server reads at every start, or start without ${refused.length === 1 ? 'it' : 'them'}.`,
+            `Not started: ${refused.join(', ')} ${refused.length === 1 ? 'is' : 'are'} not listed in ` +
+              `envNames in ~/.shellpuppet/config.json, the variables the human allows this server to ` +
+              `pass. Ask them to add ${refused.length === 1 ? 'it' : 'them'} to that list, which this ` +
+              `server reads at every start, or start without ${refused.length === 1 ? 'it' : 'them'}.`,
             true,
           );
         }

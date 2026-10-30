@@ -20,8 +20,8 @@ import { assertNodeVersion, packageVersion } from '../daemon/meta.js';
 import { NO_MATCHES } from '../core/find.js';
 import { resultRefusal } from '../core/reasoning.js';
 import { shellpuppetHome } from '../daemon/paths.js';
-import { readMcpConfig, planPassedEnv } from '../mcp/config.js';
-import { readDaemonConfig } from '../daemon/config.js';
+import { planPassedEnv } from '../mcp/config.js';
+import { isEnvNamesProblem, readDaemonConfig } from '../daemon/config.js';
 import { agentNameFor } from '../core/reasoning.js';
 import { knownKeys } from '../core/keys.js';
 import type { Logger, SessionSummary } from '../core/types.js';
@@ -38,9 +38,9 @@ Usage:
       A session that runs as an agent CLI receives, from THIS shell's
       environment, the variables listed for that agent in agents.passEnv in
       config.json, with no flag. --env-name copies another variable, for a
-      program that is not an agent CLI: only names listed in mcp.passEnv
-      pass, and any other name refuses the start. Values are never printed
-      or logged.
+      program that is not an agent CLI: only names listed in envNames in
+      config.json pass, and any other name refuses the start. Values are
+      never printed or logged.
       --agent names the agent CLI the session runs (claude, codex, qoder...)
       when it is reached through a shell or a launcher script, so that
       --hide-reasoning and result can read its screen.
@@ -297,18 +297,21 @@ async function main(): Promise<void> {
       };
       // The same lists and the same rules as terminal_start. The CLI reads
       // config.json on every run, so a change to a list needs no restart here.
-      const agentsConfig = readDaemonConfig(shellpuppetHome());
+      const daemonConfig = readDaemonConfig(shellpuppetHome());
       const agent = agentNameFor(
         parsed.flags.has('agent') ? String(parsed.flags.get('agent')) : undefined,
         command,
-        agentsConfig.config.agentSignatures ?? [],
+        daemonConfig.config.agentSignatures ?? [],
       );
       const envNames = parsed.lists.get('env-name') ?? [];
+      if (envNames.length > 0) {
+        for (const problem of daemonConfig.problems.filter(isEnvNamesProblem)) console.error(`warning: ${problem}`);
+      }
       const plan = planPassedEnv({
         agent,
         requested: envNames,
-        agentLists: agentsConfig.config.agentPassEnv ?? {},
-        adHoc: envNames.length > 0 ? readMcpConfig(shellpuppetHome(), stderrLogger).passEnv : [],
+        agentLists: daemonConfig.config.agentPassEnv ?? {},
+        adHoc: daemonConfig.config.envNames ?? [],
         environment: process.env,
         source: "this shell's environment",
       });
@@ -326,14 +329,14 @@ async function main(): Promise<void> {
         const names = plan.refused;
         fail(
           2,
-          `Not started: ${names.join(', ')} ${names.length === 1 ? 'is' : 'are'} not in ` +
-            `mcp.passEnv, the list of variables you allow to be passed into a session. Add ` +
-            `${names.length === 1 ? 'it' : 'them'} to ~/.shellpuppet/config.json, or start ` +
-            `without ${names.length === 1 ? 'it' : 'them'}.`,
+          `Not started: ${names.join(', ')} ${names.length === 1 ? 'is' : 'are'} not listed in ` +
+            `envNames in ~/.shellpuppet/config.json, the variables you allow to be passed into a ` +
+            `session. Add ${names.length === 1 ? 'it' : 'them'} to that list, or start without ` +
+            `${names.length === 1 ? 'it' : 'them'}.`,
         );
       }
       if (agent !== null) {
-        for (const problem of agentsConfig.problems.filter((p) => p.startsWith('agents'))) {
+        for (const problem of daemonConfig.problems.filter((p) => p.startsWith('agents'))) {
           console.error(`warning: ${problem}`);
         }
       }

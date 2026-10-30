@@ -229,10 +229,10 @@ The daemon's environment is inherited from whichever client auto-started it.
 If that client runs under a secrets manager's wrapper, or is an agent CLI
 holding its own API keys, those resolved secrets sit in the daemon's
 environment. Passed on, they would reach **every session started by anyone
-thereafter**, nondeterministically, and `mcp.passEnv` would restrict nothing.
-So by default (`sessionEnv: "clean"`, ADR-008) a session gets a minimal
-functional set. On top of it come the names a person adds in the list form,
-and the variables its starter passes for its agent or through `envNames`.
+thereafter**, nondeterministically, and config `envNames` would restrict
+nothing. So by default (`sessionEnv: "clean"`, ADR-008) a session gets a
+minimal functional set. On top of it come the names a person adds in the list
+form, and the variables its starter passes for its agent or names at start.
 `"passthrough"` hands every session the daemon's whole environment; choose it
 knowingly. While it is in effect, the daemon names the variables it hands on
 whose names look like credentials. It does so once in `daemon.log` at start
@@ -250,13 +250,13 @@ environment, which the daemon never sees. That moves a secret into a session
 the agent can read, so the agent does not choose which names. A session that
 runs as an agent CLI receives exactly the names the human listed for that
 agent in `agents.passEnv`, and a name asked for beyond them refuses the start.
-Any other session receives only names asked for through `envNames` or
-`--env-name` that the human listed in `mcp.passEnv`. Both lists are empty
-until someone fills them. The lists choose names, not programs: a start that
-names an agent gets that agent's list whatever the session runs, so any name
-on any agent's list, or on `mcp.passEnv`, can reach a session that whoever
-starts sessions can read. List a key only if the agents you let start
-sessions may see it. Values travel only over the
+Any other session receives only names asked for through `terminal_start`'s
+`envNames` or `--env-name` that the human listed in config `envNames`. Both
+lists are empty until someone fills them. The lists choose names, not
+programs: a start that names an agent gets that agent's list whatever the
+session runs, so any name on any agent's list, or on config `envNames`, can
+reach a session that whoever starts sessions can read. List a key only if the
+agents you let start sessions may see it. Values travel only over the
 authenticated loopback connection to the daemon, and stay out of tool
 results, `daemon.log`, the audit trail (which records the names, even with
 `captureContent` on) and the viewer. Once in the session, a value is as

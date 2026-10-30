@@ -5,6 +5,15 @@ Notable changes to ShellPuppet, newest first. The format is based on
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0 a minor
 version may change behaviour, and every such change is listed here.
 
+## [Unreleased]
+
+### Changed
+
+- The variables a caller may name at start are listed in config `envNames`, at
+  the top level, read by both `terminal_start`'s `envNames` and `shellpuppet
+  start --env-name`. A config that still uses `mcp.passEnv` passes nothing and
+  is reported.
+
 ## [0.1.0] - 2026-10-30
 
 The first public release.

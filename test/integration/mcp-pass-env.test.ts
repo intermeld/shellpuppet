@@ -1,14 +1,14 @@
 /**
  * `terminal_start`'s `envNames` (design §4.6): the MCP server copies only the
- * variables the human listed in `mcp.passEnv` from its own environment into a
- * session's. The real stdio server, a real daemon and real PTYs. The home sets
- * `sessionEnv: "clean"`, so a variable that reached the session by the
- * daemon's own inheritance cannot pass for one this feature carried.
+ * variables the human listed in config `envNames` from its own environment
+ * into a session's. The real stdio server, a real daemon and real PTYs. The
+ * home sets `sessionEnv: "clean"`, so a variable that reached the session by
+ * the daemon's own inheritance cannot pass for one this feature carried.
  */
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { auditLogPath } from '../../src/daemon/audit.js';
@@ -23,6 +23,8 @@ const UNNAMED_VALUE = 'unnamed-value-9b2e';
 const AGENT_VALUE = 'agent-value-5a07';
 
 let client: Client;
+/** What the server has written to stderr, where it reports config problems. */
+let serverStderr = '';
 
 interface TextResult {
   content?: { type: string; text?: string }[];
@@ -68,7 +70,7 @@ function writeConfig(agentLists: Record<string, string[]> = AGENT_LISTS): void {
     JSON.stringify({
       viewer: { launchMode: 'none' },
       sessionEnv: 'clean',
-      mcp: { passEnv: ['SP_TEST_PASSED', 'SP_TEST_LISTED_UNSET'] },
+      envNames: ['SP_TEST_PASSED', 'SP_TEST_LISTED_UNSET'],
       agents: { passEnv: agentLists },
     }),
   );
@@ -88,9 +90,11 @@ beforeAll(async () => {
   delete env['SP_TEST_AGENT_UNSET'];
 
   client = new Client({ name: 'shellpuppet-tests', version: '0.0.0' });
-  await client.connect(
-    new StdioClientTransport({ command: process.execPath, args: [mcpEntry], env, stderr: 'pipe' }),
-  );
+  const transport = new StdioClientTransport({ command: process.execPath, args: [mcpEntry], env, stderr: 'pipe' });
+  transport.stderr?.on('data', (chunk: Buffer) => {
+    serverStderr += chunk.toString('utf8');
+  });
+  await client.connect(transport);
 }, 60_000);
 
 afterAll(async () => {
@@ -132,7 +136,7 @@ describe('the variables each agent receives (agents.passEnv)', () => {
     expect(await screenOf(id)).toContain('agent:none');
   }, 60_000);
 
-  it('refuses envNames off the agent\'s list for an agent session, even a name on mcp.passEnv, and starts nothing', async () => {
+  it('refuses envNames off the agent\'s list for an agent session, even a name on config envNames, and starts nothing', async () => {
     const before = await client.callTool({ name: 'terminal_list', arguments: {} });
     const { started } = await startReporter(['SP_TEST_PASSED'], 'qoder');
     expect((started as TextResult).isError).toBe(true);
@@ -195,7 +199,7 @@ describe('terminal_start envNames', () => {
     expect((started as TextResult).isError).toBe(true);
     const text = resultText(started);
     expect(text).toContain('SP_TEST_UNNAMED');
-    expect(text).toContain('mcp.passEnv');
+    expect(text).toContain('envNames in ~/.shellpuppet/config.json');
     expect(text).not.toContain(UNNAMED_VALUE);
     const after = await client.callTool({ name: 'terminal_list', arguments: {} });
     const count = (listed: unknown): number => resultText(listed).match(/^s\d+ {2}/gm)?.length ?? 0;
@@ -209,6 +213,32 @@ describe('terminal_start envNames', () => {
     expect(text).toContain("Passed from this MCP server's environment: SP_TEST_PASSED.");
     expect(await screenOf(id)).toContain(`listed:${PASSED_VALUE}`);
   }, 60_000);
+
+  it('passes nothing from a list under mcp.passEnv, reports it, and starts nothing', async () => {
+    fs.writeFileSync(
+      path.join(home, 'config.json'),
+      JSON.stringify({ viewer: { launchMode: 'none' }, sessionEnv: 'clean', mcp: { passEnv: ['SP_TEST_PASSED'] } }),
+    );
+    try {
+      const before = await client.callTool({ name: 'terminal_list', arguments: {} });
+      const { started } = await startReporter(['SP_TEST_PASSED']);
+      expect((started as TextResult).isError).toBe(true);
+      const text = resultText(started);
+      expect(text).toContain('SP_TEST_PASSED is not listed in envNames');
+      expect(text).not.toContain(PASSED_VALUE);
+      const after = await client.callTool({ name: 'terminal_list', arguments: {} });
+      const count = (listed: unknown): number => resultText(listed).match(/^s\d+ {2}/gm)?.length ?? 0;
+      expect(count(after)).toBe(count(before));
+      await vi.waitFor(() =>
+        expect(serverStderr).toContain(
+          'shellpuppet-mcp warning: mcp.passEnv is not read, so nothing passes from it: the variables a ' +
+            'caller may name at start are read from envNames, at the top level of config.json',
+        ),
+      );
+    } finally {
+      writeConfig();
+    }
+  });
 
   it('audits the names and writes no value to the audit trail or the daemon log', () => {
     const audit = fs.readFileSync(auditLogPath(home), 'utf8');

@@ -89,10 +89,11 @@ export interface SessionOptions {
   shell?: boolean;
   /**
    * Variables set in this session's environment on top of what `sessionEnv`
-   * gives it, by name and value (§4.6). The MCP server fills it from its own
-   * environment, for the names the human allowed in `mcp.passEnv`. The values
-   * are spawn input only: the session never keeps them, and logs and the
-   * audit trail record the names alone.
+   * gives it, by name and value (§4.6). The MCP server or the CLI fills it
+   * from its own environment, for the names the human allowed in `envNames`
+   * or listed for the session's agent in `agents.passEnv`. The values are
+   * spawn input only: the session never keeps them, and logs and the audit
+   * trail record the names alone.
    */
   env?: Record<string, string>;
 }
@@ -287,10 +288,10 @@ export type SessionEnvMode = 'passthrough' | 'clean' | string[];
 
 /**
  * A variable name a session's own environment may carry (`SessionOptions.env`)
- * and `mcp.passEnv` may list: letters, digits and underscores, not starting
- * with a digit. That is every name an API key or setting is given in
- * practice, and it keeps out names that a shell or an environment block would
- * read some other way. `__proto__` is refused too: an ordinary object would
+ * and `envNames` and `agents.passEnv` may list: letters, digits and
+ * underscores, not starting with a digit. That is every name an API key or
+ * setting is given in practice, and it keeps out names that a shell or an
+ * environment block would read some other way. `__proto__` is refused too: an ordinary object would
  * swallow it rather than store it, and the variable would silently not pass.
  */
 export const ENV_NAME_PATTERN = /^(?!__proto__$)[A-Za-z_][A-Za-z0-9_]*$/;

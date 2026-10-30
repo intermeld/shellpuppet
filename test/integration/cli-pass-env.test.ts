@@ -1,10 +1,10 @@
 /**
  * `shellpuppet start --env-name` (design §4.6): the CLI copies only the
- * variables the human listed in `mcp.passEnv` from its own environment into a
- * session's, as `terminal_start`'s `envNames` does for the MCP server. The
- * real CLI, a real daemon and real PTYs. The home sets `sessionEnv: "clean"`,
- * so a variable that reached the session by the daemon's own inheritance
- * cannot pass for one this feature carried.
+ * variables the human listed in config `envNames` from its own environment
+ * into a session's, as `terminal_start`'s `envNames` does for the MCP server.
+ * The real CLI, a real daemon and real PTYs. The home sets
+ * `sessionEnv: "clean"`, so a variable that reached the session by the
+ * daemon's own inheritance cannot pass for one this feature carried.
  */
 
 import { execFile } from 'node:child_process';
@@ -32,13 +32,13 @@ interface CliResult {
   stderr: string;
 }
 
-function writeConfig(passEnv: string[], agentPassEnv: Record<string, string[]> = { qoder: ['SP_TEST_AGENT'] }): void {
+function writeConfig(envNames: string[], agentPassEnv: Record<string, string[]> = { qoder: ['SP_TEST_AGENT'] }): void {
   fs.writeFileSync(
     path.join(home, 'config.json'),
     JSON.stringify({
       viewer: { launchMode: 'none' },
       sessionEnv: 'clean',
-      mcp: { passEnv },
+      envNames,
       agents: { passEnv: agentPassEnv },
     }),
   );
@@ -178,7 +178,7 @@ describe('shellpuppet start --env-name', () => {
     const started = await startReporter('--env-name', 'SP_TEST_PASSED', '--env-name', 'SP_TEST_UNNAMED');
     expect(started.code).toBe(2);
     expect(started.stderr).toContain('SP_TEST_UNNAMED');
-    expect(started.stderr).toContain('mcp.passEnv');
+    expect(started.stderr).toContain('envNames in ~/.shellpuppet/config.json');
     for (const value of VALUES) expect(started.stdout + started.stderr).not.toContain(value);
     expect(await sessionCount()).toBe(before);
   }, 90_000);
@@ -211,6 +211,25 @@ describe('shellpuppet start --env-name', () => {
       const started = await startReporter('--env-name', 'SP_TEST_UNNAMED');
       expect(started.code).toBe(0);
       expect(await screenOf(started.id)).toContain(`other:${UNNAMED_VALUE}`);
+    } finally {
+      writeConfig(['SP_TEST_PASSED', 'SP_TEST_SECOND', 'SP_TEST_LISTED_UNSET']);
+    }
+  }, 90_000);
+
+  it('passes nothing from a list under mcp.passEnv, says the list is read from envNames, and starts nothing', async () => {
+    fs.writeFileSync(
+      path.join(home, 'config.json'),
+      JSON.stringify({ viewer: { launchMode: 'none' }, sessionEnv: 'clean', mcp: { passEnv: ['SP_TEST_PASSED'] } }),
+    );
+    try {
+      const before = await sessionCount();
+      const started = await startReporter('--env-name', 'SP_TEST_PASSED');
+      expect(started.code).toBe(2);
+      expect(started.stderr).toContain('warning: mcp.passEnv is not read, so nothing passes from it');
+      expect(started.stderr).toContain('read from envNames');
+      expect(started.stderr).toContain('SP_TEST_PASSED is not listed in envNames');
+      for (const value of VALUES) expect(started.stdout + started.stderr).not.toContain(value);
+      expect(await sessionCount()).toBe(before);
     } finally {
       writeConfig(['SP_TEST_PASSED', 'SP_TEST_SECOND', 'SP_TEST_LISTED_UNSET']);
     }
