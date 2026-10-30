@@ -114,6 +114,40 @@ export function releaseFailedStarts(): boolean {
   return wrapped;
 }
 
+type ErrorSource = { on(event: 'error', listener: (error: Error) => void): unknown };
+
+/**
+ * Take the errors of the two streams of a live Windows terminal that node-pty
+ * 1.1.0 listens for nowhere, each of which would otherwise be an uncaught
+ * exception, on which the daemon shuts down with every session.
+ *
+ * - `input`: input reaches the pseudoconsole through a socket on its input
+ *   pipe (`lib/windowsPtyAgent.js`). Once the console host has closed its end,
+ *   a write the pipe refuses (`write EAGAIN`) is emitted as an 'error'; a
+ *   viewer's focus report racing the session's exit does it.
+ * - `output`: a worker thread copies the output pipe to a local socket
+ *   (`lib/worker/conoutSocketWorker.js`), and an error thrown there becomes
+ *   the worker's 'error'.
+ *
+ * With the listener the stream fails as before and the daemon and its other
+ * sessions carry on. False when the installed node-pty is not the wrapped
+ * version or the terminal has neither stream.
+ */
+export function listenForTerminalErrors(
+  pty: unknown,
+  listener: (error: Error, stream: 'input' | 'output') => void,
+): boolean {
+  if (!wrapped) return false;
+  const agent = (
+    pty as { _agent?: { inSocket?: ErrorSource; _conoutSocketWorker?: { _worker?: ErrorSource } } }
+  )._agent;
+  const input = agent?.inSocket;
+  const output = agent?._conoutSocketWorker?._worker;
+  input?.on('error', (error) => listener(error, 'input'));
+  output?.on('error', (error) => listener(error, 'output'));
+  return input !== undefined || output !== undefined;
+}
+
 /**
  * Wrap the agent module only for the node-pty version whose private fields
  * `release` reads. Another version is left alone and its module not loaded:

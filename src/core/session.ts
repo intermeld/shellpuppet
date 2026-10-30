@@ -25,7 +25,7 @@ import { commandLine } from './policy.js';
 import { detectPrompt, StalePromptGuard } from './promptDetector.js';
 import { waitFor } from './waiter.js';
 import type { WaitTarget } from './waiter.js';
-import { releaseFailedStarts } from './windowsPtyStart.js';
+import { listenForTerminalErrors, releaseFailedStarts } from './windowsPtyStart.js';
 import {
   DEFAULT_COLS,
   DEFAULT_ROWS,
@@ -573,6 +573,17 @@ export class Session implements WaitTarget {
       // built, so a missing binary surfaces now rather than at the load above.
       throw explainSpawnFailure(error);
     }
+    // A failed write on a Windows terminal's pipes must not take the daemon
+    // down (`windowsPtyStart.ts`). Logged once a stream: for the known cause,
+    // the console host has gone and the session's exit follows.
+    if (process.platform === 'win32') {
+      const reported = new Set<string>();
+      listenForTerminalErrors(this.pty, (error, stream) => {
+        if (reported.has(stream)) return;
+        reported.add(stream);
+        this.logger.warn(`session ${stream} failed`, { id, error: String(error) });
+      });
+    }
 
     this.pty.onData((data) => {
       // Track bracketed-paste mode from the app's own output (see PASTE_START).
@@ -641,8 +652,8 @@ export class Session implements WaitTarget {
     } else {
       // No condition was asked for, so nothing is being checked. `ready` is
       // true, meaning only that the process started, and `readyReason` says
-      // plainly that it is not evidence. Agent CLIs emit nothing for 15 to
-      // 50 s and silently discard input typed during that window, so a bare
+      // plainly that it is not evidence. Some agent CLIs emit nothing for tens
+      // of seconds and silently discard input typed during that window, so a bare
       // `true` here is the most dangerous value in the API.
       this.readyFlag = true;
       this.readyReasonValue = 'not-tracked';
