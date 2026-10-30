@@ -195,6 +195,9 @@ describe('the generic engine', () => {
   });
 
   it('sets a signature aside when its pattern runs past the time budget', () => {
+    // The pattern runs for the whole of the suite's budget
+    // (`test/regex-budget-setup.ts`) before it is set aside, hence the time
+    // this test is given.
     const slow = compileSignatures([
       { name: 'slow', composer: { text: '^(a+)+$' }, answer: { start: { text: 'x' } } },
     ]).signatures[0]!;
@@ -202,7 +205,7 @@ describe('the generic engine', () => {
     expect(hideReasoning(lines, slow)).toBeNull();
     expect(slow.overBudgetAt).not.toBeNull();
     expect(latestResult(lines, slow)).toMatchObject({ found: false, reason: 'over-budget' });
-  });
+  }, 15_000);
 });
 
 describe('Claude Code (built in)', () => {
@@ -553,12 +556,15 @@ describe('review round: what a result must never offer', () => {
   });
 
   it('sets a signature that ran past its budget aside for a while, not for good', () => {
+    // The pattern runs for the whole of the suite's budget
+    // (`test/regex-budget-setup.ts`) before it is set aside, hence the time
+    // this test is given.
     const slow = compileSignatures([{ name: 'slowish', composer: { text: '^(a+)+$' }, answer: { start: { text: 'x' } } }]).signatures[0]!;
     hideReasoning([plain(`${'a'.repeat(40)}!`)], slow);
     expect(slow.overBudgetAt).not.toBeNull();
     expect(setAside(slow)).toBe(true);
     expect(setAside(slow, (slow.overBudgetAt ?? 0) + SET_ASIDE_MS + 1)).toBe(false);
-  });
+  }, 15_000);
 
   it('refuses requireTrailer without a trailer to require', () => {
     const { problems } = compileSignatures([

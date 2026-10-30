@@ -59,6 +59,22 @@ export class RegexBudgetError extends Error {
 const CONTEXT = createContext({ body: null as unknown });
 const CALL_BODY = new Script('body()');
 
+/** The budget a call gets when it names none: `REGEX_BUDGET_MS`, outside tests. */
+let defaultBudgetMs = REGEX_BUDGET_MS;
+
+/**
+ * Test hook: the budget a call gets when it names none.
+ *
+ * The budget is wall-clock time, so on a machine loaded by the rest of a test
+ * run an ordinary pattern can be descheduled past it, and a test about what a
+ * pattern matches fails for a reason it is not about. The suite gives those
+ * tests more time (`test/regex-budget-setup.ts`); the tests of the budget
+ * itself put the product's figure back.
+ */
+export function setDefaultRegexBudgetForTests(budgetMs: number): void {
+  defaultBudgetMs = budgetMs;
+}
+
 /**
  * Run `body` under `budgetMs` of wall-clock execution, and throw
  * `RegexBudgetError` naming `pattern` if it overruns. Anything else the body
@@ -67,7 +83,7 @@ const CALL_BODY = new Script('body()');
 export function withRegexBudget<T>(
   pattern: string,
   body: () => T,
-  budgetMs: number = REGEX_BUDGET_MS,
+  budgetMs: number = defaultBudgetMs,
 ): T {
   const sandbox = CONTEXT as { body: unknown };
   const previous = sandbox.body;

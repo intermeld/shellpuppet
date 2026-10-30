@@ -9,7 +9,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, describe, expect, it } from 'vitest';
-import { readDaemonState } from '../../src/daemon/paths.js';
+import { daemonLogPath, readDaemonState } from '../../src/daemon/paths.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
 import { api, eventually, makeTempHome, removeTempHome, repoRoot } from './helpers.js';
 
@@ -84,6 +84,32 @@ async function cliWithin(timeout: number, ...args: string[]): Promise<CliResult>
   }
 }
 
+/**
+ * What a failed assertion on an exit code says. The code alone cannot tell a
+ * request the daemon refused from a process ended from outside, which exits 1
+ * with nothing on stderr, so the message carries stderr, the end of stdout
+ * and the warnings and errors in the daemon's log, which is where a failed
+ * capture says why.
+ */
+function whatHappened(result: CliResult, homeDir: string = home): string {
+  let logged: string[] = [];
+  try {
+    logged = fs
+      .readFileSync(daemonLogPath(homeDir), 'utf8')
+      .split('\n')
+      .filter((line) => /"level":"(warn|error)"/.test(line))
+      .slice(-10);
+  } catch {
+    // No log: no daemon has run in that home.
+  }
+  return [
+    `exit ${String(result.code)} after ${String(result.elapsedMs)} ms`,
+    `stderr: ${result.stderr.trim() || '(empty)'}`,
+    `stdout: ${result.stdout.trim().slice(-500) || '(empty)'}`,
+    `daemon warnings and errors: ${logged.length === 0 ? 'none' : `\n${logged.join('\n')}`}`,
+  ].join('\n');
+}
+
 afterAll(async () => {
   await cli('daemon', 'stop', '--force');
   removeTempHome(home);
@@ -101,7 +127,7 @@ describe('shellpuppet CLI', () => {
       '-e',
       "console.log('cli-e2e-marker'); setInterval(() => {}, 200)",
     );
-    expect(started.code).toBe(0);
+    expect(started.code, whatHappened(started)).toBe(0);
     expect(started.stdout).toMatch(/^s\d+ {2}cli-e2e/m);
     expect(started.stdout).toContain('viewer: http://127.0.0.1:');
     const id = /^(s\d+)/m.exec(started.stdout)?.[1] ?? '';
@@ -112,17 +138,17 @@ describe('shellpuppet CLI', () => {
     expect(started.elapsedMs).toBeLessThan(15_000);
 
     const wait = await cli('wait', id, '--text', 'cli-e2e-marker', '--timeout', '20000');
-    expect(wait.code).toBe(0);
+    expect(wait.code, whatHappened(wait)).toBe(0);
     expect(wait.stderr).toContain('matched');
     expect(wait.elapsedMs).toBeLessThan(8_000);
 
     const list = await cli('list');
-    expect(list.code).toBe(0);
+    expect(list.code, whatHappened(list)).toBe(0);
     expect(list.stdout).toContain(id);
     expect(list.stdout).toContain('live');
 
     const snap = await cli('snap', id);
-    expect(snap.code).toBe(0);
+    expect(snap.code, whatHappened(snap)).toBe(0);
     expect(snap.stdout).toContain('cli-e2e-marker');
 
     const json = await cli('snap', id, '--json');
@@ -131,12 +157,12 @@ describe('shellpuppet CLI', () => {
     // The verb, not just the route: `--read-only` has to be a flag the CLI
     // knows, or it slides into the positionals.
     const link = await cli('viewer-url', id, '--read-only');
-    expect(link.code).toBe(0);
+    expect(link.code, whatHappened(link)).toBe(0);
     expect(link.stdout).toContain(`/view?s=${id}&vt=`);
     expect(link.stdout).toContain('watch-only');
 
     const killed = await cli('kill', id);
-    expect(killed.code).toBe(0);
+    expect(killed.code, whatHappened(killed)).toBe(0);
     expect(killed.stdout).toContain(`killed ${id}`);
 
     const after = await cli('list');
@@ -166,9 +192,10 @@ describe('shellpuppet CLI', () => {
       '-e',
       "console.log('cli-shot-marker'); setInterval(() => {}, 200)",
     );
-    expect(started.code).toBe(0);
+    expect(started.code, whatHappened(started)).toBe(0);
     const id = /^(s\d+)/m.exec(started.stdout)?.[1] ?? '';
-    expect((await cli('wait', id, '--text', 'cli-shot-marker', '--timeout', '20000')).code).toBe(0);
+    const painted = await cli('wait', id, '--text', 'cli-shot-marker', '--timeout', '20000');
+    expect(painted.code, whatHappened(painted)).toBe(0);
     // The session must die whether the capture worked or not: left alive, it
     // would fail the daemon tests after it, because a daemon with a live
     // session will not stop.
@@ -186,7 +213,7 @@ describe('shellpuppet CLI', () => {
         '600',
         '--json',
       );
-      expect(shot.code).toBe(0);
+      expect(shot.code, whatHappened(shot)).toBe(0);
       const body = JSON.parse(shot.stdout) as Record<string, unknown>;
       expect(body['width']).toBe(800);
       expect(body['height']).toBe(600);
@@ -205,19 +232,20 @@ describe('shellpuppet CLI', () => {
     // user runs, and it depends on PATH resolution. Keep the sequence in step
     // with the README's.
     const started = await cli('start', '--label', 'smoke', '--no-shell', 'node');
-    expect(started.code).toBe(0);
+    expect(started.code, whatHappened(started)).toBe(0);
     const id = /^(s\d+)/m.exec(started.stdout)?.[1] ?? '';
 
     const wait = await cli('wait', id, '--quiet', '1000', '--timeout', '15000');
-    expect(wait.code).toBe(0);
+    expect(wait.code, whatHappened(wait)).toBe(0);
 
     const typed = await cli('type', id, '6 * 7', '--enter', '--verify');
-    expect(typed.code).toBe(0);
+    expect(typed.code, whatHappened(typed)).toBe(0);
     expect(typed.stdout).toContain('verified on screen');
 
     await eventually(async () => (await cli('snap', id)).stdout.includes('42'), 15_000);
 
-    expect((await cli('kill', id)).code).toBe(0);
+    const killed = await cli('kill', id);
+    expect(killed.code, whatHappened(killed)).toBe(0);
   });
 
   it("flags after the command belong to the command, not to shellpuppet", async () => {
@@ -225,10 +253,10 @@ describe('shellpuppet CLI', () => {
     // verbatim, so `start goose --version` hands --version to Goose rather
     // than booting a full interactive Goose with its MCP fleet.
     const started = await cli('start', '--no-shell', '--label', 'passthrough', process.execPath, '--version');
-    expect(started.code).toBe(0);
+    expect(started.code, whatHappened(started)).toBe(0);
     const id = /^(s\d+)/m.exec(started.stdout)?.[1] ?? '';
     const wait = await cli('wait', id, '--text', 'v', '--timeout', '15000', '--debounce', '300');
-    expect(wait.code).toBe(0);
+    expect(wait.code, whatHappened(wait)).toBe(0);
     // node --version printed its version: proof the flag reached node.
     expect(wait.stdout).toMatch(/v\d+\.\d+\.\d+/);
     await cli('kill', id);
@@ -240,7 +268,7 @@ describe('shellpuppet CLI', () => {
     await cli('wait', id, '--quiet', '700', '--timeout', '15000');
 
     const typed = await cli('type', id, '1 + 1', '--verify');
-    expect(typed.code).toBe(0);
+    expect(typed.code, whatHappened(typed)).toBe(0);
     expect(typed.stdout).toContain('typed');
     await cli('kill', id);
   });
@@ -257,10 +285,10 @@ describe('shellpuppet CLI', () => {
     );
     const id = /^(s\d+)/m.exec(started.stdout)?.[1] ?? '';
     const ready = await cli('wait', id, '--text', 'swallower-up', '--timeout', '15000');
-    expect(ready.code).toBe(0);
+    expect(ready.code, whatHappened(ready)).toBe(0);
 
     const typed = await cli('type', id, 'does-not-land', '--verify');
-    expect(typed.code).toBe(1);
+    expect(typed.code, whatHappened(typed)).toBe(1);
     expect(typed.stdout).toContain('did NOT appear');
     await cli('kill', id);
   });
@@ -269,7 +297,7 @@ describe('shellpuppet CLI', () => {
     const started = await cli('start', '--no-shell', process.execPath, '-e', 'setInterval(() => {}, 200)');
     const id = /^(s\d+)/m.exec(started.stdout)?.[1] ?? '';
     const wait = await cli('wait', id, '--text', 'never-appears', '--timeout', '1500');
-    expect(wait.code).toBe(3);
+    expect(wait.code, whatHappened(wait)).toBe(3);
     expect(wait.stderr).toContain('NOT matched');
     await cli('kill', id);
   });
@@ -289,19 +317,19 @@ describe('shellpuppet CLI', () => {
       await cli('wait', id, '--text', 'find-marker-one', '--timeout', '20000');
 
       const hit = await cli('find', id, 'find-marker-\\w+');
-      expect(hit.code).toBe(0);
+      expect(hit.code, whatHappened(hit)).toBe(0);
       expect(hit.stdout.trim().split('\n')).toEqual([expect.stringMatching(/^\d+: find-marker-one$/)]);
       expect(hit.stderr).toBe('');
 
       // The pattern names text that is on no line, so any echo of it would show.
       const miss = await cli('find', id, 'absent-pattern-xyz');
-      expect(miss.code).toBe(3);
+      expect(miss.code, whatHappened(miss)).toBe(3);
       expect(miss.stdout).toBe('');
       expect(miss.stderr.trim()).toBe('No matches.');
 
       // As JSON the empty result is printed, and the exit code still says so.
       const missJson = await cli('find', id, 'absent-pattern-xyz', '--json');
-      expect(missJson.code).toBe(3);
+      expect(missJson.code, whatHappened(missJson)).toBe(3);
       expect((JSON.parse(missJson.stdout) as { matches: unknown[] }).matches).toEqual([]);
     } finally {
       await cli('kill', id);
@@ -320,27 +348,27 @@ describe('shellpuppet CLI', () => {
     }, 15_000);
 
     const typed = await cli('type', id, 'anything');
-    expect(typed.code).toBe(1);
+    expect(typed.code, whatHappened(typed)).toBe(1);
     expect(typed.stderr).toContain('has exited');
     await cli('kill', id);
   });
 
   it('daemon status / stop / start round-trip', async () => {
     const status = await cli('daemon', 'status');
-    expect(status.code).toBe(0);
+    expect(status.code, whatHappened(status)).toBe(0);
     expect(status.stdout).toContain('running on port');
     // No sessionEnv in the config: sessions get the clean baseline (ADR-008).
     expect(status.stdout).toContain('session environment clean');
 
     const stopped = await cli('daemon', 'stop');
-    expect(stopped.code).toBe(0);
+    expect(stopped.code, whatHappened(stopped)).toBe(0);
     expect(stopped.stdout).toContain('stopped');
 
     const statusDown = await cli('daemon', 'status');
     expect(statusDown.stdout).toContain('not running');
 
     const startedAgain = await cli('daemon', 'start');
-    expect(startedAgain.code).toBe(0);
+    expect(startedAgain.code, whatHappened(startedAgain)).toBe(0);
     expect(startedAgain.stdout).toContain('started on port');
   });
 
@@ -349,12 +377,12 @@ describe('shellpuppet CLI', () => {
     const id = /^(s\d+)/m.exec(started.stdout)?.[1] ?? '';
 
     const refused = await cli('daemon', 'stop');
-    expect(refused.code).toBe(1);
+    expect(refused.code, whatHappened(refused)).toBe(1);
     expect(refused.stderr).toContain('live session');
 
     await cli('kill', id);
     const stopped = await cli('daemon', 'stop');
-    expect(stopped.code).toBe(0);
+    expect(stopped.code, whatHappened(stopped)).toBe(0);
   });
 
   it('audits CLI actions under the cli actor (§4.5)', () => {
@@ -372,7 +400,7 @@ describe('shellpuppet CLI', () => {
     expect((await cli('snap')).code).toBe(2);
     expect((await cli('daemon', 'bogus')).code).toBe(2);
     const help = await cli('help');
-    expect(help.code).toBe(0);
+    expect(help.code, whatHappened(help)).toBe(0);
     expect(help.stdout).toContain('Usage:');
   });
 
@@ -385,16 +413,16 @@ describe('shellpuppet CLI', () => {
     const id = /^(s\d+)/m.exec(started.stdout)?.[1] ?? '';
     try {
       const badRegex = await cli('wait', id, '--regex', '(unclosed', '--timeout', '2000');
-      expect(badRegex.code).toBe(2);
+      expect(badRegex.code, whatHappened(badRegex)).toBe(2);
       expect(badRegex.stderr).toContain('error (400)');
 
       const badGrid = await cli('resize', id, '5000', '30');
-      expect(badGrid.code).toBe(2);
+      expect(badGrid.code, whatHappened(badGrid)).toBe(2);
 
       // Not the caller's input: the session is not there. That is the
       // operation failing, and it stays 1.
       const gone = await cli('kill', 's99999');
-      expect(gone.code).toBe(1);
+      expect(gone.code, whatHappened(gone)).toBe(1);
       expect(gone.stderr).toContain('error (404)');
     } finally {
       await cli('kill', id);
@@ -408,7 +436,7 @@ describe('shellpuppet CLI', () => {
     const jsonHome = makeTempHome('shellpuppet-cli-json-');
     try {
       const started = await cliFromHome(jsonHome, 'daemon', 'start', '--json');
-      expect(started.code).toBe(0);
+      expect(started.code, whatHappened(started, jsonHome)).toBe(0);
       const startBody = JSON.parse(started.stdout) as Record<string, unknown>;
       expect(startBody['running']).toBe(true);
       expect(typeof startBody['port']).toBe('number');
@@ -418,11 +446,11 @@ describe('shellpuppet CLI', () => {
       expect(JSON.parse(again.stdout)).toMatchObject({ running: true, port: startBody['port'] });
 
       const restarted = await cliFromHome(jsonHome, 'daemon', 'restart', '--json');
-      expect(restarted.code).toBe(0);
+      expect(restarted.code, whatHappened(restarted, jsonHome)).toBe(0);
       expect(JSON.parse(restarted.stdout)).toMatchObject({ running: true });
 
       const stopped = await cliFromHome(jsonHome, 'daemon', 'stop', '--json');
-      expect(stopped.code).toBe(0);
+      expect(stopped.code, whatHappened(stopped, jsonHome)).toBe(0);
       expect(JSON.parse(stopped.stdout)).toEqual({ running: false, stopped: true });
 
       // And a stop with nothing to stop reads the same to a script.
@@ -456,7 +484,7 @@ describe('shellpuppet CLI', () => {
         '-e',
         'setInterval(() => {}, 200)',
       );
-      expect(started.code).toBe(0);
+      expect(started.code, whatHappened(started, windowHome)).toBe(0);
       expect(started.stdout).toMatch(/^viewer: window opened \(viewer-url s\d+ mints a link\)$/m);
       expect(started.stdout).not.toContain('vt=');
 
@@ -469,7 +497,7 @@ describe('shellpuppet CLI', () => {
         '-e',
         'setInterval(() => {}, 200)',
       );
-      expect(asJson.code).toBe(0);
+      expect(asJson.code, whatHappened(asJson, windowHome)).toBe(0);
       const body = JSON.parse(asJson.stdout) as Record<string, unknown>;
       expect(body['viewer']).toEqual({ opened: true, mode: 'isolated-app' });
       expect(body['viewerUrl']).toBeUndefined();
@@ -504,15 +532,15 @@ describe('shellpuppet CLI', () => {
       '-e',
       script,
     );
-    expect(started.code).toBe(0);
+    expect(started.code, whatHappened(started)).toBe(0);
     const id = /^(s\d+)/m.exec(started.stdout)?.[1] ?? '';
     try {
       await eventually(async () => (await cli('snap', id)).stdout.includes('Type your message'), 30_000);
       const result = await cli('result', id);
-      expect(result.code).toBe(0);
+      expect(result.code, whatHappened(result)).toBe(0);
       expect(result.stdout.trim()).toBe('▪ MANGO');
       const hidden = await cli('snap', id, '--hide-reasoning');
-      expect(hidden.code).toBe(0);
+      expect(hidden.code, whatHappened(hidden)).toBe(0);
       expect(hidden.stdout).not.toMatch(/^ │ /m);
       expect(hidden.stdout).toMatch(/^\[reasoning hidden: \d+ lines?\]$/m);
     } finally {
@@ -523,11 +551,11 @@ describe('shellpuppet CLI', () => {
     const plainId = /^(s\d+)/m.exec(plain.stdout)?.[1] ?? '';
     try {
       const refused = await cli('snap', plainId, '--hide-reasoning');
-      expect(refused.code).toBe(2);
+      expect(refused.code, whatHappened(refused)).toBe(2);
       expect(refused.stdout).toBe('');
       expect(refused.stderr).toMatch(/no agent signature/);
       const noResult = await cli('result', plainId);
-      expect(noResult.code).toBe(2);
+      expect(noResult.code, whatHappened(noResult)).toBe(2);
     } finally {
       await cli('kill', plainId);
     }
@@ -537,13 +565,21 @@ describe('shellpuppet CLI', () => {
     // The daemon inherits the environment of the CLI that starts it, so a
     // credential-shaped variable set here is one passthrough would pass on.
     const leakyHome = makeTempHome('shellpuppet-cli-passthrough-');
-    fs.writeFileSync(path.join(leakyHome, 'config.json'), JSON.stringify({ sessionEnv: 'passthrough' }));
+    // launchMode none, as makeTempHome wrote before this replaced it. Under
+    // the product default the daemon looks for a browser as it starts, and on
+    // macOS that look holds the daemon for 5 to 10 s, longer than
+    // `daemon start` waits for a new daemon to answer (viewerLauncher.ts).
+    fs.writeFileSync(
+      path.join(leakyHome, 'config.json'),
+      JSON.stringify({ viewer: { launchMode: 'none' }, sessionEnv: 'passthrough' }),
+    );
     process.env['SHELLPUPPET_CLI_CANARY_TOKEN'] = 'cli-canary-value-5e2a';
     try {
-      expect((await cliFromHome(leakyHome, 'daemon', 'start')).code).toBe(0);
+      const started = await cliFromHome(leakyHome, 'daemon', 'start');
+      expect(started.code, whatHappened(started, leakyHome)).toBe(0);
 
       const status = await cliFromHome(leakyHome, 'daemon', 'status');
-      expect(status.code).toBe(0);
+      expect(status.code, whatHappened(status, leakyHome)).toBe(0);
       expect(status.stdout).toContain('session environment passthrough');
       expect(status.stderr).toContain('SHELLPUPPET_CLI_CANARY_TOKEN');
       expect(status.stdout + status.stderr).not.toContain('cli-canary-value-5e2a');
@@ -569,11 +605,11 @@ describe('shellpuppet CLI', () => {
     const helpHome = makeTempHome('shellpuppet-help-');
     try {
       const long = await cliFromHome(helpHome, '--help');
-      expect(long.code).toBe(0);
+      expect(long.code, whatHappened(long, helpHome)).toBe(0);
       expect(long.stdout).toContain('Usage:');
 
       const short = await cliFromHome(helpHome, '-h');
-      expect(short.code).toBe(0);
+      expect(short.code, whatHappened(short, helpHome)).toBe(0);
       expect(short.stdout).toContain('Usage:');
 
       // Usage and exit 0 would also hold for a build that asked for the
@@ -602,7 +638,7 @@ describe('shellpuppet CLI: value flags', () => {
       '-e',
       'setInterval(() => {}, 200)',
     );
-    expect(started.code).toBe(0);
+    expect(started.code, whatHappened(started)).toBe(0);
     const id = started.stdout.trim().split(/\s+/)[0] ?? '';
     expect(id).not.toBe('');
 
