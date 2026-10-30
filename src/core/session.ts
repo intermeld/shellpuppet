@@ -761,9 +761,9 @@ export class Session implements WaitTarget {
   }
   /**
    * The program's exit code once the session has ended. Null while it runs,
-   * and for a session that ended with no code (its output failed): the
-   * session ends that program itself, so the code node-pty records afterwards
-   * says nothing about the program and is not reported (`howSessionEnded`).
+   * and for a session that ended with no code because its output failed: the
+   * code node-pty records for its program afterwards is not reported
+   * (`howSessionEnded`).
    */
   get exitCode(): number | null {
     return this.exitCodeValue;
