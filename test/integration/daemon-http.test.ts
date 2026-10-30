@@ -4,8 +4,10 @@
  * guarantee: two clients, one PTY.
  */
 
+import * as fs from 'node:fs';
 import type * as http from 'node:http';
 import * as net from 'node:net';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { VIEWER_GRANT_TTL_MS } from '../../src/daemon/auth.js';
@@ -327,6 +329,53 @@ describe('session lifecycle over HTTP', () => {
     expect(result.status).toBe(400);
     expect(String(result.body['error'])).toContain('Not an executable file');
   });
+
+  it.runIf(process.platform === 'win32')(
+    'refuses a script started without the shell on Windows, and runs it through the shell',
+    async () => {
+      // Without the shell, Windows hands a batch file to cmd.exe on its own,
+      // with the arguments quoted for a program's parser, and fails anything
+      // else that is not an .exe or a .com with error 193 once the terminal
+      // is built. Each is a 400 that says what to do instead.
+      const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'shellpuppet-scripts-'));
+      try {
+        const files = {
+          cmd: path.join(dir, 'say.cmd'),
+          bat: path.join(dir, 'say.bat'),
+          ps1: path.join(dir, 'say.ps1'),
+          none: path.join(dir, 'say'),
+        };
+        fs.writeFileSync(files.cmd, '@echo script-ran-%1\r\n');
+        fs.writeFileSync(files.bat, '@echo script-ran-%1\r\n');
+        fs.writeFileSync(files.ps1, 'Write-Output "script-ran"\r\n');
+        fs.writeFileSync(files.none, '#!/bin/sh\necho script-ran\n');
+        for (const [kind, file] of Object.entries(files)) {
+          const refused = await api(td.port, td.token, '/sessions', {
+            body: { command: file, args: ['x'], shell: false },
+          });
+          expect(refused.status, kind).toBe(400);
+          expect(String(refused.body['error']), kind).toContain(
+            'Not a program Windows can start directly',
+          );
+          expect(String(refused.body['error']), kind).toContain('Drop shell:false');
+        }
+        // Through the shell, the default on Windows, the batch file runs.
+        const started = await api(td.port, td.token, '/sessions', {
+          body: { command: files.cmd, args: ['through-shell'] },
+        });
+        expect(started.status).toBe(200);
+        const id = String((started.body as { id: string }).id);
+        const waited = await api(
+          td.port,
+          td.token,
+          `/sessions/${id}/wait?text=script-ran-through-shell&timeout=20000`,
+        );
+        expect(waited.body['matched']).toBe(true);
+      } finally {
+        fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+      }
+    },
+  );
 
   it('refuses a directory as the command with a clean 400', async () => {
     // A directory is not a program: statSync succeeds, so isFile() is what
