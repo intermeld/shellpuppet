@@ -49,7 +49,7 @@ function waitForExit(session: Session, timeoutMs = 30_000): Promise<number> {
     );
     session.onExit((code) => {
       clearTimeout(timer);
-      resolve(code);
+      resolve(code ?? -1);
     });
   });
 }

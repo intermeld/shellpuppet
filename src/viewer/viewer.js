@@ -139,6 +139,15 @@
     refreshTitle();
   };
 
+  /** The daemon says the session's input has failed: nothing typed here reaches the program. */
+  let inputFailed = false;
+  const showInputFailed = () => {
+    // "The program has exited" is the more useful of the two once it is true.
+    if (sessionEnded || inputFailed) return;
+    inputFailed = true;
+    modeHint.textContent = "this session's input has failed; kill it and start it again";
+  };
+
   const showIdentity = (identity) => {
     // Prefer the purpose: "fix the failing login test" tells you which window
     // you want; "claude" does not, when three of them are claude.
@@ -264,9 +273,9 @@
   function showReadOnly() {
     readonlyButton.textContent = `read-only: ${readOnly ? 'on' : 'off'}`;
     readonlyButton.classList.toggle('active', readOnly);
-    // Both write the same line, and "the program has exited" is the more
-    // useful of the two facts once it is true.
-    if (sessionEnded) return;
+    // Both write the same line, and "the program has exited" or "the input
+    // has failed" is the more useful of the two facts once it is true.
+    if (sessionEnded || inputFailed) return;
     if (readOnlyEnforced) {
       readonlyButton.disabled = true;
       readonlyButton.title = 'This viewer link grants watching only';
@@ -621,8 +630,10 @@
           showEnded(control.exitCode);
         } else if (control && control.type === 'input-refused') {
           // The daemon refusing a keystroke because the program has gone, for
-          // a page that missed the frame above.
+          // a page that missed the frame above, or because the session's
+          // input has failed.
           if (control.reason === 'exited') showEnded(control.exitCode);
+          else if (control.reason === 'input-failed') showInputFailed();
         } else if (control && control.type === 'prompt-stall') {
           showPromptAlert(control.question, control.waitingMs, control.options);
         } else if (control && control.type === 'prompt-clear') {

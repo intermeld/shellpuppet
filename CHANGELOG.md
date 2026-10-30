@@ -22,10 +22,19 @@ version may change behaviour, and every such change is listed here.
   keep running.
 - On Windows, a kill whose console-list helper cannot be started (out of
   handles, say) leaves the daemon and its other sessions running.
-- An error on a connection whose WebSocket upgrade the daemon refused leaves
-  the daemon running.
-- Input or a key sent to a session whose input pipe has failed is answered
-  with a 409 that says so and to kill the session and start it again.
+- On Windows, a session that ends because its output socket failed, while
+  its program runs on, reports an exit with no code (`exitCode` null), and
+  killing it or stopping the daemon still ends the program and its tree.
+- An error on a connection whose WebSocket upgrade the daemon refused, or a
+  connection the daemon's HTTP server could not accept, leaves the daemon
+  running; the second is logged.
+- On Windows, input or a key sent over the API to a session whose input pipe
+  has failed is answered with a 409 that says so and to kill the session and
+  start it again (a session that has already exited still gets the 409 that
+  says it exited).
+- A viewer typing into a session whose input pipe has failed is told once,
+  and the page says that the session's input has failed and to kill it and
+  start it again; nothing typed there is written, audited or logged.
 
 ## [0.1.0] - 2026-10-30
 

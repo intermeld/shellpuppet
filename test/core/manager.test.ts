@@ -98,6 +98,7 @@ describe('SessionManager.killAll tree kill in one run', () => {
     id: string;
     pid: number;
     exited: boolean;
+    programEnded: boolean;
     kill: () => Promise<void>;
   }
 
@@ -115,17 +116,18 @@ describe('SessionManager.killAll tree kill in one run', () => {
 
   function recorded(events: string[]): {
     treeKiller: TreeKiller;
-    standIn: (id: string, pid: number, exited?: boolean) => StandIn;
+    standIn: (id: string, pid: number, exited?: boolean, programEnded?: boolean) => StandIn;
   } {
     return {
       treeKiller: (pids) => {
         events.push(`trees ${pids.join(',')}`);
         return Promise.resolve(null);
       },
-      standIn: (id, pid, exited = false) => ({
+      standIn: (id, pid, exited = false, programEnded = exited) => ({
         id,
         pid,
         exited,
+        programEnded,
         kill: () => {
           events.push(`kill ${id}`);
           return Promise.resolve();
@@ -165,6 +167,20 @@ describe('SessionManager.killAll tree kill in one run', () => {
     expect(fields).toEqual([
       { sessions: 1, timedOut: true, exitCode: null, elapsedMs: 30_000, timeoutMs: TREE_KILL_TIMEOUT_MS },
     ]);
+  });
+
+  it('walks the tree of a session that ended without its program being seen to end', async () => {
+    const events: string[] = [];
+    const { treeKiller, standIn } = recorded(events);
+    // s1's terminal closed with no exit code, and its program may run on.
+    const { manager } = managerWith([standIn('s1', 101, true, false), standIn('s2', 102, true)], {
+      platform: 'win32',
+      treeKiller,
+    });
+
+    await manager.killAll(1_000);
+
+    expect(events).toEqual(['trees 101', 'kill s1', 'kill s2']);
   });
 
   it('runs no tree kill when no session is live', async () => {
