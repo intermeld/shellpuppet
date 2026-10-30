@@ -72,6 +72,7 @@ const child = spawn(process.execPath, [daemonEntry], {
   detached: true,
   stdio: 'ignore',      // MUST be 'ignore': see below
   windowsHide: true,
+  cwd: os.homedir(),    // not the client's folder: see below
 });
 child.unref();
 ```
@@ -79,6 +80,11 @@ child.unref();
 `stdio: 'ignore'` and `unref()` are not optional. Inheriting stdio causes the
 inherited-stdio hang: a daemon holding its parent's handles leaves the calling shell
 waiting for EOF **forever**. Every client invocation must return promptly, always.
+
+The daemon runs in the user's home directory, whichever client starts it. A process holds
+its working directory open, so a daemon started in the first client's folder would keep
+that folder from being deleted or renamed on Windows for as long as it ran. Sessions do
+not inherit the daemon's folder either (§3.1).
 
 **The auto-start race is normal, not exceptional.** Claude Code launches its MCP servers
 in parallel; two clients will routinely both find no daemon and both spawn one. The loser
@@ -253,6 +259,15 @@ its signature does not describe, a version that changes the shape, or output tha
 one, defeats it.
 
 ### 3.1 Behavioural requirements drawn from real failures
+
+**A session starts in the folder of the client that asked for it.** `terminal_start`
+without `cwd` sends the MCP server's working directory, normally the folder the agent was
+started in, and `shellpuppet start` without `--cwd` sends the shell's; a relative `cwd` is
+taken from that folder, so the daemon always receives an absolute path. A direct caller of
+the HTTP API (`POST /sessions`) that sends no `cwd` gets the user's home directory, and a
+relative `cwd` there is taken from the home directory. A session never starts in the
+daemon's own folder, which is wherever it happened to be started, and never in the
+ShellPuppet home, beside `daemon.json` and its token.
 
 **`terminal_start` must say how the human reaches the session.** When the daemon opened a
 viewer window, the response says so and carries no link: the window holds the only grant
