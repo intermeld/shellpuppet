@@ -85,6 +85,31 @@ export interface ClientOptions {
    * resolved per request (the MCP client name is only known post-handshake).
    */
   actor?: string | (() => string);
+  /**
+   * Whether a request whose daemon has gone may start another and send the
+   * request there, as every ordinary call does (design §2.2). False makes
+   * such a request throw `DaemonGoneError` instead: the daemon verbs pass it,
+   * because asking about or stopping a daemon must never start one.
+   */
+  autoStart?: boolean;
+}
+
+/**
+ * The daemon a request went to has gone, and the caller asked for no other to
+ * be started in its place (`autoStart: false`).
+ */
+export class DaemonGoneError extends Error {
+  constructor(
+    readonly pid: number,
+    readonly port: number,
+    options?: ErrorOptions,
+  ) {
+    super(
+      `The ShellPuppet daemon (pid ${String(pid)}, port ${String(port)}) has stopped.`,
+      options,
+    );
+    this.name = 'DaemonGoneError';
+  }
 }
 
 interface HealthResponse {
@@ -253,7 +278,8 @@ export interface ApiResponse {
 /**
  * One authenticated JSON request. If the daemon has gone since discovery
  * (stale state), re-ensure once and retry, because one-shot clients meet this
- * whenever the daemon idle-stopped moments earlier.
+ * whenever the daemon idle-stopped moments earlier; with `autoStart: false`,
+ * throw `DaemonGoneError` instead.
  *
  * A request that fails while its daemon is still running is reported, never
  * retried against another daemon. The caller holds session ids from this
@@ -296,6 +322,9 @@ export async function request(
           `${pid}.`,
         { cause: error },
       );
+    }
+    if (options.autoStart === false) {
+      throw new DaemonGoneError(connection.pid, connection.port, { cause: error });
     }
     const fresh = await ensureDaemon(options);
     connection.port = fresh.port;

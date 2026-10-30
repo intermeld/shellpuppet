@@ -131,7 +131,12 @@ if the state file names another daemon that is running, even one too busy to ans
   connected clients is a core use case, not idleness.
 - **Explicit control.** `shellpuppet daemon start|stop|restart|status` CLI verbs. `stop`
   refuses if sessions are live unless `--force`. `restart` is the documented remedy for
-  the version-mismatch warning (§9).
+  the version-mismatch warning (§9). `status`, `stop` and the stop half of `restart`
+  never start a daemon: every other request whose daemon has gone starts one and retries
+  there (§2.2), but these send theirs with `autoStart: false`, so a daemon that goes
+  between being found and being asked, as one that is stopping does, is reported as not
+  running (`{ "running": false }` with `--json`). Asking about a daemon in the middle of
+  a stop, a rebuild and a start must not start one from the old build.
 - **Shutdown kills all session process trees** (§3.1). The daemon must never exit and
   strand running agent CLIs.
 
