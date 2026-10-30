@@ -54,6 +54,12 @@ version may change behaviour, and every such change is listed here.
   session that has exited gets. A viewer's is not answered, so a page whose
   window does not fit the grid does not ask again; the session's exit follows
   within about a second.
+- `shellpuppet daemon status`, `daemon stop` and the stop half of `daemon
+  restart` never start a daemon. One that went between being found and being
+  asked, as a stopping daemon does, was replaced by a fresh daemon from the
+  build on disk; `status` now reports `not running` (`{ "running": false }`
+  with `--json`), and `stop` reports it as not running. Every other verb still
+  starts a daemon in place of one that has gone.
 - The daemon answers `/health` and every request while it detects the browser
   for the viewer window, which it begins as it starts. The paths
   chrome-launcher checks first are tried by file access alone, and its full
