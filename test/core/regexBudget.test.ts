@@ -8,12 +8,14 @@
  * own deadline all stop with it.
  */
 
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { findOnScreen } from '../../src/core/find.js';
 import { compilePolicy, evaluateCommand } from '../../src/core/policy.js';
-import { RegexBudgetError, withRegexBudget } from '../../src/core/regexBudget.js';
+import { RegexBudgetError, setDefaultRegexBudgetForTests, withRegexBudget } from '../../src/core/regexBudget.js';
+import { REGEX_BUDGET_MS } from '../../src/core/types.js';
 import { WaitConditionError, waitFor } from '../../src/core/waiter.js';
 import type { WaitTarget } from '../../src/core/waiter.js';
+import { TEST_REGEX_BUDGET_MS } from '../regex-budget-setup.js';
 
 /** Exponential backtracking on a string that cannot match. */
 const HOSTILE = '^(a+)+$';
@@ -61,6 +63,12 @@ describe('withRegexBudget', () => {
 });
 
 describe('the budget at each caller', () => {
+  // The product's budget, not the one the suite gives patterns
+  // (`test/regex-budget-setup.ts`): these show that each caller abandons a
+  // runaway pattern in time with the figure the daemon runs with.
+  beforeAll(() => setDefaultRegexBudgetForTests(REGEX_BUDGET_MS));
+  afterAll(() => setDefaultRegexBudgetForTests(TEST_REGEX_BUDGET_MS));
+
   it('a wait on a hostile pattern is refused, rather than freezing everything', async () => {
     const startedAt = Date.now();
     await expect(

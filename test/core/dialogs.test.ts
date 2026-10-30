@@ -317,6 +317,9 @@ describe('dialog signatures from config', () => {
   });
 
   it('sets aside a pattern that runs past its budget, says so once and keeps the others working', () => {
+    // The runaway pattern runs for the whole of the suite's budget
+    // (`test/regex-budget-setup.ts`) before it is set aside, hence the time
+    // this test is given.
     const reported: string[] = [];
     useDialogSignatures(
       [
@@ -331,5 +334,5 @@ describe('dialog signatures from config', () => {
     expect(dialogPrompt(screen.split('\n'))?.question).toBe('wants to run a command');
     expect(Date.now() - startedAt).toBeLessThan(5_000);
     expect(reported).toEqual(['Runaway']);
-  });
+  }, 15_000);
 });
