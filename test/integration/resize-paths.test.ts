@@ -110,7 +110,9 @@ describe.skipIf(process.platform !== 'win32')('resizes around the end of a progr
         expect(started.status).toBe(200);
         const id = String(started.body['id']);
         const resized = await api(port, token, `/sessions/${id}/resize`, { body: { cols: 100, rows: 30 } });
-        expect(resized.status).toBe(200);
+        // The program may already have ended when the resize arrives, and then the answer is the
+        // 409 an ended session gets; either way the daemon handled it and carries on.
+        expect([200, 409]).toContain(resized.status);
         const session = sessionOf(daemon, id);
         // node-pty holds a resize until the first output only while it is not ready.
         if ((session as unknown as { pty: { _isReady?: boolean } }).pty._isReady === false) held++;
