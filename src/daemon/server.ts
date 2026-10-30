@@ -603,7 +603,7 @@ export class Daemon {
     // memoised answer serve every start. It never holds the event loop, so the
     // daemon answers /health and everything else while it runs.
     if ((this.options.viewer?.launchMode ?? 'none') === 'isolated-app') {
-      void findBrowser(this.options.viewer?.browserPath).catch(() => undefined);
+      void findBrowser(this.options.viewer?.browserPath, this.logger).catch(() => undefined);
     }
 
     const state: DaemonState = {
@@ -1136,7 +1136,7 @@ export class Daemon {
           });
           return;
         }
-        const browser = await findBrowser(this.options.viewer?.browserPath);
+        const browser = await findBrowser(this.options.viewer?.browserPath, this.logger);
         if (browser === null) {
           // No silent fallback to re-rendering the cells ourselves: that would
           // return a picture of what the daemon thinks, labelled as what the

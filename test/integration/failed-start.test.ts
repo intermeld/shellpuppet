@@ -8,7 +8,7 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -23,10 +23,11 @@ const fs = createRequire(import.meta.url)('fs') as { openSync: (...args: unknown
  * A file the start's own checks pass, an `.exe` like any program, that
  * Windows cannot run: it holds text, not an executable image.
  */
-function notAProgram(): string {
-  const file = path.join(mkdtempSync(path.join(os.tmpdir(), 'shellpuppet-not-a-program-')), 'sink.exe');
+function notAProgram(): { dir: string; file: string } {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'shellpuppet-not-a-program-'));
+  const file = path.join(dir, 'sink.exe');
   writeFileSync(file, 'console.log("not an executable image");\n');
-  return file;
+  return { dir, file };
 }
 
 /** Console hosts this process owns: one per pseudoconsole it created. */
@@ -96,10 +97,15 @@ describe('a Windows start that fails part-way', () => {
     'leaves no console host running when the process cannot be created',
     async () => {
       const manager = new SessionManager(compilePolicy(undefined));
-      const command = notAProgram();
-      await expectNoConsoleHostLeft(manager, () => {
-        expect(() => manager.create({ command, shell: false })).toThrow('Cannot create process');
-      });
+      const { dir, file } = notAProgram();
+      try {
+        await expectNoConsoleHostLeft(manager, () => {
+          expect(() => manager.create({ command: file, shell: false })).toThrow('Cannot create process');
+        });
+      } finally {
+        rmSync(dir, { recursive: true, force: true, maxRetries: 3 });
+      }
+      expect(existsSync(dir)).toBe(false);
     },
     180_000,
   );

@@ -21,10 +21,13 @@
  * there is none. `chrome-launcher` (Apache-2.0, ~140 KB) does the fiddly
  * cross-platform detection, which is exactly the part that would otherwise
  * be machine-specific guesswork: the install folders on Windows,
- * LaunchServices on macOS, `.desktop` files and PATH on Linux. Its lookup runs
- * in a child process, never in the daemon (`detectBrowser`). We spawn the
- * browser ourselves, because the detachment discipline below is not
- * negotiable.
+ * LaunchServices on macOS, `.desktop` files and PATH on Linux. On macOS and
+ * Linux the part of that search which shells out runs in a child process,
+ * never in the daemon (`detectBrowser`); on Windows the paths checked by
+ * file access are the whole search, so the child is not run. A lookup that
+ * times out, crashes or returns something other than a JSON list is logged
+ * once. We spawn the browser ourselves, because the detachment discipline
+ * below is not negotiable.
  *
  * Nothing here may ever fail a session start. A browser that will not launch is
  * an inconvenience: the launcher reports that nothing opened, the daemon hands
@@ -40,7 +43,7 @@ import * as fs from 'node:fs';
 import { createRequire } from 'node:module';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { Logger } from '../core/types.js';
+import { NULL_LOGGER, type Logger } from '../core/types.js';
 
 export type ViewerLaunchMode = 'isolated-app' | 'default-browser' | 'none';
 
@@ -164,10 +167,15 @@ const nodeRequire = createRequire(import.meta.url);
 /** The detection the daemon runs: chrome-launcher's, then the supplementary list. */
 export function defaultBrowserDetection(): BrowserDetection {
   let lookupModule = '';
-  try {
-    lookupModule = pathToFileURL(nodeRequire.resolve('chrome-launcher')).href;
-  } catch {
-    // Not installed: the well-known and supplementary paths still apply.
+  // On Windows, `wellKnownChromePaths` is chrome-launcher's entire search,
+  // so a child lookup cannot find a browser that list missed. macOS and
+  // Linux search beyond a fixed list, and that lookup runs in a child.
+  if (process.platform !== 'win32') {
+    try {
+      lookupModule = pathToFileURL(nodeRequire.resolve('chrome-launcher')).href;
+    } catch {
+      // Not installed: the well-known and supplementary paths still apply.
+    }
   }
   return {
     wellKnown: wellKnownChromePaths(),
@@ -182,7 +190,10 @@ export function defaultBrowserDetection(): BrowserDetection {
  * daemon from serving: nothing here throws, and no part of it holds the
  * daemon's event loop (see `detectBrowser`).
  */
-export async function findBrowser(explicitPath?: string): Promise<string | null> {
+export async function findBrowser(
+  explicitPath?: string,
+  logger: Logger = NULL_LOGGER,
+): Promise<string | null> {
   if (explicitPath !== undefined && explicitPath !== '') {
     // Never cached: an operator who names a binary means that binary, and the
     // answer is a single file check anyway.
@@ -197,7 +208,7 @@ export async function findBrowser(explicitPath?: string): Promise<string | null>
   // The promise is memoised, not the value, so a caller that arrives while
   // detection is still running waits for the rest of it instead of starting
   // a second detection of its own.
-  cachedDetection ??= detectBrowser();
+  cachedDetection ??= detectBrowser(defaultBrowserDetection(), logger);
   return cachedDetection;
 }
 
@@ -217,17 +228,21 @@ export function resetBrowserCache(): void {
  * on macOS for long enough that a client gives up on a daemon it has just
  * started. So the paths chrome-launcher itself checks first are tried with
  * asynchronous file checks; only when none exists does its full lookup run,
- * in a child process; and the supplementary list is checked last. The answer
- * is the one chrome-launcher's own ranking gives, then the first supplementary
- * browser present.
+ * in a child process; and the supplementary list is checked last. On Windows
+ * the default detection leaves that lookup empty, because the well-known
+ * paths are the whole search. The answer is the one chrome-launcher's own
+ * ranking gives, then the first supplementary browser present. A lookup that
+ * times out, crashes or prints something other than a JSON list is logged
+ * once, through `logger`.
  */
 export async function detectBrowser(
   detection: BrowserDetection = defaultBrowserDetection(),
+  logger: Logger = NULL_LOGGER,
 ): Promise<string | null> {
   const known = await firstExisting(detection.wellKnown);
   if (known !== null) return known;
   if (detection.lookupModule !== '') {
-    const found = await lookUpInChild(detection.lookupModule, detection.lookupTimeoutMs);
+    const found = await lookUpInChild(detection.lookupModule, detection.lookupTimeoutMs, logger);
     if (found !== null) return found;
   }
   return firstExisting(detection.extra);
@@ -266,7 +281,15 @@ const LOOKUP_SCRIPT = [
   'process.stdout.write(JSON.stringify(found));',
 ].join('\n');
 
-function lookUpInChild(moduleUrl: string, timeoutMs: number): Promise<string | null> {
+function lookUpInChild(
+  moduleUrl: string,
+  timeoutMs: number,
+  logger: Logger,
+): Promise<string | null> {
+  const fail = (reason: string, resolve: (value: string | null) => void): void => {
+    logger.warn('browser lookup failed', { reason });
+    resolve(null);
+  };
   return new Promise((resolve) => {
     try {
       execFile(
@@ -275,20 +298,25 @@ function lookUpInChild(moduleUrl: string, timeoutMs: number): Promise<string | n
         { timeout: timeoutMs, windowsHide: true, encoding: 'utf8', maxBuffer: 1024 * 1024 },
         (error, stdout) => {
           if (error !== null) {
-            resolve(null);
+            fail(error.message, resolve);
             return;
           }
           try {
             const parsed: unknown = JSON.parse(stdout);
-            const first: unknown = Array.isArray(parsed) ? parsed[0] : undefined;
+            if (!Array.isArray(parsed)) {
+              fail('unreadable output', resolve);
+              return;
+            }
+            const first: unknown = parsed[0];
+            // An empty list is a lookup that found nothing, not a failure.
             resolve(typeof first === 'string' && first !== '' ? first : null);
           } catch {
-            resolve(null);
+            fail('unreadable output', resolve);
           }
         },
       );
-    } catch {
-      resolve(null);
+    } catch (error) {
+      fail(error instanceof Error ? error.message : 'lookup failed', resolve);
     }
   });
 }
@@ -401,7 +429,7 @@ export async function launchViewer(
   if (mode === 'none') return { launched: false, mode, reason: 'viewer.launchMode is "none"' };
 
   if (mode === 'isolated-app') {
-    const browser = await findBrowser(config.browserPath);
+    const browser = await findBrowser(config.browserPath, logger);
     if (browser === null) {
       // Degrade rather than fail: the system's opener is tried, and when
       // nothing opens the daemon hands the caller the URL.

@@ -22,19 +22,18 @@ version may change behaviour, and every such change is listed here.
   or agent, is logged as `signature set aside`, with nothing to change: it is
   tried again in a minute. An overrun of an entry from config is a
   `CONFIG PROBLEM` that asks for simpler patterns.
-- On Windows, a start with `shell: false` (`--no-shell`) whose command is not
-  an `.exe` or a `.com`, such as a `.cmd`, `.bat`, `.ps1` or extensionless
-  script, is refused with a 400 that says to run it through the shell or to
-  name its interpreter. Windows runs a batch file given to it as a program
-  through cmd.exe, with the arguments quoted for a program's parser, which
-  cmd reads by other rules; any other script failed with error 193 after the
-  terminal was built.
+- On Windows, a start with `shell: false` (`--no-shell`) is refused with a
+  400 unless the command resolves to an `.exe` or a `.com` file. A `.cmd`,
+  `.bat`, `.ps1` or extensionless script is refused, and so is a path whose
+  file name contains `:`, which names an alternate data stream. The 400 for
+  a script says to run it through the shell or to name its interpreter. A
+  command that contains a path separator and is not absolute is resolved
+  from the session's working directory, and that absolute path is what is
+  checked and started. A bare name is found on PATH.
 - A session started without `cwd` starts in the folder of the client that
   asked for it: `terminal_start` sends the MCP server's working directory and
   `shellpuppet start` the shell's, and a relative `cwd` is taken from there. A
   direct `POST /sessions` with no `cwd` starts in the user's home directory.
-  Sessions started without `cwd` began in the daemon's folder, which was the
-  folder of whichever client had started the daemon.
 - The auto-started daemon runs in the user's home directory, so it holds no
   client's folder open (on Windows, a folder a process runs in cannot be
   deleted or renamed).
@@ -55,11 +54,11 @@ version may change behaviour, and every such change is listed here.
   window does not fit the grid does not ask again; the session's exit follows
   within about a second.
 - `shellpuppet daemon status`, `daemon stop` and the stop half of `daemon
-  restart` never start a daemon. One that went between being found and being
-  asked, as a stopping daemon does, was replaced by a fresh daemon from the
-  build on disk; `status` now reports `not running` (`{ "running": false }`
-  with `--json`), and `stop` reports it as not running. Every other verb still
-  starts a daemon in place of one that has gone.
+  restart` never start a daemon. When the daemon has gone between being found
+  and being asked, `status` reports `not running` (`{ "running": false }`
+  with `--json`), and `stop` reports it as not running. Every other verb
+  still starts a daemon in place of one that has gone. The start half of
+  `daemon restart` is the one start that verb makes.
 - The viewer window and the screenshot browser are started with switches,
   documented in Chromium's source, that ask the browser to make no background
   requests of its own: background networking, component updates, built-in
@@ -75,11 +74,11 @@ version may change behaviour, and every such change is listed here.
   starts: folders with a capture's name, untouched for 10 minutes.
 - The daemon answers `/health` and every request while it detects the browser
   for the viewer window, which it begins as it starts. The paths
-  chrome-launcher checks first are tried by file access alone, and its full
-  lookup, which on macOS takes seconds, runs in a child process, so a first
-  `daemon start` on macOS is no longer at risk of missing the client's
-  ten-second wait. The browser found is the one chrome-launcher ranks first,
-  as before.
+  chrome-launcher checks first are tried by file access alone. On Windows
+  that list is chrome-launcher's whole search, so no further lookup runs. On
+  macOS and Linux the rest of the lookup runs in a child process, and a
+  lookup that times out, crashes or prints something other than a JSON list
+  is logged once. The browser found is the one chrome-launcher ranks first.
 - On Windows, a session whose input pipe refuses a write once its console
   host has gone (`write EAGAIN`), or whose output worker or output socket
   fails, has the failure logged once, and the daemon and its other sessions

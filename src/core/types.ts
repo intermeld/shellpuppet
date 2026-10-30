@@ -85,6 +85,13 @@ export interface SessionOptions {
    * true on Windows because direct ConPTY spawns of single-file binaries hang
    * (§7). Applied AFTER policy evaluation: policy always sees the pre-wrap
    * command (§4.3).
+   *
+   * With `false`, a Windows command must resolve to an `.exe` or a `.com`.
+   * A path whose file name contains `:` names an alternate data stream and
+   * is refused. A command that contains a path separator and is not absolute
+   * is resolved from the session's working directory, and that absolute path
+   * is what is checked and started. A bare name is found on PATH. A
+   * drive-relative command (`D:app.exe`, `D:dir\app.exe`) is not rewritten.
    */
   shell?: boolean;
   /**

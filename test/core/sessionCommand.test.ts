@@ -27,14 +27,19 @@ afterEach(() => {
 
 function script(name: string): string {
   const file = path.join(tempDir, name);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   fs.writeFileSync(file, '@exit /b 0\r\n');
   return file;
 }
 
 /** What starting `command` without the shell, as Windows would, throws. */
-function startOnWindows(command: string): unknown {
+function startOnWindows(command: string, cwd?: string): unknown {
   try {
-    new Session('s1', { command, shell: false }, { platform: 'win32' });
+    new Session(
+      's1',
+      { command, shell: false, ...(cwd !== undefined ? { cwd } : {}) },
+      { platform: 'win32' },
+    );
   } catch (error) {
     return error;
   }
@@ -61,5 +66,32 @@ describe('a command started without the shell on Windows', () => {
     const error = startOnWindows('sp-probe-tool');
     expect(error).toBeInstanceOf(CommandNotFoundError);
     expect((error as Error).message).toContain(`sp-probe-tool (${file})`);
+  });
+
+  it('resolves a relative command from the session working directory', () => {
+    const file = script(path.join('nested', 'run.cmd'));
+    const command = `.${path.sep}${path.join('nested', 'run.cmd')}`;
+    const error = startOnWindows(command, tempDir);
+    expect(error).toBeInstanceOf(CommandNotFoundError);
+    const message = (error as Error).message;
+    expect(message).toContain('Not a program Windows can start directly');
+    expect(message).toContain(file);
+  });
+
+  it('names the absolute path it looked for when a relative command is missing', () => {
+    const command = path.join('missing', 'nope.exe');
+    const error = startOnWindows(command, tempDir);
+    expect(error).toBeInstanceOf(CommandNotFoundError);
+    const message = (error as Error).message;
+    expect(message).toContain('Not an executable file');
+    expect(message).toContain(path.resolve(tempDir, command));
+  });
+
+  it('does not take a bare name from the session working directory', () => {
+    script('sp-cwd-only.CMD');
+    process.env['PATH'] = '';
+    const error = startOnWindows('sp-cwd-only', tempDir);
+    expect(error).toBeInstanceOf(CommandNotFoundError);
+    expect((error as Error).message).toContain('not found on PATH');
   });
 });
