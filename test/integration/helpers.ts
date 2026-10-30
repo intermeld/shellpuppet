@@ -74,16 +74,17 @@ export async function startTestDaemon(
     port,
     token,
     stop: async () => {
-      // Drain sessions in SMALL BATCHES before stopping the daemon. Every
-      // PTY kill on Windows forks a conpty helper process, and a
-      // simultaneous pile of ~15 of those forks during worker teardown can
-      // kill a CI worker at exit after every test has passed (seen on
-      // Windows with Node 20). Fully serial draining is too slow instead:
-      // each tree-kill takes seconds and the 60 s afterAll hook budget
-      // overflows. Batches of four pace the forks while staying well inside
-      // the budget. Test-harness plumbing only: killAll's parallel path stays
-      // covered by the manager unit tests and the forced-shutdown lifecycle
-      // test.
+      // Drain sessions in SMALL BATCHES before stopping the daemon. On
+      // Windows the DELETE of a session whose program runs is a `taskkill`
+      // run of its own: about six seconds with little else running, and up
+      // to its 30 s cap on a loaded machine. A file that leaves dozens of
+      // sessions would take minutes to drain one at a time, past the 60 s
+      // afterAll hook budget. Batches of four stay inside it, and end fewer
+      // programs at the same moment than the daemon's killAll, whose one
+      // `taskkill` run ends them all together; node-pty 1.1.0 can crash
+      // natively when programs end together (design §7). Test-harness
+      // plumbing only: killAll stays covered by the manager unit tests and
+      // the forced-shutdown lifecycle test.
       try {
         const response = await fetch(`http://127.0.0.1:${String(port)}/sessions`, {
           headers: { authorization: `Bearer ${token}` },
