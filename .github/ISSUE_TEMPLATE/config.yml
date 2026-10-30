@@ -1,0 +1,11 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security problem
+    url: https://github.com/intermeld/shellpuppet/blob/main/SECURITY.md
+    about: Please do not open a public issue for a suspected vulnerability. This page has the private route.
+  - name: Questions and ideas
+    url: https://github.com/intermeld/shellpuppet/discussions
+    about: Ask a question, float an idea or show what you've built in Discussions.
+  - name: Getting help
+    url: https://github.com/intermeld/shellpuppet/blob/main/SUPPORT.md
+    about: Where questions, bug reports and commercial enquiries go.

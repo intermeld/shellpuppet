@@ -1,0 +1,41 @@
+name: Feature request
+description: Suggest a capability or a change in behaviour
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before writing, a glance at
+        [VISION.md](https://github.com/intermeld/shellpuppet/blob/main/VISION.md)
+        helps: it says what ShellPuppet is for, what stays in the open core and
+        the principles the project won't trade away, and
+        [ROADMAP.md](https://github.com/intermeld/shellpuppet/blob/main/ROADMAP.md)
+        says what is planned already. An idea that is still taking shape can
+        start in [Discussions](https://github.com/intermeld/shellpuppet/discussions)
+        instead.
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do, and what gets in the way today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you'd like
+      description: The behaviour you want. A sketch of the CLI or tool surface is welcome.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+  - type: checkboxes
+    id: principles
+    attributes:
+      label: Fit with the principles
+      options:
+        - label: This works on a single machine without any account or network connection
+        - label: This keeps a human able to see and step into every session
+        - label: This sends nothing off the machine unless a human sends it or switches it on (ADR-007)

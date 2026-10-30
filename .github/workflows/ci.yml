@@ -1,0 +1,97 @@
+# Cross-platform CI (design §6). The matrix exists to catch divergence between
+# Windows, Linux and macOS early, and between the supported Node lines.
+# The Publish workflow calls this one against every release tag.
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+        node: ['22.x', '24.x']
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      # The viewer page as headless Chromium drew it, for a human to look at
+      # (test/integration/viewer-capture.test.ts). Absent where the test skipped.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: viewer-capture-${{ matrix.os }}-node${{ matrix.node }}
+          path: test-results/
+          if-no-files-found: ignore
+  # The package as a user gets it. The test job runs from the source tree, so
+  # it cannot notice a file missing from the package, a broken install script
+  # or a command shim that does not start. This job packs the tree, installs
+  # the tarball globally into a fresh prefix, lists the MCP server's tools,
+  # drives one session through the installed command and loads the viewer
+  # page with every file it asks for (scripts/package-smoke.mjs).
+  package:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '22.x'
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: node scripts/package-smoke.mjs
+
+  # The same check under npm 12, which runs a dependency's install scripts only
+  # when the person installing allows them, on Node 24:
+  # - Windows and macOS install as the README says, with no flag. node-pty's
+  #   prebuilt binaries need no script there, and ShellPuppet restores the
+  #   macOS spawn-helper's execute bit itself. The runner's prefix is its own,
+  #   so this is the user-owned install. A root-owned one, where the chmod is
+  #   refused and the start says which to run, is covered by the unit tests.
+  # - Linux installs with --allow-scripts=node-pty, as the README says.
+  # - Linux without the flag has no node-pty to load. There a start must refuse
+  #   with the whole reinstall line, and the daemon must keep answering.
+  package-npm12:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: windows-latest, case: 'no flag' }
+          - { os: macos-latest, case: 'no flag' }
+          - { os: ubuntu-latest, case: 'allowed', install-args: '--allow-scripts=node-pty' }
+          - { os: ubuntu-latest, case: 'not allowed', start-fails-with: 'npm install -g --allow-scripts=node-pty shellpuppet' }
+    name: package npm 12 (${{ matrix.os }}, ${{ matrix.case }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '24.x'
+          cache: npm
+      - run: npm install --global npm@12
+      - run: npm ci
+      - run: npm run build
+      - run: node scripts/package-smoke.mjs
+        env:
+          SP_SMOKE_INSTALL_ARGS: ${{ matrix.install-args }}
+          SP_SMOKE_START_FAILS_WITH: ${{ matrix.start-fails-with }}

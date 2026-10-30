@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ShellPuppet: shared terminal</title>
+<!-- SVG first for tabs that support it; the PNGs are what Windows uses for the
+     taskbar button of a Chrome --app window, which an SVG alone leaves as the
+     generic globe. Sizes are declared so the browser picks rather than
+     downscales a 512 into a 16-pixel smear. -->
+<link rel="icon" type="image/svg+xml" href="/viewer/icon.svg">
+<link rel="icon" type="image/png" sizes="16x16" href="/viewer/icon-16.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/viewer/icon-32.png">
+<link rel="icon" type="image/png" sizes="512x512" href="/viewer/icon-512.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/viewer/icon-180.png">
+<link rel="stylesheet" href="/vendor/xterm.css">
+<link rel="stylesheet" href="/viewer/viewer.css">
+</head>
+<body>
+<header>
+  <span class="dot off" id="dot" title="connection state"></span>
+  <h1>ShellPuppet</h1>
+  <span class="hint" id="session-label"></span>
+  <span class="hint" id="session-agent"></span>
+  <span class="spacer"></span>
+  <span class="hint" id="input-source"></span>
+  <span class="hint" id="size"></span>
+  <span class="zoom" role="group" aria-label="Text size">
+    <!-- Symbol-only buttons need an explicit accessible name: `title` is not a
+         dependable one across screen readers, and "−" / "+" alone say nothing. -->
+    <button id="zoom-out" title="Smaller text" aria-label="Smaller text">&minus;</button>
+    <button id="zoom-auto" title="Fit the terminal to the window" aria-label="Fit text size to the window">fit</button>
+    <button id="zoom-in" title="Larger text" aria-label="Larger text">+</button>
+  </span>
+  <button id="readonly" title="Toggle read-only: stops your keystrokes reaching the session">read-only: off</button>
+  <span class="hint" id="mode-hint">you and the agent share this session: type freely</span>
+</header>
+<!-- What this session is and who asked for it. Present from the first paint so a
+     window is identifiable without reading its terminal content, which is the
+     point of the exercise when several are open at once. -->
+<div id="identity" hidden>
+  <span id="identity-purpose"></span>
+  <span id="identity-meta"></span>
+</div>
+<div id="banner" hidden></div>
+<!-- Raised when the daemon reports this session has been sitting on a permission
+     prompt nobody has answered. role=status (not alert) so a screen reader
+     announces it without stealing focus from the terminal the human is typing into. -->
+<div id="prompt-alert" role="status" hidden></div>
+<div id="wrap"><div id="term"></div></div>
+
+<script src="/vendor/xterm.js"></script>
+<script src="/vendor/addon-fit.js"></script>
+<script src="/viewer/viewer.js"></script>
+</body>
+</html>

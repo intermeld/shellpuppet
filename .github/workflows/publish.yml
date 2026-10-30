@@ -1,0 +1,190 @@
+# Publish a release to npm.
+#
+# Runs when a version tag such as v1.2.3 is pushed:
+#   pack     checks the tag (it matches package.json, names a release rather
+#            than a prerelease, and points at a commit on main), then builds
+#            the package and packs it once. It has no publishing rights.
+#   ci       the whole CI workflow (ci.yml) against the tagged commit.
+#   install  installs that tarball on Windows, Linux and macOS and drives a
+#            session through it (scripts/package-smoke.mjs).
+#   publish  waits in the `npm-publish` environment until a maintainer
+#            approves, then stages the same tarball on npm with provenance.
+#            It installs no dependencies and runs no project code: npm is the
+#            only program it trusts.
+#
+# A staged version is not public. It waits on npm until a maintainer approves
+# it there with two-factor authentication. The Verify release workflow
+# (verify-release.yml) then checks what npm serves.
+#
+# No npm token is used here. The package's trusted publisher on npmjs.com
+# names this repository, this file and the `npm-publish` environment, and
+# allows `npm stage publish` only. npm exchanges the job's OIDC identity for a
+# short-lived credential that can stage a version but not publish one.
+#
+# The release procedure, and the settings outside this repository that it
+# relies on, are in docs/reference/releasing.md.
+name: Publish
+on:
+  push:
+    tags: ['v*.*.*']
+permissions:
+  contents: read
+concurrency:
+  group: publish
+  cancel-in-progress: false
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    outputs:
+      tarball: ${{ steps.pack.outputs.tarball }}
+      sha256: ${{ steps.pack.outputs.sha256 }}
+    steps:
+      # An early, readable refusal. The binding check is --provenance in the
+      # publish job, which fails on a private repository in any case.
+      - name: Refuse a private repository
+        if: github.event.repository.private
+        run: |
+          echo "::error::The repository is private, so npm cannot attach provenance. Make it public first."
+          exit 1
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      # No dependency cache: this job builds what is published.
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '22.x'
+      # This workflow publishes stable releases only. npm would refuse a
+      # prerelease without a dist-tag, but at the publish step, after the
+      # approval; this refuses it before anything else runs.
+      - name: The tag matches package.json, is a release and points at a commit on main
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="v$(node -p "require('./package.json').version")"
+          if [ "$TAG" != "$version" ]; then
+            echo "::error::Tag $TAG does not match the version in package.json ($version)."
+            exit 1
+          fi
+          case "$version" in
+            *-* | *+*)
+              echo "::error::$version is a prerelease or carries build metadata; this workflow publishes release versions only."
+              exit 1
+              ;;
+          esac
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::Tag $TAG points at a commit that is not on main."
+            exit 1
+          fi
+      - run: npm ci
+      - run: npm run build
+      - name: Pack
+        id: pack
+        run: |
+          tarball="$(npm pack --json | node -p "JSON.parse(require('fs').readFileSync(0, 'utf8'))[0].filename")"
+          echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(sha256sum "$tarball" | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: package
+          path: ${{ steps.pack.outputs.tarball }}
+          if-no-files-found: error
+  ci:
+    needs: pack
+    uses: ./.github/workflows/ci.yml
+  install:
+    needs: pack
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '22.x'
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: package
+          path: package
+      - name: Install the tarball and drive a session through it
+        env:
+          TARBALL: ${{ needs.pack.outputs.tarball }}
+        run: node scripts/package-smoke.mjs "package/$TARBALL"
+  publish:
+    needs: [pack, ci, install]
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: npm-publish
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5
+        with:
+          node-version: '22.x'
+          registry-url: 'https://registry.npmjs.org'
+      # Staged publishing needs npm 11.15.0 or later, and Node 22 ships npm 10.
+      - run: npm install --global npm@11.20.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: package
+      - name: The tarball is the one the other jobs checked
+        env:
+          TARBALL: ${{ needs.pack.outputs.tarball }}
+          SHA256: ${{ needs.pack.outputs.sha256 }}
+        run: echo "$SHA256  $TARBALL" | sha256sum --check
+      # Staged, not published: the version stays out of public view until a
+      # maintainer approves it on npm.
+      # --provenance: npm refuses to stage at all rather than stage without a
+      # provenance statement (from a private repository, or under a
+      # configuration that turns provenance off).
+      # --ignore-scripts: nothing from the package runs while this job holds
+      # the publishing identity.
+      - name: Stage for approval
+        id: stage
+        env:
+          TARBALL: ${{ needs.pack.outputs.tarball }}
+        run: |
+          set -o pipefail
+          npm stage publish "./$TARBALL" --provenance --ignore-scripts 2>&1 | tee stage.log
+          stage_id="$(sed -n 's/.*(staged with id \([0-9a-fA-F-]*\)).*/\1/p' stage.log | tail -n 1)"
+          if [ -z "$stage_id" ]; then
+            echo "::error::npm staged the package but printed no stage id. Find it with 'npm stage list shellpuppet' (docs/reference/releasing.md)."
+            exit 1
+          fi
+          echo "stage_id=$stage_id" >> "$GITHUB_OUTPUT"
+      - name: Say what to check and approve
+        env:
+          TARBALL: ${{ needs.pack.outputs.tarball }}
+          SHA256: ${{ needs.pack.outputs.sha256 }}
+          STAGE_ID: ${{ steps.stage.outputs.stage_id }}
+        run: |
+          # `npm stage download` names the file <name>-<version>-<stage id>.tgz.
+          downloaded="${TARBALL%.tgz}-$STAGE_ID.tgz"
+          {
+            echo "## Staged on npm, not yet public"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Tarball | \`$TARBALL\` |"
+            echo "| SHA-256 | \`$SHA256\` |"
+            echo "| Stage id | \`$STAGE_ID\` |"
+            echo
+            echo "Check that npm holds this tarball, then approve it (docs/reference/releasing.md):"
+            echo
+            echo '```sh'
+            echo "npm stage download $STAGE_ID"
+            echo "sha256sum $downloaded   # must print $SHA256"
+            echo "npm stage approve $STAGE_ID   # asks for two-factor authentication"
+            echo '```'
+            echo
+            echo "In PowerShell the check is \`(Get-FileHash $downloaded -Algorithm SHA256).Hash.ToLower()\`."
+            echo
+            echo "Approve only if this whole run succeeds. Once it is approved, run the Verify release workflow with this version and this run's id ($GITHUB_RUN_ID)."
+          } >> "$GITHUB_STEP_SUMMARY"

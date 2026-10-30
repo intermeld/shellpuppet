@@ -1,0 +1,80 @@
+# Changelog
+
+Notable changes to ShellPuppet, newest first. The format is based on
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and versions follow
+[Semantic Versioning](https://semver.org/spec/v2.0.0.html). Before 1.0 a minor
+version may change behaviour, and every such change is listed here.
+
+## [0.1.0] - 2026-10-30
+
+The first public release.
+
+### Added
+
+- A per-user daemon that owns real terminal sessions: a real PTY (ConPTY on
+  Windows) rendered through a real terminal emulator, listening on
+  `127.0.0.1` only and shared by every client the user runs on the machine.
+- An MCP server with twelve tools (start, snapshot, type, key, wait, find,
+  result, list, resize, screenshot, viewer-url, kill) and a CLI with a verb
+  for each, spelled `snap` for the snapshot. A tool refuses a parameter it
+  does not define, naming it.
+- Reading an agent CLI without its reasoning: `terminal_snapshot`,
+  `terminal_find` and `terminal_wait` take `hideReasoning`, and
+  `terminal_result` returns the answer that ended the latest turn and nothing
+  else. Signatures for Claude Code, Codex, Qoder, OpenCode, MiMo Code, Grok
+  and Antigravity are built in, and config `agents.signatures` adds others.
+  `terminal_start`'s `agent` (CLI `--agent`) names the CLI a session runs. A
+  session with no signature is refused, never shown unfiltered.
+- Waits on text, a regular expression, quiescence or a permission prompt,
+  with a time budget on caller-supplied patterns so one pattern cannot stall
+  the daemon.
+- Detection of permission prompts in driven agent CLIs, and of the select,
+  multi-select and confirm steps drawn by `@clack/prompts` (the create-vite
+  and `sv create` wizards, MiMo Code's folder-trust question), with sessions
+  that sit on one flagged and the viewer badged.
+- Permission dialogs that a program draws inside its own screen, with its
+  choices as a row of buttons, recognised by signature: OpenCode's and MiMo
+  Code's are built in, and config `prompts.dialogs` adds others without a
+  release.
+- Variables from the client's own environment passed into a session it
+  starts, only those a person has listed: per agent CLI in config
+  `agents.passEnv`, which a session started as that agent receives with
+  nothing named at start, and for other programs in config `mcp.passEnv`,
+  named at start (`terminal_start` `envNames`, `shellpuppet start
+  --env-name`). Names are recorded; values never appear in tool results, the
+  CLI's output, logs, the audit trail or the viewer.
+- `shellpuppet start --no-viewer` opens no viewer window, for a short scripted
+  session nobody needs to watch; `viewer-url` still gives a link to it.
+- Sessions start with a clean environment: a minimal functional set rather
+  than the daemon's whole environment, which is whatever the client that
+  auto-started the daemon had (ADR-008).
+  - Config `sessionEnv` adds names to it, or with `"passthrough"` hands on
+    everything. Under passthrough the daemon names the credential-shaped
+    variables it passes on, in `daemon.log` and `daemon status`, and never
+    shows their values.
+- A browser viewer on the same session for a human to watch and type into. A
+  window opens when a session starts, and the caller is given a link only when
+  none opened, or on request. Viewer links work once and expire after five
+  minutes; read-only links are enforced by the daemon; the human's window sets
+  the grid unless the session holds it.
+- Screenshots of the viewer through a headless Chromium-family browser.
+- Installs under npm 12, which runs a dependency's install scripts only when
+  allowed:
+  - ShellPuppet has no install script of its own. It restores the execute bit
+    on node-pty's macOS helper itself.
+  - On Linux, install with `--allow-scripts=node-pty` so that node-pty is
+    built.
+  - When node-pty cannot open a terminal, starting a session says what to do,
+    and the daemon keeps running.
+- Token authentication, `Host` and `Origin` checks, a command policy
+  (allowlist or denylist), an audit log that keeps a viewer's automatic
+  terminal replies apart from what people type, and a kill that ends the
+  whole process tree.
+- No telemetry, usage reporting, crash reporting or update checks, and no
+  outbound path at all: nothing leaves the machine unless a person sends it or
+  switches it on.
+
+## [0.0.1] - 2026-08-25
+
+A placeholder that reserved the package name. It contains no functionality;
+install 0.1.0 or later.

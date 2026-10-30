@@ -1,0 +1,17 @@
+     + Thought · 2.3s
+
+     Now build the project, logging the output:
+
+  ┃                                                                                                                                                         ⬖ Getting started                ✕
+  ┃  ⠏ dotnet build Example.Library.Solutions.slnf -c Release 2>&1 | tee artifacts/logs/build-release-ab.tx | tail -6; printf '\nexit line: BUILD_EXIT
+  ┃    =%s\n' "${PIPESTATUS[0]}" | tee -a artifacts/logs/build-release-ab.tx                                                                                  OpenCode includes free models so
+  ┃                                                                                                                                                           you can start immediately.
+
+     Press ctrl+b to move running work to the background                                                                                                      Connect from 75+ providers to
+                                                                                                                                                              use other models, including
+  ┃                                                                                                                                                           Claude, GPT, Gemini etc
+  ┃
+  ┃                                                                                                                                                           Connect provider        /connect
+  ┃  Build · Example model, example p
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+   ⬝⬝⬝⬝⬝⬝⬝⬝ esc interrupt                                                                                     ↓ 1 shell · 98.9K (10%)  ctrl+p commands    ~/projects/example-app

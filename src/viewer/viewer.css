@@ -1,0 +1,84 @@
+:root { color-scheme: dark; }
+html, body { height: 100%; margin: 0; }
+body {
+  background: #0b0e14; color: #c5cdd9; display: flex; flex-direction: column;
+  font: 13px ui-monospace, "Cascadia Code", Consolas, monospace; overflow: hidden;
+}
+header {
+  display: flex; align-items: center; gap: 12px; padding: 7px 14px; flex: 0 0 auto;
+  background: #141922; border-bottom: 1px solid #232a36;
+}
+header h1 { font-size: 13px; margin: 0; font-weight: 600; letter-spacing: .02em; }
+/* Keep status labels on one line; the trailing hint is the only thing that
+   gives way, truncating rather than wrapping the header onto three rows. */
+header > * { white-space: nowrap; flex: 0 0 auto; }
+#mode-hint { overflow: hidden; text-overflow: ellipsis; min-width: 0; flex: 0 1 auto; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: #3fb950; flex: 0 0 auto; }
+.dot.off { background: #f85149; }
+button {
+  background: #1c2330; color: #c5cdd9; border: 1px solid #2d3542;
+  border-radius: 5px; padding: 4px 9px; font: inherit; cursor: pointer;
+}
+button.active { background: #3d2c14; border-color: #8a6d3b; color: #e8c284; }
+.spacer { flex: 1 1 auto; }
+.hint { color: #6b7684; font-size: 12px; }
+#input-source.agent { color: #6cb6ff; }
+#input-source.human { color: #7ee787; }
+#banner {
+  flex: 0 0 auto; padding: 8px 14px; background: #3d1d1f; color: #ffa198;
+  border-bottom: 1px solid #6e2c30; font-size: 12px;
+}
+
+/* Session identity strip. Quiet by design: it must be readable at a glance
+   when switching windows, without competing with the terminal for attention. */
+#identity {
+  flex: 0 0 auto; padding: 6px 14px; background: #12191f; color: #9fb4c7;
+  border-bottom: 1px solid #22303c; font-size: 12px;
+  display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap;
+}
+#identity-purpose { color: #d7e3ee; font-weight: 600; }
+#identity-meta { color: #7d93a6; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+
+/* Amber, not the banner's red: a held prompt is the session waiting on YOU, not
+   a fault. Deliberately loud: the whole feature exists because a held prompt
+   can go unnoticed for minutes at a time. */
+#prompt-alert {
+  flex: 0 0 auto; padding: 8px 14px; background: #3d2f14; color: #f0c674;
+  border-bottom: 1px solid #7a5c1e; font-size: 12px;
+}
+#prompt-alert .question {
+  font-weight: 600; color: #ffd479;
+}
+#prompt-alert .options {
+  margin: 4px 0 0; padding-left: 20px; color: #d8b46a;
+}
+.zoom { display: flex; gap: 4px; align-items: center; }
+.zoom button { padding: 3px 8px; min-width: 26px; line-height: 1; }
+.zoom button.active { background: #14303d; border-color: #2f6b86; color: #6cb6ff; }
+
+/* The wrap centres the terminal. A HELD session keeps a fixed grid (it was asked
+   for explicitly and the PTY must keep it), so it is scaled to fill the window
+   by FONT SIZE rather than by changing the grid: see fitGridByFont in viewer.js.
+   Centring keeps any leftover margin even instead of stranding the content in
+   the top-left corner. */
+#wrap {
+  flex: 1 1 auto; min-height: 0; padding: 6px 8px; box-sizing: border-box;
+  overflow: hidden;
+}
+/* #term must keep filling the available box so the fit addon measures the real
+   space. So the centring has to happen INSIDE it, on the .xterm element
+   the addon actually sizes. Centring #wrap's children does nothing, because
+   #term is the only child and it is already 100% of the box. */
+#term { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+
+/* Capture mode (headless screenshot): the terminal and nothing else. */
+body.capture header, body.capture #identity, body.capture #banner, body.capture #prompt-alert {
+  display: none;
+}
+#term .xterm { margin: 0 auto; }
+/* auto, not xterm's default scroll: a scrollbar track drawn permanently down the
+   edge implies there is something to scroll to, and with the grid fitted to the
+   window there usually is not. */
+.xterm-viewport { overflow-y: auto !important; }
+.xterm-viewport::-webkit-scrollbar { width: 10px; }
+.xterm-viewport::-webkit-scrollbar-thumb { background: #2d3542; border-radius: 5px; }

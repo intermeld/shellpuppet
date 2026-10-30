@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="ShellPuppet">
+  <title>ShellPuppet</title>
+  <!--
+    ShellPuppet mark: a puppeteer's control cross on strings, holding a terminal
+    prompt. Both halves of the name in one shape.
+
+    Made of a few plain vector shapes, because it has to survive being drawn
+    16 pixels wide in a taskbar.
+
+    Two things are deliberate:
+
+    - The control piece is the classic CROSSED PAIR seen slightly from above, so
+      the two bars are rotated only ~17 degrees off horizontal. A steeper X
+      would be more obviously a cross at 512px and an unreadable smudge at 32px;
+      the shallow crossing keeps a horizontal mass at the top, which is what
+      still reads when the icon is small.
+    - The caret is smaller than the rig is wide but heavier in stroke, because
+      weight survives downscaling and size does not. It is the part that must
+      still say "terminal" when the strings have collapsed to one pixel.
+
+    The tile, caret and rig colours are the viewer's own (viewer.css), so the
+    icon and the app it opens look like one product; the shadow belongs to the
+    mark alone:
+      #0b0e14  tile   - the terminal background
+      #6cb6ff  caret  - the cursor blue
+      #f0c674  rig    - the prompt-alert amber
+      #c99a3f  shadow - the underside of the lower bar, the only shading in the
+                        mark; it is what makes the pair read as crossed wood
+                        rather than as a flat asterisk.
+  -->
+  <rect width="512" height="512" rx="112" fill="#0b0e14"/>
+
+  <!-- Control cross. The lower bar is drawn first and darker so the upper bar
+       reads as lying across it: the minimum cue for "viewed from above". -->
+  <g transform="translate(256 132)">
+    <rect x="-168" y="-17" width="336" height="34" rx="10" fill="#c99a3f"
+          transform="rotate(-17)"/>
+    <rect x="-168" y="-17" width="336" height="34" rx="10" fill="#f0c674"
+          transform="rotate(17)"/>
+  </g>
+
+  <!-- Strings. 20 wide, not hairlines: a 1px string vanishes entirely when the
+       icon is scaled down. Each ENDS ON what it holds: never short of it, never
+       across it. Left lands on the chevron's top vertex, right on the underscore.
+
+       These coordinates are DERIVED from the scaled caret below, not guessed:
+       with transform="translate(66 128) scale(0.72)", the chevron's top vertex
+       (180,208) lands at (195.6, 277.8) and the underscore's top edge (y=416)
+       lands at y=427.5. Getting this wrong is the easiest mistake in this
+       file: if the caret's scale or offset ever changes, recompute these two
+       rects rather than nudging them by eye. -->
+  <g fill="#f0c674">
+    <rect x="186" y="150" width="20" height="132"/>
+    <rect x="300" y="150" width="20" height="280"/>
+  </g>
+
+  <!-- The prompt, drawn on the 512 grid and scaled to 0.72, centred under the
+       rig so the rig can be a cross without the two fighting for the same
+       space. -->
+  <g fill="#6cb6ff" transform="translate(66 128) scale(0.72)">
+    <!-- Chevron as an outline path, not a stroked polyline, so the mitre stays
+         sharp at every size and no renderer rounds it for us. -->
+    <path d="M180 208 L136 252 L216 332 L136 412 L180 456 L304 332 Z"/>
+    <rect x="264" y="416" width="128" height="40" rx="8"/>
+  </g>
+</svg>

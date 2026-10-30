@@ -1,0 +1,19 @@
+# Dependency updates. A new dependency needs the justification CONTRIBUTING.md
+# asks for; a version update does not. Dependabot opens the pull request, and
+# a maintainer reads what it pulls in before merging.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      minor-and-patch:
+        update-types: [minor, patch]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday

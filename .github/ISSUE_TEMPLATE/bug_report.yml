@@ -1,0 +1,67 @@
+name: Bug report
+description: Something is broken or behaves differently from the documentation
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. **Security problems do not belong here**: see
+        [SECURITY.md](https://github.com/intermeld/shellpuppet/blob/main/SECURITY.md)
+        for the private route. Please check pasted logs for secrets first;
+        terminal output often contains tokens that programs echo.
+  - type: input
+    id: version
+    attributes:
+      label: ShellPuppet version or commit
+      placeholder: "0.1.0, or a commit hash"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Node.js version and operating system
+      placeholder: "Node 22.x on Windows 11 / macOS 15 / Ubuntu 24.04"
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      options:
+        - Daemon
+        - CLI
+        - MCP server
+        - Viewer
+        - Not sure
+    validations:
+      required: true
+  - type: input
+    id: agent
+    attributes:
+      label: Agent CLI being driven, if any
+      placeholder: "Claude Code, Codex, Antigravity, Gemini CLI, Goose, Qoder, Grok, other"
+  - type: textarea
+    id: steps
+    attributes:
+      label: What you did
+      description: Step by step, including the exact command or tool call.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead
+      description: Include the relevant lines of `~/.shellpuppet/daemon.log` if you can.
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Configuration that might matter
+      description: Command policy, `sessionEnv`, viewer launch mode, anything non-default.

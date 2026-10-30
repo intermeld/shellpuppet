@@ -1,0 +1,87 @@
+# Identity-hygiene check.
+#
+# THREAT MODEL: read this before trusting or extending it. This check exists to
+# stop the MAINTAINERS accidentally committing a specific set of sensitive
+# strings (internal names and paths) in plaintext. It is not, and does not claim
+# to be, a general content-security boundary: it does not decode archives or
+# images, and an adversary who *wanted* to smuggle an encoded string past it
+# could. The adversary it is designed against is our own muscle memory.
+#
+# The pattern list lives in an Actions secret so the denylist itself never
+# appears in the repository; the step prints file paths only (secret values are
+# masked in logs regardless).
+#
+# Fail-closed properties:
+#   - A missing/empty pattern secret FAILS the run unless the run is a fork PR
+#     (forks never receive secrets). Fork-PR skips are announced, and the same
+#     content is re-scanned by the push run when merged. That is detective,
+#     not preventive, for that path; maintainers scan fork PRs locally before
+#     merge.
+#   - A grep error (exit >= 2, e.g. a malformed pattern) FAILS the run.
+#   - The scan covers FULL HISTORY (all commits, all refs), not just HEAD,
+#     because a public repository publishes its history, not just HEAD.
+#   - A weekly scheduled run surfaces a silently broken secret within days.
+name: Content checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "17 6 * * 1"
+permissions:
+  contents: read
+jobs:
+  policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          fetch-depth: 0
+      - name: Content policy
+        env:
+          PATTERNS: ${{ secrets.CONTENT_POLICY_PATTERNS }}
+          IS_FORK: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork }}
+        run: |
+          # The runner injects bash -e; this script manages exit codes itself.
+          set +e -u
+          if [ -z "${PATTERNS:-}" ]; then
+            if [ "${IS_FORK}" = "true" ]; then
+              echo "::notice::Fork PR: patterns unavailable to forks; content is re-scanned on merge."
+              exit 0
+            fi
+            echo "::error::CONTENT_POLICY_PATTERNS is not set or not readable. Failing closed."
+            exit 1
+          fi
+          # Validate the pattern compiles before trusting any scan with it
+          # (rc 1 = valid pattern, no match in the probe: the normal case).
+          echo probe | grep -qiE -e "$PATTERNS"
+          rc=$?
+          if [ "$rc" -ge 2 ]; then
+            echo "::error::Pattern set does not compile (grep rc=$rc). Failing closed."
+            exit 1
+          fi
+          fail=0
+          # 1) Working tree at HEAD (paths printed, contents never).
+          grep -rilE --exclude-dir=.git -e "$PATTERNS" . > /tmp/tree.txt
+          rc=$?
+          if [ "$rc" -ge 2 ]; then echo "::error::Tree scan failed (grep rc=$rc). Failing closed."; exit 1; fi
+          if [ -s /tmp/tree.txt ]; then
+            echo "::error::Content policy violation in the working tree:"; cat /tmp/tree.txt; fail=1
+          fi
+          # 2) Full history: every blob reachable from any ref (commit:path).
+          git grep -ilE -e "$PATTERNS" $(git rev-list --all) -- > /tmp/hist.txt 2>/dev/null
+          rc=$?
+          if [ "$rc" -ge 2 ]; then echo "::error::History scan failed (git grep rc=$rc). Failing closed."; exit 1; fi
+          if [ -s /tmp/hist.txt ]; then
+            echo "::error::Content policy violation in HISTORY (commit:path):"; sort -u /tmp/hist.txt | head -50; fail=1
+          fi
+          # 3) Commit messages.
+          git log --all --format='%H %s %b' > /tmp/msgs.txt
+          grep -qiE -e "$PATTERNS" /tmp/msgs.txt
+          rc=$?
+          if [ "$rc" -ge 2 ]; then echo "::error::Message scan failed (grep rc=$rc). Failing closed."; exit 1; fi
+          if [ "$rc" -eq 0 ]; then
+            echo "::error::Content policy violation in commit message(s)."; fail=1
+          fi
+          [ "$fail" -eq 1 ] && exit 1
+          echo "Content policy: clean (tree, full history, commit messages)."

@@ -1,0 +1,31 @@
+ShellPuppet
+Copyright 2026 Red Eagle Tech Ltd
+
+This product includes software developed by third parties, listed below with
+the attribution their licences require (ADR-002). Only dependencies whose
+licence asks for a notice appear here; the full set, with versions, is in
+package.json and package-lock.json.
+
+------------------------------------------------------------------------------
+chrome-launcher (https://github.com/GoogleChrome/chrome-launcher)
+Licensed under the Apache License, Version 2.0.
+
+   Copyright 2014 Google Inc.
+
+------------------------------------------------------------------------------
+lighthouse-logger (https://github.com/GoogleChrome/lighthouse), a dependency of
+chrome-launcher.
+Licensed under the Apache License, Version 2.0.
+
+   Copyright 2014 Google Inc.
+
+------------------------------------------------------------------------------
+marky (https://github.com/nolanlawson/marky), a dependency of
+lighthouse-logger.
+Licensed under the Apache License, Version 2.0.
+
+   Copyright 2016 Nolan Lawson
+
+------------------------------------------------------------------------------
+A copy of the Apache License, Version 2.0 is in LICENSE, and at
+http://www.apache.org/licenses/LICENSE-2.0
