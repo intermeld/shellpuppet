@@ -570,11 +570,11 @@ default (ADR-008).
   gives. The human decides which names can move. A session that runs as an agent CLI
   (named by `agent`, or recognised by its command as the daemon recognises it) gets
   the names listed for that agent in config `agents.passEnv`, with nothing asked for at
-  start, and a name asked for beyond them refuses the start; the daemon parses and
-  reports the lists, the clients apply them. Any other session gets only the names
-  asked for through `envNames` or the CLI's `--env-name` that are listed in config
-  `mcp.passEnv` (empty by default), and any other name refuses the start. The agent
-  asks; it never chooses, since a variable it could move into a
+  start, and a name asked for beyond them refuses the start. Any other session gets
+  only the names asked for through `terminal_start`'s `envNames` or the CLI's
+  `--env-name` that are listed in config `envNames` (empty by default), and any other
+  name refuses the start. The daemon parses and reports both lists, the clients apply
+  them. The agent asks; it never chooses, since a variable it could move into a
   session it reads is one it could read. Values stay out of tool results, logs, the audit
   trail (names only, whatever `captureContent` says), session state and the viewer, and
   a refusal names a variable, never its value.

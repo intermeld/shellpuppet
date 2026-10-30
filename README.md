@@ -224,7 +224,7 @@ window could open, and `terminal_viewer_url` mints one whenever you ask: for a
 second device, a closed window or someone who should watch without typing.
 Links work once and for a few minutes. An agent CLI that needs a key held only in the
 client's environment gets the names you list for it in `agents.passEnv`, and any
-other program the names you list in `mcp.passEnv` and ask for at start
+other program the names you list in config `envNames` and ask for at start
 (`docs/reference/configuration.md`). Sessions
 otherwise start with a clean environment, not the daemon's, so a key in the
 daemon's environment doesn't reach them. `terminal_screenshot` returns a PNG of the viewer as a

@@ -40,7 +40,7 @@ time is given instead, and the CLI is ready once you answer it.
 | OpenCode 2.0.26 | **0.6 to 5.7 s** | ready at **7 to 12 s** | Showed an update notice beside its composer on both runs. |
 | MiMo Code 0.1.16 | **6.2 to 6.4 s** | trust question at **6.2 to 6.4 s** | Asks for trust on first use in a folder. |
 | Grok 1.0.70 | **1.2 to 1.3 s** | ready at **1.2 to 1.3 s** | Wait on its input box: the `Shift+Tab` hint under it is not always drawn, and runs that waited on the hint did not all see it. |
-| Goose 1.41.0 | **0.4 s** | not reached | Stopped at a configuration error about its provider key and keyring on the measuring machine, where Goose is not set up. Run `goose configure` first; a key it reads from its environment has to be passed in (it has no agent signature yet, so through `mcp.passEnv` and `envNames`). In July, configured, it painted nothing for about 29 s while starting its MCP extension fleet of 89 processes; budget 90 to 150 s cold. |
+| Goose 1.41.0 | **0.4 s** | not reached | Stopped at a configuration error about its provider key and keyring on the measuring machine, where Goose is not set up. Run `goose configure` first; a key it reads from its environment has to be passed in (it has no agent signature yet, so through config `envNames` and `terminal_start`'s `envNames`). In July, configured, it painted nothing for about 29 s while starting its MCP extension fleet of 89 processes; budget 90 to 150 s cold. |
 
 Gemini CLI is not installed on the measuring machine. In July, at
 version 0.52, it printed an update banner at once, then auto-updated and

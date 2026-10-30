@@ -1,51 +1,30 @@
 /**
- * The MCP adapter's own section of `config.json` (the daemon reads the
- * rest): the framing toggle at launch, the variable list at every
- * `terminal_start`. Problems are reported through the logger, which
- * the adapter points at stderr: stdout belongs to the MCP protocol.
+ * The MCP adapter's own section of `config.json` (the daemon parses the
+ * rest, the variable lists included): the framing toggle at launch. Also the
+ * rules by which the MCP server and the CLI apply those lists at every start.
+ * Problems are reported through the logger, which the adapter points at
+ * stderr: stdout belongs to the MCP protocol.
  */
 
 import * as fs from 'node:fs';
 import { configPath } from '../daemon/paths.js';
-import { ENV_NAME_PATTERN } from '../core/types.js';
 import type { Logger } from '../core/types.js';
 
 export interface McpConfig {
   /** §4.4 framing toggle: `{ "mcp": { "untrustedFraming": false } }` disables. */
   untrustedFraming: boolean;
-  /**
-   * The variables a client may pass into a session from its own environment:
-   * this server for `terminal_start`'s `envNames`, and the CLI for
-   * `start --env-name` (§4.6). Set by the human, so the agent driving either
-   * can ask only for these; empty when unset, so nothing passes until a
-   * person lists something.
-   */
-  passEnv: string[];
 }
 
-const DEFAULTS: McpConfig = { untrustedFraming: true, passEnv: [] };
+const DEFAULTS: McpConfig = { untrustedFraming: true };
 
 /** The `mcp` section of a parsed config, with defaults for what is absent. */
-export function parseMcpConfig(parsed: unknown, logger: Logger): McpConfig {
+export function parseMcpConfig(parsed: unknown): McpConfig {
   const mcp =
     typeof parsed === 'object' && parsed !== null
-      ? (parsed as { mcp?: { untrustedFraming?: unknown; passEnv?: unknown } }).mcp
+      ? (parsed as { mcp?: { untrustedFraming?: unknown } }).mcp
       : undefined;
   if (mcp === undefined || mcp === null) return { ...DEFAULTS };
-
-  const listed = mcp.passEnv;
-  let passEnv: string[] = [];
-  if (Array.isArray(listed)) {
-    passEnv = listed.filter(
-      (name): name is string => typeof name === 'string' && ENV_NAME_PATTERN.test(name),
-    );
-    if (passEnv.length !== listed.length) {
-      logger.warn('mcp.passEnv: ignoring entries that are not variable names');
-    }
-  } else if (listed !== undefined) {
-    logger.warn('mcp.passEnv must be an array of variable names: passing none');
-  }
-  return { untrustedFraming: mcp.untrustedFraming !== false, passEnv };
+  return { untrustedFraming: mcp.untrustedFraming !== false };
 }
 
 /**
@@ -83,7 +62,7 @@ export function resolvePassedEnv(
  * session the agent's list is the whole answer: its names pass without being
  * asked for, and a requested name off that list refuses the start. A session
  * that runs as no agent passes only requested names on `adHoc`
- * (`mcp.passEnv`). Names, never values, go into the notes and the refusal.
+ * (config `envNames`). Names, never values, go into the notes and the refusal.
  */
 export function planPassedEnv(input: {
   agent: string | null;
@@ -121,7 +100,7 @@ export function readMcpConfig(home: string, logger: Logger): McpConfig {
     return { ...DEFAULTS };
   }
   try {
-    return parseMcpConfig(JSON.parse(raw), logger);
+    return parseMcpConfig(JSON.parse(raw));
   } catch {
     logger.warn('config.json could not be parsed: using the MCP defaults');
     return { ...DEFAULTS };

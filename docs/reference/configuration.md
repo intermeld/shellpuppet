@@ -36,6 +36,12 @@ Full example, everything optional:
   // TERM and COLORTERM are always injected regardless.
   "sessionEnv": "clean",
 
+  // Variables a caller may copy from its OWN environment into a session it
+  // starts by naming them: terminal_start's envNames and shellpuppet start
+  // --env-name, for a program that is not an agent CLI. Empty by default:
+  // nothing is passed until you list it. See below.
+  "envNames": [],
+
   // Audit log (design §4.5). captureContent also records the full
   // text of every keystroke: SECRET-CAPTURING, for debugging only.
   "audit": {
@@ -80,12 +86,7 @@ Full example, everything optional:
   // MCP adapter options.
   "mcp": {
     // Wrap screen content returned by tools in UNTRUSTED DATA delimiters.
-    "untrustedFraming": true,
-
-    // Variables the MCP server may copy from its OWN environment into a
-    // session it starts, when terminal_start names them in envNames. Empty
-    // by default: nothing is passed until you list it. See below.
-    "passEnv": []
+    "untrustedFraming": true
   }
 }
 ```
@@ -255,20 +256,24 @@ signature or a list that is not one, is reported in `daemon.log` as a
 For a program that is not one of the agent CLIs, name the variable at start
 instead:
 
-1. List its name in `mcp.passEnv`, for example
-   `"mcp": { "passEnv": ["NPM_TOKEN"] }`. The MCP server and the CLI
-   read the list at every start, so a change needs no restart.
+1. List its name in `envNames`, at the top level of `config.json`, for
+   example `"envNames": ["NPM_TOKEN"]`. The MCP server and the CLI read
+   the list at every start, so a change needs no restart.
 2. Name it when you start the session: `terminal_start`'s `envNames`, or
    `shellpuppet start --env-name NPM_TOKEN ...` (repeat the flag for
    more than one). The MCP server or the CLI copies the value from its own
    environment and the session gets it on top of whatever `sessionEnv` gives
    it.
 
-The list is yours, not the agent's: an agent can ask only for names on it, and
-a name that is not on it refuses the start. A listed name that is not set in
-the client's environment is reported by name, and the session starts
-without it. Values are never shown in tool results, the CLI's output, logs,
-the audit trail or the viewer; the audit trail records the names.
+This one list governs both routes: `terminal_start`'s `envNames` and the
+CLI's `--env-name` can each ask only for names on it. The list is yours, not
+the agent's: a name that is not on it refuses the start. A listed name that is
+not set in the client's environment is reported by name, and the session
+starts without it. Values are never shown in tool results, the CLI's output,
+logs, the audit trail or the viewer; the audit trail records the names. An
+entry that is not a variable name is left out, and a value that is not a list
+passes nothing; either is reported in `daemon.log` as a `CONFIG PROBLEM`, by
+the MCP server on stderr, and by the CLI on a start that names a variable.
 
 ## Policy notes
 

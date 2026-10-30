@@ -69,6 +69,14 @@ export interface DaemonConfig {
    * daemon only checks them, so a mistake is reported in `daemon.log` too.
    */
   agentPassEnv?: Record<string, string[]>;
+  /**
+   * The variables a caller may name at start for a session that runs as no
+   * agent (`envNames`, design §4.6): `terminal_start`'s `envNames` and the
+   * CLI's `--env-name`. The MCP server and the CLI hold the values and apply
+   * the list; the daemon only checks it, so a mistake is reported in
+   * `daemon.log` too.
+   */
+  envNames?: string[];
 }
 
 export interface ParsedDaemonConfig {
@@ -79,7 +87,10 @@ export interface ParsedDaemonConfig {
 
 const POLICY_MODES: readonly PolicyMode[] = ['allow-all', 'allowlist', 'denylist'];
 const POLICY_KEYS = new Set(['mode', 'allow', 'deny', 'maxSessions']);
-/** `mcp` is the MCP adapter's section, known here so it is not flagged. */
+/**
+ * `mcp` is the MCP adapter's section, known here so it is not flagged; the
+ * daemon looks inside it only for a `passEnv`, which it reports.
+ */
 const TOP_LEVEL_KEYS = new Set([
   'policy',
   'idleMinutes',
@@ -89,6 +100,7 @@ const TOP_LEVEL_KEYS = new Set([
   'viewer',
   'prompts',
   'agents',
+  'envNames',
 ]);
 const VIEWER_KEYS = new Set(['launchMode', 'browserPath', 'profileDir']);
 const VIEWER_LAUNCH_MODES: readonly ViewerLaunchMode[] = [
@@ -180,6 +192,14 @@ function parseAgentPassEnv(
     lists[agent] = valid;
   }
   return lists;
+}
+
+/**
+ * Whether a problem concerns the `envNames` list, for the clients that apply
+ * it to report alongside their own refusals.
+ */
+export function isEnvNamesProblem(problem: string): boolean {
+  return problem.startsWith('envNames') || problem.startsWith('mcp.passEnv');
 }
 
 /** A policy that refuses every command, naming the configuration problem. */
@@ -339,6 +359,26 @@ export function parseDaemonConfig(raw: unknown): ParsedDaemonConfig {
         if (passEnv !== undefined) config.agentPassEnv = passEnv;
       }
     }
+  }
+
+  // The variables a caller may name at start. A list under `mcp.passEnv` is
+  // not read: it passes nothing, and the problem says where the list goes.
+  const envNames = raw['envNames'];
+  if (envNames !== undefined) {
+    if (!Array.isArray(envNames)) {
+      problems.push('envNames must be an array of variable names: passing none');
+    } else {
+      const valid = envNames.filter((name): name is string => typeof name === 'string' && ENV_NAME_PATTERN.test(name));
+      if (valid.length !== envNames.length) problems.push('envNames: ignoring entries that are not variable names');
+      config.envNames = valid;
+    }
+  }
+  const mcp = raw['mcp'];
+  if (isRecord(mcp) && mcp['passEnv'] !== undefined) {
+    problems.push(
+      'mcp.passEnv is not read, so nothing passes from it: the variables a caller may name at start ' +
+        'are read from envNames, at the top level of config.json',
+    );
   }
 
   return { config, problems };

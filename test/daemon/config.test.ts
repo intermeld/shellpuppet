@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { parseDaemonConfig } from '../../src/daemon/config.js';
+import { isEnvNamesProblem, parseDaemonConfig } from '../../src/daemon/config.js';
 import { compilePolicy, evaluateCommand } from '../../src/core/policy.js';
 
 /** Compile the parsed policy and evaluate a command, as the daemon would. */
@@ -31,6 +31,7 @@ describe('parseDaemonConfig: valid input', () => {
       idleMinutes: 0.5,
       sessionEnv: ['MY_API_KEY'],
       audit: { captureContent: false },
+      envNames: ['NPM_TOKEN'],
       mcp: { untrustedFraming: true },
     });
     expect(problems).toEqual([]);
@@ -43,6 +44,7 @@ describe('parseDaemonConfig: valid input', () => {
     expect(config.idleMinutes).toBe(0.5);
     expect(config.sessionEnv).toEqual(['MY_API_KEY']);
     expect(config.audit).toEqual({ captureContent: false });
+    expect(config.envNames).toEqual(['NPM_TOKEN']);
   });
 
   it('a valid policy still evaluates normally after the round trip', () => {
@@ -275,5 +277,42 @@ describe('the variables each agent receives', () => {
     const { config } = parseDaemonConfig(JSON.parse('{"agents":{"passEnv":{"__proto__":["X"],"qoder":["Q"]}}}'));
     expect(config.agentPassEnv).toEqual({ qoder: ['Q'] });
     expect(Object.getPrototypeOf(config.agentPassEnv)).toBe(Object.prototype);
+  });
+});
+
+describe('the variables a caller may name at start (envNames)', () => {
+  it('reads the names the human allows to be passed', () => {
+    const { config, problems } = parseDaemonConfig({ envNames: ['OPENCODE_API_KEY', 'OTHER_KEY'] });
+    expect(problems).toEqual([]);
+    expect(config.envNames).toEqual(['OPENCODE_API_KEY', 'OTHER_KEY']);
+  });
+
+  it('drops entries that are not variable names, and says so', () => {
+    const { config, problems } = parseDaemonConfig({ envNames: ['GOOD_KEY', 'BAD-KEY', 7, '', '__proto__'] });
+    expect(config.envNames).toEqual(['GOOD_KEY']);
+    expect(problems).toEqual(['envNames: ignoring entries that are not variable names']);
+  });
+
+  it('passes nothing when envNames is not a list, and says so', () => {
+    const { config, problems } = parseDaemonConfig({ envNames: 'OPENCODE_API_KEY' });
+    expect(config.envNames).toBeUndefined();
+    expect(problems).toEqual(['envNames must be an array of variable names: passing none']);
+  });
+
+  it('reads no names from mcp.passEnv, and says in one line that the list is read from envNames', () => {
+    const { config, problems } = parseDaemonConfig({ mcp: { untrustedFraming: true, passEnv: ['NPM_TOKEN'] } });
+    expect(problems).toEqual([
+      'mcp.passEnv is not read, so nothing passes from it: the variables a caller may name at start ' +
+        'are read from envNames, at the top level of config.json',
+    ]);
+    expect(config.envNames).toBeUndefined();
+  });
+
+  it('passes only what envNames lists when mcp.passEnv is there too', () => {
+    const { config, problems } = parseDaemonConfig({ envNames: ['A_KEY'], mcp: { passEnv: ['B_KEY'] } });
+    expect(config.envNames).toEqual(['A_KEY']);
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toMatch(/^mcp\.passEnv is not read/);
+    expect(isEnvNamesProblem(problems[0]!)).toBe(true);
   });
 });
