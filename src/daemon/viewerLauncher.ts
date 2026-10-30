@@ -20,9 +20,11 @@
  * So: detect an installed Chromium-family browser, and degrade gracefully when
  * there is none. `chrome-launcher` (Apache-2.0, ~140 KB) does the fiddly
  * cross-platform detection, which is exactly the part that would otherwise
- * be machine-specific guesswork: Windows registry and Program Files, macOS
- * LSRegister, Linux PATH. We spawn the process ourselves, because the
- * detachment discipline below is not negotiable.
+ * be machine-specific guesswork: the install folders on Windows,
+ * LaunchServices on macOS, `.desktop` files and PATH on Linux. Its lookup runs
+ * in a child process, never in the daemon (`detectBrowser`). We spawn the
+ * browser ourselves, because the detachment discipline below is not
+ * negotiable.
  *
  * Nothing here may ever fail a session start. A browser that will not launch is
  * an inconvenience: the launcher reports that nothing opened, the daemon hands
@@ -32,10 +34,12 @@
  * the system's opener (`start`, `open`, `xdg-open`) on its exit code.
  */
 
-import { spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
+import { createRequire } from 'node:module';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import type { Logger } from '../core/types.js';
 
 export type ViewerLaunchMode = 'isolated-app' | 'default-browser' | 'none';
@@ -97,22 +101,99 @@ export function extraBrowserCandidates(): string[] {
 }
 
 /**
- * Find a Chromium-family browser, or null. `chrome-launcher` is imported
- * dynamically and inside a try: a detection library must never be able to stop
- * the daemon from serving sessions, and its Windows path pokes the registry.
+ * The Chrome installations `chrome-launcher` checks by file access alone,
+ * before any lookup that shells out, in the order it ranks them: the
+ * `CHROME_PATH` and `LIGHTHOUSE_CHROMIUM_PATH` overrides first everywhere; on
+ * Windows its whole search, which is these paths and nothing else; on macOS
+ * the two `/Applications` bundles its own `getFirstInstallation()` checks
+ * before its LaunchServices query, which rank above anything that query
+ * finds. Linux has only the overrides here: its lookup reads `.desktop` files
+ * and PATH, which a fixed list cannot match.
+ */
+export function wellKnownChromePaths(
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string[] {
+  const overrides = [env['CHROME_PATH'], env['LIGHTHOUSE_CHROMIUM_PATH']].filter(
+    (value): value is string => typeof value === 'string' && value !== '',
+  );
+  if (platform === 'win32') {
+    const roots = [env['LOCALAPPDATA'], env['PROGRAMFILES'], env['PROGRAMFILES(X86)']].filter(
+      (value): value is string => typeof value === 'string' && value !== '',
+    );
+    const relative = [
+      path.join('Google', 'Chrome SxS', 'Application', 'chrome.exe'),
+      path.join('Google', 'Chrome', 'Application', 'chrome.exe'),
+    ];
+    return [...overrides, ...roots.flatMap((root) => relative.map((rel) => path.join(root, rel)))];
+  }
+  if (platform === 'darwin') {
+    return [
+      ...overrides,
+      '/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary',
+      '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+    ];
+  }
+  return overrides;
+}
+
+/** Where browser detection looks, in the order it looks. */
+export interface BrowserDetection {
+  /** Checked first, by file access alone. */
+  wellKnown: string[];
+  /**
+   * A module exporting chrome-launcher's `Launcher`, as a file URL. A child
+   * process imports it and runs `Launcher.getInstallations()`. Empty skips
+   * the lookup.
+   */
+  lookupModule: string;
+  /** How long the child process may take before it is ended and counts as finding nothing. */
+  lookupTimeoutMs: number;
+  /** Checked last, by file access alone. */
+  extra: string[];
+}
+
+/**
+ * How long chrome-launcher's full lookup may take. Its macOS query took 5.7 s
+ * and 9.7 s on macOS CI runners, so this leaves room for a slower machine.
+ */
+export const BROWSER_LOOKUP_TIMEOUT_MS = 30_000;
+
+const nodeRequire = createRequire(import.meta.url);
+
+/** The detection the daemon runs: chrome-launcher's, then the supplementary list. */
+export function defaultBrowserDetection(): BrowserDetection {
+  let lookupModule = '';
+  try {
+    lookupModule = pathToFileURL(nodeRequire.resolve('chrome-launcher')).href;
+  } catch {
+    // Not installed: the well-known and supplementary paths still apply.
+  }
+  return {
+    wellKnown: wellKnownChromePaths(),
+    lookupModule,
+    lookupTimeoutMs: BROWSER_LOOKUP_TIMEOUT_MS,
+    extra: extraBrowserCandidates(),
+  };
+}
+
+/**
+ * Find a Chromium-family browser, or null. Detection can never stop the
+ * daemon from serving: nothing here throws, and no part of it holds the
+ * daemon's event loop (see `detectBrowser`).
  */
 export async function findBrowser(explicitPath?: string): Promise<string | null> {
   if (explicitPath !== undefined && explicitPath !== '') {
     // Never cached: an operator who names a binary means that binary, and the
-    // answer is a single existsSync anyway.
-    return fs.existsSync(explicitPath) ? explicitPath : null;
+    // answer is a single file check anyway.
+    return (await exists(explicitPath)) ? explicitPath : null;
   }
   // Detection is memoised for the daemon's lifetime because it is NOT cheap:
-  // chrome-launcher's macOS path (an LSRegister query) took 5.7 s and 9.7 s
-  // on macOS CI runners. A session start waits for the launch, so the daemon
-  // looks once as it starts (server.ts) and every start after that finds the
-  // answer ready; it changes only when someone installs a browser. A daemon
-  // restart re-detects.
+  // chrome-launcher's macOS lookup (a LaunchServices query) took 5.7 s and
+  // 9.7 s on macOS CI runners. A session start waits for the launch, so the
+  // daemon looks once as it starts (server.ts) and every start after that
+  // finds the answer ready; it changes only when someone installs a browser.
+  // A daemon restart re-detects.
   // The promise is memoised, not the value, so a caller that arrives while
   // detection is still running waits for the rest of it instead of starting
   // a second detection of its own.
@@ -128,19 +209,88 @@ export function resetBrowserCache(): void {
   cachedDetection = undefined;
 }
 
-async function detectBrowser(): Promise<string | null> {
-  try {
-    const { Launcher } = await import('chrome-launcher');
-    const installations = Launcher.getInstallations();
-    if (installations.length > 0 && installations[0] !== undefined) return installations[0];
-  } catch {
-    // No Chrome/Chromium found, or detection threw: fall through to the
-    // supplementary list rather than giving up.
+/**
+ * Detect a browser without holding the daemon's event loop. chrome-launcher's
+ * lookup is synchronous and shells out on macOS (`lsregister -dump`, seconds)
+ * and Linux (`grep` over `.desktop` files, `which`). Run in the daemon, it
+ * would stop `/health` and every other request being answered while it ran,
+ * on macOS for long enough that a client gives up on a daemon it has just
+ * started. So the paths chrome-launcher itself checks first are tried with
+ * asynchronous file checks; only when none exists does its full lookup run,
+ * in a child process; and the supplementary list is checked last. The answer
+ * is the one chrome-launcher's own ranking gives, then the first supplementary
+ * browser present.
+ */
+export async function detectBrowser(
+  detection: BrowserDetection = defaultBrowserDetection(),
+): Promise<string | null> {
+  const known = await firstExisting(detection.wellKnown);
+  if (known !== null) return known;
+  if (detection.lookupModule !== '') {
+    const found = await lookUpInChild(detection.lookupModule, detection.lookupTimeoutMs);
+    if (found !== null) return found;
   }
-  for (const candidate of extraBrowserCandidates()) {
-    if (fs.existsSync(candidate)) return candidate;
+  return firstExisting(detection.extra);
+}
+
+async function exists(file: string): Promise<boolean> {
+  try {
+    await fs.promises.access(file);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function firstExisting(candidates: string[]): Promise<string | null> {
+  for (const candidate of candidates) {
+    if (await exists(candidate)) return candidate;
   }
   return null;
+}
+
+/**
+ * What the child process runs: import the module named by its one argument,
+ * an absolute file URL, so nothing depends on the child's working directory,
+ * and print what `getInstallations()` returns as JSON. A lookup that throws
+ * (chrome-launcher's does on Linux when it finds nothing) prints an empty list.
+ */
+const LOOKUP_SCRIPT = [
+  'let found = [];',
+  'try {',
+  '  const { Launcher } = await import(process.argv[1]);',
+  '  found = Launcher.getInstallations();',
+  '} catch {',
+  '  found = [];',
+  '}',
+  'process.stdout.write(JSON.stringify(found));',
+].join('\n');
+
+function lookUpInChild(moduleUrl: string, timeoutMs: number): Promise<string | null> {
+  return new Promise((resolve) => {
+    try {
+      execFile(
+        process.execPath,
+        ['--input-type=module', '-e', LOOKUP_SCRIPT, moduleUrl],
+        { timeout: timeoutMs, windowsHide: true, encoding: 'utf8', maxBuffer: 1024 * 1024 },
+        (error, stdout) => {
+          if (error !== null) {
+            resolve(null);
+            return;
+          }
+          try {
+            const parsed: unknown = JSON.parse(stdout);
+            const first: unknown = Array.isArray(parsed) ? parsed[0] : undefined;
+            resolve(typeof first === 'string' && first !== '' ? first : null);
+          } catch {
+            resolve(null);
+          }
+        },
+      );
+    } catch {
+      resolve(null);
+    }
+  });
 }
 
 /**

@@ -38,6 +38,13 @@ version may change behaviour, and every such change is listed here.
   session that has exited gets. A viewer's is not answered, so a page whose
   window does not fit the grid does not ask again; the session's exit follows
   within about a second.
+- The daemon answers `/health` and every request while it detects the browser
+  for the viewer window, which it begins as it starts. The paths
+  chrome-launcher checks first are tried by file access alone, and its full
+  lookup, which on macOS takes seconds, runs in a child process, so a first
+  `daemon start` on macOS is no longer at risk of missing the client's
+  ten-second wait. The browser found is the one chrome-launcher ranks first,
+  as before.
 - On Windows, a session whose input pipe refuses a write once its console
   host has gone (`write EAGAIN`), or whose output worker or output socket
   fails, has the failure logged once, and the daemon and its other sessions

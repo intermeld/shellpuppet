@@ -597,7 +597,8 @@ export class Daemon {
 
     // Browser detection is slow the first time it runs (viewerLauncher.ts), and
     // a session start waits for its viewer launch, so look once now and let the
-    // memoised answer serve every start.
+    // memoised answer serve every start. It never holds the event loop, so the
+    // daemon answers /health and everything else while it runs.
     if ((this.options.viewer?.launchMode ?? 'none') === 'isolated-app') {
       void findBrowser(this.options.viewer?.browserPath).catch(() => undefined);
     }
