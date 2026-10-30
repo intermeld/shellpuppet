@@ -12,6 +12,12 @@ updates:
     groups:
       minor-and-patch:
         update-types: [minor, patch]
+    ignore:
+      # The Node.js types follow the oldest line package.json supports, so
+      # code cannot use what that line lacks. Raise them by hand when the
+      # floor moves.
+      - dependency-name: '@types/node'
+        update-types: ['version-update:semver-major']
   - package-ecosystem: github-actions
     directory: /
     schedule:

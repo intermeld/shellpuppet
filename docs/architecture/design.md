@@ -721,7 +721,8 @@ default (ADR-008).
   grandchild is gone (the Windows `taskkill` and POSIX process-group paths both covered).
 
 **Cross-platform CI**
-Matrix over `windows-latest`, `ubuntu-latest`, `macos-latest`, on Node 22 and 24.
+Matrix over `windows-latest`, `ubuntu-latest`, `macos-latest`, on every Node line still
+supported upstream: 22, 24 and 26.
 The shell-wrapper requirement and the measured timings are Windows findings, and the
 matrix is what catches a regression on the other platforms.
 
@@ -778,7 +779,7 @@ the approval, and config `policy` decides what the agent may start.
 ## 9. Distribution
 
 **Hosting: GitHub, `intermeld/shellpuppet`. CI: GitHub Actions**, a matrix over Windows,
-Ubuntu and macOS on Node 22 and 24.
+Ubuntu and macOS on every Node line still supported upstream (22, 24 and 26).
 
 **Users install from npm:**
 
