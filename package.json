@@ -60,7 +60,7 @@
     "@eslint/js": "^10.0.1",
     "@types/node": "^20.19.43",
     "@types/ws": "^8.18.2",
-    "@vitest/coverage-v8": "^4.1.10",
+    "@vitest/coverage-v8": "^5.0.5",
     "eslint": "^10.13.0",
     "typescript": "^6.0.3",
     "typescript-eslint": "^8.72.1",
