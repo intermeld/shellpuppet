@@ -10,6 +10,7 @@ import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as path from 'node:path';
 import process from 'node:process';
+import { setTimeout } from 'node:timers';
 
 const home = process.env['SHELLPUPPET_HOME'];
 if (!home) process.exit(1);
