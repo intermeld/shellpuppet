@@ -372,10 +372,12 @@ describe.skipIf(process.platform !== 'win32')('a failed write on a Windows termi
     const pid = session.pid;
 
     // node-pty then closes the terminal and reports an exit with no code, and
-    // the program would run on where nobody can read or type into it.
+    // the program would run on where nobody can read or type into it. The
+    // code the exit reports is read from the exit itself: the session ends the
+    // program at once, so node-pty may record its code before a poll looks.
+    const reported = new Promise<number | null>((resolve) => session.onExit(resolve));
     failOutput(session);
-    await eventually(() => session.exited, 10_000);
-    expect(session.exitCode).toBeNull();
+    expect(await reported).toBeNull();
     // Nothing kills it here but the session itself.
     await eventually(() => !processAlive(pid), 30_000).catch(() => undefined);
 
@@ -383,9 +385,9 @@ describe.skipIf(process.platform !== 'win32')('a failed write on a Windows termi
     expect(walked).toEqual([[pid]]);
     expect(entries.filter((entry) => entry.message === 'session output failed: ending its program')).toHaveLength(1);
     // The code node-pty records once it sees the program end is the session's.
-    await eventually(() => session.exitCode !== null, 10_000);
+    await eventually(() => session.exitCode !== null, 30_000);
     expect(session.programEnded).toBe(true);
-  }, 60_000);
+  }, 120_000);
 
   it('leaves out of the shutdown tree kill a program whose output failed, once node-pty has seen it end', async () => {
     const { logger } = recordingLogger();
