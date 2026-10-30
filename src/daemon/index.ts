@@ -25,13 +25,14 @@ async function main(): Promise<void> {
   const { config, problems } = readDaemonConfig(home);
   for (const problem of problems) logger.warn('CONFIG PROBLEM', { problem });
   // Recognised by every session's prompt detection from here on. The entries
-  // that did not compile were reported among the problems above; one that
-  // runs past its time budget on a screen is set aside and reported then.
+  // that did not compile were reported among the problems above; a signature,
+  // built-in or from config, that runs past its time budget on a screen is
+  // reported then and set aside for a minute at a time.
   useDialogSignatures(config.dialogs ?? [], (name) => {
     logger.warn('CONFIG PROBLEM', {
       problem:
-        `prompts.dialogs entry "${name}" ran past the regular-expression time budget on a ` +
-        'screen and is no longer used: simplify its patterns and restart the daemon',
+        `the "${name}" dialog signature ran past the regular-expression time budget on a screen ` +
+        'and is set aside for a minute at a time; if it keeps happening, simplify its patterns',
     });
   });
 

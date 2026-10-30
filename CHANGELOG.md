@@ -20,6 +20,13 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- A dialog signature, built-in or from config `prompts.dialogs`, whose
+  pattern once ran past the regular-expression time budget is set aside for
+  a minute and then tried again, as an agent signature is, rather than for
+  the rest of the daemon's life. The budget is wall-clock time, so on a
+  loaded machine an ordinary pattern can overrun it once, and its dialog then
+  went unrecognised until a restart. Each overrun is reported in
+  `daemon.log`.
 - On Windows, a resize made before a session's first output, by a viewer or
   `terminal_resize`, no longer stops the daemon when the session's program
   has ended by the time that output arrives. node-pty runs such a resize

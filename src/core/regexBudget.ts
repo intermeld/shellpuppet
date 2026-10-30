@@ -34,6 +34,17 @@
 import { Script, createContext } from 'node:vm';
 import { REGEX_BUDGET_MS } from './types.js';
 
+/**
+ * How long a signature whose pattern ran past its budget is set aside, by the
+ * dialog signatures (`dialogs.ts`) and the agent signatures (`reasoning.ts`)
+ * alike. It is tried again after that: the budget is wall-clock time, so an
+ * ordinary pattern can overrun once on a loaded machine, and a signature set
+ * aside for good would miss its program until the daemon restarts. A pattern
+ * that runs long every time costs one budget's worth a minute, and its author
+ * is told each time.
+ */
+export const SET_ASIDE_MS = 60_000;
+
 /** A pattern that ran out of its budget. Callers map this to a 400. */
 export class RegexBudgetError extends Error {
   constructor(

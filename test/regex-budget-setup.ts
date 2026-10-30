@@ -5,8 +5,8 @@
  * The budget is wall-clock time (`src/core/regexBudget.ts`). On a machine
  * loaded by the rest of the run, an ordinary pattern can be descheduled past
  * 250 ms (`\d+ extensions` against a few short lines is one that was), and a
- * built-in dialog signature set aside that way stays aside for the rest of
- * its file, failing the tests after it as well. Two seconds is what a pattern
+ * built-in dialog signature set aside that way stays aside for a minute,
+ * failing the tests after it in its file as well. Two seconds is what a pattern
  * that searches rather than backtracks needs on a loaded machine, with room
  * to spare; a runaway pattern is still abandoned, two seconds in instead of a
  * quarter.
