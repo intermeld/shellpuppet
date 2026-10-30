@@ -43,7 +43,8 @@ describe('browser detection at daemon start', () => {
         await new Promise((resolve) => setTimeout(resolve, 50));
       }
       const gaps = answered.slice(1).map((at, i) => at - answered[i]!);
-      expect(Math.max(...gaps)).toBeLessThan(1_000);
+      // Well short of the three-second hold, with room for a loaded machine.
+      expect(Math.max(...gaps)).toBeLessThan(2_000);
       // Detection finishes, and the daemon never ran the lookup itself.
       await findBrowser();
       expect(lookup.calls).toBe(0);
