@@ -328,9 +328,13 @@ Leave it off unless actively debugging, and delete the log afterwards.
     could hit something unrelated. A grandchild that outlived its parent is
     left running. Kill the session yourself while it is alive if
     that matters: `terminal_kill` on a live session does walk the tree. A
-    session that ended because its terminal closed while its program ran on
-    (Windows, after its output socket failed) is not one of these: its
-    program has not been seen to exit, so its reap and its kill walk the tree.
+    session that ended because its terminal closed when its output failed
+    (Windows) is not one of these: its program had not exited, and the
+    session ends it at once with the same tree kill. Every tree kill starts
+    from a pid: node-pty holds a running program's handle and closes it as it
+    sees the program end, a moment before the exit code is recorded, so a kill
+    in that moment can reach a pid just freed, the same kind of race every
+    kill has while `taskkill` enumerates the processes.
 - A screenshot starts a headless browser with a DevTools port on loopback for
   the seconds the capture takes. Another process running as your user could
   attach to it in that window. The same-user model above already grants such

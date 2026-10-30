@@ -23,8 +23,11 @@ version may change behaviour, and every such change is listed here.
 - On Windows, a kill whose console-list helper cannot be started (out of
   handles, say) leaves the daemon and its other sessions running.
 - On Windows, a session that ends because its output socket failed, while
-  its program runs on, reports an exit with no code (`exitCode` null), and
-  killing it or stopping the daemon still ends the program and its tree.
+  its program runs on, ends that program and its tree at once and logs it.
+  Its `exitCode` is null until the program's code is known. The viewer, the
+  list and the 409 say the session ended because its output failed, not that
+  the program exited. A kill, the reap and stopping the daemon walk the tree
+  of any such program whose end has not been seen.
 - An error on a connection whose WebSocket upgrade the daemon refused, or a
   connection the daemon's HTTP server could not accept, leaves the daemon
   running; the second is logged.
@@ -32,9 +35,10 @@ version may change behaviour, and every such change is listed here.
   has failed is answered with a 409 that says so and to kill the session and
   start it again (a session that has already exited still gets the 409 that
   says it exited).
-- A viewer typing into a session whose input pipe has failed is told once,
-  and the page says that the session's input has failed and to kill it and
-  start it again; nothing typed there is written, audited or logged.
+- On Windows, a viewer typing into a session whose input pipe has failed is
+  told once, and one that opens afterwards is told as it connects; the page
+  says that the session's input has failed and to kill it and start it again,
+  and nothing typed there is written, audited or logged.
 
 ## [0.1.0] - 2026-10-30
 

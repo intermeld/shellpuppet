@@ -32,7 +32,7 @@ import { WaitConditionError } from '../core/waiter.js';
 import { agentNames, hideReasoning, latestResult, programName, signatureFor } from '../core/reasoning.js';
 import type { CompiledSignature, FilteredLines } from '../core/reasoning.js';
 import type { Session } from '../core/session.js';
-import { ENV_NAME_PATTERN } from '../core/types.js';
+import { ENV_NAME_PATTERN, howSessionEnded } from '../core/types.js';
 import type {
   Logger,
   PolicyConfig,
@@ -140,12 +140,15 @@ const MAX_VIEWPORT_ROWS = 150;
 const VIEWER_WIPE = '\x1bc\x1b[3J';
 
 /**
- * What a watcher is shown when the program is gone: grey, on its own line
+ * What a watcher is shown when the session ends: grey, on its own line
  * and identical whether it was sent live at the moment of exit or replayed
- * to someone who joined during the fifteen-minute grace.
+ * to someone who joined during the fifteen-minute grace. An end with no exit
+ * code says why the session ended (`howSessionEnded`).
  */
 function exitNotice(exitCode: number | null): string {
-  return `\r\n\x1b[90m[process exited: ${String(exitCode)}]\x1b[0m\r\n`;
+  const notice =
+    exitCode === null ? `session ended: ${howSessionEnded(null)}` : `process exited: ${String(exitCode)}`;
+  return `\r\n\x1b[90m[${notice}]\x1b[0m\r\n`;
 }
 
 /**
@@ -1215,7 +1218,9 @@ export class Daemon {
         session.exited
       ) {
         json(res, 409, {
-          error: `Session ${id} has exited (code ${String(session.exitCode)}) and no longer accepts input or geometry changes.`,
+          error:
+            `Session ${id} has ${session.exitCode === null ? 'ended' : 'exited'} ` +
+            `(${howSessionEnded(session.exitCode)}) and no longer accepts input or geometry changes.`,
         });
         return;
       }
@@ -2190,6 +2195,8 @@ export class Daemon {
         // rather than shown a terminal that looks alive.
         exited: session.exited,
         exitCode: session.exitCode,
+        // Likewise a session whose input has failed, before the viewer types.
+        inputFailed: session.inputFailed,
       }),
     );
 

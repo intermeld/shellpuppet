@@ -1,7 +1,7 @@
 /**
  * Shared domain types and defaults for ShellPuppet.
  *
- * Everything here is pure data, with no I/O and no Node APIs. The design document
+ * Everything here is pure, with no I/O and no Node APIs. The design document
  * (`docs/architecture/design.md`) is the source of truth for the shapes below;
  * section references are given where a type encodes a specific decision.
  */
@@ -134,10 +134,31 @@ export interface SessionSummary {
    */
   geometryHeld: boolean;
   exited: boolean;
+  /**
+   * The program's exit code once the session has ended. Null while it runs,
+   * and after an end with no code until the program's code is known
+   * (`howSessionEnded`).
+   */
   exitCode: number | null;
   /** Number of connected viewer/WebSocket clients. */
   watchers: number;
   createdAt: string;
+}
+
+/**
+ * How a session's end reads for a person: by its program's exit code or, for
+ * a session that ended with no code, by its failed output (Windows: node-pty
+ * closed the terminal when its output socket failed, and the session then
+ * ended its program).
+ */
+export function howSessionEnded(exitCode: number | null): string {
+  return exitCode === null ? 'its output failed' : `code ${String(exitCode)}`;
+}
+
+/** A session's state in a list: `live`, `exited(<code>)` or `ended(output failed)`. */
+export function listedState(session: { exited: boolean; exitCode: number | null }): string {
+  if (!session.exited) return 'live';
+  return session.exitCode === null ? 'ended(output failed)' : `exited(${String(session.exitCode)})`;
 }
 
 /** Cursor position within the visible viewport. */

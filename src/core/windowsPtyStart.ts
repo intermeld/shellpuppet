@@ -25,7 +25,7 @@
  * unheard: those of the helper its ConPTY kill forks
  * (`hearConsoleListFailures`), and, through `listenForTerminalErrors`, those
  * of a live terminal's streams. `recordedExitCode` reads whether node-pty has
- * seen a terminal's program end.
+ * seen a terminal's program end, where `canReadExitCode` says it can.
  */
 
 import type { ChildProcess } from 'node:child_process';
@@ -218,16 +218,30 @@ export function listenForTerminalErrors(
   return input !== undefined || worker !== undefined || terminal.on !== undefined;
 }
 
+type ExitRecordingTerminal = { _agent?: { _useConpty?: boolean; exitCode?: number } };
+
 /**
- * The exit code node-pty 1.1.0 has recorded for a Windows terminal's program,
- * or undefined while the program runs. Under ConPTY node-pty holds the
- * program's process handle until the program exits (`src/win/conpty.cc`), so
- * while this is undefined the program's pid is still its own. Undefined too
- * when the installed node-pty is not the wrapped version.
+ * Whether node-pty records when this Windows terminal's program ends, so that
+ * `recordedExitCode` can say: node-pty 1.1.0 under ConPTY, whose exit thread
+ * records the program's code as it sees the program end. Not under winpty,
+ * whose agent asks Windows about whichever process has the pid now (a live one
+ * answers 259, still active), and not with another node-pty version.
+ */
+export function canReadExitCode(pty: unknown): boolean {
+  return wrapped && (pty as ExitRecordingTerminal)._agent?._useConpty === true;
+}
+
+/**
+ * The exit code node-pty has recorded for a Windows terminal's program, or
+ * undefined while it has recorded none: while the program runs, and wherever
+ * `canReadExitCode` is false. node-pty holds the program's handle while the
+ * program runs and closes it as it sees the program end, a moment before the
+ * code is recorded here (`src/win/conpty.cc`). A kill in that moment can reach
+ * a pid just freed: the same kind of race every kill has while `taskkill`
+ * enumerates the processes.
  */
 export function recordedExitCode(pty: unknown): number | undefined {
-  if (!wrapped) return undefined;
-  return (pty as { _agent?: { exitCode?: number } })._agent?.exitCode;
+  return canReadExitCode(pty) ? (pty as ExitRecordingTerminal)._agent?.exitCode : undefined;
 }
 
 /**
