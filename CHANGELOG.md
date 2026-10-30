@@ -20,6 +20,15 @@ version may change behaviour, and every such change is listed here.
   through cmd.exe, with the arguments quoted for a program's parser, which
   cmd reads by other rules; any other script failed with error 193 after the
   terminal was built.
+- A session started without `cwd` starts in the folder of the client that
+  asked for it: `terminal_start` sends the MCP server's working directory and
+  `shellpuppet start` the shell's, and a relative `cwd` is taken from there. A
+  direct `POST /sessions` with no `cwd` starts in the user's home directory.
+  Sessions started without `cwd` began in the daemon's folder, which was the
+  folder of whichever client had started the daemon.
+- The auto-started daemon runs in the user's home directory, so it holds no
+  client's folder open (on Windows, a folder a process runs in cannot be
+  deleted or renamed).
 
 ### Fixed
 

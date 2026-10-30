@@ -9,6 +9,7 @@
 import * as fs from 'node:fs';
 import * as http from 'node:http';
 import { createRequire } from 'node:module';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
@@ -1514,27 +1515,31 @@ export class Daemon {
       });
       return;
     }
+    // A session starts in the user's home directory unless the caller names a
+    // folder, and a relative one is taken from there. Never the daemon's own
+    // working directory: that is wherever the daemon happened to be started,
+    // and the ShellPuppet home would put a program beside daemon.json and its
+    // token. The CLI and the MCP server send their own working directory, so
+    // this default is for a direct caller of the API.
+    const cwd = path.resolve(os.homedir(), asString(body['cwd']) ?? '.');
     // A working directory that is not one is a caller mistake, reported as
     // one here rather than left to fail deep inside ConPTY as "Cannot create
     // process, error code: 267", which gives the caller nothing to act on.
-    const cwd = asString(body['cwd']);
-    if (cwd !== undefined) {
-      let isDirectory: boolean;
-      try {
-        isDirectory = fs.statSync(cwd).isDirectory();
-      } catch {
-        json(res, 400, { error: `cwd does not exist: ${cwd}` });
-        return;
-      }
-      if (!isDirectory) {
-        json(res, 400, { error: `cwd is not a directory: ${cwd}` });
-        return;
-      }
+    let isDirectory: boolean;
+    try {
+      isDirectory = fs.statSync(cwd).isDirectory();
+    } catch {
+      json(res, 400, { error: `cwd does not exist: ${cwd}` });
+      return;
+    }
+    if (!isDirectory) {
+      json(res, 400, { error: `cwd is not a directory: ${cwd}` });
+      return;
     }
     const options = {
       command,
       ...(asStringArray(body['args']) !== undefined ? { args: asStringArray(body['args']) } : {}),
-      ...(asString(body['cwd']) !== undefined ? { cwd: asString(body['cwd']) } : {}),
+      cwd,
       ...(asNumber(body['cols']) !== undefined ? { cols: asNumber(body['cols']) } : {}),
       ...(asNumber(body['rows']) !== undefined ? { rows: asNumber(body['rows']) } : {}),
       ...(body['hold'] === true ? { hold: true } : {}),

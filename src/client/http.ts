@@ -17,6 +17,8 @@
  */
 
 import { spawn } from 'node:child_process';
+import * as fs from 'node:fs';
+import * as os from 'node:os';
 import { fileURLToPath } from 'node:url';
 import {
   daemonStatePath,
@@ -112,6 +114,24 @@ async function health(port: number, timeoutMs = HEALTH_TIMEOUT_MS): Promise<Heal
   }
 }
 
+/**
+ * The folder the daemon runs in: the user's home directory, whichever client
+ * starts it. A process holds its working directory open, so on Windows a
+ * daemon started in the first client's folder would keep that folder from
+ * being deleted or renamed for as long as it ran. Not the ShellPuppet home:
+ * the daemon creates and hardens that itself (design §4.1), and a client that
+ * created it first would leave it unhardened. Undefined, and so inherited,
+ * only where the home directory is not there to run in.
+ */
+export function daemonWorkingDirectory(): string | undefined {
+  const home = os.homedir();
+  try {
+    return fs.statSync(home).isDirectory() ? home : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 function defaultDaemonEntry(): string {
   // From dist/client/http.js this resolves to dist/daemon/index.js.
   return fileURLToPath(new URL('../daemon/index.js', import.meta.url));
@@ -185,11 +205,18 @@ export async function ensureDaemon(options: ClientOptions = {}): Promise<DaemonC
 
   const entry = options.daemonEntry ?? defaultDaemonEntry();
   logger.info('auto-starting daemon', { entry });
+  const cwd = daemonWorkingDirectory();
   const child = spawn(process.execPath, [entry], {
     detached: true,
     stdio: 'ignore', // MUST be 'ignore': inherited handles hang the caller (§2.2)
     windowsHide: true,
     env: { ...process.env, SHELLPUPPET_HOME: home },
+    ...(cwd !== undefined ? { cwd } : {}),
+  });
+  // A process that cannot start reports it as an 'error' event, which with no
+  // listener would end this client. The poll below reports the failure.
+  child.on('error', (error) => {
+    logger.warn('the daemon process did not start', { error: String(error) });
   });
   child.unref();
 
