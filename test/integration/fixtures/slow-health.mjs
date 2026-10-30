@@ -14,7 +14,7 @@
 
 import * as http from 'node:http';
 import process from 'node:process';
-import { setTimeout } from 'node:timers';
+import { setInterval, setTimeout } from 'node:timers';
 
 const delay = process.argv[2] ?? 'never';
 const other = process.argv[3] ?? 'destroy';
