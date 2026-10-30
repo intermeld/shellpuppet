@@ -20,13 +20,11 @@ version may change behaviour, and every such change is listed here.
   host has gone (`write EAGAIN`), or whose output worker or output socket
   fails, has the failure logged once, and the daemon and its other sessions
   keep running.
-- On Windows, after a session's tree kill, node-pty's kill ends only the
-  processes its helper finds on the session's console. When the helper has
-  no answer, because the program has already gone (as it always has after the
-  tree kill) or because the helper cannot be started (out of handles, say),
-  it ends nothing more, where it used to kill, five seconds later, whatever
-  process Windows had given the program's pid to by then. A helper that
-  cannot be started leaves the daemon and its other sessions running.
+- On Windows, a session's kill ends the session's processes with its tree
+  kill alone. node-pty's own kill ends no process and starts no helper
+  process, so it never ends a process, or a whole console of them, found by a
+  pid the session's program no longer holds, and it cannot stop the daemon by
+  failing to start one.
 - On Windows, a session that ends because its output socket failed, while
   its program runs on, ends that program and its tree at once and logs it.
   Its `exitCode` is null until the program's code is known. The viewer, the
