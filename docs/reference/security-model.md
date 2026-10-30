@@ -372,6 +372,18 @@ Leave it off unless actively debugging, and delete the log afterwards.
   `none`, none of this isolation applies: the viewer grant lands in the
   history of whichever browser opens the link, and the viewer shares a
   browsing context with the other pages that browser has open.
+- **The browsers ShellPuppet starts are asked not to call out.** The isolated
+  viewer window and the screenshot browser are started with switches
+  documented in Chromium's source that ask the browser to make no network
+  requests of its own: background networking, component updates, default
+  apps, sync, metrics and crash reports, Domain Reliability, the variations
+  seed, proxy auto-detection, the Optimization Guide and network time queries
+  (design §5 lists them). They ask, and they do not reach everything: a NetLog
+  of a fresh Chrome started with them still showed, over its first minute, its
+  component updater, a Safe Browsing key fetch, an account check and a search
+  endpoint contacted, and a vendor's own services may be beyond Chromium's
+  switches. ShellPuppet's own code makes no such request. On
+  `default-browser`, your own browser opens the link with its own settings.
 - **A session starts when an agent asks.** There is no approval for each
   session: connecting ShellPuppet to an agent is the approval, and config
   `policy` (an allowlist or denylist when a mode is set, and `maxSessions` when
