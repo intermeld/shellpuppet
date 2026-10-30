@@ -244,7 +244,13 @@ function matchDialog(raw: readonly string[], dialog: CompiledDialog): DetectedPr
         (ch) => /[─-╿]/u.test(ch),
       );
       const request = requestText(raw.slice(t + 1, c), frame);
-      return { question, options, signature: [dialog.name, question, request, ...options].join(' | ') };
+      return {
+        question,
+        options,
+        signature: [dialog.name, question, request, ...options].join(' | '),
+        // The title down to the row of choices, the request between them included.
+        rows: [t, c],
+      };
     }
   }
   return null;

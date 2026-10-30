@@ -247,7 +247,11 @@ chrome around it, and the answer that ends a turn. `hideReasoning` (on snapshot,
 wait; any value but true or false is refused) replaces each reasoning
 block above the composer with one `[reasoning hidden: N lines]` line and keeps the rest;
 it reads 400 lines of scrollback over what it returns, so a block whose first line has
-scrolled away is still recognised. A result is refused while a prompt sits unsent in the
+scrolled away is still recognised. A question the program is waiting on is never
+hidden: the rows the prompt detection claims for a question on screen, and the
+border rows beside them, stay whatever the signature's rules would take, so a
+permission box drawn in the same style as the reasoning keeps every row of its
+own. A result is refused while a prompt sits unsent in the
 composer (Claude Code, Codex and Qoder, whose signatures tell typed text from the
 placeholder), and, for a program that always closes a finished turn with a summary line,
 until that line is drawn. A line with reasoning drawn below it is never taken for the

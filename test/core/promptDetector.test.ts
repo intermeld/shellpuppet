@@ -189,6 +189,15 @@ describe('detectPrompt: Codex shapes', () => {
     expect(prompt!.options[2]).toMatch(/^3\. No, and tell Codex/);
   });
 
+  it('claims the rows from its question down to its last option, the command between them included', () => {
+    const prompt = detectPrompt(CODEX_EXEC_PROMPT)!;
+    const lines = CODEX_EXEC_PROMPT.split('\n');
+    expect(lines[prompt.rows[0]]).toMatch(/Would you like to run/);
+    expect(lines[prompt.rows[1]]).toMatch(/^ {2}3\. No, and tell Codex/);
+    // Everything the box draws between the two belongs to the question.
+    expect(lines.slice(prompt.rows[0], prompt.rows[1] + 1).join('\n')).toMatch(/\$specs=@/);
+  });
+
   it('is not vetoed by the press-enter-or-esc footer below the options', () => {
     // A bare "esc to cancel" must not read as activity when it is part of
     // the prompt's own footer.
@@ -291,6 +300,16 @@ describe('detectPrompt: Grok shapes', () => {
   it('does not read the 1/3:select footer as an option row', () => {
     const prompt = detectPrompt(GROK_PERMISSION_PROMPT)!;
     expect(prompt.options.every((o) => !/select/.test(o))).toBe(true);
+  });
+
+  it('claims the option rows as its own, with neither the command nor the footer among them', () => {
+    const prompt = detectPrompt(GROK_PERMISSION_PROMPT)!;
+    const lines = GROK_PERMISSION_PROMPT.split('\n');
+    const claimed = lines.slice(prompt.rows[0], prompt.rows[1] + 1);
+    expect(claimed).toHaveLength(3);
+    expect(claimed[0]).toMatch(/^ {2}│ {2}1 \(○\) Yes, and don't ask again/);
+    expect(claimed[1]).toMatch(/^ {2}│ {2}2 \(•\) Yes, proceed/);
+    expect(claimed[2]).toMatch(/^ {2}│ {2}3 \(○\) No, reject/);
   });
 });
 
