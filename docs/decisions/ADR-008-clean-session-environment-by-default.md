@@ -31,8 +31,9 @@ see what it hands out.
 ## Decision
 
 1. **The default is `"clean"`.** A session gets the functional baseline, plus
-   the names an operator adds in the list form, plus what its starter passes
-   through `envNames`. `"passthrough"` is available, chosen by name.
+   the names an operator adds in the list form, plus what its starter names at
+   start (`terminal_start`'s `envNames` or `--env-name`). `"passthrough"` is
+   available, chosen by name.
 2. **The baseline covers ordinary toolchains.**
    - On Windows, besides `PATH`, the system folders and the user's profile and
      temporary folders, it holds the standard variables that carry no secrets

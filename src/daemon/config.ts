@@ -195,11 +195,17 @@ function parseAgentPassEnv(
 }
 
 /**
- * Whether a problem concerns the `envNames` list, for the clients that apply
- * it to report alongside their own refusals.
+ * Whether a problem bears on the `envNames` list, for the clients that apply
+ * it to report alongside their own refusals: a problem with the list itself,
+ * the unread `mcp.passEnv`, or a `config.json` that could not be read at all,
+ * which leaves the list empty.
  */
 export function isEnvNamesProblem(problem: string): boolean {
-  return problem.startsWith('envNames') || problem.startsWith('mcp.passEnv');
+  return (
+    problem.startsWith('envNames') ||
+    problem.startsWith('mcp.passEnv') ||
+    (problem.startsWith('config.json ') && problem.includes('refusing all commands'))
+  );
 }
 
 /** A policy that refuses every command, naming the configuration problem. */
@@ -366,10 +372,12 @@ export function parseDaemonConfig(raw: unknown): ParsedDaemonConfig {
   const envNames = raw['envNames'];
   if (envNames !== undefined) {
     if (!Array.isArray(envNames)) {
-      problems.push('envNames must be an array of variable names: passing none');
+      problems.push('envNames in config.json must be an array of variable names: passing none');
     } else {
       const valid = envNames.filter((name): name is string => typeof name === 'string' && ENV_NAME_PATTERN.test(name));
-      if (valid.length !== envNames.length) problems.push('envNames: ignoring entries that are not variable names');
+      if (valid.length !== envNames.length) {
+        problems.push('envNames in config.json: ignoring entries that are not variable names');
+      }
       config.envNames = valid;
     }
   }

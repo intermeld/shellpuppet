@@ -290,13 +290,13 @@ describe('the variables a caller may name at start (envNames)', () => {
   it('drops entries that are not variable names, and says so', () => {
     const { config, problems } = parseDaemonConfig({ envNames: ['GOOD_KEY', 'BAD-KEY', 7, '', '__proto__'] });
     expect(config.envNames).toEqual(['GOOD_KEY']);
-    expect(problems).toEqual(['envNames: ignoring entries that are not variable names']);
+    expect(problems).toEqual(['envNames in config.json: ignoring entries that are not variable names']);
   });
 
   it('passes nothing when envNames is not a list, and says so', () => {
     const { config, problems } = parseDaemonConfig({ envNames: 'OPENCODE_API_KEY' });
     expect(config.envNames).toBeUndefined();
-    expect(problems).toEqual(['envNames must be an array of variable names: passing none']);
+    expect(problems).toEqual(['envNames in config.json must be an array of variable names: passing none']);
   });
 
   it('reads no names from mcp.passEnv, and says in one line that the list is read from envNames', () => {

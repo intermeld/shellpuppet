@@ -67,8 +67,9 @@ receives the data, and the rules differ with them.
      there for the daemon's lifetime without writing it to disk. The daemon
      never shows it: not in tool results, logs, the audit trail or the viewer.
      And it never hands its own copy to the sessions it starts, under
-     `passthrough` as much as under the clean default; a value a client passes
-     through `envNames` is that client's to pass.
+     `passthrough` as much as under the clean default; a value a client names
+     at start (`terminal_start`'s `envNames` or `--env-name`) is that client's
+     to pass.
    - No ShellPuppet tool, command or daemon endpoint sets or changes a
      destination or a credential, switches the feature on or widens what it
      sends.
