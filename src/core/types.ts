@@ -288,11 +288,12 @@ export type SessionEnvMode = 'passthrough' | 'clean' | string[];
 
 /**
  * A variable name a session's own environment may carry (`SessionOptions.env`)
- * and `envNames` and `agents.passEnv` may list: letters, digits and
+ * and config `envNames` or `agents.passEnv` may list: letters, digits and
  * underscores, not starting with a digit. That is every name an API key or
  * setting is given in practice, and it keeps out names that a shell or an
- * environment block would read some other way. `__proto__` is refused too: an ordinary object would
- * swallow it rather than store it, and the variable would silently not pass.
+ * environment block would read some other way. `__proto__` is refused too: an
+ * ordinary object would swallow it rather than store it, and the variable would
+ * silently not pass.
  */
 export const ENV_NAME_PATTERN = /^(?!__proto__$)[A-Za-z_][A-Za-z0-9_]*$/;
 
