@@ -27,9 +27,8 @@ version may change behaviour, and every such change is listed here.
   failing to start one.
 - On Windows, a session that ends because its output socket failed, while
   its program runs on, ends that program and its tree at once and logs it.
-  Its `exitCode` is null until the program's code is known. The viewer, the
-  list and the 409 say the session ended because its output failed, not that
-  the program exited. A kill, the reap and stopping the daemon walk the tree
+  Its `exitCode` stays null. The viewer, the list and the 409 say the session
+  ended because its output failed, not that the program exited. A kill, the reap and stopping the daemon walk the tree
   of any such program whose end has not been seen.
 - An error on a connection whose WebSocket upgrade the daemon refused, or a
   connection the daemon's HTTP server could not accept, leaves the daemon

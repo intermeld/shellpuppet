@@ -384,9 +384,11 @@ describe.skipIf(process.platform !== 'win32')('a failed write on a Windows termi
     expect(processAlive(pid)).toBe(false);
     expect(walked).toEqual([[pid]]);
     expect(entries.filter((entry) => entry.message === 'session output failed: ending its program')).toHaveLength(1);
-    // The code node-pty records once it sees the program end is the session's.
-    await eventually(() => session.exitCode !== null, 30_000);
-    expect(session.programEnded).toBe(true);
+    // node-pty records the code of the program the session ended, which then
+    // counts as ended; the session still reports no code of its own.
+    await eventually(() => session.programEnded, 30_000);
+    expect(agentOf(session).exitCode).not.toBeUndefined();
+    expect(session.exitCode).toBeNull();
   }, 120_000);
 
   it('leaves out of the shutdown tree kill a program whose output failed, once node-pty has seen it end', async () => {
@@ -423,7 +425,12 @@ describe.skipIf(process.platform !== 'win32')('a failed write on a Windows termi
     failOutput(session);
     const exited = await viewer.waitForControl((control) => control['type'] === 'exited', 10_000);
     await viewer.waitForData('[session ended', 5_000).catch(() => undefined);
+    // The session ends the program at once, and node-pty then records that
+    // program's code: what a person reads must not change when it does.
+    await eventually(() => !processAlive(session.pid), 30_000);
+    await eventually(() => agentOf(session).exitCode !== undefined, 30_000);
     const typed = await api(td.port, td.token, `/sessions/${id}/input`, { body: { data: 'x' } });
+    const listed = await api(td.port, td.token, '/sessions', { method: 'GET' });
 
     expect(exited).toEqual({ type: 'exited', exitCode: null });
     expect(viewer.received()).toContain('[session ended: its output failed]');
@@ -431,8 +438,8 @@ describe.skipIf(process.platform !== 'win32')('a failed write on a Windows termi
     expect(String(typed.body['error'])).toBe(
       `Session ${id} has ended (its output failed) and no longer accepts input or geometry changes.`,
     );
-    // And what it says comes true: the program is ended.
-    await eventually(() => !processAlive(session.pid), 30_000);
+    const summary = (listed.body['sessions'] as Array<Record<string, unknown>>).find((s) => s['id'] === id);
+    expect(summary).toMatchObject({ exited: true, exitCode: null });
     viewer.close();
   }, 60_000);
 

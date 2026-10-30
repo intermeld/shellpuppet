@@ -136,7 +136,7 @@ export interface SessionSummary {
   exited: boolean;
   /**
    * The program's exit code once the session has ended. Null while it runs,
-   * and after an end with no code until the program's code is known
+   * and for a session that ended with no code because its output failed
    * (`howSessionEnded`).
    */
   exitCode: number | null;
