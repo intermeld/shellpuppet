@@ -8,6 +8,8 @@
  *   response is ended: the error line must already be there. The line holds
  *   the error's stack, the request's method and its path, and nothing from
  *   the query, the headers or the body, any of which can carry a credential.
+ *   A target the URL parser refuses is logged the same way, and an
+ *   absolute-form one by its path, without the scheme and authority.
  * - A value flag given no value is refused by the CLI parser before any
  *   daemon contact, with exit code 2.
  */
@@ -15,6 +17,7 @@
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import type * as http from 'node:http';
+import * as net from 'node:net';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
 import { afterAll, describe, expect, it } from 'vitest';
@@ -153,6 +156,61 @@ describe('the catch-all 500 log line', () => {
     for (const secret of ['query-secret', 'query-token', 'header-secret', 'body-secret', token]) {
       expect(log).not.toContain(secret);
     }
+  }, 60_000);
+});
+
+/** Send one raw request with `target` as its request target; resolves with the status line. */
+function rawRequest(port: number, target: string, headers = ''): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(port, '127.0.0.1', () => {
+      socket.write(`GET ${target} HTTP/1.1\r\nHost: 127.0.0.1:${String(port)}\r\n${headers}Connection: close\r\n\r\n`);
+    });
+    let text = '';
+    socket.on('data', (chunk: Buffer) => (text += chunk.toString('utf8')));
+    socket.on('end', () => resolve(text.split('\r\n')[0] ?? ''));
+    socket.on('error', reject);
+  });
+}
+
+describe('the catch-all 500 log line for unusual request targets', () => {
+  it('logs a target the URL parser refuses, and an absolute-form one, by the path alone', async () => {
+    const home = makeTempHome('daemon-500-targets-');
+    homes.push(home);
+    const logPath = daemonLogPath(home);
+    const daemon = new Daemon({ home, logger: createFileLogger(logPath) });
+    daemons.push(daemon);
+    const { port, token } = await daemon.start();
+
+    // Targets `new URL` refuses: handleRequest throws before any route runs.
+    const refused = await rawRequest(port, 'http://[/view?s=s1&vt=GRANT-SECRET-1');
+    const relative = await rawRequest(port, '//[/sessions?token=TOKEN-SECRET-2', `Authorization: Bearer ${token}\r\n`);
+    // An absolute-form target that parses, made to fail inside the handler:
+    // its scheme and authority, user and password included, are not the path.
+    const target = daemon as unknown as { handleRequest: Handler };
+    const original = target.handleRequest.bind(daemon);
+    target.handleRequest = async (req, res) => {
+      if (!(req.url ?? '').includes('probe-absolute')) return original(req, res);
+      throw new Error('probe failure');
+    };
+    const absolute = await rawRequest(
+      port,
+      `http://user:PASS-SECRET-3@127.0.0.1:${String(port)}/probe-absolute?vt=GRANT-SECRET-4`,
+    );
+
+    expect([refused, relative, absolute]).toEqual(Array(3).fill('HTTP/1.1 500 Internal Server Error'));
+    const log = fs.readFileSync(logPath, 'utf8');
+    const paths = log
+      .split('\n')
+      .filter((line) => line !== '')
+      .map((line) => JSON.parse(line) as { message: string; meta?: Record<string, unknown> })
+      .filter((line) => line.message === 'unhandled request error')
+      .map((line) => line.meta?.['path']);
+    expect(paths).toEqual(['/view', '//[/sessions', '/probe-absolute']);
+    for (const secret of ['GRANT-SECRET-1', 'TOKEN-SECRET-2', 'PASS-SECRET-3', 'GRANT-SECRET-4', 'user:', token]) {
+      expect(log).not.toContain(secret);
+    }
+    // The daemon still answers.
+    expect((await fetch(`http://127.0.0.1:${String(port)}/health`)).status).toBe(200);
   }, 60_000);
 });
 

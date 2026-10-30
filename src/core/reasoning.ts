@@ -391,6 +391,8 @@ export interface CompiledSignature {
    * once on a loaded machine without the signature being at fault.
    */
   overBudgetAt: number | null;
+  /** Whether it is one of `BUILT_IN_SIGNATURES`, not an entry from config. */
+  builtIn: boolean;
 }
 
 export { SET_ASIDE_MS };
@@ -538,6 +540,7 @@ export function compileSignatures(list: readonly unknown[], where = 'agents.sign
         ...(entry['typed'] !== undefined ? { typed: compileLine(entry['typed'], `${named}.typed`) } : {}),
         ...(typeof tidy === 'string' ? { tidy: pattern(tidy, `${named}.tidy`) } : {}),
         overBudgetAt: null,
+        builtIn: where === 'built-in',
       });
       usable.push(index);
     } catch (error) {
@@ -548,15 +551,17 @@ export function compileSignatures(list: readonly unknown[], where = 'agents.sign
 }
 
 let active: CompiledSignature[] = compileSignatures(BUILT_IN_SIGNATURES, 'built-in').signatures;
-let reportOverBudget: (name: string) => void = () => undefined;
+let reportOverBudget: (name: string, builtIn: boolean) => void = () => undefined;
 
 /**
  * Use the built-in signatures plus `extra`, the entries from config; an entry
- * named like a built-in one replaces it. Returns what was wrong with `extra`.
+ * named like a built-in one replaces it. `onOverBudget` is told, with whether
+ * the signature is built in, each time one runs past its budget (the daemon
+ * logs it). Returns what was wrong with `extra`.
  */
 export function useAgentSignatures(
   extra: readonly unknown[],
-  onOverBudget: (name: string) => void = () => undefined,
+  onOverBudget: (name: string, builtIn: boolean) => void = () => undefined,
 ): string[] {
   const { signatures, problems } = compileSignatures(extra);
   const replaced = new Set(signatures.map((s) => s.name));
@@ -696,7 +701,7 @@ function guarded<T>(signature: CompiledSignature, body: () => T): T | null {
     // Reported each time it trips: a person reading daemon.log sees whether
     // a signature keeps running long or tripped once under load.
     signature.overBudgetAt = Date.now();
-    reportOverBudget(signature.name);
+    reportOverBudget(signature.name, signature.builtIn);
     return null;
   }
 }

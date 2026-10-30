@@ -18,6 +18,7 @@ import {
   CommandNotFoundError,
   DEFAULT_SESSION_ENV,
   SessionInputFailedError,
+  SessionProgramEndedError,
   credentialShapedNames,
 } from '../core/session.js';
 import { NativePtyUnavailableError } from '../core/nativePty.js';
@@ -238,13 +239,28 @@ export class AlreadyRunningError extends Error {
 
 type JsonBody = Record<string, unknown>;
 
+/** The scheme and authority that open an absolute-form request target (`http://user@host:port`). */
+const SCHEME_AND_AUTHORITY = /^[a-z][a-z0-9+.-]*:\/\/[^/]*/i;
+
 /**
- * A request target without its query or fragment, for a log line. Split
- * rather than parsed: a target `new URL` refuses must still be logged, and
- * never throw inside the error handler.
+ * A request target's path, for a log line: without its query or fragment,
+ * and, for an absolute-form target, without the scheme and authority, which
+ * name the host and can name a user and a password. Split rather than
+ * parsed: a target `new URL` refuses must still be logged, and never throw
+ * inside the error handler.
  */
 function pathOnly(target: string | undefined): string {
-  return (target ?? '').split(/[?#]/, 1)[0] ?? '';
+  const path = (target ?? '').split(/[?#]/, 1)[0] ?? '';
+  const absolute = SCHEME_AND_AUTHORITY.exec(path);
+  return absolute === null ? path : path.slice(absolute[0].length) || '/';
+}
+
+/** The 409 for input, a key or a resize sent to a session that has ended. */
+function endedRefusal(id: string, exitCode: number | null): string {
+  return (
+    `Session ${id} has ${exitCode === null ? 'ended' : 'exited'} ` +
+    `(${howSessionEnded(exitCode)}) and no longer accepts input or geometry changes.`
+  );
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1227,17 +1243,15 @@ export class Daemon {
         return;
       }
 
-      // resize is guarded alongside input/key: node-pty throws on resizing a
-      // dead PTY, which would surface as a bare 500 instead of this 409.
+      // resize is refused alongside input/key once the session has ended. In
+      // the moment before that, once node-pty has seen the program end,
+      // `Session.resize` refuses it itself, and the route below answers that
+      // with the same 409.
       if (
         (action === 'input' || action === 'key' || action === 'resize') &&
         session.exited
       ) {
-        json(res, 409, {
-          error:
-            `Session ${id} has ${session.exitCode === null ? 'ended' : 'exited'} ` +
-            `(${howSessionEnded(session.exitCode)}) and no longer accepts input or geometry changes.`,
-        });
+        json(res, 409, { error: endedRefusal(id, session.exitCode) });
         return;
       }
 
@@ -1473,7 +1487,13 @@ export class Daemon {
           return;
         }
         const hold = body['hold'] === true;
-        session.resize(cols, rows, { hold });
+        try {
+          session.resize(cols, rows, { hold });
+        } catch (error) {
+          if (!(error instanceof SessionProgramEndedError)) throw error;
+          json(res, 409, { error: endedRefusal(id, error.exitCode) });
+          return;
+        }
         this.audit.record(actor, 'resize', id, { cols, rows, hold });
         // An API resize takes the grid away from whichever viewport had it, so
         // nobody is left believing they still drive it. It does NOT hold
@@ -2325,34 +2345,40 @@ export class Daemon {
               cols: Math.min(cols, MAX_VIEWPORT_COLS),
               rows: Math.min(rows, MAX_VIEWPORT_ROWS),
             };
-            // Asking is the deliberate act that takes control, whether or not
-            // the grid actually moves: a viewport that already fits is still
-            // the one driving.
             const handedOver = this.geometryController.get(session.id) !== ws;
-            this.geometryController.set(session.id, ws);
             const changed = wanted.cols !== session.cols || wanted.rows !== session.rows;
             let applied = false;
             try {
               session.resize(wanted.cols, wanted.rows);
               applied = true;
             } catch (error) {
-              // A resize can race the session's exit (a viewer fitting its
-              // window while looking at a dying session). `Session.resize`
-              // throws once the program has ended, and an exception escaping
-              // a WS handler would take the whole daemon down via the
-              // uncaughtException path.
+              // The program has ended (a viewer fitting its window while
+              // looking at a dying session), and the session's exit follows
+              // within about a second, with an `exited` frame to every
+              // watcher. Nothing moved and nobody takes the grid, so nothing
+              // is said: an answer would have a driving page whose window
+              // does not fit the grid propose again at once, over and over
+              // until the exit arrives.
+              if (error instanceof SessionProgramEndedError) return;
+              // Any other failure is logged rather than left to escape: an
+              // exception from a WS handler would take the whole daemon down
+              // via the uncaughtException path.
               this.logger.warn('viewer resize failed', {
                 id: session.id,
                 error: String(error),
               });
             }
+            // Asking is the deliberate act that takes control, whether or not
+            // the grid actually moves: a viewport that already fits is still
+            // the one driving.
+            this.geometryController.set(session.id, ws);
             // A geometry change is a geometry change whoever made it, and
             // `resize` is on the list of audited actions the security page
             // publishes. Only the ones that actually took: a proposal the
-            // grid already satisfied moved nothing, and one that threw
-            // because the session was dying moved nothing either, so neither
-            // is recorded as a success. `hold` is false because a viewport
-            // never holds: holding is asked for explicitly, over the API (§5).
+            // grid already satisfied moved nothing, and one that failed moved
+            // nothing either, so neither is recorded as a success. `hold` is
+            // false because a viewport never holds: holding is asked for
+            // explicitly, over the API (§5).
             if (changed && applied) {
               this.audit.record(actor, 'resize', session.id, {
                 cols: wanted.cols,

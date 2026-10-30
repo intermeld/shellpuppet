@@ -7,7 +7,7 @@
 
 import { Daemon, AlreadyRunningError } from './server.js';
 import { createAuditor } from './audit.js';
-import { readDaemonConfig } from './config.js';
+import { readDaemonConfig, signatureOverBudgetLog } from './config.js';
 import { useDialogSignatures } from '../core/dialogs.js';
 import { useAgentSignatures } from '../core/reasoning.js';
 import { createFileLogger } from './logger.js';
@@ -28,22 +28,16 @@ async function main(): Promise<void> {
   // that did not compile were reported among the problems above; a signature,
   // built-in or from config, that runs past its time budget on a screen is
   // reported then and set aside for a minute at a time.
-  useDialogSignatures(config.dialogs ?? [], (name) => {
-    logger.warn('CONFIG PROBLEM', {
-      problem:
-        `the "${name}" dialog signature ran past the regular-expression time budget on a screen ` +
-        'and is set aside for a minute at a time; if it keeps happening, simplify its patterns',
-    });
+  useDialogSignatures(config.dialogs ?? [], (name, builtIn) => {
+    const { message, meta } = signatureOverBudgetLog('dialog', name, builtIn);
+    logger.warn(message, meta);
   });
 
   // How hideReasoning and terminal_result read each agent's screen: the
   // built-in signatures, plus or replaced by the config's.
-  useAgentSignatures(config.agentSignatures ?? [], (name) => {
-    logger.warn('CONFIG PROBLEM', {
-      problem:
-        `the "${name}" agent signature ran past the regular-expression time budget on a screen ` +
-        'and is set aside for a minute at a time; if it keeps happening, simplify its patterns',
-    });
+  useAgentSignatures(config.agentSignatures ?? [], (name, builtIn) => {
+    const { message, meta } = signatureOverBudgetLog('agent', name, builtIn);
+    logger.warn(message, meta);
   });
 
   const daemon = new Daemon({

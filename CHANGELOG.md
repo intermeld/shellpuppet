@@ -16,23 +16,28 @@ version may change behaviour, and every such change is listed here.
 - When the daemon answers a request with its catch-all 500, the line it
   writes to `daemon.log` holds the error's stack and the request's method and
   path. The query, the headers and the body are left out: a query can carry a
-  viewer grant, and a header the client token.
+  viewer grant, and a header the client token. For an absolute-form target
+  the path is logged without the scheme and authority.
+- An overrun of a built-in signature's regular-expression time budget, dialog
+  or agent, is logged as `signature set aside`, with nothing to change: it is
+  tried again in a minute. An overrun of an entry from config is a
+  `CONFIG PROBLEM` that asks for simpler patterns.
 
 ### Fixed
 
 - A dialog signature, built-in or from config `prompts.dialogs`, whose
-  pattern once ran past the regular-expression time budget is set aside for
-  a minute and then tried again, as an agent signature is, rather than for
-  the rest of the daemon's life. The budget is wall-clock time, so on a
-  loaded machine an ordinary pattern can overrun it once, and its dialog then
-  went unrecognised until a restart. Each overrun is reported in
-  `daemon.log`.
+  pattern runs past the regular-expression time budget is set aside for a
+  minute and then tried again, as an agent signature is. The budget is
+  wall-clock time, so on a loaded machine an ordinary pattern can overrun it
+  once. Each overrun is reported in `daemon.log`.
 - On Windows, a resize made before a session's first output, by a viewer or
-  `terminal_resize`, no longer stops the daemon when the session's program
-  has ended by the time that output arrives. node-pty runs such a resize
-  later and threw where nothing could catch it; the resize is now dropped,
-  as there is nothing left to resize. A resize asked for after the program
-  has ended is refused to its caller, as before.
+  `terminal_resize`, is dropped when the session's program has ended by the
+  time that output arrives, and the daemon and its sessions keep running.
+  A resize asked for once the program has ended, before the session's exit
+  has followed, is answered over HTTP and `terminal_resize` with the 409 a
+  session that has exited gets. A viewer's is not answered, so a page whose
+  window does not fit the grid does not ask again; the session's exit follows
+  within about a second.
 - On Windows, a session whose input pipe refuses a write once its console
   host has gone (`write EAGAIN`), or whose output worker or output socket
   fails, has the failure logged once, and the daemon and its other sessions

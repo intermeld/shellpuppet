@@ -208,6 +208,39 @@ export function isEnvNamesProblem(problem: string): boolean {
   );
 }
 
+/**
+ * The daemon.log line for a signature that ran past the regular-expression
+ * time budget on a screen and is set aside for a minute (`SET_ASIDE_MS`), to
+ * be tried again. One from config is a CONFIG PROBLEM its author can act on.
+ * A built-in one is not anybody's to change, and a busy machine can make an
+ * ordinary pattern overrun, so its line says so and asks nothing.
+ */
+export function signatureOverBudgetLog(
+  kind: 'dialog' | 'agent',
+  name: string,
+  builtIn: boolean,
+): { message: string; meta: Record<string, string> } {
+  if (builtIn) {
+    return {
+      message: 'signature set aside',
+      meta: {
+        signature: name,
+        note:
+          `the built-in "${name}" ${kind} signature ran past the regular-expression time budget on a ` +
+          'screen, as a busy machine can make it do; it is tried again in a minute, and there is nothing to change',
+      },
+    };
+  }
+  return {
+    message: 'CONFIG PROBLEM',
+    meta: {
+      problem:
+        `the "${name}" ${kind} signature ran past the regular-expression time budget on a screen ` +
+        'and is set aside for a minute at a time; if it keeps happening, simplify its patterns',
+    },
+  };
+}
+
 /** A policy that refuses every command, naming the configuration problem. */
 function denyAllPolicy(reason: string): PolicyConfig {
   // The empty allowlist is belt-and-braces: even if configError were ever

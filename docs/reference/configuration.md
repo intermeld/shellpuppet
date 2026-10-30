@@ -149,8 +149,10 @@ the turn before it offered. `"requireTrailer": true` refuses a result until
 the `trailer` line that closes a finished turn is drawn. An entry with a
 mistake is reported in `daemon.log` as a `CONFIG PROBLEM` and left out; a
 session that would have needed it is refused. An entry whose pattern runs
-past the regular-expression time budget is reported in `daemon.log` and set
-aside for a minute, and its sessions are refused meanwhile.
+past the regular-expression time budget is reported in `daemon.log` as a
+`CONFIG PROBLEM` and set aside for a minute, and its sessions are refused
+meanwhile. A built-in signature that does is set aside the same way and
+logged as `signature set aside`, with nothing to change.
 
 ## Recognising a program's own permission dialog
 
@@ -178,9 +180,11 @@ like any other: `terminal_list` shows the session waiting, `terminal_wait`
 with `prompt: true` returns it and the stall alert fires. An entry that does
 not compile is reported in `daemon.log` as a `CONFIG PROBLEM` and left out;
 the others, and the built-in ones, still work. A signature whose pattern
-runs past the regular-expression time budget on a screen, built-in or from
-config, is reported there too, each time, and set aside for a minute, then
-tried again; meanwhile its dialog is not recognised. Write patterns
+runs past the regular-expression time budget on a screen is set aside for a
+minute, then tried again; meanwhile its dialog is not recognised. Each time,
+an entry from config is reported there as a `CONFIG PROBLEM`, and a built-in
+one as `signature set aside`, with nothing to change: a busy machine can make
+an ordinary pattern overrun. Write patterns
 specific enough not to match ordinary output: anchor them to what the
 program draws around its dialog, such as a border, as the built-in ones do,
 so that a transcript, a diff or a file listing quoting the dialog's words is
