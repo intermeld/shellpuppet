@@ -16,6 +16,12 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- On Windows, a resize made before a session's first output, by a viewer or
+  `terminal_resize`, no longer stops the daemon when the session's program
+  has ended by the time that output arrives. node-pty runs such a resize
+  later and threw where nothing could catch it; the resize is now dropped,
+  as there is nothing left to resize. A resize asked for after the program
+  has ended is refused to its caller, as before.
 - On Windows, a session whose input pipe refuses a write once its console
   host has gone (`write EAGAIN`), or whose output worker or output socket
   fails, has the failure logged once, and the daemon and its other sessions

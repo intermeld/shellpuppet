@@ -5,8 +5,10 @@
  * `test/integration/failed-start.test.ts` drives the real one. The rest cover
  * what the same wrapper decides and listens to: the list of pids node-pty's
  * kill ends, which is empty and found with no helper started (and in
- * `test/integration/kill-reused-pid.test.ts` with real terminals), a live
- * terminal's streams and the exit code node-pty records.
+ * `test/integration/kill-reused-pid.test.ts` with real terminals), a resize
+ * that arrives after the program has ended (and in
+ * `test/integration/resize-before-first-output.test.ts` with a real one), a
+ * live terminal's streams and the exit code node-pty records.
  */
 
 import type { ChildProcess } from 'node:child_process';
@@ -186,6 +188,69 @@ describe("the list of pids node-pty's kill ends", () => {
     expect(children).toEqual([]);
     await expect(listed).resolves.toEqual([]);
     expect(channel('child_process').hasSubscribers).toBe(false);
+  });
+});
+
+type ResizingAgent = { _useConpty?: boolean; _exitCode?: number; _pty?: number; _pid?: number };
+
+/** node-pty 1.1.0's agent resize, as `lib/windowsPtyAgent.js` has it, recording what reaches the terminal. */
+function standInResizeModule(): { module: AgentModule; calls: string[] } {
+  const calls: string[] = [];
+  function WindowsPtyAgent(): void {
+    // The tests below call the prototype on agents built field by field.
+  }
+  (WindowsPtyAgent.prototype as { resize(this: ResizingAgent, cols: number, rows: number): void }).resize = function resize(
+    this: ResizingAgent,
+    cols: number,
+    rows: number,
+  ): void {
+    if (this._useConpty === true) {
+      if (this._exitCode !== undefined) throw new Error('Cannot resize a pty that has already exited');
+      calls.push(`resize pseudoconsole ${String(this._pty)} to ${String(cols)}x${String(rows)}`);
+      return;
+    }
+    calls.push(`resize winpty ${String(this._pid)} to ${String(cols)}x${String(rows)}`);
+  };
+  return { module: { WindowsPtyAgent }, calls };
+}
+
+function resizeOn(module: AgentModule, agent: ResizingAgent, cols: number, rows: number): void {
+  const { resize } = module.WindowsPtyAgent.prototype;
+  if (resize === undefined) throw new Error('the stand-in agent has no resize');
+  resize.call(agent, cols, rows);
+}
+
+describe('a resize of a ConPTY terminal whose program node-pty has seen end', () => {
+  it('is dropped rather than thrown, and every other resize reaches the terminal', () => {
+    const { module, calls } = standInResizeModule();
+    wrapWindowsPtyAgent(module);
+
+    expect(() => resizeOn(module, { _useConpty: true, _pty: 7, _exitCode: 3 }, 100, 30)).not.toThrow();
+    resizeOn(module, { _useConpty: true, _pty: 8 }, 100, 30);
+    resizeOn(module, { _useConpty: false, _pid: 4321 }, 90, 20);
+    expect(calls).toEqual(['resize pseudoconsole 8 to 100x30', 'resize winpty 4321 to 90x20']);
+  });
+
+  it("is dropped by the installed node-pty's agent once wrapped", () => {
+    // node-pty runs a resize asked for before the terminal's first output from
+    // that output's 'data' handler, where a throw reaches no caller.
+    expect(releaseFailedStarts()).toBe(true);
+    const require = createRequire(import.meta.url);
+    const { WindowsPtyAgent } = require('node-pty/lib/windowsPtyAgent.js') as {
+      WindowsPtyAgent: { prototype: { resize(this: unknown, cols: number, rows: number): void } };
+    };
+    const calls: string[] = [];
+    const native = {
+      resize: (pty: number, cols: number, rows: number): void => {
+        calls.push(`native resize ${String(pty)} to ${String(cols)}x${String(rows)}`);
+      },
+    };
+    const ended = { _useConpty: true, _useConptyDll: false, _pty: 7, _exitCode: 3, _ptyNative: native };
+    const live = { _useConpty: true, _useConptyDll: false, _pty: 8, _ptyNative: native };
+
+    expect(() => WindowsPtyAgent.prototype.resize.call(ended, 100, 30)).not.toThrow();
+    WindowsPtyAgent.prototype.resize.call(live, 100, 30);
+    expect(calls).toEqual(['native resize 8 to 100x30']);
   });
 });
 

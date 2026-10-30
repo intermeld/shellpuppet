@@ -23,8 +23,16 @@
  *
  * The same wrapper makes a ConPTY kill end no process of its own
  * (`listNothingToKill`): node-pty would look them up by a pid the program may
- * no longer hold. Through `listenForTerminalErrors` it hears the other errors
- * node-pty 1.1.0 leaves unheard, those of a live terminal's streams.
+ * no longer hold. It drops a ConPTY resize that arrives once node-pty has seen
+ * the program end, where node-pty would throw `Cannot resize a pty that has
+ * already exited`. node-pty holds a resize asked for before the terminal's
+ * first output and runs it from the output socket's first 'data' event, so
+ * when the program has ended by then, as it can on a busy daemon, that throw
+ * reaches no caller and would be an uncaught exception. Once the program has
+ * ended a resize changes nothing the session shows, so dropping the call loses
+ * nothing; a resize asked for after the end is refused by `Session.resize`
+ * instead, to its caller. Through `listenForTerminalErrors` it hears the other
+ * errors node-pty 1.1.0 leaves unheard, those of a live terminal's streams.
  * `recordedExitCode` reads whether node-pty has seen a terminal's program
  * end, where `canReadExitCode` says it can.
  */
@@ -47,9 +55,18 @@ export interface HalfBuiltAgent {
   };
 }
 
-/** The method of node-pty's agent that a ConPTY kill takes its list of pids from. */
+/** The fields of node-pty's agent that its resize reads. */
+interface ResizingAgent {
+  _useConpty?: boolean;
+  /** Set by node-pty's exit thread as it sees a ConPTY terminal's program end. */
+  _exitCode?: number;
+}
+
+/** The methods of node-pty's agent that the wrapper replaces. */
 interface AgentPrototype {
+  /** Where a ConPTY kill takes its list of pids from. */
   _getConsoleProcessList?: () => Promise<number[]>;
+  resize?: (this: ResizingAgent, cols: number, rows: number) => void;
 }
 
 type AgentConstructor = ((this: HalfBuiltAgent, ...args: unknown[]) => void) & {
@@ -64,7 +81,8 @@ export interface AgentModule {
 
 /**
  * Replace the module's `WindowsPtyAgent` with one that releases a failed
- * start, and whose kill ends no process of its own (`listNothingToKill`).
+ * start, whose kill ends no process of its own (`listNothingToKill`) and whose
+ * resize of a ConPTY terminal is dropped once node-pty has seen its program end.
  * node-pty looks the constructor up on this module object each time it
  * builds a terminal, so the replacement takes effect for every later start.
  */
@@ -85,10 +103,17 @@ export function wrapWindowsPtyAgent(agents: AgentModule): void {
   Wrapped.prototype = Original.prototype;
   Wrapped.releasesFailedStarts = true;
   agents.WindowsPtyAgent = Wrapped;
-  // node-pty's kill looks the method up on the prototype, which the wrapped
-  // constructor shares, so every terminal from here on uses this one.
+  // node-pty's kill and resize look their methods up on the prototype, which
+  // the wrapped constructor shares, so every terminal from here on uses these.
   if (typeof Original.prototype._getConsoleProcessList === 'function') {
     Original.prototype._getConsoleProcessList = listNothingToKill;
+  }
+  const resize = Original.prototype.resize;
+  if (typeof resize === 'function') {
+    Original.prototype.resize = function resizeWhileRunning(this: ResizingAgent, cols: number, rows: number): void {
+      if (this._useConpty === true && this._exitCode !== undefined) return;
+      resize.call(this, cols, rows);
+    };
   }
 }
 
