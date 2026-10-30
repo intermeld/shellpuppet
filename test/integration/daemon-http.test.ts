@@ -1661,10 +1661,11 @@ describe('screenshots without a browser (§5)', () => {
 });
 
 describe('errors the daemon carries on through', () => {
-  it('logs an error on its HTTP server once listening, and goes on answering', async () => {
+  it('logs every error on its HTTP server once listening, and goes on answering', async () => {
     // Once listening, an error on the server is a connection it failed to
     // accept, out of handles say. With no listener it would be an uncaught
-    // exception, on which the daemon shuts down with every session.
+    // exception, on which the daemon shuts down with every session. Out of
+    // handles, such failures come in runs, so it is heard every time.
     const errors: { message: string; meta?: Record<string, unknown> }[] = [];
     const ignore = (): void => undefined;
     const listener = await startTestDaemon({
@@ -1674,7 +1675,9 @@ describe('errors the daemon carries on through', () => {
       const server = (listener.daemon as unknown as { server: http.Server }).server;
       const refused = Object.assign(new Error('accept EMFILE'), { code: 'EMFILE', syscall: 'accept' });
       expect(() => server.emit('error', refused)).not.toThrow();
-      expect(errors).toEqual([{ message: 'http server error', meta: { error: 'Error: accept EMFILE' } }]);
+      expect(() => server.emit('error', refused)).not.toThrow();
+      const line = { message: 'http server error', meta: { error: 'Error: accept EMFILE' } };
+      expect(errors).toEqual([line, line]);
       expect((await api(listener.port, null, '/health')).status).toBe(200);
     } finally {
       await listener.stop();

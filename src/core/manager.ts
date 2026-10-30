@@ -103,7 +103,8 @@ export class SessionManager {
       // running, which is a residual risk stated in
       // `docs/reference/security-model.md` rather than a case to guess at.
       // The one exception is a session that ended without its program being
-      // seen to end (`Session.programEnded`): kill() walks that program's tree.
+      // seen to end (`Session.programEnded`): the session ends that program
+      // at once, and kill() waits for it, or walks the tree if it has not.
       await session.kill();
       reaped.push(id);
     }

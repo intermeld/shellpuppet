@@ -25,7 +25,12 @@ import { commandLine } from './policy.js';
 import { detectPrompt, StalePromptGuard } from './promptDetector.js';
 import { waitFor } from './waiter.js';
 import type { WaitTarget } from './waiter.js';
-import { listenForTerminalErrors, recordedExitCode, releaseFailedStarts } from './windowsPtyStart.js';
+import {
+  canReadExitCode,
+  listenForTerminalErrors,
+  recordedExitCode,
+  releaseFailedStarts,
+} from './windowsPtyStart.js';
 import {
   DEFAULT_COLS,
   DEFAULT_ROWS,
@@ -522,6 +527,8 @@ export class Session implements WaitTarget {
   private exitedFlag = false;
   private exitedAtValue: number | null = null;
   private exitCodeValue: number | null = null;
+  /** The tree kill under way for a program whose session ended with no exit code. */
+  private endingProgram: Promise<void> | null = null;
   private readyFlag: boolean;
   private readyReasonValue: SessionSummary['readyReason'] = 'not-tracked';
   private geometryHeldFlag: boolean;
@@ -637,15 +644,17 @@ export class Session implements WaitTarget {
 
     this.pty.onExit(({ exitCode: reported }) => {
       // node-pty closes a Windows terminal whose output socket failed and
-      // reports an exit with no code, while the program may run on: the
-      // session can no longer be read or typed into, so it has ended, but its
-      // program has not been seen to end (`programEnded`).
+      // reports an exit with no code, while the program runs on: the session
+      // can no longer be read or typed into, so it has ended, and its program
+      // is ended at once rather than left running where nobody can see or
+      // reach it (`endProgram`).
       const exitCode = typeof reported === 'number' ? reported : null;
       this.exitedFlag = true;
       this.exitedAtValue = Date.now();
       this.exitCodeValue = exitCode;
       this.lastChange = Date.now();
       this.logger.info('session exit', { id, exitCode });
+      if (!this.programEnded) this.endingProgram = this.endProgram();
       for (const listener of this.exitListeners) listener(exitCode);
     });
 
@@ -750,17 +759,23 @@ export class Session implements WaitTarget {
   get exitedAt(): number | null {
     return this.exitedAtValue;
   }
-  /** Null until the session ends, and for an end that came with no code. */
+  /**
+   * The program's exit code once the session has ended: the one its exit came
+   * with or, after an exit with no code, the one node-pty records once it sees
+   * the program end. Null until then.
+   */
   get exitCode(): number | null {
-    return this.exitCodeValue;
+    if (!this.exitedFlag) return null;
+    return this.exitCodeValue ?? recordedExitCode(this.pty) ?? null;
   }
   /**
-   * Whether the session's program is known to have ended: its exit came with
-   * a code, or node-pty has recorded one since. An exit with no code ends the
-   * session but not necessarily its program, whose tree a kill still walks.
+   * Whether the session's program is known to have ended: it has an exit
+   * code. After an exit with no code it has not, until node-pty records one,
+   * and its tree is walked. Where node-pty records none (`canReadExitCode`),
+   * such an exit counts as the end: a pid nothing vouches for is never walked.
    */
   get programEnded(): boolean {
-    return this.exitedFlag && (this.exitCodeValue !== null || recordedExitCode(this.pty) !== undefined);
+    return this.exitedFlag && (this.exitCode !== null || !canReadExitCode(this.pty));
   }
   /** Whether the input pipe has failed (Windows): input is refused from then on. */
   get inputFailed(): boolean {
@@ -950,7 +965,7 @@ export class Session implements WaitTarget {
       rows: rendered.rows,
       cursor: rendered.cursor,
       exited: this.exitedFlag,
-      exitCode: this.exitCodeValue,
+      exitCode: this.exitCode,
       screen: rendered.screen,
     };
   }
@@ -1005,7 +1020,7 @@ export class Session implements WaitTarget {
       readyReason: this.readyReasonValue,
       geometryHeld: this.geometryHeldFlag,
       exited: this.exitedFlag,
-      exitCode: this.exitCodeValue,
+      exitCode: this.exitCode,
       watchers: this.watchers,
       createdAt: this.createdAt.toISOString(),
     };
@@ -1033,8 +1048,10 @@ export class Session implements WaitTarget {
    * left alone rather than guessed at, a residual risk stated in
    * `docs/reference/security-model.md`. A session whose program has not been
    * seen to end (`programEnded`) is walked, whether or not the session has
-   * ended: on Windows node-pty holds such a program's process handle, so its
-   * pid is still its own.
+   * ended. node-pty holds such a program's handle while it runs and closes it
+   * as it sees the program end, a moment before the code is recorded, so a
+   * kill in that moment can reach a pid just freed: the same kind of race
+   * every kill has while `taskkill` enumerates the processes.
    */
   async kill(): Promise<void> {
     if (this.killed) return;
@@ -1042,47 +1059,11 @@ export class Session implements WaitTarget {
     const pid = this.pty.pid;
     this.logger.info('session kill', { id: this.id, pid });
 
-    if (!this.programEnded) {
-      if (this.platform === 'win32') {
-        // A root that has already died leaves no tree to walk. At daemon
-        // shutdown this is the usual case: `killAll` has just killed every
-        // session's tree in one run.
-        const failure = this.processAlive(pid) ? await this.treeKiller([pid]) : null;
-        if (failure !== null) {
-          // Three very different things land here, so report which
-          // actually happened.
-          //
-          // `timedOut` means OUR timeout fired and taskkill was terminated
-          // mid-walk. The tree may be half-killed, so this is the one
-          // that genuinely warrants attention.
-          //
-          // A non-zero exit is NOT proof of failure. `taskkill /T` walks
-          // a live tree, and descendants routinely die of their own
-          // accord (or as a side effect of a parent dying) between
-          // enumeration and the kill call; taskkill then reports "not
-          // found" for those and exits 128 having successfully killed
-          // everything else. Measured: exit 128 alongside 78 SUCCESS
-          // lines on a Qoder tree.
-          this.logger.warn(
-            failure.timedOut
-              ? 'tree kill timed out; the process tree may be partially killed'
-              : 'taskkill exited non-zero (usually descendants that vanished mid-walk)',
-            { id: this.id, pid, ...failure, timeoutMs: TREE_KILL_TIMEOUT_MS },
-          );
-        }
-      } else {
-        // SIGKILL outright, with no SIGTERM grace: design §3.1 chooses the
-        // process-group kill precisely so that children which ignore SIGTERM
-        // cannot survive, and a grace period would hand them the chance back.
-        try {
-          process.kill(-pid, 'SIGKILL');
-        } catch (error) {
-          this.logger.warn('process-group kill failed, falling back to pty.kill', {
-            id: this.id,
-            error: String(error),
-          });
-        }
-      }
+    if (this.endingProgram !== null) {
+      // The session is already ending its program, after an exit with no code.
+      await this.endingProgram;
+    } else if (!this.programEnded) {
+      await this.killTree(pid);
     }
 
     try {
@@ -1107,6 +1088,66 @@ export class Session implements WaitTarget {
     }
 
     this.renderer.dispose();
+  }
+
+  /**
+   * End the program of a session that ended with no exit code: node-pty
+   * closed its terminal when its output failed, and the program would run on
+   * where nobody can read or type into it, for an agent CLI still acting and
+   * spending. The same tree kill a kill uses. Never rejects.
+   */
+  private async endProgram(): Promise<void> {
+    const pid = this.pty.pid;
+    this.logger.warn('session output failed: ending its program', { id: this.id, pid });
+    await this.killTree(pid);
+  }
+
+  /**
+   * The OS tree kill of `kill()`, for a program that may still be running:
+   * `taskkill /T /F` from a live root on Windows, the process group on POSIX.
+   * Never rejects.
+   */
+  private async killTree(pid: number): Promise<void> {
+    if (this.platform === 'win32') {
+      // A root that has already died leaves no tree to walk. At daemon
+      // shutdown this is the usual case: `killAll` has just killed every
+      // session's tree in one run.
+      const failure = this.processAlive(pid) ? await this.treeKiller([pid]) : null;
+      if (failure !== null) {
+        // Three very different things land here, so report which
+        // actually happened.
+        //
+        // `timedOut` means OUR timeout fired and taskkill was terminated
+        // mid-walk. The tree may be half-killed, so this is the one
+        // that genuinely warrants attention.
+        //
+        // A non-zero exit is NOT proof of failure. `taskkill /T` walks
+        // a live tree, and descendants routinely die of their own
+        // accord (or as a side effect of a parent dying) between
+        // enumeration and the kill call; taskkill then reports "not
+        // found" for those and exits 128 having successfully killed
+        // everything else. Measured: exit 128 alongside 78 SUCCESS
+        // lines on a Qoder tree.
+        this.logger.warn(
+          failure.timedOut
+            ? 'tree kill timed out; the process tree may be partially killed'
+            : 'taskkill exited non-zero (usually descendants that vanished mid-walk)',
+          { id: this.id, pid, ...failure, timeoutMs: TREE_KILL_TIMEOUT_MS },
+        );
+      }
+    } else {
+      // SIGKILL outright, with no SIGTERM grace: design §3.1 chooses the
+      // process-group kill precisely so that children which ignore SIGTERM
+      // cannot survive, and a grace period would hand them the chance back.
+      try {
+        process.kill(-pid, 'SIGKILL');
+      } catch (error) {
+        this.logger.warn('process-group kill failed, falling back to pty.kill', {
+          id: this.id,
+          error: String(error),
+        });
+      }
+    }
   }
 
   /**

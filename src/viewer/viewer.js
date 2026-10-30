@@ -131,11 +131,14 @@
     if (sessionEnded) return;
     sessionEnded = true;
     readonlyButton.disabled = true;
-    readonlyButton.title = 'The program has exited';
-    modeHint.textContent =
-      exitCode === null || exitCode === undefined
-        ? 'the program has exited; this session no longer accepts input'
-        : `the program has exited (code ${String(exitCode)}); this session no longer accepts input`;
+    // An end with no exit code is the session's, not the program's: the
+    // terminal closed when its output failed, and the daemon then ended the
+    // program.
+    const withCode = typeof exitCode === 'number';
+    readonlyButton.title = withCode ? 'The program has exited' : 'The session has ended';
+    modeHint.textContent = withCode
+      ? `the program has exited (code ${String(exitCode)}); this session no longer accepts input`
+      : 'the session has ended: its output failed; it no longer accepts input';
     refreshTitle();
   };
 
@@ -171,6 +174,8 @@
     // Said on every connect, so a page that joins during the grace after the
     // program exited knows straight away rather than on its first keystroke.
     if (identity.exited === true) showEnded(identity.exitCode);
+    // Likewise a session whose input has failed.
+    if (identity.inputFailed === true) showInputFailed();
 
     // Session id first: it is the short, unique, stable part, and window-title
     // text is truncated from the RIGHT in the Windows taskbar and alt-tab.

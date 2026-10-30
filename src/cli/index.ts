@@ -24,6 +24,7 @@ import { planPassedEnv } from '../mcp/config.js';
 import { isEnvNamesProblem, readDaemonConfig } from '../daemon/config.js';
 import { agentNameFor } from '../core/reasoning.js';
 import { knownKeys } from '../core/keys.js';
+import { listedState } from '../core/types.js';
 import type { Logger, SessionSummary } from '../core/types.js';
 
 const USAGE = `ShellPuppet: drive a real terminal session; humans watch and type via the viewer.
@@ -375,7 +376,7 @@ async function main(): Promise<void> {
       }
       for (const s of sessions) {
         console.log(
-          `${s.id}  ${s.exited ? `exited(${String(s.exitCode)})` : 'live'}  ` +
+          `${s.id}  ${listedState(s)}  ` +
             `${String(s.cols)}x${String(s.rows)}  watchers:${String(s.watchers)}  ` +
             `${s.ready ? 'ready' : 'NOT-READY'}  ${s.label}` +
             (s.agent !== null && s.agent !== undefined ? `  agent:${s.agent}` : ''),

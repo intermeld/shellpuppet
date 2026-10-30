@@ -279,12 +279,30 @@ describe('recordedExitCode', () => {
     // A fresh copy of the module, which has wrapped nothing yet.
     vi.resetModules();
     const fresh = await import('../../src/core/windowsPtyStart.js');
-    const ended = { _agent: { exitCode: 3 } };
+    const ended = { _agent: { _useConpty: true, exitCode: 3 } };
 
     expect(fresh.recordedExitCode(ended)).toBeUndefined();
     expect(fresh.releaseFailedStarts()).toBe(true);
     expect(fresh.recordedExitCode(ended)).toBe(3);
     // node-pty's agent reports no code while the program runs.
-    expect(fresh.recordedExitCode({ _agent: {} })).toBeUndefined();
+    expect(fresh.recordedExitCode({ _agent: { _useConpty: true } })).toBeUndefined();
+    // Under winpty the agent asks Windows about whatever process has the pid
+    // now, which answers 259 (still active) for a live one: not a code.
+    expect(fresh.recordedExitCode({ _agent: { _useConpty: false, exitCode: 259 } })).toBeUndefined();
+  });
+});
+
+describe('canReadExitCode', () => {
+  it('holds only for a ConPTY terminal of the wrapped node-pty', async () => {
+    // A fresh copy of the module, which has wrapped nothing yet.
+    vi.resetModules();
+    const fresh = await import('../../src/core/windowsPtyStart.js');
+    const conpty = { _agent: { _useConpty: true } };
+
+    expect(fresh.canReadExitCode(conpty)).toBe(false);
+    expect(fresh.releaseFailedStarts()).toBe(true);
+    expect(fresh.canReadExitCode(conpty)).toBe(true);
+    expect(fresh.canReadExitCode({ _agent: { _useConpty: false } })).toBe(false);
+    expect(fresh.canReadExitCode({})).toBe(false);
   });
 });
