@@ -14,6 +14,19 @@ version may change behaviour, and every such change is listed here.
   start --env-name`. A config that still uses `mcp.passEnv` passes nothing and
   is reported.
 
+### Fixed
+
+- On Windows, a session whose input pipe refuses a write once its console
+  host has gone (`write EAGAIN`), or whose output worker or output socket
+  fails, has the failure logged once, and the daemon and its other sessions
+  keep running.
+- On Windows, a kill whose console-list helper cannot be started (out of
+  handles, say) leaves the daemon and its other sessions running.
+- An error on a connection whose WebSocket upgrade the daemon refused leaves
+  the daemon running.
+- Input or a key sent to a session whose input pipe has failed is answered
+  with a 409 that says so and to kill the session and start it again.
+
 ## [0.1.0] - 2026-10-30
 
 The first public release.

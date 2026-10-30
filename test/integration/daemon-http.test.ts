@@ -4,6 +4,7 @@
  * guarantee: two clients, one PTY.
  */
 
+import type * as http from 'node:http';
 import * as net from 'node:net';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -866,6 +867,24 @@ describe('viewer grant scoping (§4.1)', () => {
     expect((await api(td.port, null, '/health')).status).toBe(200);
     const snapshot = await api(td.port, td.token, `/sessions/${session.id}/snapshot`);
     expect(snapshot.status).toBe(200);
+  });
+
+  it('a refused upgrade leaves its socket listening for errors, so a late one is not uncaught', async () => {
+    // Node takes its own 'error' listener off the socket before it emits
+    // 'upgrade', and ws adds one only inside its handleUpgrade, which a
+    // refusal never reaches. An error on that socket after the refusal, a
+    // reset say, would be an uncaught exception, on which the daemon shuts
+    // down with every session.
+    const server = (td.daemon as unknown as { server: http.Server }).server;
+    const refused = new Promise<net.Socket>((resolve) => {
+      server.once('upgrade', (_request: http.IncomingMessage, socket: net.Socket) => resolve(socket));
+    });
+    expect(await wsUpgradeStatus(td.port, 's999999', 'garbage-token')).toBe(401);
+    const socket = await refused;
+
+    // With no listener, emit('error') throws the error back at its caller.
+    const reset = Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' });
+    expect(() => socket.emit('error', reset)).not.toThrow();
   });
 
   it('mints a fresh link for a running session', async () => {

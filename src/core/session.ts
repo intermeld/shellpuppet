@@ -203,6 +203,21 @@ export class CommandNotFoundError extends Error {
 }
 
 /**
+ * Input for a session whose input pipe has failed (Windows): refused, because
+ * written it would be lost. The daemon answers it with a 409.
+ */
+export class SessionInputFailedError extends Error {
+  constructor(id: string, cause: Error) {
+    super(
+      `Session ${id}'s input pipe has failed (${String(cause)}), so input cannot reach its program. ` +
+        'Kill the session and start it again.',
+      { cause },
+    );
+    this.name = 'SessionInputFailedError';
+  }
+}
+
+/**
  * Resolve a command to a concrete executable path before spawning directly
  * (`shell: false`). Necessary on **every** platform, for different reasons:
  *
@@ -491,6 +506,8 @@ export class Session implements WaitTarget {
   private cursorHidden = false;
   /** Serialises write() so chunked writes cannot interleave. See write(). */
   private writeChain: Promise<void> = Promise.resolve();
+  /** Why the input pipe failed (Windows), once it has: input is refused from then on. */
+  private inputFailure: Error | null = null;
   private lastChange = Date.now();
   /** Sticky: the rendered screen has shown something at least once. */
   private painted = false;
@@ -573,12 +590,14 @@ export class Session implements WaitTarget {
       // built, so a missing binary surfaces now rather than at the load above.
       throw explainSpawnFailure(error);
     }
-    // A failed write on a Windows terminal's pipes must not take the daemon
-    // down (`windowsPtyStart.ts`). Logged once a stream: for the known cause,
-    // the console host has gone and the session's exit follows.
+    // An error on a Windows terminal's pipes must not take the daemon down
+    // (`windowsPtyStart.ts`). Logged once a stream: for the known cause, the
+    // console host has gone and the session's exit follows. Input after the
+    // input pipe has failed would be lost, so `write` refuses it.
     if (process.platform === 'win32') {
       const reported = new Set<string>();
       listenForTerminalErrors(this.pty, (error, stream) => {
+        if (stream === 'input') this.inputFailure ??= error;
         if (reported.has(stream)) return;
         reported.add(stream);
         this.logger.warn(`session ${stream} failed`, { id, error: String(error) });
@@ -778,6 +797,9 @@ export class Session implements WaitTarget {
    * Resolves with the screen as it was rendered just before this input went
    * in, taken in the queue, so an earlier write still going in cannot be
    * mistaken for this one's effect (`terminal_type`'s verify compares with it).
+   *
+   * Rejects with `SessionInputFailedError` once the input pipe has failed,
+   * including for the rest of a chunked write it fails part-way through.
    */
   write(data: string): Promise<string> {
     const queued = this.writeChain.then(() => this.writeInput(data));
@@ -791,6 +813,7 @@ export class Session implements WaitTarget {
   }
 
   private async writeInput(data: string): Promise<string> {
+    this.refuseIfInputFailed();
     // Recorded BEFORE the bytes go in, when the screen still shows what this
     // input is answering: the waiter's stale-prompt guard needs that prompt,
     // and its echo guard needs the input itself.
@@ -820,6 +843,8 @@ export class Session implements WaitTarget {
 
     let offset = 0;
     while (offset < data.length) {
+      // The pipe can fail while a chunk is in flight.
+      this.refuseIfInputFailed();
       let end = Math.min(offset + WRITE_CHUNK_CHARS, data.length);
 
       // Never split a surrogate pair: half of an astral character is not a
@@ -837,6 +862,11 @@ export class Session implements WaitTarget {
       }
     }
     return screen;
+  }
+
+  /** Input written after the input pipe has failed would be lost: refuse it. */
+  private refuseIfInputFailed(): void {
+    if (this.inputFailure !== null) throw new SessionInputFailedError(this.id, this.inputFailure);
   }
 
   /**

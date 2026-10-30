@@ -1,11 +1,14 @@
 /**
  * A failed write on a live Windows terminal's pipes must not take the daemon
  * down. node-pty 1.1.0 listens for no error on the socket it writes input
- * through, nor on the worker that copies the output pipe, so either error
- * would be an uncaught exception. The input pipe refuses a write once the
- * console host has closed its end (`write EAGAIN`): the last test makes that
- * happen for real by ending the session's own console host. The others emit
- * the errors libuv and the worker would deliver, on the session's own objects.
+ * through, nor on the worker that copies the output pipe, and throws an
+ * output-socket error while its own handler is the socket's only listener,
+ * so each would be an uncaught exception. The input pipe refuses a write once
+ * the console host has closed its end (`write EAGAIN`): the last test makes
+ * that happen for real by ending the session's own console host. The others
+ * emit the errors libuv and the worker would deliver, on the session's own
+ * objects, and check that input after a failed input pipe is refused, not
+ * lost.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -14,11 +17,14 @@ import { SessionManager } from '../../src/core/manager.js';
 import { compilePolicy } from '../../src/core/policy.js';
 import type { Session } from '../../src/core/session.js';
 import type { Logger } from '../../src/core/types.js';
-import { eventually, interactiveShell } from './helpers.js';
+import { api, eventually, interactiveShell, startTestDaemon } from './helpers.js';
+import type { TestDaemon } from './helpers.js';
 
 const managers: SessionManager[] = [];
+const daemons: TestDaemon[] = [];
 afterEach(async () => {
   while (managers.length > 0) await managers.pop()?.killAll();
+  while (daemons.length > 0) await daemons.pop()?.stop();
 });
 
 type Warning = { message: string; meta?: Record<string, unknown> };
@@ -32,7 +38,11 @@ function managerWithLog(): { manager: SessionManager; warnings: Warning[] } {
   return { manager, warnings };
 }
 
-type Agent = { inSocket?: NodeJS.EventEmitter; _conoutSocketWorker?: { _worker?: NodeJS.EventEmitter } };
+type Agent = {
+  inSocket?: NodeJS.EventEmitter;
+  outSocket?: NodeJS.EventEmitter;
+  _conoutSocketWorker?: { _worker?: NodeJS.EventEmitter };
+};
 function agentOf(session: Session): Agent {
   const agent = (session as unknown as { pty: { _agent?: Agent } }).pty._agent;
   if (agent === undefined) throw new Error('no Windows agent on this terminal');
@@ -100,6 +110,78 @@ describe.skipIf(process.platform !== 'win32')('a failed write on a Windows termi
 
     expect(() => worker.emit('error', refusal())).not.toThrow();
     expect(warnings.filter((w) => w.message === 'session output failed')).toHaveLength(1);
+  }, 60_000);
+
+  it('is taken by the session when its output socket fails, with node-pty listening on it too', async () => {
+    const { manager, warnings } = managerWithLog();
+    const session = manager.create({ ...interactiveShell(), cols: 80, rows: 24 });
+    // Output arrives only once the socket has connected, and node-pty puts
+    // its own handler on the socket then. That handler throws any error but
+    // EIO while it is the socket's only 'error' listener.
+    await eventually(() => session.getScreen().trim() !== '');
+    const output = agentOf(session).outSocket;
+    if (output === undefined) throw new Error('no output socket');
+
+    expect(() => output.emit('error', refusal())).not.toThrow();
+    expect(warnings.filter((w) => w.message === 'session output failed')).toHaveLength(1);
+  }, 60_000);
+
+  it('refuses input once its input pipe has failed, rather than losing it', async () => {
+    const { manager } = managerWithLog();
+    const session = manager.create({ ...interactiveShell(), cols: 80, rows: 24 });
+    const input = agentOf(session).inSocket;
+    if (input === undefined) throw new Error('no input socket');
+
+    input.emit('error', refusal());
+    await expect(session.write('echo lost\r')).rejects.toThrow(
+      /^Session s\d+'s input pipe has failed \(Error: write EAGAIN\), .*Kill the session and start it again\.$/,
+    );
+    // And every write after it, not only the first.
+    await expect(session.write('echo lost\r')).rejects.toMatchObject({ name: 'SessionInputFailedError' });
+  }, 60_000);
+
+  it('refuses the rest of a long write when the input pipe fails part-way through it', async () => {
+    const { manager } = managerWithLog();
+    const session = manager.create({ ...interactiveShell(), cols: 80, rows: 24 });
+    await eventually(() => session.getScreen().trim() !== '');
+    const input = agentOf(session).inSocket;
+    if (input === undefined) throw new Error('no input socket');
+    // The pipe fails as the first piece goes in, as a refused write reports
+    // itself after the write.
+    const pty = (session as unknown as { pty: { write(data: string): void } }).pty;
+    const write = pty.write.bind(pty);
+    let pieces = 0;
+    pty.write = (data: string): void => {
+      pieces += 1;
+      write(data);
+      if (pieces === 1) input.emit('error', refusal());
+    };
+
+    await expect(session.write(`echo ${'x'.repeat(3_000)}`)).rejects.toMatchObject({ name: 'SessionInputFailedError' });
+    expect(pieces).toBe(1);
+  }, 60_000);
+
+  it('answers input and keys with a 409 over HTTP once its input pipe has failed', async () => {
+    const td = await startTestDaemon();
+    daemons.push(td);
+    const started = await api(td.port, td.token, '/sessions', { body: { ...interactiveShell(), cols: 80, rows: 24 } });
+    expect(started.status).toBe(200);
+    const id = String(started.body['id']);
+    const session = (td.daemon as unknown as { manager: SessionManager }).manager.get(id);
+    if (session === undefined) throw new Error(`no session ${id}`);
+    const input = agentOf(session).inSocket;
+    if (input === undefined) throw new Error('no input socket');
+
+    input.emit('error', refusal());
+    const typed = await api(td.port, td.token, `/sessions/${id}/input`, { body: { data: 'echo lost\r' } });
+    expect(typed.status).toBe(409);
+    expect(String(typed.body['error'])).toBe(
+      `Session ${id}'s input pipe has failed (Error: write EAGAIN), so input cannot reach its program. ` +
+        'Kill the session and start it again.',
+    );
+    const pressed = await api(td.port, td.token, `/sessions/${id}/key`, { body: { key: 'enter' } });
+    expect(pressed.status).toBe(409);
+    expect(String(pressed.body['error'])).toBe(String(typed.body['error']));
   }, 60_000);
 
   it('takes a real refusal, once the console host has gone', async () => {

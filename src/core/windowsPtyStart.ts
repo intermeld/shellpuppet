@@ -20,8 +20,15 @@
  * skipped. The wrapper reads node-pty's private fields, so it wraps version
  * 1.1.0 only and leaves any other alone. The two pipe handles node-pty keeps
  * for the pseudoconsole stay open: its native kill does not close them.
+ *
+ * The same wrapper gives a listener to the other errors node-pty 1.1.0 leaves
+ * unheard: those of the helper its ConPTY kill forks
+ * (`hearConsoleListFailures`), and, through `listenForTerminalErrors`, those
+ * of a live terminal's streams.
  */
 
+import type { ChildProcess } from 'node:child_process';
+import { subscribe, unsubscribe } from 'node:diagnostics_channel';
 import { createRequire } from 'node:module';
 
 /** The node-pty version whose private fields this relies on. */
@@ -40,8 +47,13 @@ export interface HalfBuiltAgent {
   };
 }
 
+/** The method of node-pty's agent that a ConPTY kill forks a helper in. */
+interface AgentPrototype {
+  _getConsoleProcessList?: (this: { _innerPid: number }) => Promise<number[]>;
+}
+
 type AgentConstructor = ((this: HalfBuiltAgent, ...args: unknown[]) => void) & {
-  prototype: object;
+  prototype: AgentPrototype;
   releasesFailedStarts?: true;
 };
 
@@ -71,7 +83,35 @@ export function wrapWindowsPtyAgent(agents: AgentModule): void {
   } as unknown as AgentConstructor;
   Wrapped.prototype = Original.prototype;
   Wrapped.releasesFailedStarts = true;
+  hearConsoleListFailures(Original.prototype);
   agents.WindowsPtyAgent = Wrapped;
+}
+
+/**
+ * Under ConPTY, node-pty's kill forks a helper that lists the console's
+ * processes (`_getConsoleProcessList`) and listens only for its answer. A
+ * fork that cannot start, out of handles say, emits 'error' on the child,
+ * or throws, which rejects a promise nothing handles, and either would stop
+ * the daemon. The fork happens inside the call, so the child is given a
+ * listener as Node publishes it on the `child_process` diagnostics channel,
+ * and a fork that throws leaves the list to the shell's pid, as node-pty's
+ * own timeout does. Either way the kill goes on to close the pseudoconsole,
+ * which tells the processes still attached to it to close.
+ */
+function hearConsoleListFailures(prototype: AgentPrototype): void {
+  const list = prototype._getConsoleProcessList;
+  if (list === undefined) return;
+  prototype._getConsoleProcessList = function getConsoleProcessList(this: { _innerPid: number }) {
+    const listen = (message: unknown): void => {
+      (message as { process: ChildProcess }).process.on('error', () => undefined);
+    };
+    subscribe('child_process', listen);
+    try {
+      return list.call(this).catch(() => [this._innerPid]);
+    } finally {
+      unsubscribe('child_process', listen);
+    }
+  };
 }
 
 /** Undo what a failed start built, as far as node-pty lets us. */
@@ -117,8 +157,8 @@ export function releaseFailedStarts(): boolean {
 type ErrorSource = { on(event: 'error', listener: (error: Error) => void): unknown };
 
 /**
- * Take the errors of the two streams of a live Windows terminal that node-pty
- * 1.1.0 listens for nowhere, each of which would otherwise be an uncaught
+ * Take the errors of the streams of a live Windows terminal that node-pty
+ * 1.1.0 leaves unheard, each of which would otherwise be an uncaught
  * exception, on which the daemon shuts down with every session.
  *
  * - `input`: input reaches the pseudoconsole through a socket on its input
@@ -127,25 +167,31 @@ type ErrorSource = { on(event: 'error', listener: (error: Error) => void): unkno
  *   viewer's focus report racing the session's exit does it.
  * - `output`: a worker thread copies the output pipe to a local socket
  *   (`lib/worker/conoutSocketWorker.js`), and an error thrown there becomes
- *   the worker's 'error'.
+ *   the worker's 'error'. The terminal reads that socket, and listens on it
+ *   only once it has connected; its handler then throws any error but EIO
+ *   while it is the socket's only 'error' listener (`lib/windowsTerminal.js`).
+ *   The terminal's own `on('error')`, which its typings leave out, adds the
+ *   second.
  *
  * With the listener the stream fails as before and the daemon and its other
  * sessions carry on. False when the installed node-pty is not the wrapped
- * version or the terminal has neither stream.
+ * version or the terminal has none of these.
  */
 export function listenForTerminalErrors(
   pty: unknown,
   listener: (error: Error, stream: 'input' | 'output') => void,
 ): boolean {
   if (!wrapped) return false;
-  const agent = (
-    pty as { _agent?: { inSocket?: ErrorSource; _conoutSocketWorker?: { _worker?: ErrorSource } } }
-  )._agent;
-  const input = agent?.inSocket;
-  const output = agent?._conoutSocketWorker?._worker;
+  const terminal = pty as {
+    on?: ErrorSource['on'];
+    _agent?: { inSocket?: ErrorSource; _conoutSocketWorker?: { _worker?: ErrorSource } };
+  };
+  const input = terminal._agent?.inSocket;
+  const worker = terminal._agent?._conoutSocketWorker?._worker;
   input?.on('error', (error) => listener(error, 'input'));
-  output?.on('error', (error) => listener(error, 'output'));
-  return input !== undefined || output !== undefined;
+  worker?.on('error', (error) => listener(error, 'output'));
+  terminal.on?.('error', (error) => listener(error, 'output'));
+  return input !== undefined || worker !== undefined || terminal.on !== undefined;
 }
 
 /**
