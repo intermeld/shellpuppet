@@ -25,6 +25,7 @@ import * as path from 'node:path';
 import WebSocket from 'ws';
 import { NULL_LOGGER } from '../core/types.js';
 import type { Logger } from '../core/types.js';
+import { QUIET_BROWSER_SWITCHES } from './viewerLauncher.js';
 
 export interface CaptureOptions {
   /** A Chromium-family binary, as `findBrowser()` reports it. */
@@ -323,6 +324,25 @@ function normaliseRows(value: unknown): string[] {
 }
 
 /**
+ * How the capture browser is started: headless, DevTools on a port the OS
+ * picks, its own profile, and the switches that keep the browser's own
+ * background requests off (`QUIET_BROWSER_SWITCHES`).
+ */
+export function captureBrowserArgs(profileDir: string, width: number, height: number): string[] {
+  return [
+    '--headless=new',
+    '--remote-debugging-port=0',
+    `--user-data-dir=${profileDir}`,
+    `--window-size=${String(width)},${String(height)}`,
+    '--no-first-run',
+    '--no-default-browser-check',
+    '--hide-scrollbars',
+    ...QUIET_BROWSER_SWITCHES,
+    'about:blank',
+  ];
+}
+
+/**
  * Open the viewer page headless, wait for its first snapshot to be drawn,
  * and return the pixels and the rows. Throws when the browser will not start,
  * DevTools will not answer or the page does not paint within the budget.
@@ -335,16 +355,7 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
   const profileDir = fs.mkdtempSync(path.join(profileRoot, PROFILE_PREFIX));
   const child = spawn(
     options.browser,
-    [
-      '--headless=new',
-      '--remote-debugging-port=0',
-      `--user-data-dir=${profileDir}`,
-      `--window-size=${String(options.width)},${String(options.height)}`,
-      '--no-first-run',
-      '--no-default-browser-check',
-      '--hide-scrollbars',
-      'about:blank',
-    ],
+    captureBrowserArgs(profileDir, options.width, options.height),
     { stdio: 'ignore', windowsHide: true },
   );
   const exited = new Promise<void>((resolve) => {

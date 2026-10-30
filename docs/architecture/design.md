@@ -711,6 +711,19 @@ default (ADR-008).
   lookup, which shells out on macOS (a LaunchServices query that takes seconds) and on
   Linux, runs in a child process, so the daemon answers `/health` and every request while
   it runs.
+- **The browsers ShellPuppet starts are asked to stay quiet.** The isolated viewer window
+  and the screenshot browser are both started with switches documented in Chromium's
+  source that ask the browser to make no network requests of its own: background
+  networking, component updates, built-in extensions' background pages, default apps,
+  Domain Reliability, sync, metrics and crash reports, the variations seed, proxy
+  auto-detection (`--no-proxy-server`; both pages talk to `127.0.0.1` alone, which
+  Chromium never proxies) and, as features, the Optimization Guide's hints and models and
+  the network time queries (`QUIET_BROWSER_SWITCHES` in `viewerLauncher.ts`). None changes
+  what a page can do. They ask; they do not reach everything. A NetLog of a fresh Chrome
+  started with them, over its first minute, still showed its component updater, a Safe
+  Browsing key fetch, an account check and a search endpoint contacted, and a vendor's
+  own services may be beyond Chromium's switches. `default-browser` hands the link to the
+  user's own browser as it is.
 - Read-only mode toggle, for watching without risk of stray keystrokes (the default is
   read-write, because shared typing is the point of the tool).
 - Visible indicator of who last sent input (agent vs human): cheap, and valuable when two
