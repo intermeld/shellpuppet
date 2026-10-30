@@ -2321,9 +2321,10 @@ export class Daemon {
               applied = true;
             } catch (error) {
               // A resize can race the session's exit (a viewer fitting its
-              // window while looking at a dying session). node-pty throws on
-              // a dead PTY, and an exception escaping a WS handler would take
-              // the whole daemon down via the uncaughtException path.
+              // window while looking at a dying session). `Session.resize`
+              // throws once the program has ended, and an exception escaping
+              // a WS handler would take the whole daemon down via the
+              // uncaughtException path.
               this.logger.warn('viewer resize failed', {
                 id: session.id,
                 error: String(error),

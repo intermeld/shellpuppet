@@ -915,8 +915,18 @@ export class Session implements WaitTarget {
    * than inferred from who is calling. Omitting `hold` leaves the current
    * setting alone, so a viewport following a window cannot quietly release a
    * hold that a scripted run is relying on.
+   *
+   * Throws once node-pty has seen the program end, where it records that
+   * (`recordedExitCode`): there is no terminal left to resize, and node-pty
+   * itself throws for that on POSIX and on a Windows terminal that has drawn.
+   * On Windows a resize asked for before the terminal's first output is held
+   * by node-pty and run later; one that finds the program ended by then is
+   * dropped (`windowsPtyStart.ts`).
    */
   resize(cols: number, rows: number, options: { hold?: boolean } = {}): void {
+    if (recordedExitCode(this.pty) !== undefined) {
+      throw new Error(`Cannot resize session ${this.id}: its program has exited.`);
+    }
     this.pty.resize(cols, rows);
     this.renderer.resize(cols, rows);
     if (options.hold !== undefined) this.geometryHeldFlag = options.hold;
