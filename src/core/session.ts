@@ -918,7 +918,7 @@ export class Session implements WaitTarget {
    *
    * Throws once node-pty has seen the program end, where it records that
    * (`recordedExitCode`): there is no terminal left to resize, and node-pty
-   * itself throws for that on POSIX and on a Windows terminal that has drawn.
+   * itself throws for that on a Windows terminal that has drawn.
    * On Windows a resize asked for before the terminal's first output is held
    * by node-pty and run later; one that finds the program ended by then is
    * dropped (`windowsPtyStart.ts`).
