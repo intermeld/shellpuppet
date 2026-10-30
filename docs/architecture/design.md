@@ -304,7 +304,9 @@ since OpenCode draws a sidebar on the same rows. Signatures are data: the built-
 covers the programs above, and requires the border they draw down the dialog's left
 edge, which a quote of the dialog's words does not carry; config `prompts.dialogs` adds
 more, so a new program's dialog is recognised without a release. Each runs under the
-regular-expression budget, and one that runs past it is reported and set aside.
+regular-expression budget, and one that runs past it is reported and set aside for a
+minute, then tried again, as an agent signature is: the budget is wall-clock time, and an
+ordinary pattern can overrun it once on a loaded machine.
 *Set aside:* reading any row of words two spaces apart as buttons, which would flag
 tables and status lines everywhere.
 `terminal_list` flags a session holding a prompt with how long it has waited,

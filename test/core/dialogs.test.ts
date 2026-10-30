@@ -13,7 +13,12 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it } from 'vitest';
 import { compileDialogs, dialogPrompt, useDialogSignatures } from '../../src/core/dialogs.js';
 import { detectPrompt } from '../../src/core/promptDetector.js';
+import { setDefaultRegexBudgetForTests } from '../../src/core/regexBudget.js';
 import { ScreenRenderer } from '../../src/core/renderer.js';
+import { TEST_REGEX_BUDGET_MS } from '../regex-budget-setup.js';
+
+/** How long a signature that ran past its budget is set aside. */
+const A_MINUTE = 60_000;
 
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'dialogs');
 const OPENCODE_DIALOG = fs.readFileSync(path.join(fixtures, 'opencode-permission-dialog.txt'), 'utf8');
@@ -316,9 +321,9 @@ describe('dialog signatures from config', () => {
     expect(problems[0]).toContain('prompts.dialogs[0] (Broken)');
   });
 
-  it('sets aside a pattern that runs past its budget, says so once and keeps the others working', () => {
+  it('sets aside a pattern that runs past its budget for a minute, keeps the others working, then tries it again', () => {
     // The runaway pattern runs for the whole of the suite's budget
-    // (`test/regex-budget-setup.ts`) before it is set aside, hence the time
+    // (`test/regex-budget-setup.ts`) each time it is tried, hence the time
     // this test is given.
     const reported: string[] = [];
     useDialogSignatures(
@@ -328,11 +333,44 @@ describe('dialog signatures from config', () => {
       ],
       (name) => void reported.push(name),
     );
-    const screen = `${PLAIN_DIALOG}${'a'.repeat(40)}!\n`;
-    const startedAt = Date.now();
-    expect(dialogPrompt(screen.split('\n'))?.question).toBe('wants to run a command');
-    expect(dialogPrompt(screen.split('\n'))?.question).toBe('wants to run a command');
-    expect(Date.now() - startedAt).toBeLessThan(5_000);
+    const lines = `${PLAIN_DIALOG}${'a'.repeat(40)}!\n`.split('\n');
+    const trippedAt = Date.now();
+    expect(dialogPrompt(lines, undefined, trippedAt)?.question).toBe('wants to run a command');
     expect(reported).toEqual(['Runaway']);
+
+    // Not tried on the scans within the minute: they take no budget's worth.
+    const startedAt = Date.now();
+    expect(dialogPrompt(lines, undefined, trippedAt + A_MINUTE - 1)?.question).toBe('wants to run a command');
+    expect(Date.now() - startedAt).toBeLessThan(TEST_REGEX_BUDGET_MS);
+    expect(reported).toEqual(['Runaway']);
+
+    // Tried again after it, and its author told again when it runs long again.
+    expect(dialogPrompt(lines, undefined, trippedAt + A_MINUTE)?.question).toBe('wants to run a command');
+    expect(reported).toEqual(['Runaway', 'Runaway']);
   }, 15_000);
+
+  it('recognises a built-in dialog again a minute after its signature once ran past the budget', () => {
+    const reported: string[] = [];
+    useDialogSignatures([], (name) => void reported.push(name));
+    const lines = OPENCODE_DIALOG.split('\n');
+
+    // An ordinary pattern overruns a budget too short for the screen it reads,
+    // as it can when a loaded machine deschedules the daemon mid-search.
+    const trippedAt = Date.now();
+    setDefaultRegexBudgetForTests(1);
+    try {
+      expect(dialogPrompt([...Array<string>(1_000_000).fill('filler'), ...lines], undefined, trippedAt)).toBeNull();
+    } finally {
+      setDefaultRegexBudgetForTests(TEST_REGEX_BUDGET_MS);
+    }
+    expect(reported).toEqual(['OpenCode and MiMo Code']);
+
+    expect(dialogPrompt(lines, undefined, trippedAt + A_MINUTE - 1)).toBeNull();
+    expect(dialogPrompt(lines, undefined, trippedAt + A_MINUTE)?.options).toEqual([
+      'Allow once',
+      'Always allow',
+      'Reject',
+    ]);
+    expect(reported).toEqual(['OpenCode and MiMo Code']);
+  });
 });

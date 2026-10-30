@@ -31,7 +31,7 @@
  * (`regexBudget.ts`), as patterns from config are text a person wrote.
  */
 
-import { RegexBudgetError, withRegexBudget } from './regexBudget.js';
+import { RegexBudgetError, SET_ASIDE_MS, withRegexBudget } from './regexBudget.js';
 import type { CellStyle, StyledLine } from './renderer.js';
 
 /** Conditions on how characters are drawn. Colours as in `CellStyle`, or `default`. */
@@ -393,8 +393,7 @@ export interface CompiledSignature {
   overBudgetAt: number | null;
 }
 
-/** How long a signature that ran past its time budget is set aside. */
-export const SET_ASIDE_MS = 60_000;
+export { SET_ASIDE_MS };
 
 /** Whether a signature is set aside for running past its time budget just now. */
 export function setAside(signature: CompiledSignature, now = Date.now()): boolean {

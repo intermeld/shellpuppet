@@ -28,11 +28,14 @@
  * not start with `^` matches anywhere in a line; OpenCode draws a sidebar on
  * the same rows as the dialog, after it. Each signature's search runs under
  * the regular-expression time budget (`regexBudget.ts`): a pattern from
- * config is text a person wrote, and one that runs past the budget is set
- * aside and reported rather than tried on every scan.
+ * config is text a person wrote, and one that runs past the budget is
+ * reported and set aside for a minute (`SET_ASIDE_MS`) rather than tried on
+ * every scan. It is tried again after that, built-in ones included, as an
+ * agent signature is (`reasoning.ts`): an ordinary pattern can run past a
+ * wall-clock budget once on a loaded machine.
  */
 
-import { RegexBudgetError, withRegexBudget } from './regexBudget.js';
+import { RegexBudgetError, SET_ASIDE_MS, withRegexBudget } from './regexBudget.js';
 import type { DetectedPrompt } from './promptDetector.js';
 
 /** One program's dialog, as data. The shape of a `prompts.dialogs` entry. */
@@ -80,8 +83,11 @@ interface CompiledDialog {
   choices: RegExp;
   within: number;
   below: number;
-  /** Set once the signature has run past its budget; it is not tried again. */
-  overBudget: boolean;
+  /**
+   * When the signature last ran past its budget. It is set aside for
+   * `SET_ASIDE_MS` after that, then tried again.
+   */
+  overBudgetAt: number | null;
 }
 
 function wholeNumber(value: unknown, max: number): boolean {
@@ -132,7 +138,7 @@ export function compileDialogs(list: readonly unknown[]): {
         choices: new RegExp(choices, 'u'),
         within: (within as number | undefined) ?? DEFAULT_DIALOG_WITHIN,
         below: (below as number | undefined) ?? DEFAULT_DIALOG_BELOW,
-        overBudget: false,
+        overBudgetAt: null,
       });
       usable.push(index);
     } catch (error) {
@@ -169,21 +175,23 @@ function normalise(text: string): string {
 /** Leading whitespace and box-drawing borders (U+2500 to U+257F). */
 const LEADING_BORDER = /^[\s─-╿]+/u;
 
-/** A recognised dialog on screen, or null. */
+/** A recognised dialog on screen, or null. `now` is the time of the scan. */
 export function dialogPrompt(
   raw: readonly string[],
   dialogs: readonly CompiledDialog[] = active,
+  now: number = Date.now(),
 ): DetectedPrompt | null {
   for (const dialog of dialogs) {
-    if (dialog.overBudget) continue;
+    if (dialog.overBudgetAt !== null && now - dialog.overBudgetAt < SET_ASIDE_MS) continue;
     let found: DetectedPrompt | null = null;
     try {
       found = withRegexBudget(dialog.source, () => matchDialog(raw, dialog));
     } catch (error) {
       if (!(error instanceof RegexBudgetError)) throw error;
-      // Set aside rather than tried on every scan, and the person who wrote
-      // it is told once.
-      dialog.overBudget = true;
+      // Set aside rather than tried on every scan, and reported each time it
+      // trips: a person reading daemon.log sees whether a signature keeps
+      // running long or tripped once under load.
+      dialog.overBudgetAt = now;
       reportOverBudget(dialog.name);
     }
     if (found !== null) return found;
