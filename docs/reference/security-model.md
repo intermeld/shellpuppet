@@ -345,7 +345,10 @@ Leave it off unless actively debugging, and delete the log afterwards.
   a process the daemon itself, so nothing new is exposed, but the surface is
   named here. The page it opens holds a read-only credential for one session,
   spent at load; every DevTools call shares the capture's deadline, so a
-  browser that stops answering fails the capture rather than hanging it.
+  browser that stops answering fails the capture rather than hanging it. Its
+  profile folder is made inside the ShellPuppet home, under that folder's
+  permissions, and removed when the capture ends or, where Windows holds it
+  for a while, later (design §5).
 - The version-mismatch warning (two clones sharing one daemon) is loud but
   advisory; `shellpuppet daemon restart` is the remedy.
 - **Viewer browsing context.** The viewer opens by

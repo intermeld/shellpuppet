@@ -48,7 +48,109 @@ export interface CaptureOptions {
    * mode, as the whole of readiness when driving.
    */
   probe?: string;
+  /**
+   * The folder the capture's own browser profile is made in, created when
+   * absent. The daemon passes `captureProfileRoot(home)`, which it sweeps of
+   * leftovers; a direct caller that gives none gets the system's temporary
+   * folder.
+   */
+  profileRoot?: string;
   logger?: Logger;
+}
+
+/**
+ * A capture's browser profile is a fresh folder named with this prefix and
+ * the six characters `mkdtemp` adds. A sweep removes only folders with
+ * exactly that name, so it never touches anything ShellPuppet did not make.
+ */
+const PROFILE_PREFIX = 'shellpuppet-capture-';
+const PROFILE_NAME = /^shellpuppet-capture-[A-Za-z0-9]{6}$/;
+
+/** Where the daemon makes capture profiles: a folder of its own in its home. */
+export function captureProfileRoot(home: string): string {
+  return path.join(home, 'capture-profiles');
+}
+
+/**
+ * When a profile folder that could not be removed as its capture ended is
+ * tried again. On Windows a browser's last child processes can hold files in
+ * it for a while after the browser itself has exited, longer under load.
+ */
+export const PROFILE_RETRY_DELAYS_MS = [30_000, 300_000];
+
+/**
+ * How old a leftover profile folder must be before a sweep removes it: far
+ * longer than a capture can run (`MAX_CAPTURE_TIMEOUT_MS`, plus the wait for
+ * the browser to exit), so a capture still running is never swept.
+ */
+export const STALE_PROFILE_AGE_MS = 10 * 60_000;
+
+/**
+ * Remove a capture's profile folder. One that cannot be removed yet is tried
+ * again after each of `retryDelaysMs`, on timers that never keep the process
+ * alive, and one still there after the last is left for the sweep at the next
+ * daemon start. Resolves with whether the first attempt removed it.
+ */
+export async function removeCaptureProfile(
+  profileDir: string,
+  logger: Logger,
+  retryDelaysMs: readonly number[] = PROFILE_RETRY_DELAYS_MS,
+  remove: (dir: string) => Promise<void> = (dir) =>
+    fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 3 }),
+): Promise<boolean> {
+  const attempt = async (left: readonly number[]): Promise<boolean> => {
+    try {
+      await remove(profileDir);
+      return true;
+    } catch (error) {
+      const [delay, ...rest] = left;
+      if (delay === undefined) {
+        logger.warn('capture profile not removed; the next daemon start removes it', {
+          profileDir,
+          error: String(error),
+        });
+        return false;
+      }
+      setTimeout(() => void attempt(rest), delay).unref();
+      return false;
+    }
+  };
+  return attempt(retryDelaysMs);
+}
+
+/**
+ * Remove the capture profiles left in `root`: only folders named as a capture
+ * names them, and only those untouched for `minAgeMs`. Resolves with how many
+ * were removed. Nothing here throws: a folder that cannot be removed now is
+ * left for the next sweep.
+ */
+export async function sweepCaptureProfiles(
+  root: string,
+  logger: Logger,
+  minAgeMs: number = STALE_PROFILE_AGE_MS,
+  now: number = Date.now(),
+): Promise<number> {
+  let entries: fs.Dirent[];
+  try {
+    entries = await fs.promises.readdir(root, { withFileTypes: true });
+  } catch {
+    return 0; // No captures yet.
+  }
+  let removed = 0;
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !PROFILE_NAME.test(entry.name)) continue;
+    const dir = path.join(root, entry.name);
+    try {
+      const { mtimeMs } = await fs.promises.stat(dir);
+      if (now - mtimeMs < minAgeMs) continue;
+      await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 3 });
+      removed += 1;
+    } catch (error) {
+      logger.warn('leftover capture profile not removed', { profileDir: dir, error: String(error) });
+    }
+  }
+  if (removed > 0) logger.info('removed leftover capture profiles', { root, removed });
+  return removed;
 }
 
 export interface Capture {
@@ -228,7 +330,9 @@ function normaliseRows(value: unknown): string[] {
 export async function captureViewer(options: CaptureOptions): Promise<Capture> {
   const logger = options.logger ?? NULL_LOGGER;
   const deadline = Date.now() + (options.timeoutMs ?? DEFAULT_CAPTURE_TIMEOUT_MS);
-  const profileDir = fs.mkdtempSync(path.join(os.tmpdir(), 'shellpuppet-capture-'));
+  const profileRoot = options.profileRoot ?? os.tmpdir();
+  fs.mkdirSync(profileRoot, { recursive: true });
+  const profileDir = fs.mkdtempSync(path.join(profileRoot, PROFILE_PREFIX));
   const child = spawn(
     options.browser,
     [
@@ -330,12 +434,9 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
   } finally {
     ws?.close();
     if (child.exitCode === null) child.kill();
-    // The profile can be removed once the browser has let go of it.
+    // The profile can be removed once the browser has let go of it; one it
+    // still holds is tried again later (removeCaptureProfile).
     await Promise.race([exited, sleep(3_000)]);
-    try {
-      fs.rmSync(profileDir, { recursive: true, force: true, maxRetries: 3 });
-    } catch (error) {
-      logger.warn('capture profile not removed', { profileDir, error: String(error) });
-    }
+    await removeCaptureProfile(profileDir, logger);
   }
 }
