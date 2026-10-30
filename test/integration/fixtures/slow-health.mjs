@@ -3,10 +3,13 @@
  * ephemeral loopback port, prints `{ port, pid }` as one JSON line and answers
  * `/health` only after a delay, or never.
  *
- * Usage: node slow-health.mjs <delay-ms | never> <other: destroy | answer>
+ * Usage: node slow-health.mjs <delay-ms | never> <other: destroy | answer | vanish>
  * - `destroy`: any other request has its connection destroyed, as when a
  *   daemon drops a request mid-flight;
- * - `answer`: any other request gets `{ "from": <pid> }`.
+ * - `answer`: any other request gets `{ "from": <pid> }`;
+ * - `vanish`: any other request makes it stop listening and drop the
+ *   request, as a daemon that is stopping does: its process lives on, its
+ *   port refuses.
  */
 
 import * as http from 'node:http';
@@ -28,6 +31,12 @@ const server = http.createServer((req, res) => {
   if (other === 'answer') {
     res.writeHead(200, { 'content-type': 'application/json' });
     res.end(JSON.stringify({ from: process.pid }));
+    return;
+  }
+  if (other === 'vanish') {
+    server.close();
+    server.closeAllConnections();
+    setInterval(() => undefined, 1_000); // The process lives on until ended.
     return;
   }
   req.socket.destroy();

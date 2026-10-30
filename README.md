@@ -247,7 +247,7 @@ shellpuppet start [options] <command> [args...]   # options BEFORE the command
 shellpuppet list | snap | type | key | wait | find | resize | kill
 shellpuppet screenshot <id> [--out <file>]        # the viewer, as a browser draws it
 shellpuppet viewer-url <id> [--read-only]         # a fresh single-use viewer link
-shellpuppet daemon status|start|stop|restart
+shellpuppet daemon status|start|stop|restart     # status and stop never start one
 shellpuppet mcp
 ```
 

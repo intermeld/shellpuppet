@@ -14,7 +14,7 @@
 import { writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import process from 'node:process';
-import { discoverDaemon, ensureDaemon, request } from '../client/http.js';
+import { DaemonGoneError, discoverDaemon, ensureDaemon, request } from '../client/http.js';
 import type { DaemonConnection } from '../client/http.js';
 import { assertNodeVersion, packageVersion } from '../daemon/meta.js';
 import { NO_MATCHES } from '../core/find.js';
@@ -98,7 +98,8 @@ Usage:
       move it, which is what lets the viewer fill.
   shellpuppet kill <id>                             Kill the session and its process tree
   shellpuppet daemon status|start|stop|restart      Manage the shared daemon
-      stop/restart: --force to kill live sessions
+      stop/restart: --force to kill live sessions. status and stop never
+      start a daemon: one that has gone is reported as not running.
   shellpuppet mcp                                   Run the MCP stdio server (long-running)
   shellpuppet --version | --help
 
@@ -212,10 +213,12 @@ async function call(
   method: string,
   path: string,
   body?: unknown,
+  options: { autoStart?: boolean } = {},
 ): Promise<Body> {
   const response = await request(connection, method, path, body, {
     logger: stderrLogger,
     actor: 'cli',
+    ...options,
   });
   const payload = response.body as Body;
   if (response.status >= 400) {
@@ -614,11 +617,24 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
   const sub = parsed.positionals[0];
   const force = parsed.flags.get('force') === true;
 
-  const stopRunning = async (connection: DaemonConnection): Promise<void> => {
-    const response = await request(connection, 'POST', '/daemon/shutdown', { force }, {
-      logger: stderrLogger,
-      actor: 'cli',
-    });
+  // Every request here passes `autoStart: false`: asking about or stopping a
+  // daemon must never start one, so a daemon that goes between being found
+  // and being asked is reported as not running.
+  const daemonOnly = { autoStart: false };
+
+  /** Stop the daemon, or say false when it had already gone. */
+  const stopRunning = async (connection: DaemonConnection): Promise<boolean> => {
+    let response;
+    try {
+      response = await request(connection, 'POST', '/daemon/shutdown', { force }, {
+        logger: stderrLogger,
+        actor: 'cli',
+        ...daemonOnly,
+      });
+    } catch (error) {
+      if (error instanceof DaemonGoneError) return false;
+      throw error;
+    }
     if (response.status === 409) {
       fail(1, `${String((response.body as Body)['error'])} (use --force)`);
     }
@@ -631,7 +647,7 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
         });
         await new Promise((resolve) => setTimeout(resolve, 150));
       } catch {
-        return;
+        return true;
       }
     }
     fail(1, 'daemon did not stop within 10 s. Check daemon.log.');
@@ -639,19 +655,32 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
 
   switch (sub) {
     case 'status': {
+      const notRunning = (): void => {
+        console.log(wantJson ? JSON.stringify({ running: false }) : 'not running');
+      };
       const connection = await discoverDaemon({ logger: stderrLogger });
       if (connection === null) {
-        console.log(wantJson ? JSON.stringify({ running: false }) : 'not running');
+        notRunning();
         return;
       }
+      let sessions: Body;
+      try {
+        sessions = await call(connection, 'GET', '/sessions', undefined, daemonOnly);
+      } catch (error) {
+        if (error instanceof DaemonGoneError) {
+          notRunning();
+          return;
+        }
+        throw error;
+      }
       surfaceWarnings(connection);
-      const sessions = await call(connection, 'GET', '/sessions');
       const list = sessions['sessions'] as SessionSummary[];
       // What sessions inherit (ADR-008). A daemon that cannot say is left out
       // of the report rather than failing it.
       const environment = await request(connection, 'GET', '/environment', undefined, {
         logger: stderrLogger,
         actor: 'cli',
+        ...daemonOnly,
       })
         .then((response) =>
           response.status === 200 ? (response.body as { mode: string; exposed: string[] }) : undefined,
@@ -703,19 +732,20 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
     }
     case 'stop': {
       const connection = await discoverDaemon({ logger: stderrLogger });
-      if (connection === null) {
+      // A daemon that went before it could be told to stop was not running.
+      if (connection === null || !(await stopRunning(connection))) {
         // Nothing to stop IS the outcome asked for, so it reads the same to a
         // script as a daemon that was stopped.
         if (wantJson) printJson({ running: false, stopped: true });
         else console.log('not running');
         return;
       }
-      await stopRunning(connection);
       if (wantJson) printJson({ running: false, stopped: true });
       else console.log('stopped');
       return;
     }
     case 'restart': {
+      // Only the start half may start a daemon.
       const existing = await discoverDaemon({ logger: stderrLogger });
       if (existing !== null) await stopRunning(existing);
       const connection = await ensureDaemon({ logger: stderrLogger });
