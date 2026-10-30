@@ -79,6 +79,14 @@ version may change behaviour, and every such change is listed here.
   macOS and Linux the rest of the lookup runs in a child process, and a
   lookup that times out, crashes or prints something other than a JSON list
   is logged once. The browser found is the one chrome-launcher ranks first.
+- `hideReasoning` no longer hides a question the program is waiting on. Grok
+  Build draws its permission box behind the same bar as its reasoning, so a
+  snapshot with `hideReasoning` replaced the question and its options with one
+  `[reasoning hidden]` line. The rows the prompt detection claims for a
+  question on screen, and the border rows beside them, are never hidden, for
+  every signature; Grok's own rules stop at the box's question, command and
+  option rows, so the box keeps every row of its own even when no detector
+  claims it.
 - On Windows, a session whose input pipe refuses a write once its console
   host has gone (`write EAGAIN`), or whose output worker or output socket
   fails, has the failure logged once, and the daemon and its other sessions

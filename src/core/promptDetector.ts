@@ -46,6 +46,14 @@ export interface DetectedPrompt {
    * stall timer can accumulate across scans without resetting.
    */
   signature: string;
+  /**
+   * The first and last raw line of the screen the prompt's own drawing
+   * occupies: its question when one is found, its options, and what is
+   * drawn between them. A reader that puts parts of a screen aside
+   * (`reasoning.ts` hides reasoning) leaves these lines alone: a filter
+   * must never hide a question.
+   */
+  rows: [number, number];
 }
 
 /**
@@ -249,14 +257,14 @@ export function detectPrompt(screen: string): DetectedPrompt | null {
   const last = lines[lines.length - 1]!;
   if (isYesNo(last.text) && !BUSY_LINE.test(last.text)) {
     const question = normalise(last.text);
-    return { question, options: [], signature: question };
+    return { question, options: [], signature: question, rows: [last.index, last.index] };
   }
 
   // A bare press-enter wait (the Codex onboarding screens): the last content
   // line asks for enter and nothing below it can contradict that.
   if (PRESS_ENTER.test(last.text)) {
     const question = normalise(last.text);
-    return { question, options: [], signature: question };
+    return { question, options: [], signature: question, rows: [last.index, last.index] };
   }
 
   return null;
@@ -330,6 +338,8 @@ function clackPrompt(tail: Line[], raw: string[]): DetectedPrompt | null {
     question,
     options,
     signature: [question, ...options.map(withoutHint)].join(' | '),
+    // From the headline to the bar end, a validation message under it included.
+    rows: [top - 1, after - 1],
   };
 }
 
@@ -549,6 +559,9 @@ function livePrompt(block: Block, tail: Line[]): DetectedPrompt | null {
     question: headline,
     options,
     signature: [headline, ...options].map(stable).join(' | '),
+    // From the question, when one is found, down to the last option row:
+    // what a program draws between the two belongs to the question too.
+    rows: [question?.index ?? blockStart, blockEnd],
   };
 }
 

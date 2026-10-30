@@ -95,6 +95,15 @@ describe('detectPrompt: OpenCode and MiMo Code dialogs', () => {
     expect(prompt!.options).toEqual(['Allow once', 'Always allow', 'Reject']);
   });
 
+  it('claims the rows of the dialog itself, from its title to its row of choices', () => {
+    const prompt = detectPrompt(OPENCODE_DIALOG)!;
+    const lines = OPENCODE_DIALOG.split('\n');
+    expect(lines[prompt.rows[0]]).toMatch(/△ Permission required/);
+    expect(lines[prompt.rows[1]]).toMatch(/Allow once/);
+    // The request between the two is the dialog's own, claimed with them.
+    expect(lines.slice(prompt.rows[0], prompt.rows[1] + 1).join('\n')).toMatch(/dotnet build/);
+  });
+
   it('reads it at every width the grid may reflow it to before OpenCode redraws', async () => {
     for (const cols of [40, 60, 80, 100, 120, 160, 200]) {
       const prompt = detectPrompt(await atWidth(OPENCODE_DIALOG, cols));

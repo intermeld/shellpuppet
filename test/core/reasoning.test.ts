@@ -212,6 +212,33 @@ describe('the generic engine', () => {
     expect(latestResult(lines, demo)).toMatchObject({ found: false, reason: 'no-answer' });
   });
 
+  it('never hides the rows a question on screen claims, whatever the signature says', () => {
+    const hungry = compileSignatures([
+      {
+        name: 'hungry',
+        composer: { text: '^> ' },
+        // Reasoning that would run over anything below its first line: only
+        // the claimed rows of a question stop it.
+        reasoning: [{ start: { text: '^Thinking' }, continues: { text: '^\\S' } }],
+        answer: { start: { text: '^• ' } },
+      },
+    ]).signatures[0]!;
+    const lines = [
+      plain('You: run the tests'),
+      plain('Thinking'),
+      plain('Allow this command to run?'),
+      plain('  1 (○) Allow once'),
+      plain('  2 (•) No'),
+      plain('> '),
+    ];
+    const filtered = hideReasoning(lines, hungry);
+    expect(filtered?.lines).toContain('Allow this command to run?');
+    expect(filtered?.lines).toContain('  1 (○) Allow once');
+    // The selected option as drawn, radio and all.
+    expect(filtered?.lines).toContain('  2 (•) No');
+    expect(filtered?.lines.join('\n')).not.toMatch(/^Thinking$/m);
+  });
+
   it('sets a signature aside when its pattern runs past the time budget', () => {
     withProductBudget(() => {
       const slow = compileSignatures([
@@ -451,6 +478,71 @@ describe('Grok (built in)', () => {
     for (const name of ['grok-thinking', 'grok-thinking-second-turn', 'grok-thinking-after-tool']) {
       expect(latestResult(await screen(name), grok), name).toMatchObject({ found: false, reason: 'busy' });
     }
+  });
+});
+
+describe('Grok permission box (built in)', () => {
+  const grok = builtIn('grok');
+  // A permission box drawn behind the same bar as the reasoning, as Grok
+  // draws it: the question it asks, and the same box with the command's rows
+  // inside it. Content invented; shapes and spacing as captured.
+  const QUESTION_ALLOW = '  │  >  Allow Run the unit tests?';
+  const QUESTION_RESTORE = '  │  >  Restore the saved file and compare digests';
+  const COMMAND_ROWS = [
+    "  │  │ Copy-Item -LiteralPath 'C:\\work\\demo\\saved\\a.ts' -Destination·",
+    "  │  : 'C:\\work\\demo\\src\\a.ts' -Force",
+    "  │  │ Get-FileHash -Algorithm SHA256 -LiteralPath 'C:\\work\\demo\\src\\a.ts'",
+  ] as const;
+  // The selected option is the second: its radio is the filled one.
+  const OPTIONS = [
+    "  │  1 (○) Yes, and don't ask again for anything (always-approve mode)",
+    '  │  2 (•) Yes, proceed',
+    '  │  3 (○) No, reject (type to add feedback)',
+  ] as const;
+
+  it('hides the reasoning behind the bar and not the box: the question, its command and every option stay', async () => {
+    for (const [name, question, commandRows] of [
+      ['grok-permission-box', QUESTION_ALLOW, []],
+      ['grok-permission-box-command', QUESTION_RESTORE, COMMAND_ROWS],
+    ] as const) {
+      const lines = await screen(name);
+      const filtered = hideReasoning(lines, grok);
+      expect(filtered, name).not.toBeNull();
+      if (filtered === null) continue;
+      const kept = filtered.lines;
+      expect(kept, name).toContain(question);
+      for (const row of commandRows) expect(kept, name).toContain(row);
+      // All three options, the selected one drawn with its filled radio.
+      for (const option of OPTIONS) expect(kept, name).toContain(option);
+      expect(kept.join('\n'), name).toMatch(/^ {2}1\/3:select/m);
+      // The real reasoning still goes, and something went.
+      expect(kept.join('\n'), name).not.toMatch(/♦ Thinking/);
+      expect(kept.join('\n'), name).not.toContain('X xxxx xxxxxxxx');
+      expect(filtered.markers, name).toContain(true);
+      // A dialog stands in the composer's place, so no result is read.
+      expect(latestResult(lines, grok).found, name).toBe(false);
+    }
+  });
+
+  it('stops the bar at a box row even when no option rows are on screen to claim it', () => {
+    const plain = (text: string): StyledLine => ({
+      text,
+      spans: text === '' ? [] : [{ from: 0, to: text.length, bold: false, dim: false, italic: false, inverse: false, fg: null, bg: null }],
+    });
+    // A box whose options sit below the viewport: nothing here for the
+    // prompt detection to claim, so the signature's own rules must stop.
+    const lines = [
+      plain('     > run the tests'),
+      plain('  │  ♦ Thinking…'),
+      plain('  │'),
+      plain('  │  X xxxx xxxxxxxx 99 by 99 and xxxxx which of the xxxxx.'),
+      plain('  │  >  Allow Run the unit tests?'),
+      plain('  1/3:select  │  Tab:next option  │  Ctrl+o:always-approve'),
+    ];
+    const kept = hideReasoning(lines, grok)!.lines;
+    expect(kept).toContain('  │  >  Allow Run the unit tests?');
+    expect(kept.join('\n')).not.toMatch(/♦ Thinking/);
+    expect(kept.join('\n')).not.toContain('X xxxx');
   });
 });
 

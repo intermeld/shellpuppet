@@ -105,6 +105,11 @@ session uses the signature named by `terminal_start`'s `agent` (CLI
 `--agent`), or else the one whose `programs` include its start command's
 name; a session with neither is refused by these readers.
 
+Whatever the signature says, the rows the prompt detection claims for a
+question on screen are never hidden as reasoning, and neither are the border
+rows beside them: a permission box a program draws in the same style as its
+reasoning keeps every row of its own.
+
 Add a program, or replace a built-in one after its screen changes, under
 `agents.signatures`:
 

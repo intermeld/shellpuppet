@@ -19,6 +19,11 @@
  * (`test/fixtures/reasoning/`), and config `agents.signatures` adds or
  * replaces one without a release.
  *
+ * A question the program is waiting on is never hidden, whatever its
+ * signature says: the rows the prompt detection (`promptDetector.ts`)
+ * claims for a question on screen stay, so a permission box drawn in the
+ * same style as the reasoning keeps every row of its own.
+ *
  * Both readers fail closed. A session whose program has no signature is
  * refused rather than shown unfiltered, and `terminal_result` refuses when it
  * cannot find an answer it recognises, rather than returning something else.
@@ -32,6 +37,7 @@
  */
 
 import { RegexBudgetError, SET_ASIDE_MS, withRegexBudget } from './regexBudget.js';
+import { detectPrompt } from './promptDetector.js';
 import type { CellStyle, StyledLine } from './renderer.js';
 
 /** Conditions on how characters are drawn. Colours as in `CellStyle`, or `default`. */
@@ -134,6 +140,15 @@ const RULE = '^[─━]{10,}$';
 const RULE_INDENTED = '^\\s*[─━]{10,}';
 
 /**
+ * Grok draws its permission box behind the same bar as its reasoning: a
+ * question row (`> `), a command's rows (`│` starts one, `:` continues it)
+ * and option rows (`1 (○)`). No Grok reasoning rule starts or continues on
+ * them, so a permission box keeps every row of its own, whatever wording
+ * its question is asked in.
+ */
+const GROK_BOX_ROW = ' {2}(?:> |\\d+ \\([○•●]\\) |[│:])';
+
+/**
  * Built-in signatures. Each comment names the screens its fixtures come from.
  */
 export const BUILT_IN_SIGNATURES: readonly AgentSignature[] = [
@@ -226,15 +241,15 @@ export const BUILT_IN_SIGNATURES: readonly AgentSignature[] = [
     reasoning: [
       {
         start: { text: '^ {2}│ {2}♦ Thinking' },
-        continues: { text: '^ {2}│' },
+        continues: { text: `^ {2}│(?!${GROK_BOX_ROW})` },
       },
       // The spinner's label can be the model's own words about what it is
       // doing; it goes too, and the busy state still shows in the result.
       { start: { text: '^ {3}[|/\\\\-] \\S' } },
       // The bar on its own: the heading may have scrolled away.
       {
-        start: { text: '^ {2}│ {2}\\S' },
-        continues: { text: '^ {2}│' },
+        start: { text: `^ {2}│(?!${GROK_BOX_ROW}) {2}\\S` },
+        continues: { text: `^ {2}│(?!${GROK_BOX_ROW})` },
       },
     ],
     answer: {
@@ -617,6 +632,9 @@ export function signatureFor(agent: string | undefined, command: string): Compil
 
 // ---------------------------------------------------------------- matching
 
+/** A row that holds nothing but whitespace and box drawing: border, not text. */
+const BORDER_ROW = /^[\s─-╿-]*$/u;
+
 function styleFits(style: CellStyle, test: CompiledStyle): boolean {
   if (test.bold !== undefined && style.bold !== test.bold) return false;
   if (test.dim !== undefined && style.dim !== test.dim) return false;
@@ -667,11 +685,15 @@ function blockEnd(
   block: CompiledBlock,
   limit: number,
   tidy?: RegExp,
+  claimed?: ReadonlySet<number> | null,
 ): number {
   let end = at + 1;
   if (block.continues === undefined) return end;
   let i = at + 1;
   while (i < limit) {
+    // A line a question on screen claims for itself is never part of a
+    // block: the block ends before it rather than running over it.
+    if (claimed?.has(i)) break;
     const line = lines[i]!;
     if (!blank(line, tidy) && lineFits(line, block.continues)) {
       i++;
@@ -728,17 +750,47 @@ function composerAt(lines: readonly StyledLine[], signature: CompiledSignature):
   return null;
 }
 
+/**
+ * The rows a question on screen claims for itself: the prompt detection's
+ * own rows (`promptDetector.ts`), and the rows of nothing but border beside
+ * them, which belong to the question's box. A filter that hides reasoning
+ * must never hide a question, so a hidden block is cut at the first of
+ * these rows and never starts on one. Null when no question is on screen,
+ * so the block scan below runs as before.
+ */
+function claimedRows(lines: readonly StyledLine[]): ReadonlySet<number> | null {
+  const prompt = detectPrompt(lines.map((line) => line.text).join('\n'));
+  if (prompt === null) return null;
+  const [first, last] = prompt.rows;
+  let top = first;
+  while (top > 0 && BORDER_ROW.test(lines[top - 1]!.text)) top--;
+  let bottom = last;
+  while (bottom + 1 < lines.length && BORDER_ROW.test(lines[bottom + 1]!.text)) bottom++;
+  const rows = new Set<number>();
+  for (let i = top; i <= bottom; i++) rows.add(i);
+  return rows;
+}
+
 /** `[from, to)` ranges of reasoning above `limit`. */
-function reasoningRanges(lines: readonly StyledLine[], signature: CompiledSignature, limit: number): [number, number][] {
+function reasoningRanges(
+  lines: readonly StyledLine[],
+  signature: CompiledSignature,
+  limit: number,
+  claimed?: ReadonlySet<number> | null,
+): [number, number][] {
   const ranges: [number, number][] = [];
   let i = 0;
   while (i < limit) {
+    if (claimed?.has(i)) {
+      i++;
+      continue;
+    }
     const block = signature.reasoning.find((b) => lineFits(lines[i]!, b.start));
     if (block === undefined) {
       i++;
       continue;
     }
-    const end = blockEnd(lines, i, block, limit, signature.tidy);
+    const end = blockEnd(lines, i, block, limit, signature.tidy, claimed);
     ranges.push([i, end]);
     i = end;
   }
@@ -774,12 +826,15 @@ export function hideReasoning(
   signature: CompiledSignature,
   firstVisible = 0,
 ): FilteredLines | null {
+  // Outside the signature's budget: the detector runs its own patterns under
+  // their own (`dialogs.ts`), and the two never nest.
+  const claimed = claimedRows(lines);
   return guarded(signature, () => {
     // Everything above the composer's own line, the chrome over it included:
     // a spinner there can carry the model's words about what it is thinking.
     const composer = composerAt(lines, signature);
     const limit = composer?.line ?? lines.length;
-    const ranges = reasoningRanges(lines, signature, limit);
+    const ranges = reasoningRanges(lines, signature, limit, claimed);
     const out: FilteredLines = { lines: [], rows: [], markers: [], hiddenLines: 0, hiddenBlocks: 0 };
     const keep = (i: number): void => {
       out.lines.push(lines[i]!.text);
