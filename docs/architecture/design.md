@@ -678,7 +678,11 @@ default (ADR-008).
   browser that cannot be executed, or an opener that exits with failure, counts as nothing
   opened, and the response says why. The daemon begins detecting the browser as it starts
   and memoises that one detection, so a session start waits for the spawn, and for whatever
-  is left of the detection if it arrives first.
+  is left of the detection if it arrives first. Detection never holds the daemon's event
+  loop: the paths chrome-launcher checks first are tried by file access alone, and its full
+  lookup, which shells out on macOS (a LaunchServices query that takes seconds) and on
+  Linux, runs in a child process, so the daemon answers `/health` and every request while
+  it runs.
 - Read-only mode toggle, for watching without risk of stray keystrokes (the default is
   read-write, because shared typing is the point of the tool).
 - Visible indicator of who last sent input (agent vs human): cheap, and valuable when two
