@@ -1,7 +1,7 @@
 {
   "name": "shellpuppet",
   "version": "0.1.0",
-  "description": "Shared terminal sessions for AI agents and humans: an MCP server and CLI over a per-user daemon that owns real PTYs, with a live browser viewer wired to the same session.",
+  "description": "Supervised terminal sessions for AI agents: an agent drives a real terminal while you watch, type and approve. Like Playwright, but for the terminal. An MCP server and CLI over a per-user daemon, with a live browser viewer on the same session.",
   "license": "Apache-2.0",
   "author": "Red Eagle Tech Ltd",
   "repository": {

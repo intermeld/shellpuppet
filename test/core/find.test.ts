@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { findOnScreen } from '../../src/core/find.js';
 
 describe('findOnScreen', () => {
-  const lines = ['$ goose session', 'Loading 7 extensions…', 'ready — type a prompt', ''];
+  const lines = ['$ goose session', 'Loading 7 extensions…', 'ready: type a prompt', ''];
 
   it('returns 1-based line numbers with the matched substring', () => {
     const result = findOnScreen(lines, '\\d+ extensions');

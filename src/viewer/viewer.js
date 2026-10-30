@@ -110,7 +110,7 @@
   // carry both what the session IS and whether it wants something, so
   // alt-tabbing is a decision rather than a hunt. Composed from state, never
   // appended to, or repeated prompts would stack prefixes.
-  let identityTitle = `${sessionId} — ShellPuppet`;
+  let identityTitle = `${sessionId} · ShellPuppet`;
   let promptWaiting = false;
   /** The daemon says the program is gone: the page stops pretending otherwise. */
   let sessionEnded = false;
@@ -179,7 +179,7 @@
 
     // Session id first: it is the short, unique, stable part, and window-title
     // text is truncated from the RIGHT in the Windows taskbar and alt-tab.
-    identityTitle = `${identity.session} ${purpose} — ShellPuppet`;
+    identityTitle = `${identity.session} ${purpose} · ShellPuppet`;
     refreshTitle();
     relayout(false);
   };
