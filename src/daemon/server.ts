@@ -14,7 +14,12 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import type { WebSocket } from 'ws';
 import { SessionManager, PolicyViolationError } from '../core/manager.js';
-import { CommandNotFoundError, DEFAULT_SESSION_ENV, credentialShapedNames } from '../core/session.js';
+import {
+  CommandNotFoundError,
+  DEFAULT_SESSION_ENV,
+  SessionInputFailedError,
+  credentialShapedNames,
+} from '../core/session.js';
 import { NativePtyUnavailableError } from '../core/nativePty.js';
 import { commandLine, compilePolicy } from '../core/policy.js';
 import { keyToBytes, knownKeys } from '../core/keys.js';
@@ -1225,13 +1230,18 @@ export class Daemon {
         // real time, so the session can die between the guard and the last
         // chunk. That is the same "you are writing to a dead session" condition
         // the guard reports, so it gets the same 409. A 500 would blame the
-        // caller's request for a race in the session's lifetime.
+        // caller's request for a race in the session's lifetime. A session
+        // whose input pipe has failed refuses the write too, and its error
+        // says what to do.
         let before: string;
         try {
           before = await session.write(data);
         } catch (error) {
           json(res, 409, {
-            error: `Session ${id} exited while the input was being written: ${String(error)}`,
+            error:
+              error instanceof SessionInputFailedError
+                ? error.message
+                : `Session ${id} exited while the input was being written: ${String(error)}`,
           });
           return;
         }
@@ -1268,12 +1278,16 @@ export class Daemon {
           });
           return;
         }
-        // Same exit race as the input endpoint above: 409, not 500.
+        // Same exit race and failed input pipe as the input endpoint above:
+        // 409, not 500.
         try {
           await session.write(bytes);
         } catch (error) {
           json(res, 409, {
-            error: `Session ${id} exited while the key was being written: ${String(error)}`,
+            error:
+              error instanceof SessionInputFailedError
+                ? error.message
+                : `Session ${id} exited while the key was being written: ${String(error)}`,
           });
           return;
         }
@@ -1931,6 +1945,11 @@ export class Daemon {
     socket: import('node:net').Socket,
     head: Buffer,
   ): void {
+    // Node takes its own 'error' listener off the socket before it emits
+    // 'upgrade', and ws adds one only inside its handleUpgrade, which a
+    // refusal never reaches. An error with no listener would be an uncaught
+    // exception, on which the daemon shuts down with every session.
+    socket.on('error', () => socket.destroy());
     const reject = (code: number, reason: string): void => {
       socket.write(`HTTP/1.1 ${String(code)} ${reason}\r\nConnection: close\r\n\r\n`);
       socket.destroy();
