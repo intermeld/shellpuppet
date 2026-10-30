@@ -314,7 +314,11 @@ Leave it off unless actively debugging, and delete the log afterwards.
   ShellPuppet does not defend you against your own account being compromised.
 - `terminal_kill` uses `taskkill /T /F` (Windows) / process-group signals
   (POSIX). Descendants that detach from the console or process group can
-  survive; kill-on-close Job Objects are a documented future hardening.
+  survive; kill-on-close Job Objects are a documented future hardening. On
+  Windows a process on the session's console but outside the killed tree,
+  such as one whose parent has exited, can survive too: once the tree kill
+  has ended the program, node-pty no longer holds the terminal, so its kill
+  sends no close event.
   Two further cases, stated plainly because neither is fixed:
 
   - **If the daemon itself dies without running its teardown**, closing its

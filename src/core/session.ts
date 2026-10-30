@@ -1031,11 +1031,15 @@ export class Session implements WaitTarget {
    * killing only the direct child (`cmd.exe`) strands the real application,
    * and orphaned agent CLIs keep running and keep spending paid API tokens.
    *
-   * Windows: `taskkill /T /F` walks and kills the tree; closing the ConPTY via
-   * `pty.kill()` also sends CTRL_CLOSE_EVENT to console-attached
-   * survivors. (The design's Job Object hardening needs a native module and is
+   * Windows: `taskkill /T /F` walks and kills the tree, then `pty.kill()` runs.
+   * node-pty's kill ends no process of its own (`windowsPtyStart.ts`), and it
+   * closes the ConPTY, which sends CTRL_CLOSE_EVENT to the processes on the
+   * console, only while node-pty still holds the terminal: while the program
+   * runs. After a tree kill that ended the program it closes nothing, so a
+   * process on the session's console outside the killed tree gets no close
+   * event. (The design's Job Object hardening needs a native module and is
    * deferred. If the daemon itself dies, its ConPTY handles close, which gives
-   * console-attached descendants the same close signal.)
+   * console-attached descendants a close signal.)
    *
    * POSIX: the PTY child is the session leader of its own process group, so
    * signalling the negated pid takes the group down.

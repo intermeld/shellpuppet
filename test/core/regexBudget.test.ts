@@ -71,9 +71,10 @@ describe('the budget at each caller', () => {
 
   it('a wait on a hostile pattern is refused, rather than freezing everything', async () => {
     const startedAt = Date.now();
-    await expect(
-      waitFor(targetShowing(HOSTILE_SCREEN), { regex: HOSTILE }, { timeout: 5_000 }),
-    ).rejects.toThrow(WaitConditionError);
+    const refused = waitFor(targetShowing(HOSTILE_SCREEN), { regex: HOSTILE }, { timeout: 5_000 });
+    await expect(refused).rejects.toThrow(WaitConditionError);
+    // Abandoned at the product's figure, which the refusal names.
+    await expect(refused).rejects.toThrow(`took longer than ${String(REGEX_BUDGET_MS)} ms`);
     expect(Date.now() - startedAt).toBeLessThan(3_000);
   });
 
@@ -86,7 +87,7 @@ describe('the budget at each caller', () => {
   it('a find on a hostile pattern is refused once, not once per line', () => {
     const startedAt = Date.now();
     expect(() => findOnScreen(Array<string>(40).fill(HOSTILE_SCREEN), HOSTILE)).toThrow(
-      RegexBudgetError,
+      expect.objectContaining({ name: 'RegexBudgetError', budgetMs: REGEX_BUDGET_MS }),
     );
     // Forty lines, one budget: a per-line budget would be forty times this.
     expect(Date.now() - startedAt).toBeLessThan(3_000);
@@ -98,6 +99,8 @@ describe('the budget at each caller', () => {
     const decision = evaluateCommand(policy, HOSTILE_SCREEN);
     expect(decision.allowed).toBe(false);
     expect(decision.reason).toContain('Policy configuration error');
-    expect(Date.now() - startedAt).toBeLessThan(3_000);
+    // The refusal does not name the budget, so the time shows it: under the
+    // suite's budget the rule could not be abandoned this soon.
+    expect(Date.now() - startedAt).toBeLessThan(TEST_REGEX_BUDGET_MS);
   });
 });

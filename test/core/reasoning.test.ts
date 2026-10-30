@@ -32,8 +32,26 @@ import {
   useAgentSignatures,
 } from '../../src/core/reasoning.js';
 import type { CompiledSignature } from '../../src/core/reasoning.js';
+import { setDefaultRegexBudgetForTests } from '../../src/core/regexBudget.js';
+import { REGEX_BUDGET_MS } from '../../src/core/types.js';
+import { TEST_REGEX_BUDGET_MS } from '../regex-budget-setup.js';
 
 const FIXTURES = path.join(__dirname, '..', 'fixtures', 'reasoning');
+
+/**
+ * Run `body` with the product's budget for a pattern rather than the suite's
+ * (`test/regex-budget-setup.ts`). The tests that use it evaluate only a
+ * runaway pattern, which no loaded machine makes finish in time, so nothing
+ * they rely on can be set aside by a slow machine.
+ */
+function withProductBudget(body: () => void): void {
+  setDefaultRegexBudgetForTests(REGEX_BUDGET_MS);
+  try {
+    body();
+  } finally {
+    setDefaultRegexBudgetForTests(TEST_REGEX_BUDGET_MS);
+  }
+}
 
 async function screen(name: string): Promise<StyledLine[]> {
   const meta = JSON.parse(fs.readFileSync(path.join(FIXTURES, `${name}.json`), 'utf8')) as {
@@ -195,17 +213,19 @@ describe('the generic engine', () => {
   });
 
   it('sets a signature aside when its pattern runs past the time budget', () => {
-    // The pattern runs for the whole of the suite's budget
-    // (`test/regex-budget-setup.ts`) before it is set aside, hence the time
-    // this test is given.
-    const slow = compileSignatures([
-      { name: 'slow', composer: { text: '^(a+)+$' }, answer: { start: { text: 'x' } } },
-    ]).signatures[0]!;
-    const lines = [plain(`${'a'.repeat(40)}!`)];
-    expect(hideReasoning(lines, slow)).toBeNull();
-    expect(slow.overBudgetAt).not.toBeNull();
-    expect(latestResult(lines, slow)).toMatchObject({ found: false, reason: 'over-budget' });
-  }, 15_000);
+    withProductBudget(() => {
+      const slow = compileSignatures([
+        { name: 'slow', composer: { text: '^(a+)+$' }, answer: { start: { text: 'x' } } },
+      ]).signatures[0]!;
+      const lines = [plain(`${'a'.repeat(40)}!`)];
+      const startedAt = Date.now();
+      expect(hideReasoning(lines, slow)).toBeNull();
+      // Set aside within the product's budget: the suite's could not be this quick.
+      expect(Date.now() - startedAt).toBeLessThan(TEST_REGEX_BUDGET_MS);
+      expect(slow.overBudgetAt).not.toBeNull();
+      expect(latestResult(lines, slow)).toMatchObject({ found: false, reason: 'over-budget' });
+    });
+  });
 });
 
 describe('Claude Code (built in)', () => {
@@ -556,15 +576,16 @@ describe('review round: what a result must never offer', () => {
   });
 
   it('sets a signature that ran past its budget aside for a while, not for good', () => {
-    // The pattern runs for the whole of the suite's budget
-    // (`test/regex-budget-setup.ts`) before it is set aside, hence the time
-    // this test is given.
-    const slow = compileSignatures([{ name: 'slowish', composer: { text: '^(a+)+$' }, answer: { start: { text: 'x' } } }]).signatures[0]!;
-    hideReasoning([plain(`${'a'.repeat(40)}!`)], slow);
-    expect(slow.overBudgetAt).not.toBeNull();
-    expect(setAside(slow)).toBe(true);
-    expect(setAside(slow, (slow.overBudgetAt ?? 0) + SET_ASIDE_MS + 1)).toBe(false);
-  }, 15_000);
+    withProductBudget(() => {
+      const slow = compileSignatures([{ name: 'slowish', composer: { text: '^(a+)+$' }, answer: { start: { text: 'x' } } }]).signatures[0]!;
+      const startedAt = Date.now();
+      hideReasoning([plain(`${'a'.repeat(40)}!`)], slow);
+      expect(Date.now() - startedAt).toBeLessThan(TEST_REGEX_BUDGET_MS);
+      expect(slow.overBudgetAt).not.toBeNull();
+      expect(setAside(slow)).toBe(true);
+      expect(setAside(slow, (slow.overBudgetAt ?? 0) + SET_ASIDE_MS + 1)).toBe(false);
+    });
+  });
 
   it('refuses requireTrailer without a trailer to require', () => {
     const { problems } = compileSignatures([
