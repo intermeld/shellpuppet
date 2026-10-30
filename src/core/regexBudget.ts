@@ -40,8 +40,8 @@ import { REGEX_BUDGET_MS } from './types.js';
  * alike. It is tried again after that: the budget is wall-clock time, so an
  * ordinary pattern can overrun once on a loaded machine, and a signature set
  * aside for good would miss its program until the daemon restarts. A pattern
- * that runs long every time costs one budget's worth a minute, and its author
- * is told each time.
+ * that runs long every time costs one budget's worth a minute, and daemon.log
+ * records each overrun.
  */
 export const SET_ASIDE_MS = 60_000;
 

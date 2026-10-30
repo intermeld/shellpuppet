@@ -683,3 +683,37 @@ describe('a screen whose composer is not drawn: a permission dialog in its place
     }
   });
 });
+
+describe('an overrun reported to the daemon', () => {
+  const line = (text: string): StyledLine => ({
+    text,
+    spans: [{ from: 0, to: text.length, bold: false, dim: false, italic: false, inverse: false, fg: null, bg: null }],
+  });
+
+  it('says whether the signature is built in, which nobody can change, or from config', () => {
+    const reported: [string, boolean][] = [];
+    useAgentSignatures(
+      [{ name: 'slow', programs: ['slow-cli'], composer: { text: '^(a+)+$' }, answer: { start: { text: 'x' } } }],
+      (name, builtIn) => void reported.push([name, builtIn]),
+    );
+    const slow = signatureFor('slow', 'slow-cli');
+    const claude = signatureFor('claude', 'claude');
+    if (slow === null || claude === null) throw new Error('both signatures are in use');
+
+    withProductBudget(() => {
+      expect(hideReasoning([line(`${'a'.repeat(40)}!`)], slow)).toBeNull();
+    });
+    // An ordinary pattern overruns a budget too short for the screen it reads,
+    // as it can when a loaded machine deschedules the daemon mid-search.
+    setDefaultRegexBudgetForTests(1);
+    try {
+      expect(hideReasoning(Array<StyledLine>(200_000).fill(line('filler')), claude)).toBeNull();
+    } finally {
+      setDefaultRegexBudgetForTests(TEST_REGEX_BUDGET_MS);
+    }
+    expect(reported).toEqual([
+      ['slow', false],
+      ['claude', true],
+    ]);
+  });
+});

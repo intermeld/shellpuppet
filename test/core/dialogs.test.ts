@@ -325,33 +325,37 @@ describe('dialog signatures from config', () => {
     // The runaway pattern runs for the whole of the suite's budget
     // (`test/regex-budget-setup.ts`) each time it is tried, hence the time
     // this test is given.
-    const reported: string[] = [];
+    const reported: [string, boolean][] = [];
     useDialogSignatures(
       [
         { name: 'Runaway', title: 'x', choices: '^(a+)+$' },
         { name: 'Fine', title: 'wants to run a command', choices: '\\[ Approve \\]' },
       ],
-      (name) => void reported.push(name),
+      (name, builtIn) => void reported.push([name, builtIn]),
     );
     const lines = `${PLAIN_DIALOG}${'a'.repeat(40)}!\n`.split('\n');
     const trippedAt = Date.now();
     expect(dialogPrompt(lines, undefined, trippedAt)?.question).toBe('wants to run a command');
-    expect(reported).toEqual(['Runaway']);
+    // Reported as an entry from config, which its author can change.
+    expect(reported).toEqual([['Runaway', false]]);
 
     // Not tried on the scans within the minute: they take no budget's worth.
     const startedAt = Date.now();
     expect(dialogPrompt(lines, undefined, trippedAt + A_MINUTE - 1)?.question).toBe('wants to run a command');
     expect(Date.now() - startedAt).toBeLessThan(TEST_REGEX_BUDGET_MS);
-    expect(reported).toEqual(['Runaway']);
+    expect(reported).toEqual([['Runaway', false]]);
 
     // Tried again after it, and its author told again when it runs long again.
     expect(dialogPrompt(lines, undefined, trippedAt + A_MINUTE)?.question).toBe('wants to run a command');
-    expect(reported).toEqual(['Runaway', 'Runaway']);
+    expect(reported).toEqual([
+      ['Runaway', false],
+      ['Runaway', false],
+    ]);
   }, 15_000);
 
   it('recognises a built-in dialog again a minute after its signature once ran past the budget', () => {
-    const reported: string[] = [];
-    useDialogSignatures([], (name) => void reported.push(name));
+    const reported: [string, boolean][] = [];
+    useDialogSignatures([], (name, builtIn) => void reported.push([name, builtIn]));
     const lines = OPENCODE_DIALOG.split('\n');
 
     // An ordinary pattern overruns a budget too short for the screen it reads,
@@ -363,7 +367,8 @@ describe('dialog signatures from config', () => {
     } finally {
       setDefaultRegexBudgetForTests(TEST_REGEX_BUDGET_MS);
     }
-    expect(reported).toEqual(['OpenCode and MiMo Code']);
+    // Reported as built in: there is nothing in it for a person to change.
+    expect(reported).toEqual([['OpenCode and MiMo Code', true]]);
 
     expect(dialogPrompt(lines, undefined, trippedAt + A_MINUTE - 1)).toBeNull();
     expect(dialogPrompt(lines, undefined, trippedAt + A_MINUTE)?.options).toEqual([
@@ -371,6 +376,6 @@ describe('dialog signatures from config', () => {
       'Always allow',
       'Reject',
     ]);
-    expect(reported).toEqual(['OpenCode and MiMo Code']);
+    expect(reported).toEqual([['OpenCode and MiMo Code', true]]);
   });
 });

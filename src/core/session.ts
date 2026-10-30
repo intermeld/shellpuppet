@@ -223,6 +223,22 @@ export class SessionInputFailedError extends Error {
 }
 
 /**
+ * A resize of a session whose program node-pty has seen end: refused, as there
+ * is no terminal left to resize. It can be asked for in the moment between that
+ * end and the session's exit, which follows once node-pty has flushed the last
+ * output. The daemon answers it with the 409 a session that has exited gets.
+ */
+export class SessionProgramEndedError extends Error {
+  constructor(
+    readonly sessionId: string,
+    readonly exitCode: number,
+  ) {
+    super(`Cannot resize session ${sessionId}: its program has exited (code ${String(exitCode)}).`);
+    this.name = 'SessionProgramEndedError';
+  }
+}
+
+/**
  * Resolve a command to a concrete executable path before spawning directly
  * (`shell: false`). Necessary on **every** platform, for different reasons:
  *
@@ -916,17 +932,17 @@ export class Session implements WaitTarget {
    * setting alone, so a viewport following a window cannot quietly release a
    * hold that a scripted run is relying on.
    *
-   * Throws once node-pty has seen the program end, where it records that
-   * (`recordedExitCode`): there is no terminal left to resize, and node-pty
-   * itself throws for that on a Windows terminal that has drawn.
+   * Throws `SessionProgramEndedError` once node-pty has seen the program end,
+   * where it records that (`recordedExitCode`): there is no terminal left to
+   * resize, and node-pty itself throws for that on a Windows terminal that has
+   * drawn.
    * On Windows a resize asked for before the terminal's first output is held
    * by node-pty and run later; one that finds the program ended by then is
    * dropped (`windowsPtyStart.ts`).
    */
   resize(cols: number, rows: number, options: { hold?: boolean } = {}): void {
-    if (recordedExitCode(this.pty) !== undefined) {
-      throw new Error(`Cannot resize session ${this.id}: its program has exited.`);
-    }
+    const ended = recordedExitCode(this.pty);
+    if (ended !== undefined) throw new SessionProgramEndedError(this.id, ended);
     this.pty.resize(cols, rows);
     this.renderer.resize(cols, rows);
     if (options.hold !== undefined) this.geometryHeldFlag = options.hold;

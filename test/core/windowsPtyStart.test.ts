@@ -252,6 +252,30 @@ describe('a resize of a ConPTY terminal whose program node-pty has seen end', ()
     WindowsPtyAgent.prototype.resize.call(live, 100, 30);
     expect(calls).toEqual(['native resize 8 to 100x30']);
   });
+
+  // Exit code 0, the commonest, is recorded as `_exitCode: 0`: a guard that
+  // tested the code's truth rather than its presence would let node-pty throw.
+  it('is dropped when the program ended with code 0', () => {
+    const { module, calls } = standInResizeModule();
+    wrapWindowsPtyAgent(module);
+
+    expect(() => resizeOn(module, { _useConpty: true, _pty: 1, _exitCode: 0 }, 100, 30)).not.toThrow();
+    expect(calls).toEqual([]);
+  });
+
+  it("is dropped by the installed node-pty's agent when the program ended with code 0", () => {
+    expect(releaseFailedStarts()).toBe(true);
+    const require = createRequire(import.meta.url);
+    const { WindowsPtyAgent } = require('node-pty/lib/windowsPtyAgent.js') as {
+      WindowsPtyAgent: { prototype: { resize(this: unknown, cols: number, rows: number): void } };
+    };
+    const calls: string[] = [];
+    const native = { resize: (pty: number): void => void calls.push(`native resize ${String(pty)}`) };
+    const ended = { _useConpty: true, _useConptyDll: false, _pty: 9, _exitCode: 0, _ptyNative: native };
+
+    expect(() => WindowsPtyAgent.prototype.resize.call(ended, 100, 30)).not.toThrow();
+    expect(calls).toEqual([]);
+  });
 });
 
 /** A stand-in live terminal: its input socket, output worker and output socket. */

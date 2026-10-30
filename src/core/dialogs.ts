@@ -88,6 +88,8 @@ interface CompiledDialog {
    * `SET_ASIDE_MS` after that, then tried again.
    */
   overBudgetAt: number | null;
+  /** Whether it is one of `BUILT_IN_DIALOGS`, which no config can change. */
+  builtIn: boolean;
 }
 
 function wholeNumber(value: unknown, max: number): boolean {
@@ -96,9 +98,9 @@ function wholeNumber(value: unknown, max: number): boolean {
 
 /**
  * Compile signatures, setting aside any that cannot be used and saying why,
- * in words a person can act on.
+ * in words a person can act on. `builtIn` marks the list as `BUILT_IN_DIALOGS`.
  */
-export function compileDialogs(list: readonly unknown[]): {
+export function compileDialogs(list: readonly unknown[], builtIn = false): {
   dialogs: CompiledDialog[];
   problems: string[];
   /** The positions in `list` of the entries that compiled. */
@@ -139,6 +141,7 @@ export function compileDialogs(list: readonly unknown[]): {
         within: (within as number | undefined) ?? DEFAULT_DIALOG_WITHIN,
         below: (below as number | undefined) ?? DEFAULT_DIALOG_BELOW,
         overBudgetAt: null,
+        builtIn,
       });
       usable.push(index);
     } catch (error) {
@@ -148,20 +151,20 @@ export function compileDialogs(list: readonly unknown[]): {
   return { dialogs, problems, usable };
 }
 
-let active: CompiledDialog[] = compileDialogs(BUILT_IN_DIALOGS).dialogs;
-let reportOverBudget: (name: string) => void = () => undefined;
+let active: CompiledDialog[] = compileDialogs(BUILT_IN_DIALOGS, true).dialogs;
+let reportOverBudget: (name: string, builtIn: boolean) => void = () => undefined;
 
 /**
  * Recognise the built-in dialogs plus `extra`, the entries from config, and
- * name the one to tell when a signature runs past its budget (the daemon
- * logs it). Returns what was wrong with `extra`; the entries that are fine
- * are used.
+ * name the one to tell, with whether the signature is built in, when a
+ * signature runs past its budget (the daemon logs it). Returns what was wrong
+ * with `extra`; the entries that are fine are used.
  */
 export function useDialogSignatures(
   extra: readonly unknown[],
-  onOverBudget: (name: string) => void = () => undefined,
+  onOverBudget: (name: string, builtIn: boolean) => void = () => undefined,
 ): string[] {
-  const builtIn = compileDialogs(BUILT_IN_DIALOGS).dialogs;
+  const builtIn = compileDialogs(BUILT_IN_DIALOGS, true).dialogs;
   const { dialogs, problems } = compileDialogs(extra);
   active = [...builtIn, ...dialogs];
   reportOverBudget = onOverBudget;
@@ -192,7 +195,7 @@ export function dialogPrompt(
       // trips: a person reading daemon.log sees whether a signature keeps
       // running long or tripped once under load.
       dialog.overBudgetAt = now;
-      reportOverBudget(dialog.name);
+      reportOverBudget(dialog.name, dialog.builtIn);
     }
     if (found !== null) return found;
   }
