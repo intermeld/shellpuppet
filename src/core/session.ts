@@ -760,22 +760,25 @@ export class Session implements WaitTarget {
     return this.exitedAtValue;
   }
   /**
-   * The program's exit code once the session has ended: the one its exit came
-   * with or, after an exit with no code, the one node-pty records once it sees
-   * the program end. Null until then.
+   * The program's exit code once the session has ended. Null while it runs,
+   * and for a session that ended with no code (its output failed): the
+   * session ends that program itself, so the code node-pty records afterwards
+   * says nothing about the program and is not reported (`howSessionEnded`).
    */
   get exitCode(): number | null {
-    if (!this.exitedFlag) return null;
-    return this.exitCodeValue ?? recordedExitCode(this.pty) ?? null;
+    return this.exitCodeValue;
   }
   /**
-   * Whether the session's program is known to have ended: it has an exit
-   * code. After an exit with no code it has not, until node-pty records one,
-   * and its tree is walked. Where node-pty records none (`canReadExitCode`),
+   * Whether the session's program is known to have ended: its exit came with
+   * a code, or node-pty has recorded one since an exit with no code. Until
+   * then its tree is walked. Where node-pty records none (`canReadExitCode`),
    * such an exit counts as the end: a pid nothing vouches for is never walked.
    */
   get programEnded(): boolean {
-    return this.exitedFlag && (this.exitCode !== null || !canReadExitCode(this.pty));
+    return (
+      this.exitedFlag &&
+      (this.exitCodeValue !== null || recordedExitCode(this.pty) !== undefined || !canReadExitCode(this.pty))
+    );
   }
   /** Whether the input pipe has failed (Windows): input is refused from then on. */
   get inputFailed(): boolean {
