@@ -49,6 +49,8 @@ Usage:
       its window unless --hold keeps it, which is for runs you compare against
       a known width.
       --purpose says what the session is FOR; it titles the viewer window.
+      --no-shell starts the command without a shell; on Windows it must then
+      be an .exe or .com, so start a script through the shell.
       Options go BEFORE the command; everything after the command is passed
       to it verbatim (so its own --flags survive).
   shellpuppet list                                  List sessions

@@ -22,6 +22,13 @@ version may change behaviour, and every such change is listed here.
   or agent, is logged as `signature set aside`, with nothing to change: it is
   tried again in a minute. An overrun of an entry from config is a
   `CONFIG PROBLEM` that asks for simpler patterns.
+- On Windows, a start with `shell: false` (`--no-shell`) whose command is not
+  an `.exe` or a `.com`, such as a `.cmd`, `.bat`, `.ps1` or extensionless
+  script, is refused with a 400 that says to run it through the shell or to
+  name its interpreter. Windows runs a batch file given to it as a program
+  through cmd.exe, with the arguments quoted for a program's parser, which
+  cmd reads by other rules; any other script failed with error 193 after the
+  terminal was built.
 
 ### Fixed
 
