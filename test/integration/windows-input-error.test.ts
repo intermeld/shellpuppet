@@ -8,16 +8,23 @@
  * that happen for real by ending the session's own console host. The others
  * emit the errors libuv and the worker would deliver, on the session's own
  * objects, and check that input after a failed input pipe is refused, not
- * lost.
+ * lost, over the API and in the viewer. A failed output socket closes the
+ * terminal with an exit that carries no code while the program runs on; the
+ * session's kill still walks the program's tree.
  */
 
 import { execFileSync } from 'node:child_process';
+import type * as net from 'node:net';
 import { afterEach, describe, expect, it } from 'vitest';
 import { SessionManager } from '../../src/core/manager.js';
 import { compilePolicy } from '../../src/core/policy.js';
-import type { Session } from '../../src/core/session.js';
+import { taskkillTrees } from '../../src/core/session.js';
+import type { Session, TreeKiller } from '../../src/core/session.js';
 import type { Logger } from '../../src/core/types.js';
-import { api, eventually, interactiveShell, startTestDaemon } from './helpers.js';
+import type { Auditor } from '../../src/daemon/audit.js';
+import { captureViewer } from '../../src/daemon/screenshot.js';
+import { findBrowser } from '../../src/daemon/viewerLauncher.js';
+import { api, connectWs, eventually, interactiveShell, processAlive, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 
 const managers: SessionManager[] = [];
@@ -40,7 +47,8 @@ function managerWithLog(): { manager: SessionManager; warnings: Warning[] } {
 
 type Agent = {
   inSocket?: NodeJS.EventEmitter;
-  outSocket?: NodeJS.EventEmitter;
+  outSocket?: net.Socket;
+  exitCode?: number;
   _conoutSocketWorker?: { _worker?: NodeJS.EventEmitter };
 };
 function agentOf(session: Session): Agent {
@@ -51,6 +59,28 @@ function agentOf(session: Session): Agent {
 
 function refusal(): Error {
   return Object.assign(new Error('write EAGAIN'), { code: 'EAGAIN', errno: -4088, syscall: 'write' });
+}
+
+/** A logger that keeps every line, at every level. */
+function recordingLogger(): { logger: Logger; entries: Warning[] } {
+  const entries: Warning[] = [];
+  const keep = (message: string, meta?: Record<string, unknown>): void => {
+    entries.push({ message, meta });
+  };
+  return { logger: { debug: keep, info: keep, warn: keep, error: keep }, entries };
+}
+
+/** Start the platform's shell on a test daemon; its id. */
+async function startShell(td: TestDaemon): Promise<string> {
+  const started = await api(td.port, td.token, '/sessions', { body: { ...interactiveShell(), cols: 80, rows: 24 } });
+  expect(started.status).toBe(200);
+  return String(started.body['id']);
+}
+
+function sessionOf(td: TestDaemon, id: string): Session {
+  const session = (td.daemon as unknown as { manager: SessionManager }).manager.get(id);
+  if (session === undefined) throw new Error(`no session ${id}`);
+  return session;
 }
 
 /**
@@ -102,7 +132,7 @@ describe.skipIf(process.platform !== 'win32')('a failed write on a Windows termi
     await eventually(() => neighbour.getScreen().includes('still-here'));
   }, 60_000);
 
-  it('is taken by the session when the output worker fails', () => {
+  it('is taken by the session when the output worker fails, and input still goes in', async () => {
     const { manager, warnings } = managerWithLog();
     const session = manager.create({ ...interactiveShell(), cols: 80, rows: 24 });
     const worker = agentOf(session)._conoutSocketWorker?._worker;
@@ -110,6 +140,8 @@ describe.skipIf(process.platform !== 'win32')('a failed write on a Windows termi
 
     expect(() => worker.emit('error', refusal())).not.toThrow();
     expect(warnings.filter((w) => w.message === 'session output failed')).toHaveLength(1);
+    // Only the input pipe failing refuses input.
+    await expect(session.write('echo still-typed\r')).resolves.toBeTypeOf('string');
   }, 60_000);
 
   it('is taken by the session when its output socket fails, with node-pty listening on it too', async () => {
@@ -164,12 +196,8 @@ describe.skipIf(process.platform !== 'win32')('a failed write on a Windows termi
   it('answers input and keys with a 409 over HTTP once its input pipe has failed', async () => {
     const td = await startTestDaemon();
     daemons.push(td);
-    const started = await api(td.port, td.token, '/sessions', { body: { ...interactiveShell(), cols: 80, rows: 24 } });
-    expect(started.status).toBe(200);
-    const id = String(started.body['id']);
-    const session = (td.daemon as unknown as { manager: SessionManager }).manager.get(id);
-    if (session === undefined) throw new Error(`no session ${id}`);
-    const input = agentOf(session).inSocket;
+    const id = await startShell(td);
+    const input = agentOf(sessionOf(td, id)).inSocket;
     if (input === undefined) throw new Error('no input socket');
 
     input.emit('error', refusal());
@@ -182,6 +210,136 @@ describe.skipIf(process.platform !== 'win32')('a failed write on a Windows termi
     const pressed = await api(td.port, td.token, `/sessions/${id}/key`, { body: { key: 'enter' } });
     expect(pressed.status).toBe(409);
     expect(String(pressed.body['error'])).toBe(String(typed.body['error']));
+  }, 60_000);
+
+  it('tells a viewer once that its input has failed, and writes, audits and logs none of its keys', async () => {
+    const { logger, entries } = recordingLogger();
+    const audited: string[] = [];
+    const audit: Auditor = { captureContent: false, record: (_actor, action) => audited.push(action) };
+    const td = await startTestDaemon({ logger, audit });
+    daemons.push(td);
+    const id = await startShell(td);
+    const session = sessionOf(td, id);
+    await eventually(() => session.getScreen().trim() !== '');
+    const viewer = await connectWs(td.port, id, td.token);
+    const input = agentOf(session).inSocket;
+    if (input === undefined) throw new Error('no input socket');
+
+    input.emit('error', refusal());
+    const auditedBefore = audited.length;
+    const sourcesBefore = viewer.controls().filter((control) => control['type'] === 'input-source').length;
+    for (const key of ['a', 'b', 'c']) viewer.ws.send(key);
+    await eventually(
+      () =>
+        viewer.controls().some((control) => control['type'] === 'input-refused') ||
+        entries.filter((entry) => entry.message === 'viewer input failed').length === 3,
+      5_000,
+    );
+    // Time for any further frame or log line to arrive.
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    expect(viewer.controls().filter((control) => control['type'] === 'input-refused')).toEqual([
+      { type: 'input-refused', reason: 'input-failed' },
+    ]);
+    expect(audited.slice(auditedBefore)).toEqual([]);
+    expect(viewer.controls().filter((control) => control['type'] === 'input-source')).toHaveLength(sourcesBefore);
+    expect(entries.filter((entry) => entry.message === 'viewer input failed')).toEqual([]);
+    expect(session.exited).toBe(false);
+    viewer.close();
+  }, 60_000);
+
+  it("shows the person at the viewer that the session's input has failed", async (context) => {
+    const browser = await findBrowser();
+    if (browser === null) {
+      context.skip();
+      return;
+    }
+    const td = await startTestDaemon();
+    daemons.push(td);
+    const id = await startShell(td);
+    const session = sessionOf(td, id);
+    await eventually(() => session.getScreen().trim() !== '');
+    const input = agentOf(session).inSocket;
+    if (input === undefined) throw new Error('no input socket');
+    input.emit('error', refusal());
+    const minted = await api(td.port, td.token, `/sessions/${id}/viewer`, { body: {} });
+    expect(minted.status).toBe(200);
+
+    // The page types a key a second, as a person would, until it shows the
+    // notice or has tried six times; then it reports the line it shows.
+    const capture = await captureViewer({
+      browser,
+      viewerUrl: String(minted.body['viewerUrl']),
+      width: 900,
+      height: 600,
+      drive: true,
+      timeoutMs: 60_000,
+      probe: `(() => {
+        const hint = document.getElementById('mode-hint');
+        const typing = document.querySelector('.xterm-helper-textarea');
+        if (!hint || !typing) return null;
+        const st = (window.__typing = window.__typing || { tries: 0, at: 0 });
+        if (hint.textContent.includes('input has failed') || st.tries >= 6) return hint.textContent;
+        if (Date.now() - st.at >= 1000) {
+          st.at = Date.now();
+          st.tries += 1;
+          typing.dispatchEvent(new InputEvent('input', { data: 'a', inputType: 'insertText' }));
+        }
+        return null;
+      })()`,
+    });
+    expect(capture.probe).toBe("this session's input has failed; kill it and start it again");
+  }, 120_000);
+
+  it('walks the tree of a program whose output socket failed, though the session has ended', async () => {
+    const { logger, entries } = recordingLogger();
+    const manager = new SessionManager(compilePolicy(undefined), logger);
+    managers.push(manager);
+    const session = manager.create({ ...interactiveShell(), cols: 80, rows: 24 });
+    await eventually(() => session.getScreen().trim() !== '');
+    const pid = session.pid;
+    const output = agentOf(session).outSocket;
+    if (output === undefined) throw new Error('no output socket');
+
+    // A dying output worker ends the socket with an error that is not EIO.
+    // node-pty then closes the terminal and reports an exit with no code,
+    // while the program runs on.
+    output.destroy(Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET', errno: -4077, syscall: 'read' }));
+    await eventually(() => session.exited, 10_000);
+    const codeAtExit = session.exitCode;
+    expect(processAlive(pid)).toBe(true);
+
+    await manager.kill(session.id);
+    const messages = entries.map((entry) => entry.message);
+    expect(messages).toContain('session tree killed');
+    expect(messages.filter((message) => message.includes('SURVIVED'))).toEqual([]);
+    expect(processAlive(pid)).toBe(false);
+    expect(codeAtExit).toBeNull();
+  }, 60_000);
+
+  it('leaves out of the shutdown tree kill a program node-pty has seen end after its output socket failed', async () => {
+    const { logger } = recordingLogger();
+    const walked: number[][] = [];
+    const treeKiller: TreeKiller = (pids) => {
+      walked.push([...pids]);
+      return taskkillTrees(pids);
+    };
+    const manager = new SessionManager(compilePolicy(undefined), logger, { treeKiller });
+    managers.push(manager);
+    const session = manager.create({ ...interactiveShell(), cols: 80, rows: 24 });
+    await eventually(() => session.getScreen().trim() !== '');
+    const pid = session.pid;
+    const agent = agentOf(session);
+    agent.outSocket?.destroy(Object.assign(new Error('read ECONNRESET'), { code: 'ECONNRESET' }));
+    await eventually(() => session.exited, 10_000);
+
+    // The program then ends, and node-pty records its code. Its pid is free
+    // from then on, for Windows to give to another process.
+    process.kill(pid);
+    await eventually(() => agent.exitCode !== undefined, 10_000);
+
+    await manager.killAll();
+    expect(walked).toEqual([]);
   }, 60_000);
 
   it('takes a real refusal, once the console host has gone', async () => {

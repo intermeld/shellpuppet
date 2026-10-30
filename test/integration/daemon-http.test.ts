@@ -1659,3 +1659,25 @@ describe('screenshots without a browser (§5)', () => {
     }
   });
 });
+
+describe('errors the daemon carries on through', () => {
+  it('logs an error on its HTTP server once listening, and goes on answering', async () => {
+    // Once listening, an error on the server is a connection it failed to
+    // accept, out of handles say. With no listener it would be an uncaught
+    // exception, on which the daemon shuts down with every session.
+    const errors: { message: string; meta?: Record<string, unknown> }[] = [];
+    const ignore = (): void => undefined;
+    const listener = await startTestDaemon({
+      logger: { debug: ignore, info: ignore, warn: ignore, error: (message, meta) => errors.push({ message, meta }) },
+    });
+    try {
+      const server = (listener.daemon as unknown as { server: http.Server }).server;
+      const refused = Object.assign(new Error('accept EMFILE'), { code: 'EMFILE', syscall: 'accept' });
+      expect(() => server.emit('error', refused)).not.toThrow();
+      expect(errors).toEqual([{ message: 'http server error', meta: { error: 'Error: accept EMFILE' } }]);
+      expect((await api(listener.port, null, '/health')).status).toBe(200);
+    } finally {
+      await listener.stop();
+    }
+  });
+});

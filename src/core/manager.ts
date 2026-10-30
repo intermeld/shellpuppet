@@ -102,6 +102,8 @@ export class SessionManager {
       // recycled. A grandchild that outlived its parent is left
       // running, which is a residual risk stated in
       // `docs/reference/security-model.md` rather than a case to guess at.
+      // The one exception is a session that ended without its program being
+      // seen to end (`Session.programEnded`): kill() walks that program's tree.
       await session.kill();
       reaped.push(id);
     }
@@ -156,10 +158,14 @@ export class SessionManager {
     );
   }
 
-  /** Windows only: kill every live session's tree in one `taskkill` run. */
+  /**
+   * Windows only: kill, in one `taskkill` run, the tree of every session
+   * whose program has not been seen to end, including one whose session
+   * ended without it (`Session.programEnded`).
+   */
   private async killTreesInOneRun(sessions: readonly Session[]): Promise<void> {
     if ((this.sessionDeps.platform ?? process.platform) !== 'win32') return;
-    const pids = sessions.filter((session) => !session.exited).map((session) => session.pid);
+    const pids = sessions.filter((session) => !session.programEnded).map((session) => session.pid);
     if (pids.length === 0) return;
     const failure = await (this.sessionDeps.treeKiller ?? taskkillTrees)(pids);
     if (failure !== null) {

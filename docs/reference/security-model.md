@@ -327,7 +327,10 @@ Leave it off unless actively debugging, and delete the log afterwards.
     on POSIX the process group id may have been recycled, so signalling it
     could hit something unrelated. A grandchild that outlived its parent is
     left running. Kill the session yourself while it is alive if
-    that matters: `terminal_kill` on a live session does walk the tree.
+    that matters: `terminal_kill` on a live session does walk the tree. A
+    session that ended because its terminal closed while its program ran on
+    (Windows, after its output socket failed) is not one of these: its
+    program has not been seen to exit, so its reap and its kill walk the tree.
 - A screenshot starts a headless browser with a DevTools port on loopback for
   the seconds the capture takes. Another process running as your user could
   attach to it in that window. The same-user model above already grants such

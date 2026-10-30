@@ -66,13 +66,15 @@ async function main(): Promise<void> {
   };
   process.on('SIGINT', () => shutdown('SIGINT'));
   process.on('SIGTERM', () => shutdown('SIGTERM'));
+  // `finally`: the process exits even if the stop itself fails, rather than
+  // living on with its port closed.
   process.on('uncaughtException', (error) => {
     logger.error('uncaught exception, shutting down', { error: String(error.stack ?? error) });
-    void daemon.stop().then(() => process.exit(1));
+    void daemon.stop().finally(() => process.exit(1));
   });
   process.on('unhandledRejection', (reason) => {
     logger.error('unhandled rejection, shutting down', { reason: String(reason) });
-    void daemon.stop().then(() => process.exit(1));
+    void daemon.stop().finally(() => process.exit(1));
   });
 
   try {

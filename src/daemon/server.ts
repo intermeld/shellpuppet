@@ -544,6 +544,13 @@ export class Daemon {
       this.server.once('error', reject);
       this.server.listen(0, '127.0.0.1', () => {
         this.server.removeListener('error', reject);
+        // Once listening, an error is a connection the server failed to
+        // accept, out of handles say. With no listener it would be an
+        // uncaught exception, on which the daemon shuts down with every
+        // session; the server goes on accepting instead.
+        this.server.on('error', (error) => {
+          this.logger.error('http server error', { error: String(error) });
+        });
         resolve();
       });
     });
@@ -2260,6 +2267,8 @@ export class Daemon {
       ws.close();
     });
 
+    /** Whether this socket has been told that the session's input has failed. */
+    let toldInputFailed = false;
     ws.on('message', (message: Buffer | string) => {
       this.lastActivity = Date.now();
       const text = typeof message === 'string' ? message : message.toString('utf8');
@@ -2361,6 +2370,17 @@ export class Daemon {
               exitCode: session.exitCode,
             }),
           );
+        }
+        return;
+      }
+      if (session.inputFailed) {
+        // The input pipe has failed (Windows): nothing typed reaches the
+        // program, so nothing is written, audited or logged. This socket is
+        // told once, and the page says so; the 409 on the HTTP path is the
+        // same refusal.
+        if (!toldInputFailed && ws.readyState === ws.OPEN) {
+          toldInputFailed = true;
+          ws.send(JSON.stringify({ type: 'input-refused', reason: 'input-failed' }));
         }
         return;
       }

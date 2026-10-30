@@ -25,7 +25,7 @@ import { commandLine } from './policy.js';
 import { detectPrompt, StalePromptGuard } from './promptDetector.js';
 import { waitFor } from './waiter.js';
 import type { WaitTarget } from './waiter.js';
-import { listenForTerminalErrors, releaseFailedStarts } from './windowsPtyStart.js';
+import { listenForTerminalErrors, recordedExitCode, releaseFailedStarts } from './windowsPtyStart.js';
 import {
   DEFAULT_COLS,
   DEFAULT_ROWS,
@@ -500,7 +500,7 @@ export class Session implements WaitTarget {
   /** Trailing output kept so a mode sequence split across PTY reads is still seen. */
   private modeScanTail = '';
   private readonly dataListeners = new Set<(data: string) => void>();
-  private readonly exitListeners = new Set<(exitCode: number) => void>();
+  private readonly exitListeners = new Set<(exitCode: number | null) => void>();
 
   /** Whether the program has hidden the cursor (DECTCEM off), carried to viewers. */
   private cursorHidden = false;
@@ -635,7 +635,12 @@ export class Session implements WaitTarget {
       for (const listener of this.dataListeners) listener(data);
     });
 
-    this.pty.onExit(({ exitCode }) => {
+    this.pty.onExit(({ exitCode: reported }) => {
+      // node-pty closes a Windows terminal whose output socket failed and
+      // reports an exit with no code, while the program may run on: the
+      // session can no longer be read or typed into, so it has ended, but its
+      // program has not been seen to end (`programEnded`).
+      const exitCode = typeof reported === 'number' ? reported : null;
       this.exitedFlag = true;
       this.exitedAtValue = Date.now();
       this.exitCodeValue = exitCode;
@@ -745,8 +750,21 @@ export class Session implements WaitTarget {
   get exitedAt(): number | null {
     return this.exitedAtValue;
   }
+  /** Null until the session ends, and for an end that came with no code. */
   get exitCode(): number | null {
     return this.exitCodeValue;
+  }
+  /**
+   * Whether the session's program is known to have ended: its exit came with
+   * a code, or node-pty has recorded one since. An exit with no code ends the
+   * session but not necessarily its program, whose tree a kill still walks.
+   */
+  get programEnded(): boolean {
+    return this.exitedFlag && (this.exitCodeValue !== null || recordedExitCode(this.pty) !== undefined);
+  }
+  /** Whether the input pipe has failed (Windows): input is refused from then on. */
+  get inputFailed(): boolean {
+    return this.inputFailure !== null;
   }
   get watchers(): number {
     return this.dataListeners.size;
@@ -893,7 +911,7 @@ export class Session implements WaitTarget {
     return () => this.dataListeners.delete(listener);
   }
 
-  onExit(listener: (exitCode: number) => void): () => void {
+  onExit(listener: (exitCode: number | null) => void): () => void {
     this.exitListeners.add(listener);
     return () => this.exitListeners.delete(listener);
   }
@@ -1013,7 +1031,10 @@ export class Session implements WaitTarget {
    * could take down something unrelated; on Windows `taskkill` cannot walk a
    * tree from a dead root either. So a grandchild that outlived its parent is
    * left alone rather than guessed at, a residual risk stated in
-   * `docs/reference/security-model.md`.
+   * `docs/reference/security-model.md`. A session whose program has not been
+   * seen to end (`programEnded`) is walked, whether or not the session has
+   * ended: on Windows node-pty holds such a program's process handle, so its
+   * pid is still its own.
    */
   async kill(): Promise<void> {
     if (this.killed) return;
@@ -1021,7 +1042,7 @@ export class Session implements WaitTarget {
     const pid = this.pty.pid;
     this.logger.info('session kill', { id: this.id, pid });
 
-    if (!this.exitedFlag) {
+    if (!this.programEnded) {
       if (this.platform === 'win32') {
         // A root that has already died leaves no tree to walk. At daemon
         // shutdown this is the usual case: `killAll` has just killed every

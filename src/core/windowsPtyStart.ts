@@ -24,12 +24,14 @@
  * The same wrapper gives a listener to the other errors node-pty 1.1.0 leaves
  * unheard: those of the helper its ConPTY kill forks
  * (`hearConsoleListFailures`), and, through `listenForTerminalErrors`, those
- * of a live terminal's streams.
+ * of a live terminal's streams. `recordedExitCode` reads whether node-pty has
+ * seen a terminal's program end.
  */
 
 import type { ChildProcess } from 'node:child_process';
 import { subscribe, unsubscribe } from 'node:diagnostics_channel';
 import { createRequire } from 'node:module';
+import * as path from 'node:path';
 
 /** The node-pty version whose private fields this relies on. */
 const WRAPPED_VERSION = '1.1.0';
@@ -49,8 +51,11 @@ export interface HalfBuiltAgent {
 
 /** The method of node-pty's agent that a ConPTY kill forks a helper in. */
 interface AgentPrototype {
-  _getConsoleProcessList?: (this: { _innerPid: number }) => Promise<number[]>;
+  _getConsoleProcessList?: (this: { _innerPid: number }, ...args: unknown[]) => Promise<number[]>;
 }
+
+/** The module that helper runs, as node-pty names it when it forks it. */
+const CONSOLE_LIST_HELPER = 'conpty_console_list_agent';
 
 type AgentConstructor = ((this: HalfBuiltAgent, ...args: unknown[]) => void) & {
   prototype: AgentPrototype;
@@ -92,26 +97,45 @@ export function wrapWindowsPtyAgent(agents: AgentModule): void {
  * processes (`_getConsoleProcessList`) and listens only for its answer. A
  * fork that cannot start, out of handles say, emits 'error' on the child,
  * or throws, which rejects a promise nothing handles, and either would stop
- * the daemon. The fork happens inside the call, so the child is given a
- * listener as Node publishes it on the `child_process` diagnostics channel,
- * and a fork that throws leaves the list to the shell's pid, as node-pty's
- * own timeout does. Either way the kill goes on to close the pseudoconsole,
- * which tells the processes still attached to it to close.
+ * the daemon. The fork happens inside the call, so the children Node
+ * publishes on the `child_process` diagnostics channel meanwhile are
+ * collected, and the helper among them is given a listener; a fork that
+ * throws leaves the list to the shell's pid, as node-pty's own timeout does.
+ * Either way the kill goes on to close the pseudoconsole, which tells the
+ * processes still attached to it to close.
  */
 function hearConsoleListFailures(prototype: AgentPrototype): void {
   const list = prototype._getConsoleProcessList;
   if (list === undefined) return;
-  prototype._getConsoleProcessList = function getConsoleProcessList(this: { _innerPid: number }) {
-    const listen = (message: unknown): void => {
-      (message as { process: ChildProcess }).process.on('error', () => undefined);
+  prototype._getConsoleProcessList = function getConsoleProcessList(
+    this: { _innerPid: number },
+    ...args: unknown[]
+  ) {
+    const published: ChildProcess[] = [];
+    const collect = (message: unknown): void => {
+      published.push((message as { process: ChildProcess }).process);
     };
-    subscribe('child_process', listen);
+    subscribe('child_process', collect);
     try {
-      return list.call(this).catch(() => [this._innerPid]);
+      return list.apply(this, args).catch(() => [this._innerPid]);
     } finally {
-      unsubscribe('child_process', listen);
+      unsubscribe('child_process', collect);
+      // The helper only: another subscriber may have started a child of its
+      // own meanwhile, whose errors are its own. Node sets a child's arguments
+      // before it starts it and reports a start that failed on a later tick,
+      // so a listener added here is in time.
+      for (const child of published) {
+        if (isConsoleListHelper(child)) child.on('error', () => undefined);
+      }
     }
   };
+}
+
+/** Whether a child is node-pty's console-list helper, by the module it runs. */
+function isConsoleListHelper(child: ChildProcess): boolean {
+  // Unset on a child that never got as far as starting: it has no start to fail.
+  const args = child.spawnargs as readonly string[] | undefined;
+  return args !== undefined && args.some((arg) => path.basename(arg, '.js') === CONSOLE_LIST_HELPER);
 }
 
 /** Undo what a failed start built, as far as node-pty lets us. */
@@ -192,6 +216,18 @@ export function listenForTerminalErrors(
   worker?.on('error', (error) => listener(error, 'output'));
   terminal.on?.('error', (error) => listener(error, 'output'));
   return input !== undefined || worker !== undefined || terminal.on !== undefined;
+}
+
+/**
+ * The exit code node-pty 1.1.0 has recorded for a Windows terminal's program,
+ * or undefined while the program runs. Under ConPTY node-pty holds the
+ * program's process handle until the program exits (`src/win/conpty.cc`), so
+ * while this is undefined the program's pid is still its own. Undefined too
+ * when the installed node-pty is not the wrapped version.
+ */
+export function recordedExitCode(pty: unknown): number | undefined {
+  if (!wrapped) return undefined;
+  return (pty as { _agent?: { exitCode?: number } })._agent?.exitCode;
 }
 
 /**

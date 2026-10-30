@@ -2,11 +2,14 @@
  * A Windows start that fails part-way releases what node-pty had built: the
  * output worker, both sockets and, under ConPTY, the pseudoconsole. These
  * drive the wrapper with a stand-in for node-pty's agent module;
- * `test/integration/failed-start.test.ts` drives the real one.
+ * `test/integration/failed-start.test.ts` drives the real one. The rest cover
+ * what the same wrapper reads and listens to: the helper node-pty's kill
+ * forks, a live terminal's streams and the exit code node-pty records.
  */
 
+import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
-import { subscribe, unsubscribe } from 'node:diagnostics_channel';
+import { channel, subscribe, unsubscribe } from 'node:diagnostics_channel';
 import { EventEmitter, once } from 'node:events';
 import { createRequire } from 'node:module';
 import * as os from 'node:os';
@@ -199,6 +202,43 @@ describe("the helper node-pty's kill forks", () => {
     // A program path holding a NUL byte is refused before anything starts.
     await expect(listConsoleProcesses('no\0such-node')).resolves.toEqual([4321]);
   });
+
+  it('listens on the helper only, not on a child another subscriber starts during the call', async () => {
+    expect(releaseFailedStarts()).toBe(true);
+    // Node publishes every child as it is constructed, so another subscriber
+    // can start a child of its own while node-pty's helper is published.
+    let started = false;
+    let helper: ChildProcess | undefined;
+    let unrelated: ChildProcess | undefined;
+    const startAnother = (message: unknown): void => {
+      if (started) return;
+      started = true;
+      helper = (message as { process: ChildProcess }).process;
+      unrelated = spawn(path.join(os.tmpdir(), 'shellpuppet-no-such-program.exe'));
+    };
+    subscribe('child_process', startAnother);
+    try {
+      void listConsoleProcesses(path.join(os.tmpdir(), 'shellpuppet-no-such-node.exe'));
+    } finally {
+      unsubscribe('child_process', startAnother);
+    }
+    if (helper === undefined || unrelated === undefined) throw new Error('no child published');
+
+    // Read before either error arrives on the next tick; the test's own
+    // listeners then keep a run without the fix to these assertions.
+    const heard = { helper: helper.listenerCount('error'), unrelated: unrelated.listenerCount('error') };
+    const failures = Promise.all([once(helper, 'error'), once(unrelated, 'error')]);
+    expect(heard).toEqual({ helper: 1, unrelated: 0 });
+    await failures;
+  });
+
+  it('leaves no subscriber on the child_process channel once the call returns', async () => {
+    expect(releaseFailedStarts()).toBe(true);
+    const processes = channel('child_process');
+    expect(processes.hasSubscribers).toBe(false);
+    await expect(listConsoleProcesses('no\0such-node')).resolves.toEqual([4321]);
+    expect(processes.hasSubscribers).toBe(false);
+  });
 });
 
 /** A stand-in live terminal: its input socket, output worker and output socket. */
@@ -231,5 +271,20 @@ describe('listenForTerminalErrors', () => {
     expect(fresh.releaseFailedStarts()).toBe(true);
     expect(fresh.listenForTerminalErrors(pty, () => undefined)).toBe(true);
     expect(sources.map((source) => source.listenerCount('error'))).toEqual([1, 1, 1]);
+  });
+});
+
+describe('recordedExitCode', () => {
+  it("reads the exit code node-pty records for a terminal's program, only while it is wrapped", async () => {
+    // A fresh copy of the module, which has wrapped nothing yet.
+    vi.resetModules();
+    const fresh = await import('../../src/core/windowsPtyStart.js');
+    const ended = { _agent: { exitCode: 3 } };
+
+    expect(fresh.recordedExitCode(ended)).toBeUndefined();
+    expect(fresh.releaseFailedStarts()).toBe(true);
+    expect(fresh.recordedExitCode(ended)).toBe(3);
+    // node-pty's agent reports no code while the program runs.
+    expect(fresh.recordedExitCode({ _agent: {} })).toBeUndefined();
   });
 });
