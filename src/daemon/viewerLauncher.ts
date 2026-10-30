@@ -308,6 +308,78 @@ function lookUpInChild(moduleUrl: string, timeoutMs: number): Promise<string | n
  * every time, which is the wrong trade for a window a human is meant to keep
  * open and glance at.
  */
+export function isolatedWindowArgs(url: string, profileDir: string): string[] {
+  return [
+    `--app=${url}`,
+    `--user-data-dir=${profileDir}`,
+    '--new-window',
+    // First-run flows would hijack the window with a sign-in wizard; the
+    // default-browser prompt would ask to change a setting the user never
+    // asked to change from a window they did not open.
+    '--no-first-run',
+    '--no-default-browser-check',
+    ...QUIET_BROWSER_SWITCHES,
+  ];
+}
+
+/**
+ * Switches that ask a Chromium-family browser ShellPuppet starts, the viewer
+ * window and the screenshot browser alike, to make no network requests of its
+ * own: updates, reports and the services a browser contacts in the
+ * background. Nothing leaves the machine unless a human sends it or switches
+ * it on, and nobody asked these browsers to call anywhere. Each switch is
+ * documented in Chromium's source, named beside it; none changes what a page
+ * can do, so the viewer and its WebSocket to the daemon work as they would
+ * without them.
+ *
+ * They ask, and they do not reach everything. A NetLog of a fresh Chrome
+ * started with them, over its first minute, still showed its component
+ * updater, a Safe Browsing key fetch, an account check and a search endpoint
+ * contacted, none of which these switches turn off; a vendor's own services,
+ * such as Edge's, may be beyond Chromium's switches too.
+ */
+export const QUIET_BROWSER_SWITCHES: readonly string[] = [
+  // chrome/common/chrome_switches.h: "Disable several subsystems which run
+  // network requests in the background."
+  '--disable-background-networking',
+  // chrome/common/chrome_switches.h: no updates for the components listed at
+  // chrome://components.
+  '--disable-component-update',
+  // chrome/common/chrome_switches.h: "Disable default component extensions
+  // with background pages."
+  '--disable-component-extensions-with-background-pages',
+  // chrome/common/chrome_switches.h: "Disables installation of default apps
+  // on first run."
+  '--disable-default-apps',
+  // chrome/common/chrome_switches.h: "Disables Domain Reliability Monitoring."
+  '--disable-domain-reliability',
+  // components/sync/base/command_line_switches.h: "Disables syncing browser
+  // data to a Google Account."
+  '--disable-sync',
+  // components/metrics/metrics_switches.h: "Enables the recording of metrics
+  // reports but disables reporting."
+  '--metrics-recording-only',
+  // base/base_switches.h: "Disables the crash reporting."
+  '--disable-breakpad',
+  // components/variations/variations_switches.cc: "Disable fetching of
+  // variations seed from the server."
+  '--disable-variations-seed-fetch',
+  // chrome/common/chrome_switches.h: "Don't use a proxy server, always make
+  // direct connections." With the system's proxy detection on, a browser
+  // looks for a `wpad` host on the local network. Both pages talk to
+  // 127.0.0.1 alone, which Chromium never sends through a proxy.
+  '--no-proxy-server',
+  // base/base_switches.h: "Comma-separated list of feature names to disable."
+  // One switch for every name, because Chromium keeps only the last. The
+  // names are features in Chromium's source:
+  // components/optimization_guide/core/optimization_guide_features.cc, the
+  // Optimization Hints component's syncing and the prediction models a
+  // browser downloads; components/network_time/network_time_tracker.cc, the
+  // network time queries. A name a later Chromium no longer knows is ignored,
+  // and that feature keeps its default.
+  '--disable-features=OptimizationHints,OptimizationTargetPrediction,NetworkTimeServiceQuerying',
+];
+
 /**
  * What a test may inject in place of the platform's opener command, so the
  * default-browser path can be exercised without opening a browser.
@@ -365,16 +437,7 @@ export async function launchViewer(
     // Its exit is not judged: a Chromium launched beside a running instance of
     // the same profile hands the URL over and exits at once, with code 0, and
     // the window is in the other process.
-    const outcome = await spawnDetached(browser, [
-      `--app=${url}`,
-      `--user-data-dir=${profileDir}`,
-      '--new-window',
-      // First-run flows would hijack the window with a sign-in wizard; the
-      // default-browser prompt would ask to change a setting the user never
-      // asked to change from a window they did not open.
-      '--no-first-run',
-      '--no-default-browser-check',
-    ]);
+    const outcome = await spawnDetached(browser, isolatedWindowArgs(url, profileDir));
     if (outcome.spawned) {
       logger.info('viewer window opened', { browser, profileDir });
       return { launched: true, mode, browser };

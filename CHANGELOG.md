@@ -38,6 +38,14 @@ version may change behaviour, and every such change is listed here.
   build on disk; `status` now reports `not running` (`{ "running": false }`
   with `--json`), and `stop` reports it as not running. Every other verb still
   starts a daemon in place of one that has gone.
+- The viewer window and the screenshot browser are started with switches,
+  documented in Chromium's source, that ask the browser to make no background
+  requests of its own: background networking, component updates, built-in
+  extensions' background pages, default apps, Domain Reliability, sync,
+  metrics and crash reports, the variations seed, proxy auto-detection, the
+  Optimization Guide's hints and models, and network time queries. A fresh
+  Chrome still contacts a few of its services that these switches do not
+  reach (design §5 says which).
 - Screenshot browser profiles no longer pile up. Each capture's profile
   folder is made in `capture-profiles` in the ShellPuppet home; one that
   Windows will not let go of as the capture ends is tried again after 30
