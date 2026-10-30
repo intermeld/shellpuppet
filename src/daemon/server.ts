@@ -56,7 +56,9 @@ import {
   DEFAULT_CAPTURE_TIMEOUT_MS,
   MAX_CAPTURE_TIMEOUT_MS,
   MIN_CAPTURE_TIMEOUT_MS,
+  captureProfileRoot,
   captureViewer,
+  sweepCaptureProfiles,
 } from './screenshot.js';
 import type { ViewerLaunchConfig } from './viewerLauncher.js';
 import type { Auditor } from './audit.js';
@@ -627,6 +629,11 @@ export class Daemon {
     }, 1_000);
     this.raceCheckTimer.unref();
 
+    // Capture profiles an earlier daemon on this home could not remove, which
+    // Windows can refuse while a browser's last processes hold them. Only
+    // folders a capture names, untouched for longer than any capture runs.
+    void sweepCaptureProfiles(captureProfileRoot(home), this.logger);
+
     // Said once, at start, because passthrough leaks silently otherwise
     // (ADR-008): the names only, never the values.
     const { exposed } = this.environmentReport();
@@ -1119,6 +1126,7 @@ export class Daemon {
             width,
             height,
             timeoutMs,
+            profileRoot: captureProfileRoot(this.options.home),
             logger: this.logger,
           });
           this.audit.record(actor, 'screenshot', id, { width, height });

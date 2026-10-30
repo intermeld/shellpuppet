@@ -687,7 +687,13 @@ default (ADR-008).
   answering "what is actually on screen" when the text snapshot looks right and something
   still seems wrong.
   The capture carries a read-only credential and holds the grid, so photographing a
-  session can neither type into it nor resize it.
+  session can neither type into it nor resize it. Each capture's browser runs in a fresh
+  profile folder, `shellpuppet-capture-` and six characters, made in
+  `<home>/capture-profiles` and removed when the capture ends. On Windows a browser's last
+  processes can hold that folder for a while after the browser exits, so one that cannot
+  be removed is tried again after 30 seconds and after 5 minutes, and the daemon removes
+  what is still left as it next starts: only folders with that name, and only those
+  untouched for 10 minutes, far longer than a capture can run.
 - The viewer link carries a one-use grant, exchanged at page load for an `HttpOnly` cookie
   scoped to that one session, so the page itself holds no credential (§3.1, §4.1).
 - The viewer opens by default in ShellPuppet's own chromeless browser profile

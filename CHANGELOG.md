@@ -38,6 +38,11 @@ version may change behaviour, and every such change is listed here.
   build on disk; `status` now reports `not running` (`{ "running": false }`
   with `--json`), and `stop` reports it as not running. Every other verb still
   starts a daemon in place of one that has gone.
+- Screenshot browser profiles no longer pile up. Each capture's profile
+  folder is made in `capture-profiles` in the ShellPuppet home; one that
+  Windows will not let go of as the capture ends is tried again after 30
+  seconds and after 5 minutes, and the daemon removes what is left as it
+  starts: folders with a capture's name, untouched for 10 minutes.
 - The daemon answers `/health` and every request while it detects the browser
   for the viewer window, which it begins as it starts. The paths
   chrome-launcher checks first are tried by file access alone, and its full
