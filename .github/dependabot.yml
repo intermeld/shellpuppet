@@ -10,12 +10,18 @@ updates:
       day: monday
     open-pull-requests-limit: 5
     groups:
+      # vitest and its plugins pin one another as peers, so they move in one
+      # pull request at every level. A dependency joins the first group it
+      # matches.
+      vitest:
+        patterns: ['vitest', '@vitest/*']
       minor-and-patch:
         update-types: [minor, patch]
     ignore:
-      # The Node.js types follow the oldest line package.json supports, so
-      # code cannot use what that line lacks. Raise them by hand when the
-      # floor moves.
+      # The Node.js types follow the oldest major line package.json supports,
+      # so code cannot use an API that line lacks altogether (newer minors
+      # within the line are not fenced). Raise them by hand when the floor
+      # moves.
       - dependency-name: '@types/node'
         update-types: ['version-update:semver-major']
   - package-ecosystem: github-actions
