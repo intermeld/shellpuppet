@@ -3,7 +3,7 @@
  * exports `Launcher`, imported by the detection's child process. Its query
  * string says how the lookup behaves:
  *
- * - `?mode=slow&found=<path>`: holds its thread for two seconds, as a slow
+ * - `?mode=slow&found=<path>`: holds its thread for three seconds, as a slow
  *   synchronous shell-out does, then reports `<path>`;
  * - `?mode=found&found=<path>`: reports `<path>` at once;
  * - `?mode=empty`: reports nothing;
@@ -22,7 +22,7 @@ function hold(ms) {
 export const Launcher = {
   getInstallations() {
     if (mode === 'slow') {
-      hold(2_000);
+      hold(3_000);
       return [found];
     }
     if (mode === 'found') return [found];

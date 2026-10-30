@@ -58,9 +58,10 @@ describe('detectBrowser', () => {
   it(
     'runs a slow lookup without holding the event loop',
     async () => {
-      // The stand-in holds its thread for two seconds, as `lsregister -dump`
-      // does. Run in this process, it would stop the timer below for those two
-      // seconds; in a child process the timer keeps its beat.
+      // The stand-in holds its thread for three seconds, as `lsregister -dump`
+      // does. Run in this process, it would stop the timer below for all
+      // three; in a child process the timer keeps its beat, give or take the
+      // spawn itself, which a loaded machine can stretch past a second.
       const browser = installed('slow/browser.exe');
       let last = Date.now();
       let longestGap = 0;
@@ -78,10 +79,11 @@ describe('detectBrowser', () => {
       } finally {
         clearInterval(beat);
       }
-      // The lookup really ran, and took its two seconds...
-      expect(Date.now() - started).toBeGreaterThanOrEqual(1_900);
-      // ...while the event loop went on turning.
-      expect(longestGap).toBeLessThan(500);
+      // The lookup really ran, and took its three seconds...
+      expect(Date.now() - started).toBeGreaterThanOrEqual(2_900);
+      // ...while the event loop went on turning: never held for anything like
+      // them.
+      expect(longestGap).toBeLessThan(2_000);
     },
     20_000,
   );

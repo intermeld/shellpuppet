@@ -2,24 +2,32 @@
  * A Windows start that fails after node-pty has created the pseudoconsole
  * must not leave its console host running. Two failures are driven: a
  * sandbox that denies pipe access, simulated where it strikes (the open of
- * the terminal's input pipe is refused), and a real one, a file Windows
- * cannot run started with `shell: false`, which node-pty finds out only once
- * both pipes are open.
+ * the terminal's input pipe is refused), and a real one, a file named as a
+ * program that Windows cannot run started with `shell: false`, which
+ * node-pty finds out only once both pipes are open.
  */
 
 import { execFileSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { SessionManager } from '../../src/core/manager.js';
 import { compilePolicy } from '../../src/core/policy.js';
-import { repoRoot } from './helpers.js';
 
 // The module object node-pty itself calls `openSync` on.
 const fs = createRequire(import.meta.url)('fs') as { openSync: (...args: unknown[]) => number };
 
-/** A file, so the start's own check passes, that Windows cannot run. */
-const script = path.join(repoRoot, 'test', 'fixtures', 'plain-sink.mjs');
+/**
+ * A file the start's own checks pass, an `.exe` like any program, that
+ * Windows cannot run: it holds text, not an executable image.
+ */
+function notAProgram(): string {
+  const file = path.join(mkdtempSync(path.join(os.tmpdir(), 'shellpuppet-not-a-program-')), 'sink.exe');
+  writeFileSync(file, 'console.log("not an executable image");\n');
+  return file;
+}
 
 /** Console hosts this process owns: one per pseudoconsole it created. */
 function consoleHosts(): number[] {
@@ -88,8 +96,9 @@ describe('a Windows start that fails part-way', () => {
     'leaves no console host running when the process cannot be created',
     async () => {
       const manager = new SessionManager(compilePolicy(undefined));
+      const command = notAProgram();
       await expectNoConsoleHostLeft(manager, () => {
-        expect(() => manager.create({ command: script, shell: false })).toThrow('Cannot create process');
+        expect(() => manager.create({ command, shell: false })).toThrow('Cannot create process');
       });
     },
     180_000,
