@@ -73,9 +73,15 @@ or a connected agent keeps the old behaviour until its next restart.
 
 ## Using ShellPuppet from an agent session
 
-When your model is a Claude model, pass `hideReasoning: true` on every
-ShellPuppet reading call, or `--hide-reasoning` with the CLI. Leave the flag
-off when the full screen is needed.
+**Important:** A session whose model is a Claude model should **ALWAYS** pass
+`hideReasoning: true` on every call that reads a screen: `terminal_snapshot`,
+`terminal_wait`, `terminal_find`, `terminal_screenshot`, `terminal_list`, and
+`--hide-reasoning` with their CLI equivalents. Claude models' safety checks can
+flag another model's reasoning read off a screen as an attempt to extract
+reasoning and stop the session. Leaving the reasoning out avoids that;
+`terminal_result` gives the agent's answer. With the flag, a Claude model can
+use every ShellPuppet tool freely. Other models can leave the flag off when
+they need the full screen.
 
 ## Machine-local context
 
