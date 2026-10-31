@@ -102,6 +102,9 @@ describe('MCP adapter', () => {
     expect(byName.get('terminal_find')).toContain('UNTRUSTED');
     expect(byName.get('terminal_key')).toContain('escape');
     expect(byName.get('terminal_kill')).toContain('process tree');
+    expect(byName.get('terminal_result')).toContain('hideReasoning changes nothing here');
+    const resultSchema = tools.find((tool) => tool.name === 'terminal_result')?.inputSchema;
+    expect(JSON.stringify(resultSchema)).toContain('this flag changes nothing');
     const instructions = client.getInstructions() ?? '';
     expect(instructions).toContain('Important');
     expect(instructions).toContain('ALWAYS pass hideReasoning: true');
@@ -340,6 +343,12 @@ describe('MCP adapter', () => {
     })) as TextResult;
     expect(result.isError).toBe(true);
     expect(resultText(result)).toContain('No such session');
+    const flaggedResult = (await client.callTool({
+      name: 'terminal_result',
+      arguments: { session: 's999', hideReasoning: true },
+    })) as TextResult;
+    expect(flaggedResult.isError).toBe(true);
+    expect(resultText(flaggedResult)).toContain('No such session');
   });
 
   it('audits MCP actions under mcp:<clientInfo.name> from the handshake (§4.5)', () => {

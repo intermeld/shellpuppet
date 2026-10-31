@@ -133,6 +133,16 @@ in the reading agent's context.
   OpenCode and MiMo Code signatures describe no reasoning block, because those
   programs draw none at their default settings, so for them `hideReasoning`
   hides nothing by construction.
+
+  **Important:** A session whose model is a Claude model should **ALWAYS** pass
+  `hideReasoning: true` on every call that reads a screen: `terminal_snapshot`,
+  `terminal_wait`, `terminal_find`, `terminal_screenshot`, `terminal_list`, and
+  `--hide-reasoning` with their CLI equivalents. Claude models' safety checks can
+  flag another model's reasoning read off a screen as an attempt to extract
+  reasoning and stop the session. Leaving the reasoning out avoids that;
+  `terminal_result` gives the agent's answer. With the flag, a Claude model can
+  use every ShellPuppet tool freely. Other models can leave the flag off when
+  they need the full screen.
 - **A program on screen can make the viewer page answer it.** A terminal
   replies when a program asks where the cursor is (CPR, `ESC[6n`), what kind
   of terminal it is, whether a mode is set or which colours it draws with,

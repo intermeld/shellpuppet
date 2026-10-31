@@ -95,7 +95,7 @@ Full example, everything optional:
 
 ## Reading an agent's screen without its reasoning
 
-`terminal_snapshot`, `terminal_find`, `terminal_wait`, `terminal_list` and
+`terminal_snapshot`, `terminal_find`, `terminal_wait` and
 `terminal_screenshot` with `hideReasoning`,
 and `terminal_result`, read an agent CLI's screen by a **signature**: how that
 program draws its reasoning, its answer, its busy line, its composer and the
@@ -104,7 +104,9 @@ Antigravity are built in, each measured on the version `agent-profiles.md`
 names. A
 session uses the signature named by `terminal_start`'s `agent` (CLI
 `--agent`), or else the one whose `programs` include its start command's
-name; a session with neither is refused by these readers.
+name; a session with neither is refused by these readers. A filtered
+`terminal_list` omits every waiting prompt's question and options, whether
+or not the session has a signature.
 
 Whatever the signature says, the rows the prompt detection claims for a
 question on screen are never hidden as reasoning, and neither are the border

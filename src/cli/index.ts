@@ -65,8 +65,9 @@ Usage:
       signature is refused (exit 2), never printed unfiltered.
   shellpuppet result <id> [--hide-reasoning]        Print the agent's latest answer
       The answer that ends the latest turn, and its turn summary: never its
-      reasoning. Exits 3, with the reason on stderr, while the agent is
-      still working or when no answer is recognised.
+      reasoning. --hide-reasoning is accepted but changes nothing: result
+      always leaves reasoning out. Exits 3, with the reason on stderr, while
+      the agent is still working or when no answer is recognised.
   shellpuppet type <id> <text> [--enter] [--verify] Type text (--verify re-reads the screen,
                                                     for up to 15 s on long text)
   shellpuppet key <id> <name>                       Press a key (enter, escape, ctrl+c, f1…)

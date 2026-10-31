@@ -211,12 +211,15 @@ Twelve tools appear once the server is wired in: `terminal_start`,
 
 When the session runs another agent CLI, `terminal_result` returns the answer
 that ended its latest turn and nothing else, and `terminal_snapshot`,
-`terminal_find`, `terminal_wait`, `terminal_list` and `terminal_screenshot` take `hideReasoning` to leave out the
-reasoning it draws. Each CLI's screen is read by a signature: Claude Code,
+`terminal_find`, `terminal_wait` and `terminal_screenshot` take `hideReasoning`
+to leave out the reasoning it draws. A filtered `terminal_list` omits every
+waiting prompt's question and options, whether or not the session has a
+signature. Each CLI's screen is read by a signature: Claude Code,
 Codex, Qoder, OpenCode, MiMo Code, Grok and Antigravity are built in. A
 session started through a shell or a launcher script says which CLI it runs
-with `terminal_start`'s `agent`. A session with no signature is refused
-rather than shown unfiltered.
+with `terminal_start`'s `agent`. Snapshot, find, wait, screenshot and
+`terminal_result` refuse a session with no signature rather than show it
+unfiltered.
 
 **Important:** A session whose model is a Claude model should **ALWAYS** pass
 `hideReasoning: true` on every call that reads a screen: `terminal_snapshot`,
