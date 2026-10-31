@@ -15,10 +15,10 @@ ADR-005 and ADR-007.
 
 This page describes ShellPuppet as it stands in this repository. The dashboard
 decided in [ADR-009](../decisions/ADR-009-dashboard-and-sessions-you-start-yourself.md)
-is being built ([ROADMAP.md](../../ROADMAP.md)): its access credential, below,
-is in place and not yet released; its page, panes and launch profiles are
-specified in the [design](../architecture/design.md) and are added here as they
-are built.
+is being built ([ROADMAP.md](../../ROADMAP.md)): its access credential and the
+`shellpuppet dashboard` command that opens its window, below, are in place and
+not yet released; its page content, panes and launch profiles are specified in
+the [design](../architecture/design.md) and are added here as they are built.
 
 The daemon owns real terminals. Anything that can reach its API can run
 commands as you. The protections below narrow *who* can reach it. They do not
@@ -88,11 +88,14 @@ make a reachable terminal safe.
   redeem.
 
   A **dashboard grant** is the same kind of one-use, five-minute grant, and it
-  is not a session credential. `POST /dashboard/open` takes the client token,
-  mints the grant and opens the page through the launcher the viewer already
-  uses. The grant is not in the response, not printed, and not written to
-  `audit.log` or `daemon.log`. Loading `GET /dashboard` as a document exchanges
-  it, once, for an `HttpOnly` `SameSite=Strict` cookie named `sp_dash` at
+  is not a session credential. `shellpuppet dashboard` takes the client token
+  to `POST /dashboard/open`, which mints the grant and opens the page in
+  ShellPuppet's isolated browser profile. Unlike a viewer start, a failure to
+  open that window never falls back to your default browser: the grant is
+  revoked and the command fails. The grant is not in the response, not printed,
+  and not written to `audit.log` or `daemon.log`. Loading `GET /dashboard` as a
+  document exchanges it, once, for an `HttpOnly` `SameSite=Strict` cookie named
+  `sp_dash` at
   `Path=/`, with no `Max-Age`, no `Secure` and no `Domain`. That cookie may
   open the dashboard page, `GET /sessions` and the `/dashboard/events`
   socket. It does not open `/events`, a session stream, a start, a kill, a

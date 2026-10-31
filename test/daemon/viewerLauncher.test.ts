@@ -14,6 +14,7 @@ import { afterAll, describe, expect, it } from 'vitest';
 import {
   defaultBrowserCommand,
   findBrowser,
+  launchDashboard,
   launchViewer,
   resetBrowserCache,
 } from '../../src/daemon/viewerLauncher.js';
@@ -202,6 +203,70 @@ describe('launchViewer', () => {
     expect(result.reason).toBe(
       `${path.basename(process.execPath)} exited with code 4; fell back: no Chromium-family browser found`,
     );
+  });
+});
+
+describe('launchDashboard', () => {
+  const dashboardUrl = 'http://127.0.0.1:1/dashboard?dt=0123abcd';
+
+  it('opens the isolated window even when the viewer is set to the default browser', async () => {
+    // `shellpuppet dashboard` exists to open a window. A launch mode meant for
+    // automatic viewer windows must not turn it into a hand-off to the
+    // person's browser, whose extensions would then hold the grant.
+    let openerCalls = 0;
+    const result = await launchDashboard(
+      dashboardUrl,
+      tempDir,
+      { launchMode: 'default-browser', browserPath: process.execPath },
+      NULL_LOGGER,
+      {
+        opener: () => {
+          openerCalls += 1;
+          return { command: process.execPath, args: ['-e', 'process.exit(0)'], windowsVerbatimArguments: false };
+        },
+      },
+    );
+    expect(result).toEqual({ launched: true, mode: 'isolated-app', browser: process.execPath });
+    expect(openerCalls).toBe(0);
+  });
+
+  it('reports no window and never falls back when no browser is found', async () => {
+    // The viewer degrades to the system's opener here; the dashboard must not,
+    // because the opener is the person's default browser. The recording
+    // opener proves the failure path did not reach it.
+    let openerCalls = 0;
+    const result = await launchDashboard(
+      dashboardUrl,
+      tempDir,
+      { launchMode: 'isolated-app', browserPath: path.join(tempDir, 'absent.exe') },
+      NULL_LOGGER,
+      {
+        opener: () => {
+          openerCalls += 1;
+          return { command: process.execPath, args: ['-e', 'process.exit(0)'], windowsVerbatimArguments: false };
+        },
+      },
+    );
+    expect(result.launched).toBe(false);
+    expect(result.mode).toBe('isolated-app');
+    expect(result.reason).toBe('no Chromium-family browser found');
+    expect(openerCalls).toBe(0);
+  });
+
+  it('reports no window when the isolated profile cannot be created', async () => {
+    // A file where the profile directory should be is a profile the launcher
+    // cannot make. The dashboard fails rather than finding another profile.
+    const notADirectory = path.join(tempDir, 'profile-is-a-file');
+    fs.writeFileSync(notADirectory, '');
+    const result = await launchDashboard(
+      dashboardUrl,
+      tempDir,
+      { browserPath: process.execPath, profileDir: notADirectory },
+      NULL_LOGGER,
+    );
+    expect(result.launched).toBe(false);
+    expect(result.mode).toBe('isolated-app');
+    expect(result.reason).toBe('profile directory unavailable');
   });
 });
 

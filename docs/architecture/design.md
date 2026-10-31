@@ -505,7 +505,7 @@ Token-based, following the Jupyter / SSH-agent model, with **five credentials**:
   not cost the human a fresh URL. Grants and credentials both die with the session.
 - **Dashboard grant** (one use, short life, not a session credential). The `dt` in a
   dashboard URL. `POST /dashboard/open`, which takes the client token, mints it and asks
-  the same launcher that opens a viewer to open `GET /dashboard`. The grant is not
+  the viewer launcher's isolated-window path to open `GET /dashboard`. The grant is not
   returned in the response, not printed and not written to the audit log or `daemon.log`.
   Its only use is to be exchanged, once, on a top-level document navigation to
   `GET /dashboard` or `HEAD /dashboard`. A fetch of that URL does not spend it. A launcher
@@ -972,6 +972,12 @@ gets a fresh proof, without replacing the cookie. The routes are:
 | `DELETE /sessions/<id>` | Cookie plus document proof may kill |
 | `/dashboard/events` | Cookie plus subprotocol; outbound WebSocket; inbound ignored |
 | `/sessions/<id>/stream` | Cookie plus subprotocol; `drive=0` for a dashboard pane |
+
+`shellpuppet dashboard` is the CLI verb for `POST /dashboard/open`. It prints
+whether a window opened, never the URL or grant. The route opens the isolated
+window whatever `viewer.launchMode` says; a failure revokes the grant and the
+command exits non-zero with the daemon's message, without trying the default
+browser.
 
 The client token retains these routes where already allowed; `/events`
 remains client-token only. Stream authentication precedes session existence

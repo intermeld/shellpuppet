@@ -9,9 +9,14 @@ version may change behaviour, and every such change is listed here.
 
 ### Added
 
+- `shellpuppet dashboard` opens the dashboard in ShellPuppet's isolated browser
+  profile and prints whether a window opened, never the URL or grant. The
+  daemon's dashboard opener never falls back to the default browser: a window
+  that cannot open revokes the grant and fails the command, with a message
+  naming `viewer.browserPath`.
 - The dashboard has its own one-use grant, which lives for five minutes and is
   minted only by the daemon. `POST /dashboard/open` (client token) mints it and opens
-  the page through the existing launcher. The grant is not returned to the
+  the page in the isolated browser profile, never the default browser. The grant is not returned to the
   caller. A top-level navigation to `GET /dashboard` redeems it for an
   `HttpOnly` `sp_dash` cookie. That cookie may open the dashboard page,
   `GET /sessions` and `/dashboard/events`. Each accepted navigation embeds a

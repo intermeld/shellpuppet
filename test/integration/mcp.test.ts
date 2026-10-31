@@ -91,6 +91,13 @@ describe('MCP adapter', () => {
       'terminal_wait',
     ]);
 
+    // No agent path mints a dashboard link. The dashboard is the person's
+    // window, opened by the CLI; a tool that returned its URL would put the
+    // grant in the agent's transcript.
+    expect(tools.some((tool) => /dashboard/i.test(tool.name))).toBe(false);
+    expect(JSON.stringify(tools)).not.toContain('/dashboard');
+    expect(JSON.stringify(tools)).not.toContain('dt=');
+
     const byName = new Map(tools.map((t) => [t.name, t.description ?? '']));
     // First paint ≠ ready (start), echo trap (type + wait), untrusted data
     // (snapshot/wait/find), escape as focus reset (type/key).
