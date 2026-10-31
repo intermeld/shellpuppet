@@ -78,6 +78,8 @@ import type { DaemonState } from './paths.js';
 import { packageVersion } from './meta.js';
 import { terminalReportKind } from './terminalReports.js';
 import { ViewerSync } from './viewerSync.js';
+import { SessionFeed } from './sessionFeed.js';
+import type { FeedFrame, FeedSummary } from './sessionFeed.js';
 
 const DEFAULT_IDLE_MS = 30 * 60_000;
 const IDLE_CHECK_INTERVAL_MS = 60_000;
@@ -486,6 +488,7 @@ export class Daemon {
     }
   >();
   private readonly version = packageVersion();
+  private readonly sessionFeed: SessionFeed;
 
   private portValue: number | null = null;
   private waitsInFlight = 0;
@@ -516,7 +519,12 @@ export class Daemon {
     this.sessionEnv = options.sessionEnv ?? DEFAULT_SESSION_ENV;
     this.manager = new SessionManager(compilePolicy(options.policy), this.logger, {
       sessionEnv: this.sessionEnv,
-    });
+    }, (id) => this.sessionFeed.remove(id));
+    this.sessionFeed = new SessionFeed(
+      this.version,
+      () => this.manager.list().map((summary) => this.summaryWithPrompt(summary)),
+      this.logger,
+    );
     this.server = http.createServer((req, res) => {
       this.handleRequest(req, res).catch((error: unknown) => {
         // What a person needs to find the fault: the stack, and which request
@@ -559,6 +567,11 @@ export class Daemon {
 
   get liveSessions(): number {
     return this.manager.liveCount();
+  }
+
+  /** Subscribe inside the daemon to the dashboard's session feed. */
+  subscribeDashboardFeed(listener: (frame: FeedFrame) => void): () => void {
+    return this.sessionFeed.subscribe(listener);
   }
 
   // ------------------------------------------------------------------ start
@@ -1679,6 +1692,12 @@ export class Daemon {
       return;
     }
 
+    // Registration is synchronous with creation, before any asynchronous
+    // viewer launch or readiness work can publish a change for this id.
+    this.sessionFeed.add(this.summaryWithPrompt(session.summary()));
+    session.onExit(() => this.updateFeedSession(session.id));
+    session.onReady(() => this.updateFeedSession(session.id));
+
     // Commands are policy-visible by definition, so the command line IS
     // audited (§4.5), unlike typed content. Passed variables are audited by
     // name only, whatever `audit.captureContent` says: a value is a secret
@@ -1893,17 +1912,30 @@ export class Daemon {
   })[] {
     const now = Date.now();
     return this.manager.list().map((summary) => {
-      const state = this.promptStates.get(summary.id);
-      if (state === undefined) return summary;
-      return {
-        ...summary,
-        waitingOnPrompt: {
-          ...(!hideReasoning ? { question: state.prompt.question, options: state.prompt.options } : {}),
-          waitingMs: now - state.since,
-          alerted: state.alerted,
-        },
-      };
+      const full = this.summaryWithPrompt(summary, now);
+      const waiting = full.waitingOnPrompt;
+      if (!hideReasoning || waiting === undefined) return full;
+      return { ...full, waitingOnPrompt: { waitingMs: waiting.waitingMs, alerted: waiting.alerted } };
     });
+  }
+
+  private summaryWithPrompt(summary: SessionSummary, now = Date.now()): FeedSummary {
+    const state = this.promptStates.get(summary.id);
+    if (state === undefined) return summary;
+    return {
+      ...summary,
+      waitingOnPrompt: {
+        question: state.prompt.question,
+        options: state.prompt.options,
+        waitingMs: now - state.since,
+        alerted: state.alerted,
+      },
+    };
+  }
+
+  private updateFeedSession(id: string): void {
+    const session = this.manager.get(id);
+    if (session !== undefined) this.sessionFeed.update(this.summaryWithPrompt(session.summary()));
   }
 
   /**
@@ -1960,7 +1992,10 @@ export class Daemon {
           // over, or a badge raised by the stall alert never comes down.
           this.broadcastControl(session.id, { type: 'prompt-clear' });
         }
-        this.promptStates.delete(session.id);
+        if (previous !== undefined) {
+          this.promptStates.delete(session.id);
+          this.updateFeedSession(session.id);
+        }
         continue;
       }
       // A real sighting cancels a pending miss: the prompt is still there.
@@ -1970,6 +2005,10 @@ export class Daemon {
       // visibly different set of options. Storing only on signature change
       // would serve a stale selection to `terminal_list` and to a viewer
       // joining late.
+      const promptChanged = previous === undefined ||
+        previous.prompt.question !== detected.question ||
+        previous.prompt.options.length !== detected.options.length ||
+        previous.prompt.options.some((option, index) => option !== detected.options[index]);
       if (previous !== undefined) {
         previous.misses = 0;
         previous.prompt = detected;
@@ -2003,11 +2042,15 @@ export class Daemon {
           prompt: detected,
           misses: 0,
         });
+        if (promptChanged || previous?.alerted === true) this.updateFeedSession(session.id);
         continue;
       }
 
+      if (promptChanged) this.updateFeedSession(session.id);
+
       if (!previous.alerted && Date.now() - previous.since >= stallMs) {
         previous.alerted = true;
+        this.updateFeedSession(session.id);
         const waitingMs = Date.now() - previous.since;
         this.audit.record('daemon', 'prompt-stall', session.id);
         this.logger.warn('session waiting on a prompt', {
@@ -2039,7 +2082,10 @@ export class Daemon {
 
     // Sessions that exited or were reaped take their prompt state with them.
     for (const id of [...this.promptStates.keys()]) {
-      if (!seen.has(id)) this.promptStates.delete(id);
+      if (!seen.has(id)) {
+        this.promptStates.delete(id);
+        this.updateFeedSession(id);
+      }
     }
   }
 
@@ -2198,6 +2244,7 @@ export class Daemon {
       }
       if (options.resync !== false) sync.resync();
     }
+    this.updateFeedSession(sessionId);
   }
 
   /** What one watcher is told about the grid, from its own point of view. */
@@ -2357,6 +2404,7 @@ export class Daemon {
     }
 
     const unsubscribeData = session.onData((data) => sync.deliver(data));
+    this.updateFeedSession(session.id);
     const unsubscribeExit = session.onExit((exitCode) => {
       sync.deliver(exitNotice(exitCode));
       // The notice is bytes on the terminal; the page needs a frame to change
@@ -2539,6 +2587,7 @@ export class Daemon {
       sync.close();
       this.sockets.delete(ws);
       this.sessionSockets.get(session.id)?.delete(ws);
+      this.updateFeedSession(session.id);
       // The grid stays where it is; it simply no longer belongs to anyone, so
       // the next viewport to arrive or to act picks it up.
       if (this.geometryController.get(session.id) === ws) {
