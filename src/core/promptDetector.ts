@@ -49,11 +49,22 @@ export interface DetectedPrompt {
   /**
    * The first and last raw line of the screen the prompt's own drawing
    * occupies: its question when one is found, its options, and what is
-   * drawn between them. A reader that puts parts of a screen aside
-   * (`reasoning.ts` hides reasoning) leaves these lines alone: a filter
-   * must never hide a question.
+   * drawn between them. For Grok's older radio box, whose command is plain
+   * bar text above the options, the span also takes that command when a
+   * bare bar closes it off from the lines above. A reader that puts parts
+   * of a screen aside (`reasoning.ts` hides reasoning) leaves these lines
+   * alone: a filter must never hide a question. A wait result does not
+   * carry this.
    */
   rows: [number, number];
+  /**
+   * Why the screen was called live. `question` means the only signal was a
+   * question-shaped line with nothing drawn below the options. The reasoning
+   * filter leaves such a span unclaimed when every row of it sits inside a
+   * reasoning block that began above the question. A wait result does not
+   * carry this.
+   */
+  basis: 'marker' | 'footer' | 'question' | 'frame';
 }
 
 /**
@@ -176,6 +187,16 @@ const TAIL_WINDOW = 20;
  * misattribute ordinary transcript text.
  */
 const QUESTION_SEARCH_BUDGET = 8;
+/**
+ * Grok's permission question row: two spaces, the bar, two spaces, `>`,
+ * then a space. With or without a question mark, that row is the question
+ * the box is asking. The composer is `│ >` with one space and does not match.
+ */
+const GROK_BOX_QUESTION = /^ {2}│ {2}> /;
+/** Bar text in that same box: two spaces, the bar, two spaces, a word. */
+const GROK_BAR_TEXT = /^ {2}│ {2}\S/;
+/** The bare bar row that closes a command off from the reasoning above it. */
+const GROK_BARE_BAR = /^ {2}│\s*$/;
 
 interface Line {
   text: string;
@@ -249,7 +270,7 @@ export function detectPrompt(screen: string): DetectedPrompt | null {
   ];
   for (const block of blocks) {
     if (block === null) continue;
-    const prompt = livePrompt(block, tail);
+    const prompt = livePrompt(block, tail, raw);
     if (prompt !== null) return prompt;
   }
 
@@ -257,14 +278,14 @@ export function detectPrompt(screen: string): DetectedPrompt | null {
   const last = lines[lines.length - 1]!;
   if (isYesNo(last.text) && !BUSY_LINE.test(last.text)) {
     const question = normalise(last.text);
-    return { question, options: [], signature: question, rows: [last.index, last.index] };
+    return { question, options: [], signature: question, rows: [last.index, last.index], basis: 'frame' };
   }
 
   // A bare press-enter wait (the Codex onboarding screens): the last content
   // line asks for enter and nothing below it can contradict that.
   if (PRESS_ENTER.test(last.text)) {
     const question = normalise(last.text);
-    return { question, options: [], signature: question, rows: [last.index, last.index] };
+    return { question, options: [], signature: question, rows: [last.index, last.index], basis: 'frame' };
   }
 
   return null;
@@ -340,6 +361,7 @@ function clackPrompt(tail: Line[], raw: string[]): DetectedPrompt | null {
     signature: [question, ...options.map(withoutHint)].join(' | '),
     // From the headline to the bar end, a validation message under it included.
     rows: [top - 1, after - 1],
+    basis: 'frame',
   };
 }
 
@@ -505,7 +527,38 @@ function pointerBlock(tail: Line[], raw: string[]): Block | null {
  * Whether a block is a prompt the program is WAITING on, and if so the
  * prompt as the consumer should see it.
  */
-function livePrompt(block: Block, tail: Line[]): DetectedPrompt | null {
+/**
+ * Where an older Grok box's command starts. The command is plain bar text
+ * above the radios. The walk may cross the one bare bar between that text
+ * and the radios, and it stops at the next bare bar, which is what closes
+ * the command off from the reasoning above. Without that closing bar the
+ * command is the same shape as reasoning, so the radios stay the start.
+ */
+function commandAboveRadios(raw: string[], firstOption: number): number {
+  const text = (index: number): string => (raw[index] ?? '').trimEnd();
+  if (!/^ {2}│ {2}\d+ \([○•●]\) /.test(text(firstOption))) return firstOption;
+  const above = firstOption - 1;
+  if (GROK_BARE_BAR.test(text(above))) {
+    let cursor = above - 1;
+    let sawText = false;
+    while (GROK_BAR_TEXT.test(text(cursor))) {
+      sawText = true;
+      cursor--;
+    }
+    if (!sawText || !GROK_BARE_BAR.test(text(cursor))) return firstOption;
+    return cursor + 1;
+  }
+  let start = firstOption;
+  let cursor = above;
+  while (GROK_BAR_TEXT.test(text(cursor))) {
+    start = cursor;
+    cursor--;
+  }
+  if (start !== firstOption && GROK_BARE_BAR.test(text(cursor))) return start;
+  return firstOption;
+}
+
+function livePrompt(block: Block, tail: Line[], raw: string[]): DetectedPrompt | null {
   const { rows, kind } = block;
   const blockStart = rows[0]!.line.index;
   const blockEnd = rows[rows.length - 1]!.line.index;
@@ -519,14 +572,26 @@ function livePrompt(block: Block, tail: Line[]): DetectedPrompt | null {
     (line) => line.index >= blockStart && line.index <= blockEnd && MARKER_LINE.test(line.text),
   );
   const hasPressEnter = below.some((line) => PRESS_ENTER.test(line.text));
-  const question = findQuestion(tail, blockStart);
   const nothingBelow = below.every((line) => RULE_LINE.test(line.text));
+  // A question mark above the bare bar that closes an older Grok command is
+  // reasoning. The command below that bar is claimed on its own, further down.
+  const commandStart = commandAboveRadios(raw, blockStart);
+  let question = findQuestion(tail, blockStart);
+  if (question !== null && commandStart < blockStart && question.index < commandStart) question = null;
 
   let live: boolean;
+  let basis: DetectedPrompt['basis'];
   if (kind === 'key-hint') {
     // The key hints are the block's own markers; the question above must
     // frame it.
     live = question !== null;
+    basis = 'frame';
+  } else if (kind === 'letter') {
+    // Distinct letter keys are the block. The weak signal the filter
+    // declines is a numbered list with nothing below it, which is also how
+    // reasoning draws a list. A letter menu is not that.
+    live = hasMarker || hasPressEnter || (question !== null && nothingBelow);
+    basis = 'frame';
   } else if (kind === 'pointer') {
     // The pointer is the block's own marker, so it proves nothing by itself:
     // Claude Code draws the same `❯` on each message in its transcript and on
@@ -537,13 +602,21 @@ function livePrompt(block: Block, tail: Line[]): DetectedPrompt | null {
     // earlier one. What follows the choices cannot decide: inquirer draws a
     // description of the focused choice and a key-help line there.
     live = hasPressEnter || (question !== null && drawnTogether(tail, question.index, blockStart));
-  } else {
+    basis = hasPressEnter ? 'footer' : 'marker';
+  } else if (hasMarker) {
     // A focused-option marker or a press-enter footer is the strongest
     // signal a selector is live. Without either, a question-shaped headline
     // counts only when the block ENDS the screen: a program blocked on a
     // choice draws nothing after its options, while an agent that has
     // finished a turn draws its composer under the numbered list it printed.
-    live = hasMarker || hasPressEnter || (question !== null && nothingBelow);
+    live = true;
+    basis = 'marker';
+  } else if (hasPressEnter) {
+    live = true;
+    basis = 'footer';
+  } else {
+    live = question !== null && nothingBelow;
+    basis = 'question';
   }
   if (!live) return null;
 
@@ -555,13 +628,18 @@ function livePrompt(block: Block, tail: Line[]): DetectedPrompt | null {
   // evade the threshold forever. Normalise filled radios to hollow in the
   // signature only; `options` keeps the live state for the consumer.
   const stable = (text: string): string => text.replace(/\([•●]\)/g, '(○)');
+  // From the question, when one is found, down to the last option row:
+  // what a program draws between the two belongs to the question too.
+  // With no question, an older Grok box still owns the command text a bare
+  // bar closes off above its radios.
+  let start = question?.index ?? blockStart;
+  if (question === null) start = Math.min(start, commandStart);
   return {
     question: headline,
     options,
     signature: [headline, ...options].map(stable).join(' | '),
-    // From the question, when one is found, down to the last option row:
-    // what a program draws between the two belongs to the question too.
-    rows: [question?.index ?? blockStart, blockEnd],
+    rows: [start, blockEnd],
+    basis,
   };
 }
 
@@ -623,6 +701,7 @@ function findQuestion(tail: Line[], blockStart: number): Line | null {
     inspected++;
     const cleaned = normalise(line.text);
     if (
+      GROK_BOX_QUESTION.test(line.text) ||
       /\?/.test(cleaned) ||
       /permission required/i.test(cleaned) ||
       /^allow\b/i.test(cleaned) ||

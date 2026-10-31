@@ -32,12 +32,15 @@
  * shape, or a screen that imitates one, defeats it. Screen content is
  * untrusted input either way (design §4.4).
  *
- * Every pattern runs under the regular-expression time budget
+ * Signature patterns run under the regular-expression time budget
  * (`regexBudget.ts`), as patterns from config are text a person wrote.
+ * The prompt detector times its dialog signatures the same way; its own
+ * patterns are not timed.
  */
 
 import { RegexBudgetError, SET_ASIDE_MS, withRegexBudget } from './regexBudget.js';
 import { detectPrompt } from './promptDetector.js';
+import type { DetectedPrompt } from './promptDetector.js';
 import type { CellStyle, StyledLine } from './renderer.js';
 
 /** Conditions on how characters are drawn. Colours as in `CellStyle`, or `default`. */
@@ -751,23 +754,59 @@ function composerAt(lines: readonly StyledLine[], signature: CompiledSignature):
 }
 
 /**
+ * Whether every row of `[first, last]` sits inside one reasoning block that
+ * began above `first`. The block scan here ignores claims: this is what
+ * decides whether a claim is made at all.
+ */
+function enclosedByReasoning(
+  lines: readonly StyledLine[],
+  signature: CompiledSignature,
+  first: number,
+  last: number,
+): boolean {
+  const composer = composerAt(lines, signature);
+  const limit = composer?.line ?? lines.length;
+  return reasoningRanges(lines, signature, limit).some(([from, to]) => from < first && last < to);
+}
+
+/**
  * The rows a question on screen claims for itself: the prompt detection's
  * own rows (`promptDetector.ts`), and the rows of nothing but border beside
  * them, which belong to the question's box. A filter that hides reasoning
  * must never hide a question, so a hidden block is cut at the first of
  * these rows and never starts on one. Null when no question is on screen,
  * so the block scan below runs as before.
+ *
+ * A detection whose only signal is a question with nothing below it is not
+ * claimed when that whole span sits inside a reasoning block that began
+ * above the question: a numbered list the reasoning drew, on a screen that
+ * happens to end there, is not a question the program is waiting on. A line
+ * that begins a reasoning block between the question and the last option
+ * stays reasoning too.
  */
-function claimedRows(lines: readonly StyledLine[]): ReadonlySet<number> | null {
-  const prompt = detectPrompt(lines.map((line) => line.text).join('\n'));
+function claimedRows(
+  lines: readonly StyledLine[],
+  signature: CompiledSignature,
+  prompt: DetectedPrompt | null,
+): ReadonlySet<number> | null {
   if (prompt === null) return null;
   const [first, last] = prompt.rows;
+  if (prompt.basis === 'question' && enclosedByReasoning(lines, signature, first, last)) return null;
   let top = first;
   while (top > 0 && BORDER_ROW.test(lines[top - 1]!.text)) top--;
   let bottom = last;
   while (bottom + 1 < lines.length && BORDER_ROW.test(lines[bottom + 1]!.text)) bottom++;
   const rows = new Set<number>();
-  for (let i = top; i <= bottom; i++) rows.add(i);
+  for (let i = top; i <= bottom; i++) {
+    // A one-line reasoning summary drawn between the question and the last
+    // option is still reasoning. A start that also continues (the bar a
+    // command is written on) is the prompt's own text, and stays.
+    const summary = signature.reasoning.some(
+      (block) => block.continues === undefined && lineFits(lines[i]!, block.start),
+    );
+    if (i > first && i < last && summary) continue;
+    rows.add(i);
+  }
   return rows;
 }
 
@@ -826,10 +865,14 @@ export function hideReasoning(
   signature: CompiledSignature,
   firstVisible = 0,
 ): FilteredLines | null {
-  // Outside the signature's budget: the detector runs its own patterns under
-  // their own (`dialogs.ts`), and the two never nest.
-  const claimed = claimedRows(lines);
+  // Outside the signature's budget, so the two never nest. A signature with
+  // no reasoning rules can hide nothing, so the detector is not run. Dialog
+  // signatures are the only patterns the detector times (`dialogs.ts`); its
+  // own patterns are not.
+  const detected =
+    signature.reasoning.length === 0 ? null : detectPrompt(lines.map((line) => line.text).join('\n'));
   return guarded(signature, () => {
+    const claimed = claimedRows(lines, signature, detected);
     // Everything above the composer's own line, the chrome over it included:
     // a spinner there can carry the model's words about what it is thinking.
     const composer = composerAt(lines, signature);

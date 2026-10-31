@@ -251,7 +251,20 @@ scrolled away is still recognised. A question the program is waiting on is never
 hidden: the rows the prompt detection claims for a question on screen, and the
 border rows beside them, stay whatever the signature's rules would take, so a
 permission box drawn in the same style as the reasoning keeps every row of its
-own. A result is refused while a prompt sits unsent in the
+own. Grok's box question is the row `│  > ` (two spaces between the bar and
+`>`); the composer is `│ >` with one space and is not that question. A numbered
+list is not claimed when the only live signal is a question with nothing below
+it and every row of the list sits inside a reasoning block that began above
+the question. A one-line reasoning summary drawn between a question and its
+options stays hidden. The older Grok box keeps the plain bar text of its
+command when a bare bar closes that text off from the reasoning above it.
+The limits: a row shaped as a Grok option stays even when the reasoning drew
+it, because that shape is also a real option and the signature keeps it when
+detection claims nothing; a filled radio inside another program's reasoning
+stays, because that glyph is what shows a selector is live and dropping the
+claim would hide a real one; a command with no bare bar above it stays with
+the reasoning, because the two are the same shape. A wait result carries the
+question and the options, not the rows the filter uses. A result is refused while a prompt sits unsent in the
 composer (Claude Code, Codex and Qoder, whose signatures tell typed text from the
 placeholder), and, for a program that always closes a finished turn with a summary line,
 until that line is drawn. A line with reasoning drawn below it is never taken for the

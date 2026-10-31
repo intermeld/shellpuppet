@@ -54,6 +54,9 @@ describe('a dialog drawn inside a TUI', () => {
     expect(result.matched).toBe(true);
     expect(result.prompt?.question).toBe('Permission required');
     expect(result.prompt?.options).toEqual(['Allow once', 'Always allow', 'Reject']);
+    // The wait JSON carries the question and the options, not the rows the filter uses.
+    expect(result.prompt).not.toHaveProperty('rows');
+    expect(result.prompt).not.toHaveProperty('basis');
     await api(td.port, td.token, `/sessions/${id}`, { method: 'DELETE' });
   });
 

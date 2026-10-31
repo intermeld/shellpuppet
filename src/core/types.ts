@@ -261,9 +261,11 @@ export interface WaitResult {
   /**
    * The prompt that satisfied a `prompt` condition, with its question and
    * options, so the caller can decide the answer without a second round trip
-   * to read the screen it already has. Absent for every other condition.
+   * to read the screen it already has. The rows the reasoning filter uses,
+   * and why the detector called the screen live, stay off this object.
+   * Absent for every other condition.
    */
-  prompt?: DetectedPrompt;
+  prompt?: Omit<DetectedPrompt, 'rows' | 'basis'>;
   /**
    * Why the wait did NOT match, when the waiter can say more than the reason,
    * e.g. quiet timed out because the program has not painted anything yet.

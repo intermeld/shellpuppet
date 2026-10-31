@@ -108,7 +108,12 @@ name; a session with neither is refused by these readers.
 Whatever the signature says, the rows the prompt detection claims for a
 question on screen are never hidden as reasoning, and neither are the border
 rows beside them: a permission box a program draws in the same style as its
-reasoning keeps every row of its own.
+reasoning keeps every row of its own. A numbered list the reasoning drew is
+not one of those rows when a question with nothing below it is the only reason
+it looked live and the list sits inside a reasoning block that began above
+that question. A wait for a prompt returns the question and the options, not
+the rows the filter uses. The limits are in the design, under reading an
+agent CLI without its reasoning.
 
 Add a program, or replace a built-in one after its screen changes, under
 `agents.signatures`:

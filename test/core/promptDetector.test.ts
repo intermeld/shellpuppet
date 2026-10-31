@@ -302,14 +302,19 @@ describe('detectPrompt: Grok shapes', () => {
     expect(prompt.options.every((o) => !/select/.test(o))).toBe(true);
   });
 
-  it('claims the option rows as its own, with neither the command nor the footer among them', () => {
+  it('claims the command above the radios, up to the bare bar that closes it, and not the footer', () => {
     const prompt = detectPrompt(GROK_PERMISSION_PROMPT)!;
     const lines = GROK_PERMISSION_PROMPT.split('\n');
+    const command = lines.findIndex((line) => line.includes('Locate worktree'));
+    const lastOption = lines.findIndex((line) => line.includes('3 (○) No, reject'));
+    expect(command).toBeGreaterThan(0);
+    expect(prompt.rows).toEqual([command, lastOption]);
     const claimed = lines.slice(prompt.rows[0], prompt.rows[1] + 1);
-    expect(claimed).toHaveLength(3);
-    expect(claimed[0]).toMatch(/^ {2}│ {2}1 \(○\) Yes, and don't ask again/);
-    expect(claimed[1]).toMatch(/^ {2}│ {2}2 \(•\) Yes, proceed/);
-    expect(claimed[2]).toMatch(/^ {2}│ {2}3 \(○\) No, reject/);
+    expect(claimed[0]).toMatch(/Locate worktree/);
+    expect(claimed.some((line) => line.includes('git rev-parse'))).toBe(true);
+    expect(claimed[claimed.length - 1]).toMatch(/3 \(○\) No, reject/);
+    expect(claimed.some((line) => line.includes('Fetch run'))).toBe(false);
+    expect(claimed.some((line) => /select/.test(line))).toBe(false);
   });
 });
 

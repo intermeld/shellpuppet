@@ -400,6 +400,9 @@ describe('waitFor prompt', () => {
     // the answer without a second round trip to read the screen it has.
     expect(result.prompt?.question).toContain('Allow this command to run?');
     expect(result.prompt?.options.length).toBeGreaterThanOrEqual(2);
+    // The rows the filter uses stay off the result a caller serialises.
+    expect(result.prompt).not.toHaveProperty('rows');
+    expect(result.prompt).not.toHaveProperty('basis');
   });
 
   it('does not match a busy screen with no prompt', async () => {
