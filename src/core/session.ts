@@ -18,6 +18,7 @@ import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { IPty } from 'node-pty';
+import type { QueuedConsoleHost, SpawnWindow } from './windowsConsoleHost.js';
 import { ensureSpawnHelperExecutable, explainSpawnFailure, loadNodePty } from './nativePty.js';
 import { ScreenRenderer } from './renderer.js';
 import type { SerializeOptions, StyledLine } from './renderer.js';
@@ -31,8 +32,7 @@ import {
   recordedExitCode,
   releaseFailedStarts,
 } from './windowsPtyStart.js';
-import { queueConsoleHostEnd, TRACK_WINDOWS_CONSOLE_HOST } from './windowsConsoleHost.js';
-import type { SpawnWindow } from './windowsConsoleHost.js';
+import { queueConsoleHostEnd } from './windowsConsoleHost.js';
 import {
   DEFAULT_COLS,
   DEFAULT_ROWS,
@@ -366,6 +366,23 @@ export interface SessionDeps {
   sessionEnv?: SessionEnvMode;
   /** Windows tree killer override, for tests only. Defaults to `taskkillTrees`. */
   treeKiller?: TreeKiller;
+  /**
+   * Console-host queue, for tests only. Defaults to the real queue.
+   * A session calls it only when `platform` is Windows.
+   */
+  queueConsoleHostEnd?: (item: QueuedConsoleHost) => void;
+  /** PTY spawn, for tests only. Defaults to node-pty. No process is started. */
+  spawn?: (
+    file: string,
+    args: string[] | string,
+    options: {
+      name: string;
+      cols: number;
+      rows: number;
+      cwd: string;
+      env: Record<string, string | undefined>;
+    },
+  ) => IPty;
 }
 
 /**
@@ -563,6 +580,8 @@ export class Session implements WaitTarget {
   private readonly renderer: ScreenRenderer;
   private readonly logger: Logger;
   private readonly platform: NodeJS.Platform;
+  private readonly endConsoleHost: (item: QueuedConsoleHost) => void;
+  private readonly spawnPty: SessionDeps['spawn'];
   private readonly treeKiller: TreeKiller;
   /** Whether the program has bracketed paste (DEC 2004) enabled. See PASTE_START. */
   private bracketedPaste = false;
@@ -625,6 +644,8 @@ export class Session implements WaitTarget {
     this.logger = deps.logger ?? NULL_LOGGER;
     this.platform = deps.platform ?? process.platform;
     this.treeKiller = deps.treeKiller ?? taskkillTrees;
+    this.endConsoleHost = deps.queueConsoleHostEnd ?? queueConsoleHostEnd;
+    this.spawnPty = deps.spawn;
 
     const cols = options.cols ?? DEFAULT_COLS;
     const rows = options.rows ?? DEFAULT_ROWS;
@@ -650,38 +671,47 @@ export class Session implements WaitTarget {
 
     // node-pty is loaded on the first start, not with the daemon, so an install
     // that left it unable to open a terminal fails here with what to do
-    // (`nativePty.ts`).
-    const { spawn } = loadNodePty();
+    // (`nativePty.ts`). A test spawn stands in and loads nothing.
+    const spawn = this.spawnPty === undefined ? loadNodePty().spawn : undefined;
     // A Windows start that fails part-way must not leave node-pty's
     // half-built terminal behind (`windowsPtyStart.ts`).
-    if (process.platform === 'win32') releaseFailedStarts();
-    ensureSpawnHelperExecutable();
+    if (spawn !== undefined && process.platform === 'win32') releaseFailedStarts();
+    if (spawn !== undefined) ensureSpawnHelperExecutable();
     // On Windows, ConPTY creates the console host inside this synchronous
     // call, before it returns. The two times are the window a later list
     // uses to recognise that host. Nothing is listed here, and the start
-    // does not wait.
-    const consoleHostT0 = TRACK_WINDOWS_CONSOLE_HOST ? Date.now() : 0;
+    // does not wait. The platform is the session's, so a test can stand in
+    // for Windows without a Windows process.
+    const trackConsoleHost = this.platform === 'win32';
+    const consoleHostT0 = trackConsoleHost ? Date.now() : 0;
+    const spawnOptions = {
+      name: 'xterm-256color',
+      cols,
+      rows,
+      cwd: options.cwd ?? process.cwd(),
+      // The daemon always passes the mode it resolved and reports; this
+      // default serves code that uses SessionManager or Session directly.
+      env: buildSessionEnv(
+        deps.sessionEnv ?? DEFAULT_SESSION_ENV,
+        this.platform,
+        process.env,
+        options.env,
+      ),
+    };
     try {
-      this.pty = spawn(file, fileArgs, {
-        name: 'xterm-256color',
-        cols,
-        rows,
-        cwd: options.cwd ?? process.cwd(),
-        // The daemon always passes the mode it resolved and reports; this
-        // default serves code that uses SessionManager or Session directly.
-        env: buildSessionEnv(
-          deps.sessionEnv ?? DEFAULT_SESSION_ENV,
-          this.platform,
-          process.env,
-          options.env,
-        ),
-      });
+      if (this.spawnPty !== undefined) {
+        this.pty = this.spawnPty(file, fileArgs, spawnOptions);
+      } else if (spawn !== undefined) {
+        this.pty = spawn(file, fileArgs, spawnOptions);
+      } else {
+        throw new Error('session spawn is not available');
+      }
     } catch (error) {
       // On Windows node-pty loads its native module here, as the terminal is
       // built, so a missing binary surfaces now rather than at the load above.
       throw explainSpawnFailure(error);
     }
-    if (TRACK_WINDOWS_CONSOLE_HOST) {
+    if (trackConsoleHost) {
       this.consoleHostWindow = { t0: consoleHostT0, t1: Date.now() };
     }
     // An error on a Windows terminal's pipes must not take the daemon down
@@ -1214,10 +1244,11 @@ export class Session implements WaitTarget {
    * platform but Windows the queue does nothing.
    */
   private queueConsoleHost(): void {
+    if (this.platform !== 'win32') return;
     const window = this.consoleHostWindow;
     if (window === null || this.consoleHostQueued) return;
     this.consoleHostQueued = true;
-    queueConsoleHostEnd({
+    this.endConsoleHost({
       id: this.id,
       window,
       log: (level, message, meta) => {

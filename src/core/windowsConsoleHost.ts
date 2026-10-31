@@ -69,6 +69,8 @@ export interface QueuedConsoleHost {
 
 export interface ConsoleHostQueue {
   push(item: QueuedConsoleHost): void;
+  /** Resolves when every queued batch has listed and ended. */
+  whenSettled(): Promise<void>;
 }
 
 const CONSOLE_HOST_NAMES = new Set(['conhost.exe', 'openconsole.exe']);
@@ -83,14 +85,23 @@ function errorText(error: unknown): string {
   return 'unknown failure';
 }
 
+/**
+ * A list timed out when the child was killed or a signal was delivered.
+ * The message text is not consulted: a failure that merely mentions a
+ * timeout is still a failed list.
+ */
+function queryTimedOut(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  if ('killed' in error && error.killed === true) return true;
+  if ('signal' in error && typeof error.signal === 'string' && error.signal !== '') return true;
+  if ('cause' in error && error.cause !== error) return queryTimedOut(error.cause);
+  return false;
+}
+
 /** Why a list could not be used. A timeout is its own reason. */
 export function queryFailureReason(error: unknown): string {
-  if (typeof error === 'object' && error !== null && 'killed' in error && error.killed === true) {
-    return 'console host query timed out';
-  }
-  const message = errorText(error);
-  if (message.includes('timed out')) return 'console host query timed out';
-  return `console host query failed: ${message}`;
+  if (queryTimedOut(error)) return 'console host query timed out';
+  return `console host query failed: ${errorText(error)}`;
 }
 
 /**
@@ -142,9 +153,20 @@ export function createConsoleHostQueue(options: ConsoleHostQueueOptions): Consol
   const coalesceMs = options.coalesceMs ?? CONSOLE_HOST_COALESCE_MS;
   const toleranceMs = options.toleranceMs ?? CONSOLE_HOST_WINDOW_TOLERANCE_MS;
   const pending: QueuedConsoleHost[] = [];
+  const waiters: Array<() => void> = [];
   let timer: ReturnType<typeof setTimeout> | null = null;
+  let running = false;
+
+  const idle = (): boolean => timer === null && !running && pending.length === 0;
+
+  const notify = (): void => {
+    if (!idle()) return;
+    const ready = waiters.splice(0);
+    for (const resolve of ready) resolve();
+  };
 
   const run = (batch: readonly QueuedConsoleHost[]): void => {
+    running = true;
     void options.list(options.parentPid).then(
       (hosts) => {
         const ended = new Set<number>();
@@ -178,7 +200,10 @@ export function createConsoleHostQueue(options: ConsoleHostQueueOptions): Consol
           item.log('warn', 'console host not ended', { id: item.id, reason });
         }
       },
-    );
+    ).finally(() => {
+      running = false;
+      notify();
+    });
   };
 
   return {
@@ -189,8 +214,15 @@ export function createConsoleHostQueue(options: ConsoleHostQueueOptions): Consol
         timer = null;
         const batch = pending.splice(0);
         if (batch.length > 0) run(batch);
+        else notify();
       }, coalesceMs);
       timer.unref();
+    },
+    whenSettled(): Promise<void> {
+      if (idle()) return Promise.resolve();
+      return new Promise((resolve) => {
+        waiters.push(resolve);
+      });
     },
   };
 }
@@ -245,10 +277,7 @@ export function listConsoleHosts(
       { windowsHide: true, timeout: timeoutMs, maxBuffer: 4 * 1024 * 1024 },
       (error, stdout) => {
         if (error) {
-          const timedOut = error.killed === true || error.message.includes('timed out');
-          reject(
-            new Error(timedOut ? 'console host query timed out' : error.message, { cause: error }),
-          );
+          reject(error instanceof Error ? error : new Error(errorText(error), { cause: error }));
           return;
         }
         try {
@@ -267,6 +296,16 @@ function terminateProcess(pid: number): void {
 }
 
 let daemonQueue: ConsoleHostQueue | null = null;
+
+/**
+ * Resolves when the daemon's queue has finished the batches already pushed.
+ * Nothing is listed at the call. Tests wait here instead of polling; the
+ * daemon does not.
+ */
+export function whenConsoleHostBatchSettled(): Promise<void> {
+  if (daemonQueue === null) return Promise.resolve();
+  return daemonQueue.whenSettled();
+}
 
 /** Queue one ended session. The list runs later, off the caller's stack. */
 export function queueConsoleHostEnd(item: QueuedConsoleHost): void {

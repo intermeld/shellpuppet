@@ -5,9 +5,32 @@
  * a daemon and real console hosts.
  */
 
-import { describe, expect, it } from 'vitest';
-import { createConsoleHostQueue, selectConsoleHost } from '../../src/core/windowsConsoleHost.js';
+import { describe, expect, it, vi } from 'vitest';
+import {
+  CONSOLE_HOST_COALESCE_MS,
+  CONSOLE_HOST_QUERY_TIMEOUT_MS,
+  CONSOLE_HOST_WINDOW_TOLERANCE_MS,
+  TRACK_WINDOWS_CONSOLE_HOST,
+  createConsoleHostQueue,
+  listConsoleHosts,
+  queryFailureReason,
+  queueConsoleHostEnd,
+  selectConsoleHost,
+} from '../../src/core/windowsConsoleHost.js';
 import type { ConsoleHostProcess, QueuedConsoleHost, SpawnWindow } from '../../src/core/windowsConsoleHost.js';
+
+/** What the stand-in for `execFile` last saw. No PowerShell is started. */
+const listed = vi.hoisted(() => ({ timeout: undefined as number | undefined, stdout: '' }));
+
+vi.mock('node:child_process', () => ({
+  execFile: (...args: unknown[]) => {
+    const options = args[2] as { timeout?: number } | undefined;
+    listed.timeout = options?.timeout;
+    const callback = args[3] as (error: Error | null, stdout: string) => void;
+    callback(null, listed.stdout);
+    return { unref(): void {} };
+  },
+}));
 
 const daemon = 4000;
 const tolerance = 5;
@@ -144,7 +167,8 @@ describe('createConsoleHostQueue', () => {
       coalesceMs: 20,
       list: () => {
         calls += 1;
-        return Promise.reject(calls === 1 ? new Error('snapshot failed') : new Error('console host query timed out'));
+        const timeout = Object.assign(new Error('Command failed'), { killed: true, signal: 'SIGTERM' });
+        return Promise.reject(calls === 1 ? new Error('snapshot failed') : timeout);
       },
       endProcess: (pid) => {
         ended.push(pid);
@@ -187,5 +211,102 @@ describe('createConsoleHostQueue', () => {
     await pause(120);
     expect(calls).toBe(1);
     expect(ended).toEqual([91, 92]);
+  });
+
+  it('uses the production tolerance, coalescing and timeout', async () => {
+    expect(CONSOLE_HOST_WINDOW_TOLERANCE_MS).toBe(5);
+    expect(CONSOLE_HOST_COALESCE_MS).toBe(300);
+    expect(CONSOLE_HOST_QUERY_TIMEOUT_MS).toBe(45_000);
+
+    listed.timeout = undefined;
+    listed.stdout = '';
+    await listConsoleHosts(daemon);
+    expect(listed.timeout).toBe(CONSOLE_HOST_QUERY_TIMEOUT_MS);
+
+    // No coalescing and no tolerance are passed in, so the defaults above are
+    // the ones a batch uses. The daemon's own queue is that call with no
+    // overrides, and where it is switched on it is driven the same way.
+    vi.useFakeTimers();
+    const kills = vi.spyOn(process, 'kill').mockImplementation(() => true);
+    try {
+      const ended: number[] = [];
+      const queue = createConsoleHostQueue({
+        parentPid: daemon,
+        list: () =>
+          Promise.resolve([
+            host({ pid: 70, creationTime: window.t1 + CONSOLE_HOST_WINDOW_TOLERANCE_MS }),
+            host({ pid: 71, creationTime: window.t1 + CONSOLE_HOST_WINDOW_TOLERANCE_MS + 1 }),
+          ]),
+        endProcess: (pid) => {
+          ended.push(pid);
+        },
+      });
+      queue.push({ id: 'defaults', window, log: () => undefined });
+      await vi.advanceTimersByTimeAsync(CONSOLE_HOST_COALESCE_MS - 1);
+      expect(ended).toEqual([]);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(ended).toEqual([70]);
+
+      if (TRACK_WINDOWS_CONSOLE_HOST) {
+        const edge = window.t1 + CONSOLE_HOST_WINDOW_TOLERANCE_MS;
+        listed.timeout = undefined;
+        listed.stdout = [
+          `70 ${String(process.pid)} conhost.exe ${String(edge)}`,
+          `71 ${String(process.pid)} conhost.exe ${String(edge + 1)}`,
+        ].join('\n');
+        kills.mockClear();
+        queueConsoleHostEnd({ id: 'daemon', window, log: () => undefined });
+        await vi.advanceTimersByTimeAsync(CONSOLE_HOST_COALESCE_MS - 1);
+        expect(listed.timeout).toBeUndefined();
+        expect(kills).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
+        expect(listed.timeout).toBe(CONSOLE_HOST_QUERY_TIMEOUT_MS);
+        expect(kills.mock.calls.map((call) => call[0])).toEqual([70]);
+      }
+    } finally {
+      kills.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
+  it('treats a killed child or a signal as a timeout, and a message as a failure', () => {
+    const killed = Object.assign(new Error('Command failed'), { killed: true });
+    expect(queryFailureReason(killed)).toBe('console host query timed out');
+
+    const signalled = Object.assign(new Error('Command failed'), { signal: 'SIGTERM' });
+    expect(queryFailureReason(signalled)).toBe('console host query timed out');
+
+    expect(queryFailureReason(new Error('the helper timed out'))).toBe(
+      'console host query failed: the helper timed out',
+    );
+  });
+
+  it('resolves when the batch has listed and ended, and not before', async () => {
+    let resolveList: (hosts: readonly ConsoleHostProcess[]) => void = () => undefined;
+    const ended: number[] = [];
+    const queue = createConsoleHostQueue({
+      parentPid: daemon,
+      coalesceMs: 20,
+      toleranceMs: tolerance,
+      list: () =>
+        new Promise((resolve) => {
+          resolveList = resolve;
+        }),
+      endProcess: (pid) => {
+        ended.push(pid);
+      },
+    });
+    queue.push({ id: 's', window, log: () => undefined });
+    let settled = false;
+    const done = queue.whenSettled().then(() => {
+      settled = true;
+    });
+    await pause(50);
+    expect(settled).toBe(false);
+    expect(ended).toEqual([]);
+    resolveList([host({ pid: 80, creationTime: 1_040 })]);
+    await done;
+    expect(settled).toBe(true);
+    expect(ended).toEqual([80]);
   });
 });
