@@ -1085,6 +1085,8 @@ describe('viewer assets and the WS frame protocol (§5)', () => {
     expect(csp).not.toContain("script-src 'unsafe-inline'");
     expect(response.headers.get('cache-control')).toBe('no-store');
     const html = await response.text();
+    expect(html).toContain('/viewer/pane.js');
+    expect(html.indexOf('/viewer/pane.js')).toBeLessThan(html.indexOf('/viewer/viewer.js'));
     expect(html).toContain('/viewer/viewer.js');
     expect(html).toContain('/vendor/xterm.js');
   });
@@ -1102,6 +1104,7 @@ describe('viewer assets and the WS frame protocol (§5)', () => {
 
   it('serves exactly the allowlisted static assets', async () => {
     for (const [assetPath, type] of [
+      ['/viewer/pane.js', 'text/javascript'],
       ['/viewer/viewer.js', 'text/javascript'],
       ['/viewer/viewer.css', 'text/css'],
       ['/vendor/xterm.js', 'text/javascript'],
