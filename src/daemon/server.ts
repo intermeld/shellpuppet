@@ -1050,7 +1050,12 @@ export class Daemon {
       }
 
       if (req.method === 'GET' && segments.length === 1) {
-        json(res, 200, { sessions: this.listWithPrompts(), version: this.version });
+        const hide = queryFlag(url, 'hideReasoning');
+        if (hide === null) {
+          json(res, 400, { error: BAD_HIDE_REASONING });
+          return;
+        }
+        json(res, 200, { sessions: this.listWithPrompts(hide), version: this.version });
         return;
       }
 
@@ -1100,6 +1105,13 @@ export class Daemon {
       // Also the faithful way to illustrate documentation.
       if (req.method === 'POST' && action === 'screenshot') {
         const body = await readBody(req);
+        if (body['hideReasoning'] !== undefined && typeof body['hideReasoning'] !== 'boolean') {
+          json(res, 400, { error: BAD_HIDE_REASONING });
+          return;
+        }
+        const hide = body['hideReasoning'] === true;
+        const signature = hide ? this.readerFor(session, res) : null;
+        if (hide && signature === null) return;
         // Absent means the default; present and not a number is a mistake to
         // report, not to paper over with the default.
         const width = body['width'] === undefined ? CAPTURE_WIDTH : asNumber(body['width']);
@@ -1148,6 +1160,26 @@ export class Daemon {
           });
           return;
         }
+        let redactedRows: Map<number, string> | undefined;
+        let expectedRows: string[] | undefined;
+        if (signature !== null) {
+          const view = await session.styledScreen(REASONING_CONTEXT_LINES);
+          const filtered = hideReasoning(view.lines, signature, view.firstVisible);
+          if (filtered === null) {
+            json(res, 400, { error: overBudgetMessage(signature) });
+            return;
+          }
+          redactedRows = new Map<number, string>();
+          const visibleRows = view.lines.length - view.firstVisible;
+          expectedRows = view.lines.slice(view.firstVisible).map((line) => line.text.replace(/\s+$/, ''));
+          while (expectedRows.length > 0 && expectedRows.at(-1) === '') expectedRows.pop();
+          filtered.lines.forEach((line, index) => {
+            if (!filtered.markers[index]) return;
+            const from = filtered.rows[index]!;
+            const to = filtered.rows[index + 1] ?? visibleRows;
+            for (let row = from; row < to; row++) redactedRows!.set(row, row === from ? line : '');
+          });
+        }
         // Read-only, because a photograph must not be able to type into the
         // thing it is photographing.
         const grant = this.tokens.mintViewerGrant(id, { readOnly: true });
@@ -1159,8 +1191,14 @@ export class Daemon {
             height,
             timeoutMs,
             profileRoot: captureProfileRoot(this.options.home),
+            ...(redactedRows === undefined ? {} : { hiddenRows: [...redactedRows.keys()] }),
             logger: this.logger,
           });
+          if (expectedRows !== undefined && this.options.capture === undefined &&
+              JSON.stringify(capture.rows) !== JSON.stringify(expectedRows)) {
+            json(res, 409, { error: 'The screen changed before its filtered picture could be taken. Try again.' });
+            return;
+          }
           this.audit.record(actor, 'screenshot', id, { width, height });
           json(res, 200, {
             png: capture.png.toString('base64'),
@@ -1169,7 +1207,9 @@ export class Daemon {
             height: capture.height,
             cols: session.cols,
             rows: session.rows,
-            lines: capture.rows,
+            lines: redactedRows === undefined
+              ? capture.rows
+              : capture.rows.map((line, row) => redactedRows.get(row) ?? line),
           });
         } catch (error) {
           this.logger.warn('screenshot failed', { id, error: String(error) });
@@ -1412,9 +1452,20 @@ export class Daemon {
             json(res, 400, { error: overBudgetMessage(reader) });
             return;
           }
+          const visiblePrompt = result.prompt === undefined
+            ? null
+            : detectPrompt(filtered.lines.join('\n'));
+          const prompt = visiblePrompt !== null && visiblePrompt.signature === result.prompt?.signature
+            ? {
+                question: visiblePrompt.question,
+                options: visiblePrompt.options,
+                signature: visiblePrompt.signature,
+              }
+            : undefined;
           json(res, 200, {
             ...result,
             screen: filtered.lines.join('\n'),
+            ...(result.prompt === undefined ? {} : { prompt }),
             reasoning: { agent: reader.name, hiddenLines: filtered.hiddenLines, hiddenBlocks: filtered.hiddenBlocks },
             id: session.id,
             exited: session.exited,
@@ -1837,8 +1888,8 @@ export class Daemon {
    * The cost is staleness bounded by the scan interval: 5 s, immaterial
    * against prompts that sit for minutes.
    */
-  private listWithPrompts(): (SessionSummary & {
-    waitingOnPrompt?: { question: string; options: string[]; waitingMs: number; alerted: boolean };
+  private listWithPrompts(hideReasoning = false): (SessionSummary & {
+    waitingOnPrompt?: { question?: string; options?: string[]; waitingMs: number; alerted: boolean };
   })[] {
     const now = Date.now();
     return this.manager.list().map((summary) => {
@@ -1847,8 +1898,7 @@ export class Daemon {
       return {
         ...summary,
         waitingOnPrompt: {
-          question: state.prompt.question,
-          options: state.prompt.options,
+          ...(!hideReasoning ? { question: state.prompt.question, options: state.prompt.options } : {}),
           waitingMs: now - state.since,
           alerted: state.alerted,
         },
@@ -1963,7 +2013,7 @@ export class Daemon {
         this.logger.warn('session waiting on a prompt', {
           id: session.id,
           waitingMs,
-          question: detected.question,
+          options: detected.options.length,
         });
         this.emitEvent({
           type: 'prompt-stall',

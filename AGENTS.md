@@ -71,6 +71,12 @@ npm run test:coverage  # v8 coverage over src/core
 The MCP server loads `dist/` at launch: run `npm run build` after changing `src/`
 or a connected agent keeps the old behaviour until its next restart.
 
+## Using ShellPuppet from an agent session
+
+When your model is a Claude model, pass `hideReasoning: true` on every
+ShellPuppet reading call, or `--hide-reasoning` with the CLI. Leave the flag
+off when the full screen is needed.
+
 ## Machine-local context
 
 Files matching `*.local.md` are gitignored and never committed. One may exist

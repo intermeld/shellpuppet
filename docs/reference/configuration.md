@@ -95,7 +95,8 @@ Full example, everything optional:
 
 ## Reading an agent's screen without its reasoning
 
-`terminal_snapshot`, `terminal_find` and `terminal_wait` with `hideReasoning`,
+`terminal_snapshot`, `terminal_find`, `terminal_wait`, `terminal_list` and
+`terminal_screenshot` with `hideReasoning`,
 and `terminal_result`, read an agent CLI's screen by a **signature**: how that
 program draws its reasoning, its answer, its busy line, its composer and the
 chrome around it. Claude Code, Codex, Qoder, OpenCode, MiMo Code, Grok and

@@ -211,12 +211,19 @@ Twelve tools appear once the server is wired in: `terminal_start`,
 
 When the session runs another agent CLI, `terminal_result` returns the answer
 that ended its latest turn and nothing else, and `terminal_snapshot`,
-`terminal_find` and `terminal_wait` take `hideReasoning` to leave out the
+`terminal_find`, `terminal_wait`, `terminal_list` and `terminal_screenshot` take `hideReasoning` to leave out the
 reasoning it draws. Each CLI's screen is read by a signature: Claude Code,
 Codex, Qoder, OpenCode, MiMo Code, Grok and Antigravity are built in. A
 session started through a shell or a launcher script says which CLI it runs
 with `terminal_start`'s `agent`. A session with no signature is refused
 rather than shown unfiltered.
+
+If your model's safety checks flag reasoning read off another model's screen
+(Claude models at present), pass `hideReasoning: true` on every reading call.
+Leave it off when you need the full screen. In a filtered screenshot, hidden
+rows are blurred and dimmed before capture; its returned row text is filtered
+too. A filtered session list reports that a prompt is waiting and for how long
+without its question.
 
 `terminal_start` opens the viewer
 window for you and tells the agent so. It gives the agent a link only when no

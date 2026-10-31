@@ -45,8 +45,29 @@
   // first snapshot has been drawn, for the capturer to wait on. A screenshot
   // must not change what the program sees.
   const captureMode = params.get('capture') === '1';
+  const redactedCapture = captureMode && params.get('redact') === '1';
   if (captureMode) document.body.classList.add('capture');
   let firstFrameSeen = false;
+
+  // The headless capturer calls this after the first paint and before taking
+  // the picture. Each cover follows the row's actual browser position, so a
+  // scaled grid keeps its layout while hidden text loses its fine detail.
+  if (redactedCapture) window.__shellpuppetCoverRows = (hiddenRows) => {
+    const rows = document.querySelectorAll('.xterm-rows > div');
+    for (const index of hiddenRows) {
+      const row = rows[index];
+      if (!row) continue;
+      const rect = row.getBoundingClientRect();
+      row.style.filter = 'blur(20px)';
+      const cover = document.createElement('div');
+      cover.style.cssText =
+        `position:fixed;left:0;top:${rect.top}px;width:100vw;height:${rect.height}px;` +
+        'z-index:2147483647;pointer-events:none;background:rgba(20,20,20,.97);' +
+        'backdrop-filter:blur(20px);color:#d0d0d0;font:11px sans-serif;';
+      cover.textContent = hiddenRows.includes(index - 1) ? '' : 'reasoning hidden';
+      document.body.append(cover);
+    }
+  };
 
   // This page never holds a credential (design §4.1). The `vt` in the address
   // bar was a ONE-USE grant, and by the time this script runs the daemon has
@@ -594,6 +615,7 @@
 
     ws.onmessage = (event) => {
       if (event.data instanceof ArrayBuffer) {
+        if (redactedCapture && window.__shellpuppetPainted === true) return;
         if (captureMode && !firstFrameSeen) {
           firstFrameSeen = true;
           // The first binary frame is the daemon's snapshot. Raise the flag

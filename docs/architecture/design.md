@@ -221,9 +221,9 @@ ambiguous in clients that do not, so the prefix stays.
 | `terminal_wait` | Block until a condition holds, then return the screen | `session`, `text`\|`regex`\|`quiet`\|`prompt`, `timeout`, `debounce`, `matchAfterInput`, `hideReasoning` |
 | `terminal_find` | Regex search the current screen, with line numbers | `session`, `pattern`, `hideReasoning` |
 | `terminal_result` | The answer that ended an agent CLI's latest turn, and nothing else | `session` |
-| `terminal_list` | List sessions and their state | none |
+| `terminal_list` | List sessions and their state | `hideReasoning` |
 | `terminal_resize` | Set screen geometry | `session`, `cols`, `rows`, `hold` |
-| `terminal_screenshot` | Photograph the viewer as a browser draws it | `session`, `path`, `width`, `height` |
+| `terminal_screenshot` | Photograph the viewer as a browser draws it | `session`, `path`, `width`, `height`, `hideReasoning` |
 | `terminal_viewer_url` | Mint a fresh one-use viewer link | `session`, `readOnly` |
 | `terminal_kill` | Terminate a session **and its whole process tree** | `session` |
 
@@ -244,8 +244,13 @@ business collecting. Each CLI's screen is described as data, a *signature*: test
 line's text and on how it is drawn (bold, dim, italic, colour) that pick out its
 reasoning blocks, its busy line, the echo of the person's prompt, the composer and the
 chrome around it, and the answer that ends a turn. `hideReasoning` (on snapshot, find and
-wait; any value but true or false is refused) replaces each reasoning
+wait, list and screenshot; any value but true or false is refused) replaces each reasoning
 block above the composer with one `[reasoning hidden: N lines]` line and keeps the rest;
+on screenshots it covers those rows with a blurred, dim overlay before capture,
+and on session lists it omits waiting prompt questions. A session whose model's
+safety checks flag another model's reasoning (Claude models at present) passes
+`hideReasoning: true` on every reading call; a session needing the full screen
+leaves it off.
 it reads 400 lines of scrollback over what it returns, so a block whose first line has
 scrolled away is still recognised. A question the program is waiting on is never
 hidden: the rows the prompt detection claims for a question on screen, and the

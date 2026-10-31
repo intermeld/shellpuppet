@@ -88,9 +88,10 @@ describe('fail closed', () => {
       `/sessions/${id}/snapshot?hideReasoning=1`,
       `/sessions/${id}/snapshot?hideReasoning=1&lastLines=20`,
       `/sessions/${id}/find?pattern=plain&hideReasoning=1`,
+      `/sessions/${id}/screenshot`,
       `/sessions/${id}/result`,
     ]) {
-      const response = await api(td.port, td.token, route);
+      const response = await api(td.port, td.token, route, route.endsWith('/screenshot') ? { method: 'POST', body: { hideReasoning: true } } : {});
       expect(response.status, route).toBe(400);
       expect(String(response.body['error']), route).toMatch(/no agent signature/);
       // Refused, never answered unfiltered.
@@ -154,6 +155,7 @@ describe('the hideReasoning flag', () => {
     for (const value of ['yes', 'True', 'TRUE', 'on', '', '2']) {
       const flag = `hideReasoning=${encodeURIComponent(value)}`;
       for (const route of [
+        `/sessions?${flag}`,
         `/sessions/${id}/snapshot?${flag}`,
         `/sessions/${id}/snapshot?${flag}&lastLines=50`,
         `/sessions/${id}/find?pattern=MANGO&${flag}`,
@@ -164,6 +166,11 @@ describe('the hideReasoning flag', () => {
         expect(String(response.body['error']), route).toContain('hideReasoning must be true or false');
         expect(response.body['screen'], route).toBeUndefined();
       }
+      const screenshot = await api(td.port, td.token, `/sessions/${id}/screenshot`, {
+        method: 'POST', body: { hideReasoning: value },
+      });
+      expect(screenshot.status).toBe(400);
+      expect(String(screenshot.body['error'])).toContain('hideReasoning must be true or false');
     }
     for (const value of ['true', '1']) {
       const response = await api(td.port, td.token, `/sessions/${id}/snapshot?hideReasoning=${value}`);
@@ -186,6 +193,39 @@ describe('waiting without the reasoning', () => {
     expect(String(waited.body['screen'])).not.toMatch(/^ │ /m);
     expect(String(waited.body['screen'])).toMatch(/^ ▪ MANGO$/m);
     expect(waited.body['reasoning']).toMatchObject({ agent: 'qoder' });
+  });
+
+  it('does not report a question that the filtered screen hid', async () => {
+    const question = 'Could I reveal the velvet zeppelin secret?';
+    const original = fs.readFileSync(path.join(FIXTURES, 'qoder-answered-after-reasoning.ansi'), 'utf8');
+    const fixture = path.join(td.home, 'hidden-question.ansi');
+    fs.writeFileSync(fixture, original.replace('The xxxx xxxxx xx to reason', question));
+    const started = await api(td.port, td.token, '/sessions', {
+      body: {
+        command: process.execPath,
+        args: ['-e', `process.stdout.write(require('fs').readFileSync(${JSON.stringify(fixture)}, 'utf8')); setInterval(() => {}, 500)`],
+        shell: false, agent: 'qoder', cols: 194, rows: 101, hold: true,
+      },
+    });
+    const id = String(started.body['id']);
+    await eventually(async () => String((await api(td.port, td.token, `/sessions/${id}/snapshot`)).body['screen']).includes(question), 30_000);
+    const hidden = await api(td.port, td.token, `/sessions/${id}/snapshot?hideReasoning=1`);
+    expect(String(hidden.body['screen'])).not.toContain(question);
+
+    // Supply a waiter result that carries a question from the raw screen.
+    // The HTTP route must derive what it reports from the filtered screen.
+    const daemon = td.daemon as unknown as { manager: { get(id: string): { waitFor: (condition: unknown, options: unknown) => Promise<unknown> } } };
+    const session = daemon.manager.get(id);
+    const originalWait = session.waitFor;
+    session.waitFor = () => Promise.resolve({ matched: true, reason: 'prompt', waitedMs: 0, screen: question, prompt: { question, options: ['1. Reveal secret'], signature: question } });
+    try {
+      const waited = await api(td.port, td.token, `/sessions/${id}/wait?prompt=1&hideReasoning=1`);
+      expect(waited.status).toBe(200);
+      expect(String(waited.body['screen'])).not.toContain(question);
+      expect(waited.body['prompt']).toBeUndefined();
+    } finally {
+      session.waitFor = originalWait;
+    }
   });
 
   it('refuses before waiting when the program has no signature', async () => {

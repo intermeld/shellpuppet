@@ -120,13 +120,13 @@ in the reading agent's context.
 - The live viewer is itself a mitigation: the human sees exactly what the
   agent sees, as it happens.
 - **Reading without the reasoning is a filter, not a boundary.**
-  `hideReasoning` (on `terminal_snapshot`, its `lastLines`, `terminal_find`
-  and `terminal_wait`) and `terminal_result` leave out what a program's
-  signature recognises as its reasoning, and both fail closed: a session with
-  no signature is refused, a value of `hideReasoning` other than true or false
-  is refused, and a result that cannot be found is refused rather than
-  replaced. `terminal_screenshot`, the viewer and the events stream show the
-  whole screen. What the filter cannot promise is that every reasoning line is
+  `hideReasoning` (on `terminal_snapshot`, its `lastLines`, `terminal_find`,
+  `terminal_wait` and `terminal_screenshot`) and `terminal_result` leave out what a program's
+  signature recognises as its reasoning. Those readers refuse a session with
+  no signature; a value of `hideReasoning` other than true or false is refused,
+  and a result that cannot be found is refused rather than replaced. Filtered screenshots cover hidden rows before capture, and filtered
+  session lists omit waiting prompt questions. The viewer and the events stream
+  show the whole screen. What the filter cannot promise is that every reasoning line is
   recognised: a program that draws its reasoning in a shape its signature
   does not describe, or a new version that changes the shape, shows it, and a
   program can draw text that imitates any shape. The Claude Code, Codex,
