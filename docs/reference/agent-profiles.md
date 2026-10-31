@@ -203,6 +203,12 @@ poll, rather than asking for one long wait and being surprised.
 (`src/core/reasoning.ts`), measured on these versions at their default
 settings:
 
+If your model's safety checks flag reasoning read off another model's screen
+(Claude models at present), pass `hideReasoning: true` on every reading call:
+snapshot, wait, find, list and screenshot. Leave it off when the full screen
+is needed. A filtered screenshot obscures hidden rows in the image and replaces
+their returned text; a filtered list omits waiting prompt questions.
+
 | CLI | Measured | Reasoning drawn on screen | What `hideReasoning` leaves out |
 |---|---|---|---|
 | Claude Code | 2.1.312 | None: a spinner while it thinks | Nothing |

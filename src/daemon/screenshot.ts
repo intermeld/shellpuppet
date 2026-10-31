@@ -35,6 +35,8 @@ export interface CaptureOptions {
   /** Browser window size in CSS pixels; the grid scales its font to fill it. */
   width: number;
   height: number;
+  /** Viewport rows the reasoning filter hid; covered before the picture is taken. */
+  hiddenRows?: readonly number[];
   /** Budget for the whole capture, browser start to screenshot. */
   timeoutMs?: number;
   /**
@@ -391,7 +393,7 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
     const url =
       options.drive === true
         ? options.viewerUrl
-        : `${options.viewerUrl}${options.viewerUrl.includes('?') ? '&' : '?'}capture=1`;
+        : `${options.viewerUrl}${options.viewerUrl.includes('?') ? '&' : '?'}capture=1${options.hiddenRows === undefined ? '' : '&redact=1'}`;
     await cdp.send('Page.navigate', { url }, sessionId);
 
     const evaluate = async (expression: string): Promise<unknown> => {
@@ -427,6 +429,9 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
       },
       sessionId,
     );
+    if (options.hiddenRows !== undefined && options.hiddenRows.length > 0) {
+      await evaluate(`window.__shellpuppetCoverRows(${JSON.stringify(options.hiddenRows)})`);
+    }
     const shot = await cdp.send<{ data: string }>(
       'Page.captureScreenshot',
       { format: 'png' },

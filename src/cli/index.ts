@@ -57,13 +57,13 @@ Usage:
       a file name containing ':' is refused as an alternate data stream.
       Options go BEFORE the command; everything after the command is passed
       to it verbatim (so its own --flags survive).
-  shellpuppet list                                  List sessions
+  shellpuppet list [--hide-reasoning]               List sessions
   shellpuppet snap <id> [--last <n>] [--hide-reasoning]
                                                     Print the rendered screen
       --hide-reasoning leaves out an agent CLI's reasoning, each block as one
       "[reasoning hidden: N lines]" line; a session whose agent has no
       signature is refused (exit 2), never printed unfiltered.
-  shellpuppet result <id>                           Print the agent's latest answer
+  shellpuppet result <id> [--hide-reasoning]        Print the agent's latest answer
       The answer that ends the latest turn, and its turn summary: never its
       reasoning. Exits 3, with the reason on stderr, while the agent is
       still working or when no answer is recognised.
@@ -85,7 +85,7 @@ Usage:
       "No matches." on stderr, never the pattern, and exits 3 (with --json
       too, after printing the empty result).
   shellpuppet screenshot <id> [--out <f>] [--width <n>] [--height <n>]
-                             [--timeout <ms>]
+                             [--timeout <ms>] [--hide-reasoning]
                                                     Photograph the viewer as a browser draws it
       Defaults to shellpuppet-<id>.png at 1400x900, with 45 s for the whole
       capture (--timeout, 1000 to 120000, for a slow or a hurried machine).
@@ -375,7 +375,7 @@ async function main(): Promise<void> {
     }
 
     case 'list': {
-      const result = await call(connection, 'GET', '/sessions');
+      const result = await call(connection, 'GET', `/sessions${parsed.flags.get('hide-reasoning') === true ? '?hideReasoning=1' : ''}`);
       if (wantJson) {
         printJson(result);
         break;
@@ -397,8 +397,8 @@ async function main(): Promise<void> {
         }).waitingOnPrompt;
         if (waiting !== undefined) {
           console.log(
-            `    WAITING ${String(Math.round(waiting.waitingMs / 1000))}s on a prompt: ` +
-              waiting.question,
+            `    WAITING ${String(Math.round(waiting.waitingMs / 1000))}s on a prompt` +
+              (waiting.question === undefined ? '' : `: ${waiting.question}`),
           );
         }
       }
@@ -547,6 +547,7 @@ async function main(): Promise<void> {
         ...(intFlag(parsed, 'timeout') !== undefined
           ? { timeoutMs: intFlag(parsed, 'timeout') }
           : {}),
+        ...(parsed.flags.get('hide-reasoning') === true ? { hideReasoning: true } : {}),
       });
       const png = Buffer.from(String(result['png']), 'base64');
       await writeFile(out, png);

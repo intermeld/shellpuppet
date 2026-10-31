@@ -1535,6 +1535,45 @@ describe('the viewer icon', () => {
   });
 });
 
+describe('prompt text in session summaries and logs', () => {
+  it('hides question text in a filtered list and in the stall log', async () => {
+    const warnings: { message: string; meta?: Record<string, unknown> }[] = [];
+    const quiet = () => undefined;
+    const promptDaemon = await startTestDaemon({
+      promptStallMs: 0,
+      logger: {
+        debug: quiet,
+        info: quiet,
+        error: quiet,
+        warn: (message, meta) => warnings.push({ message, meta }),
+      },
+    });
+    try {
+      const question = 'Reveal the purple marmalade password? (y/n)';
+      const started = await api(promptDaemon.port, promptDaemon.token, '/sessions', {
+        body: { command: process.execPath, args: ['-e', `console.log(Buffer.from('${Buffer.from(question).toString('base64')}','base64').toString()); setInterval(() => {}, 500)`], shell: false },
+      });
+      const id = String(started.body['id']);
+      await eventually(async () => {
+        const listed = await api(promptDaemon.port, promptDaemon.token, '/sessions');
+        const entry = (listed.body['sessions'] as { id: string; waitingOnPrompt?: { question: string } }[]).find((s) => s.id === id);
+        return entry?.waitingOnPrompt?.question === question;
+      }, 20_000);
+      const plain = await api(promptDaemon.port, promptDaemon.token, '/sessions');
+      expect(JSON.stringify(plain.body)).toContain(question);
+      const hidden = await api(promptDaemon.port, promptDaemon.token, '/sessions?hideReasoning=1');
+      expect(hidden.status).toBe(200);
+      const summary = (hidden.body['sessions'] as { id: string; waitingOnPrompt?: Record<string, unknown> }[]).find((s) => s.id === id);
+      expect(typeof summary?.waitingOnPrompt?.['waitingMs']).toBe('number');
+      expect(JSON.stringify(summary)).not.toContain(question);
+      await eventually(() => Promise.resolve(warnings.some((w) => w.message === 'session waiting on a prompt')), 20_000);
+      expect(JSON.stringify(warnings.find((w) => w.message === 'session waiting on a prompt'))).not.toContain(question);
+    } finally {
+      await promptDaemon.stop();
+    }
+  }, 60_000);
+});
+
 describe('screenshots without a browser (§5)', () => {
   // Neither test needs a browser: the first replaces the capture with a seam
   // and the second names a browser that does not exist. The real capture is

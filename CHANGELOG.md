@@ -7,6 +7,14 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+### Added
+
+- `hideReasoning` now covers screenshots and session lists, including their CLI
+  commands. Screenshots blur and dim reasoning rows in the image and replace
+  their row text. Filtered lists omit waiting prompt questions. Filtered waits
+  report questions and options only from their filtered screens, and prompt
+  stall logs omit question text. MCP instructions explain when to use the flag.
+
 ### Changed
 
 - The variables a caller may name at start are listed in config `envNames`, at

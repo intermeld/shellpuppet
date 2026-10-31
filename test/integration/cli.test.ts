@@ -116,6 +116,35 @@ afterAll(async () => {
 });
 
 describe('shellpuppet CLI', () => {
+  it('filters waiting questions in list and refuses a filtered screenshot without a signature', async () => {
+    const question = 'Reveal the turquoise accordion? (y/n)';
+    const encoded = Buffer.from(question).toString('base64');
+    const started = await cli('start', '--no-viewer', '--no-shell', process.execPath,
+      '-e', `console.log(Buffer.from('${encoded}','base64').toString()); setInterval(() => {}, 500)`);
+    expect(started.code, whatHappened(started)).toBe(0);
+    const id = started.stdout.split(/\s+/)[0]!;
+    try {
+      const state = readDaemonState(home);
+      expect(state).not.toBeNull();
+      await eventually(async () => {
+        const listed = await api(state!.port, state!.token, '/sessions');
+        return JSON.stringify(listed.body).includes(`"question":"${question}"`);
+      }, 20_000);
+      const plain = await cli('list');
+      expect(plain.stdout).toContain(question);
+      const hidden = await cli('list', '--hide-reasoning');
+      expect(hidden.code, whatHappened(hidden)).toBe(0);
+      expect(hidden.stdout).toContain(id);
+      expect(hidden.stdout).toContain('WAITING');
+      expect(hidden.stdout).not.toContain(question);
+      const screenshot = await cli('screenshot', id, '--hide-reasoning');
+      expect(screenshot.code).toBe(2);
+      expect(screenshot.stderr).toContain('no agent signature');
+    } finally {
+      await cli('kill', id);
+    }
+  }, 60_000);
+
   it('drives a full session lifecycle end to end', async () => {
     // start: auto-starts the daemon (cold) and returns promptly regardless.
     const started = await cli(

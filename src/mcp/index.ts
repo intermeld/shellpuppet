@@ -28,7 +28,10 @@ const stderrLogger: Logger = {
 
 async function main(): Promise<void> {
   assertNodeVersion();
-  const server = new McpServer({ name: 'shellpuppet', version: packageVersion() });
+  const server = new McpServer(
+    { name: 'shellpuppet', version: packageVersion() },
+    { instructions: 'Every tool that returns screen text accepts hideReasoning. If your model\'s safety checks flag reasoning read off another model\'s screen (Claude models at present), pass hideReasoning: true on every such call. Leave it off when you need the full screen.' },
+  );
   const home = shellpuppetHome();
   const config = readMcpConfig(home, stderrLogger);
   // The variable lists are read afresh at every terminal_start, so a change

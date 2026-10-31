@@ -102,7 +102,43 @@ describe('MCP adapter', () => {
     expect(byName.get('terminal_find')).toContain('UNTRUSTED');
     expect(byName.get('terminal_key')).toContain('escape');
     expect(byName.get('terminal_kill')).toContain('process tree');
+    expect(client.getInstructions()).toContain('hideReasoning: true on every such call');
+    for (const name of ['terminal_snapshot', 'terminal_wait', 'terminal_find', 'terminal_list', 'terminal_screenshot']) {
+      expect(byName.get(name)).toContain('Claude models at present');
+      const schema = tools.find((tool) => tool.name === name)?.inputSchema;
+      expect(JSON.stringify(schema)).toContain('hideReasoning');
+    }
   });
+
+  it('omits a waiting question from terminal_list with hideReasoning', async () => {
+    await client.callTool({ name: 'terminal_list', arguments: {} });
+    const state = readDaemonState(home);
+    expect(state).not.toBeNull();
+    const question = 'Disclose the silver pineapple? (y/n)';
+    const encoded = Buffer.from(question).toString('base64');
+    const started = await api(state!.port, state!.token, '/sessions', {
+      body: {
+        command: process.execPath,
+        args: ['-e', `console.log(Buffer.from('${encoded}','base64').toString()); setInterval(() => {}, 500)`],
+        shell: false,
+      },
+    });
+    const id = String(started.body['id']);
+    try {
+      await eventually(async () => {
+        const listed = await api(state!.port, state!.token, '/sessions');
+        return JSON.stringify(listed.body).includes(`"question":"${question}"`);
+      }, 20_000);
+      const plain = resultText(await client.callTool({ name: 'terminal_list', arguments: {} }));
+      expect(plain).toContain(question);
+      const hidden = resultText(await client.callTool({ name: 'terminal_list', arguments: { hideReasoning: true } }));
+      expect(hidden).toContain(id);
+      expect(hidden).toContain('WAITING');
+      expect(hidden).not.toContain(question);
+    } finally {
+      await client.callTool({ name: 'terminal_kill', arguments: { session: id } });
+    }
+  }, 40_000);
 
   it("pins the README's and VISION's tool lists to the tools the server registers", async () => {
     // The README's "What you get" bullet and VISION's second bullet both name
@@ -374,7 +410,7 @@ describe('MCP adapter', () => {
     })) as TextResult;
     expect(listed.isError).toBe(true);
     expect(resultText(listed)).toContain(
-      "Unknown parameters 'all', 'verbose'. This tool takes no parameters.",
+      "Unknown parameters 'all', 'verbose'. This tool takes: hideReasoning.",
     );
 
     await client.callTool({ name: 'terminal_kill', arguments: { session: id } });
