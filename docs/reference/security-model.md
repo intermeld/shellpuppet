@@ -13,6 +13,12 @@ ADR-005 and ADR-007.
 
 ## What running ShellPuppet grants
 
+This page describes the release you have installed. The dashboard decided in
+[ADR-009](../decisions/ADR-009-dashboard-and-sessions-you-start-yourself.md) is
+being built ([ROADMAP.md](../../ROADMAP.md)); its credential, routes and launch
+profiles are specified in the [design](../architecture/design.md), and each is
+added here in the release that ships it.
+
 The daemon owns real terminals. Anything that can reach its API can run
 commands as you. The protections below narrow *who* can reach it. They do not
 make a reachable terminal safe.
@@ -47,7 +53,7 @@ make a reachable terminal safe.
   one is asked for, so a start that opened a window leaves no link in a
   transcript. Loading the page exchanges it for an `HttpOnly` cookie scoped to
   that one session, which the browser attaches to the socket on its own. No
-  script on the page holds a credential to steal.
+  script on the page holds the cookie value to steal.
 
   Be precise about what that buys, because it is easy to over-read. Until it
   is redeemed, a grant is a live bearer capability: whoever loads the link
