@@ -111,9 +111,21 @@ rows beside them: a permission box a program draws in the same style as its
 reasoning keeps every row of its own. A numbered list the reasoning drew is
 not one of those rows when a question with nothing below it is the only reason
 it looked live and the list sits inside a reasoning block that began above
-that question. A wait for a prompt returns the question and the options, not
-the rows the filter uses. The limits are in the design, under reading an
-agent CLI without its reasoning.
+that question. The limits: a row shaped as a Grok option stays even when the
+reasoning drew it, because that shape is also a real option and the signature
+keeps it when detection claims nothing; a filled radio inside another
+program's reasoning stays, because that glyph is what shows a selector is live
+and dropping the claim would hide a real one; a blockquoted numbered list
+drawn as `│  > 1.` stays, because that row is also the box's question row and
+a sign-in marker; a letter menu at the end of a reasoning block stays, because
+its letter keys are what show a selector is live and dropping the claim would
+hide a real one; a run of plain bar text above an older Grok box's radios
+stays with the reasoning unless a bare bar or a reasoning start closes it off
+and the run carries command evidence (the box's `│  > ` question row, a `$`,
+or a `:` continuation), because without that the run is the same shape as the
+reasoning. A wait for a prompt returns the question and the options, not
+the rows the filter uses. The same limits are stated in the design, under
+reading an agent CLI without its reasoning.
 
 Add a program, or replace a built-in one after its screen changes, under
 `agents.signatures`:

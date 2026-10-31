@@ -197,6 +197,15 @@ const GROK_BOX_QUESTION = /^ {2}│ {2}> /;
 const GROK_BAR_TEXT = /^ {2}│ {2}\S/;
 /** The bare bar row that closes a command off from the reasoning above it. */
 const GROK_BARE_BAR = /^ {2}│\s*$/;
+/**
+ * A line that starts Grok's reasoning. The command walk does not see the
+ * signature. The thinking header is itself bar text, so the walk would
+ * otherwise take it; the spinner is not bar text, and a run below it is
+ * still closed off by it.
+ */
+const GROK_REASONING_START = /^ {2}│ {2}♦ Thinking|^ {3}[|/\\-] \S/;
+/** A `$` on a command row, or a `:` continuation of one. */
+const GROK_COMMAND_MARK = /\$|^ {2}│ {2}:/;
 
 interface Line {
   text: string;
@@ -524,40 +533,40 @@ function pointerBlock(tail: Line[], raw: string[]): Block | null {
 }
 
 /**
- * Whether a block is a prompt the program is WAITING on, and if so the
- * prompt as the consumer should see it.
- */
-/**
  * Where an older Grok box's command starts. The command is plain bar text
  * above the radios. The walk may cross the one bare bar between that text
- * and the radios, and it stops at the next bare bar, which is what closes
- * the command off from the reasoning above. Without that closing bar the
- * command is the same shape as reasoning, so the radios stay the start.
+ * and the radios. It stops at the next bare bar, or at a line that starts
+ * Grok's reasoning (`♦ Thinking`, or the spinner). The run is taken only
+ * when a line in it is command evidence: the box's `│  > ` question row,
+ * a `$`, or a `:` continuation. Otherwise the run is the same shape as
+ * reasoning, and the radios stay the start.
  */
 function commandAboveRadios(raw: string[], firstOption: number): number {
   const text = (index: number): string => (raw[index] ?? '').trimEnd();
   if (!/^ {2}│ {2}\d+ \([○•●]\) /.test(text(firstOption))) return firstOption;
   const above = firstOption - 1;
-  if (GROK_BARE_BAR.test(text(above))) {
-    let cursor = above - 1;
-    let sawText = false;
-    while (GROK_BAR_TEXT.test(text(cursor))) {
-      sawText = true;
-      cursor--;
-    }
-    if (!sawText || !GROK_BARE_BAR.test(text(cursor))) return firstOption;
-    return cursor + 1;
-  }
+  // The one bare bar between the command and the radios may be crossed.
+  // Text sitting directly on the radios is the command itself.
+  const gap = GROK_BARE_BAR.test(text(above));
+  let cursor = gap ? above - 1 : above;
   let start = firstOption;
-  let cursor = above;
-  while (GROK_BAR_TEXT.test(text(cursor))) {
+  let sawText = false;
+  let sawEvidence = false;
+  while (cursor >= 0 && GROK_BAR_TEXT.test(text(cursor)) && !GROK_REASONING_START.test(text(cursor))) {
+    sawText = true;
+    if (GROK_BOX_QUESTION.test(text(cursor)) || GROK_COMMAND_MARK.test(text(cursor))) sawEvidence = true;
     start = cursor;
     cursor--;
   }
-  if (start !== firstOption && GROK_BARE_BAR.test(text(cursor))) return start;
+  if (!sawText || !sawEvidence) return firstOption;
+  if (GROK_BARE_BAR.test(text(cursor)) || GROK_REASONING_START.test(text(cursor))) return start;
   return firstOption;
 }
 
+/**
+ * Whether a block is a prompt the program is WAITING on, and if so the
+ * prompt as the consumer should see it.
+ */
 function livePrompt(block: Block, tail: Line[], raw: string[]): DetectedPrompt | null {
   const { rows, kind } = block;
   const blockStart = rows[0]!.line.index;
@@ -631,7 +640,8 @@ function livePrompt(block: Block, tail: Line[], raw: string[]): DetectedPrompt |
   // From the question, when one is found, down to the last option row:
   // what a program draws between the two belongs to the question too.
   // With no question, an older Grok box still owns the command text a bare
-  // bar closes off above its radios.
+  // bar, or a reasoning start, closes off above its radios, when that text
+  // carries command evidence.
   let start = question?.index ?? blockStart;
   if (question === null) start = Math.min(start, commandStart);
   return {

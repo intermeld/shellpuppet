@@ -256,14 +256,21 @@ own. Grok's box question is the row `│  > ` (two spaces between the bar and
 list is not claimed when the only live signal is a question with nothing below
 it and every row of the list sits inside a reasoning block that began above
 the question. A one-line reasoning summary drawn between a question and its
-options stays hidden. The older Grok box keeps the plain bar text of its
-command when a bare bar closes that text off from the reasoning above it.
-The limits: a row shaped as a Grok option stays even when the reasoning drew
-it, because that shape is also a real option and the signature keeps it when
-detection claims nothing; a filled radio inside another program's reasoning
-stays, because that glyph is what shows a selector is live and dropping the
-claim would hide a real one; a command with no bare bar above it stays with
-the reasoning, because the two are the same shape. A wait result carries the
+options stays hidden. The older Grok box keeps a run of plain bar text above
+its radios when a bare bar, or a line that starts the reasoning, closes that
+run off and the run carries command evidence: the box's `│  > ` question row,
+a `$`, or a `:` continuation. The limits: a row shaped as a Grok option stays
+even when the reasoning drew it, because that shape is also a real option and
+the signature keeps it when detection claims nothing; a filled radio inside
+another program's reasoning stays, because that glyph is what shows a selector
+is live and dropping the claim would hide a real one; a blockquoted numbered
+list drawn as `│  > 1.` stays, because that row is also how the box draws its
+question and how a sign-in marker is drawn; a letter menu at the end of a
+reasoning block stays, because its letter keys are what show a selector is
+live and dropping the claim would hide a real one; a run of plain bar text
+stays with the reasoning when nothing closes it off, or when it carries no
+command evidence, because that run is the same shape as the reasoning. A wait
+result carries the
 question and the options, not the rows the filter uses. A result is refused while a prompt sits unsent in the
 composer (Claude Code, Codex and Qoder, whose signatures tell typed text from the
 placeholder), and, for a program that always closes a finished turn with a summary line,

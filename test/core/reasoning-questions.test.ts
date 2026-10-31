@@ -407,6 +407,49 @@ describe('stated limits: a live-looking row inside reasoning stays', () => {
     expect(kept).toContain(' │ Which option?');
     expect(kept).toContain(' │ 2 (•) Second');
   });
+
+  it('keeps a blockquoted numbered list drawn as a Grok question row', () => {
+    // `│  > 1.` is the box's question row and a sign-in marker. A numbered
+    // list the reasoning draws that way stays on screen.
+    const lines = [
+      '     > run the tests',
+      '  │  ♦ Thinking…',
+      '  │  > 1. First step',
+      '  │  > 2. Second step',
+      '  │ >',
+    ];
+    const prompt = detectPrompt(lines.join('\n'));
+    expect(prompt?.question).toMatch(/1\. First step/);
+    expect(prompt?.rows).toEqual([2, 3]);
+    expect(prompt?.basis).toBe('marker');
+    const filtered = hideReasoning(lines.map((text) => plain(text)), builtIn('grok'))!;
+    expect(filtered.hiddenLines).toBe(1);
+    expect(filtered.lines).toContain('  │  > 1. First step');
+    expect(filtered.lines).toContain('  │  > 2. Second step');
+    expect(filtered.lines.join('\n')).not.toContain('Thinking');
+  });
+
+  it('keeps a letter menu at the end of a Grok reasoning block', () => {
+    // Letter keys are what show a selector is live. Dropping the claim
+    // would hide a real menu, so one drawn at the end of the reasoning stays.
+    const lines = [
+      '     > run the tests',
+      '  │  ♦ Thinking…',
+      '  │  Apply the change?',
+      '  │  [a] Apply',
+      '  │  [b] Skip',
+    ];
+    const prompt = detectPrompt(lines.join('\n'));
+    expect(prompt?.question).toMatch(/Apply the change\?/);
+    expect(prompt?.options).toEqual(['[a] Apply', '[b] Skip']);
+    expect(prompt?.basis).toBe('frame');
+    const filtered = hideReasoning(lines.map((text) => plain(text)), builtIn('grok'))!;
+    expect(filtered.hiddenLines).toBe(1);
+    expect(filtered.lines).toContain('  │  Apply the change?');
+    expect(filtered.lines).toContain('  │  [a] Apply');
+    expect(filtered.lines).toContain('  │  [b] Skip');
+    expect(filtered.lines.join('\n')).not.toContain('Thinking');
+  });
 });
 
 describe('the older Grok command, plain bar text above the radios', () => {
@@ -460,6 +503,52 @@ describe('the older Grok command, plain bar text above the radios', () => {
     const kept = hideReasoning(lines, grok)!.lines.join('\n');
     expect(kept).not.toContain('Locate worktree');
     expect(kept).not.toContain('reasoning that stays hidden');
+    expect(kept).toContain('  │  2 (•) No');
+  });
+
+  it('hides the reasoning when a bar above the thinking closes a run with no command evidence', () => {
+    // A mid-repaint: a bare bar above the thinking, plain bar text, then the
+    // radios. Nothing in the run is a question row, a `$` or a `:` continuation.
+    const lines = [
+      '  │',
+      '  │  ♦ Thinking…',
+      '  │  reasoning that should hide',
+      '  │  Locate worktree',
+      '  │',
+      '  │  1 (○) Yes',
+      '  │  2 (•) No',
+      '  │ >',
+    ];
+    const prompt = detectPrompt(lines.join('\n'));
+    expect(prompt?.rows).toEqual([5, 6]);
+    const filtered = hideReasoning(lines.map((text) => plain(text)), grok)!;
+    expect(filtered.hiddenLines).toBe(3);
+    const kept = filtered.lines.join('\n');
+    expect(kept).not.toContain('Thinking');
+    expect(kept).not.toContain('reasoning that should hide');
+    expect(kept).not.toContain('Locate worktree');
+    expect(kept).toContain('  │  1 (○) Yes');
+    expect(kept).toContain('  │  2 (•) No');
+  });
+
+  it('hides a run of bar text between two bare bars when it carries no command evidence', () => {
+    const lines = [
+      '  │',
+      '  │  reasoning one',
+      '  │  reasoning two',
+      '  │',
+      '  │  1 (○) Yes',
+      '  │  2 (•) No',
+      '  │ >',
+    ];
+    const prompt = detectPrompt(lines.join('\n'));
+    expect(prompt?.rows).toEqual([4, 5]);
+    const filtered = hideReasoning(lines.map((text) => plain(text)), grok)!;
+    expect(filtered.hiddenLines).toBe(2);
+    const kept = filtered.lines.join('\n');
+    expect(kept).not.toContain('reasoning one');
+    expect(kept).not.toContain('reasoning two');
+    expect(kept).toContain('  │  1 (○) Yes');
     expect(kept).toContain('  │  2 (•) No');
   });
 });
