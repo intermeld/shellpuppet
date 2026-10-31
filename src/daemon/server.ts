@@ -171,6 +171,7 @@ const STATIC_ASSETS: Readonly<
   Record<string, { file: string; type: string; binary?: boolean }>
 > = {
   '/viewer/viewer.js': { file: path.join(viewerDir, 'viewer.js'), type: 'text/javascript' },
+  '/viewer/pane.js': { file: path.join(viewerDir, 'pane.js'), type: 'text/javascript' },
   '/viewer/viewer.css': { file: path.join(viewerDir, 'viewer.css'), type: 'text/css' },
   // The mark. SVG first (crisp at any size, and what the tab uses); the PNGs
   // are for Windows, which wants a raster for the taskbar button of a Chrome
