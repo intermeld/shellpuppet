@@ -17,13 +17,13 @@ import {
 import type { WaitCondition, WaitOptions, WaitResult } from './types.js';
 import { detectPrompt } from './promptDetector.js';
 import type { DetectedPrompt } from './promptDetector.js';
+import { echoEnd } from './echo.js';
+import { RegexBudgetError, withRegexBudget } from './regexBudget.js';
 
 /** Question and options only. The filter's rows stay off anything a caller serialises. */
 function promptForCaller(prompt: DetectedPrompt): NonNullable<WaitResult['prompt']> {
   return { question: prompt.question, options: prompt.options, signature: prompt.signature };
 }
-import { echoEnd } from './echo.js';
-import { RegexBudgetError, withRegexBudget } from './regexBudget.js';
 
 /**
  * What the waiter needs to observe, and what it reports back. Implemented by

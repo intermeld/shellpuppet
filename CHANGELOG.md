@@ -89,15 +89,21 @@ version may change behaviour, and every such change is listed here.
   with nothing below it is the only reason it looked live and the list sits
   inside a reasoning block that began above the question. A one-line reasoning
   summary drawn between a question and its options stays hidden. The older
-  Grok box, whose command is plain bar text above the radios, keeps that
-  command when a bare bar closes it off from the reasoning above. Two limits
-  remain. A row shaped as a Grok option (`1 (○)`, `2 (•)`) stays even when the
-  reasoning drew it, because the signature keeps that shape when detection
-  claims nothing, and a filled radio inside another program's reasoning stays,
-  because that glyph is what shows a selector is live. A command with no bare
-  bar above it stays with the reasoning, because the two are the same shape.
-  A wait result carries the question and the options. The rows the filter
-  uses are not part of it.
+  Grok box, whose command is plain bar text above the radios, keeps that run
+  when a bare bar or a reasoning start closes it off from the reasoning above
+  and the run carries command evidence: the box's `│  > ` question row, a
+  `$`, or a `:` continuation. The limits: a row shaped as a Grok option
+  (`1 (○)`, `2 (•)`) stays even when the reasoning drew it, because the
+  signature keeps that shape when detection claims nothing; a filled radio
+  inside another program's reasoning stays, because that glyph is what shows
+  a selector is live; a blockquoted numbered list drawn as `│  > 1.` stays,
+  because that row is also the box's question row and a sign-in marker; a
+  letter menu at the end of a reasoning block stays, because its letter keys
+  are what show a selector is live and dropping the claim would hide a real
+  one; a run of plain bar text stays with the reasoning when nothing closes
+  it off, or when it carries no command evidence, because that run is the
+  same shape as the reasoning. A wait result carries the question and the
+  options. The rows the filter uses are not part of it.
 - On Windows, a session whose input pipe refuses a write once its console
   host has gone (`write EAGAIN`), or whose output worker or output socket
   fails, has the failure logged once, and the daemon and its other sessions
