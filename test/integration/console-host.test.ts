@@ -2,195 +2,33 @@
  * On Windows a session's console host is a child of the daemon, and node-pty
  * 1.1.0 leaves it running after the session ends. These tests start sessions
  * on a daemon of their own. Each end waits until the daemon's queue has
- * listed and ended the host, then a process snapshot confirms it.
+ * listed and ended the host, then one call to listConsoleHosts confirms it.
  *
- * A CIM query of one parent's children takes about fourteen seconds here, so
- * the file does not poll and does not run a second query to confirm. The
- * queue's own list is that query. After it finishes, a process snapshot
- * confirms the host. The snapshot is a toolhelp list in one PowerShell
- * process, compiled once. The kill test leaves the surviving session up so
- * the stop test ends it together with its own session, in one list.
+ * That lister is one CIM query of this process, the in-process daemon, and
+ * the query takes about fourteen seconds. Each check calls it once. The
+ * queue's own list is the same query. The kill test leaves the surviving
+ * session up so the stop test ends it together with its own session, in one
+ * list.
  */
 
-import { spawn } from 'node:child_process';
-import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { whenConsoleHostBatchSettled } from '../../src/core/windowsConsoleHost.js';
-import { api, eventually, makeTempHome, processAlive, removeTempHome, startTestDaemon } from './helpers.js';
+import { listConsoleHosts, whenConsoleHostBatchSettled } from '../../src/core/windowsConsoleHost.js';
+import type { ConsoleHostProcess } from '../../src/core/windowsConsoleHost.js';
+import { api, eventually, makeTempHome, removeTempHome, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 
-interface HostProcess {
-  pid: number;
-  /** Unix milliseconds. */
-  creationTime: number;
-}
-
-const SNAPSHOT_END = 'SHELLPUPPET-SNAPSHOT-END';
-
-const snapshotScript = `
-Add-Type -TypeDefinition @"
-using System;
-using System.Text;
-using System.Runtime.InteropServices;
-public static class ShellPuppetProcessSnapshot {
-  const uint TH32CS_SNAPPROCESS = 2;
-  const uint PROCESS_QUERY_LIMITED_INFORMATION = 0x1000;
-  [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
-  public struct PROCESSENTRY32 {
-    public uint dwSize;
-    public uint cntUsage;
-    public uint th32ProcessID;
-    public IntPtr th32DefaultHeapID;
-    public uint th32ModuleID;
-    public uint cntThreads;
-    public uint th32ParentProcessID;
-    public int pcPriClassBase;
-    public uint dwFlags;
-    [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 260)]
-    public string szExeFile;
-  }
-  [DllImport("kernel32.dll", SetLastError = true)]
-  static extern IntPtr CreateToolhelp32Snapshot(uint flags, uint pid);
-  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-  static extern bool Process32First(IntPtr snap, ref PROCESSENTRY32 entry);
-  [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
-  static extern bool Process32Next(IntPtr snap, ref PROCESSENTRY32 entry);
-  [DllImport("kernel32.dll", SetLastError = true)]
-  static extern bool CloseHandle(IntPtr handle);
-  [DllImport("kernel32.dll", SetLastError = true)]
-  static extern IntPtr OpenProcess(uint access, bool inherit, uint pid);
-  [DllImport("kernel32.dll", SetLastError = true)]
-  static extern bool GetProcessTimes(IntPtr handle, out long creation, out long exit, out long kernel, out long user);
-  public static string List(uint parentPid) {
-    IntPtr snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
-    if (snap == new IntPtr(-1)) throw new System.ComponentModel.Win32Exception();
-    try {
-      StringBuilder rows = new StringBuilder();
-      PROCESSENTRY32 entry = new PROCESSENTRY32();
-      entry.dwSize = (uint)Marshal.SizeOf(entry);
-      bool more = Process32First(snap, ref entry);
-      while (more) {
-        string name = entry.szExeFile ?? "";
-        if (entry.th32ParentProcessID == parentPid && (name.Equals("conhost.exe", StringComparison.OrdinalIgnoreCase) || name.Equals("OpenConsole.exe", StringComparison.OrdinalIgnoreCase))) {
-          long unix = -1;
-          IntPtr handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, entry.th32ProcessID);
-          if (handle != IntPtr.Zero) {
-            long creation, exit, kernel, user;
-            if (GetProcessTimes(handle, out creation, out exit, out kernel, out user)) unix = (creation - 116444736000000000L) / 10000L;
-            CloseHandle(handle);
-          }
-          rows.Append(entry.th32ProcessID).Append(' ').Append(name).Append(' ').Append(unix).Append((char)10);
-        }
-        entry.dwSize = (uint)Marshal.SizeOf(entry);
-        more = Process32Next(snap, ref entry);
-      }
-      return rows.ToString();
-    } finally { CloseHandle(snap); }
-  }
-}
-"@
-while ($true) {
-  $line = [Console]::In.ReadLine()
-  if ($null -eq $line -or $line -eq 'exit') { break }
-  $text = [ShellPuppetProcessSnapshot]::List([uint32]$line)
-  [Console]::Out.Write($text)
-  [Console]::Out.WriteLine('${SNAPSHOT_END}')
-  [Console]::Out.Flush()
-}
-`;
-
-let helper: ChildProcessWithoutNullStreams | undefined;
-let helperPid: number | undefined;
-let snapshotBuffer = '';
-let snapshotError = '';
-const snapshotWaiters: Array<(body: string) => void> = [];
-
-function takeSnapshotOutput(chunk: string): void {
-  snapshotBuffer += chunk;
-  for (;;) {
-    const end = snapshotBuffer.indexOf(SNAPSHOT_END);
-    if (end === -1) return;
-    const lineEnd = snapshotBuffer.indexOf('\n', end);
-    if (lineEnd === -1) return;
-    const body = snapshotBuffer.slice(0, end);
-    snapshotBuffer = snapshotBuffer.slice(lineEnd + 1);
-    const waiter = snapshotWaiters.shift();
-    if (waiter !== undefined) waiter(body);
-  }
-}
-
-function parseSnapshot(body: string): HostProcess[] {
-  return body
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => /^\d+ /.test(line))
-    .map((line) => {
-      const parts = line.split(' ');
-      const pid = Number(parts[0]);
-      const creationTime = Number(parts[2]);
-      if (!Number.isInteger(pid) || !Number.isInteger(creationTime) || creationTime < 0) {
-        throw new Error(`process snapshot line was incomplete: ${line}`);
-      }
-      return { pid, creationTime };
-    });
-}
-
-/** Console hosts whose parent is this process. The helper is started in `beforeAll`. */
-function snapshot(): Promise<HostProcess[]> {
-  const child = helper;
-  if (child === undefined) return Promise.reject(new Error('process snapshot helper is not running'));
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      reject(new Error(`process snapshot timed out: ${snapshotError}`));
-    }, 30_000);
-    snapshotWaiters.push((body) => {
-      clearTimeout(timer);
-      try {
-        resolve(parseSnapshot(body));
-      } catch (error) {
-        reject(error instanceof Error ? error : new Error('process snapshot failed'));
-      }
-    });
-    child.stdin.write(`${String(process.pid)}\n`);
-  });
-}
-
-function startSnapshotHelper(): void {
-  const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', snapshotScript], {
-    windowsHide: true,
-    stdio: ['pipe', 'pipe', 'pipe'],
-  });
-  helper = child;
-  helperPid = child.pid;
-  child.stdout.setEncoding('utf8');
-  child.stderr.setEncoding('utf8');
-  child.stdout.on('data', takeSnapshotOutput);
-  child.stderr.on('data', (chunk: string) => {
-    snapshotError += chunk;
-  });
-}
-
-function stopSnapshotHelper(): void {
-  const pid = helperPid;
-  helperPid = undefined;
-  helper = undefined;
-  if (pid === undefined) return;
-  try {
-    process.kill(pid);
-  } catch {
-    // Already gone.
-  }
-}
-
-function hostKey(host: HostProcess): string {
+function hostKey(host: ConsoleHostProcess): string {
   return `${String(host.pid)} ${String(host.creationTime)}`;
 }
 
-function sameHosts(left: readonly HostProcess[], right: readonly HostProcess[]): boolean {
+function sameHosts(left: readonly ConsoleHostProcess[], right: readonly ConsoleHostProcess[]): boolean {
   return left.map(hostKey).sort().join('\n') === right.map(hostKey).sort().join('\n');
 }
 
-function addedHosts(current: readonly HostProcess[], baseline: readonly HostProcess[]): HostProcess[] {
+function addedHosts(
+  current: readonly ConsoleHostProcess[],
+  baseline: readonly ConsoleHostProcess[],
+): ConsoleHostProcess[] {
   const known = new Set(baseline.map(hostKey));
   return current
     .filter((host) => !known.has(hostKey(host)))
@@ -215,23 +53,29 @@ async function waitUntilExited(daemon: TestDaemon, ids: readonly string[]): Prom
   }, 20_000);
 }
 
-async function expectHostGone(pid: number): Promise<void> {
-  await eventually(() => !processAlive(pid), 2_000);
-}
-
 describe.skipIf(process.platform !== 'win32')('Windows console hosts of a test daemon', () => {
   const homes: string[] = [];
-  let baseline: HostProcess[] = [];
-  /** The kill test's daemon and the host it must leave alive, for the stop test. */
+  /** Hosts already parented to this process, taken once before any session. */
+  let baseline: ConsoleHostProcess[] = [];
+  /** The kill test's daemon and the host it leaves alive, for the stop test. */
   let carried: { daemon: TestDaemon; survivorPid: number } | undefined;
 
   beforeAll(async () => {
-    startSnapshotHelper();
-    baseline = await snapshot();
+    baseline = await listConsoleHosts(process.pid);
   });
 
-  afterAll(() => {
-    stopSnapshotHelper();
+  afterAll(async () => {
+    const left = carried;
+    carried = undefined;
+    if (left !== undefined) {
+      try {
+        await left.daemon.stop();
+      } catch {
+        // Already stopped.
+      }
+      await whenConsoleHostBatchSettled();
+      await endStrays();
+    }
     for (const home of homes) removeTempHome(home);
   });
 
@@ -251,8 +95,9 @@ describe.skipIf(process.platform !== 'win32')('Windows console hosts of a test d
     removeTempHome(started.home);
   }
 
+  /** One list, then end any console host this file added. */
   async function endStrays(): Promise<void> {
-    const left = await snapshot().catch(() => [] as HostProcess[]);
+    const left = await listConsoleHosts(process.pid).catch(() => [] as ConsoleHostProcess[]);
     const known = new Set(baseline.map((host) => host.pid));
     for (const host of left) {
       if (known.has(host.pid)) continue;
@@ -276,18 +121,19 @@ describe.skipIf(process.platform !== 'win32')('Windows console hosts of a test d
         openViewer: false,
       });
       await waitUntilExited(started, [id]);
-      // The list takes about ten seconds. A seam that resolved at the call
-      // would still be inside this half-second, with the host still running.
+      // The queue's list takes about ten seconds. A seam that resolved on
+      // the call returns in well under 500 ms, while the host is still running.
       const waited = Date.now();
       await whenConsoleHostBatchSettled();
       expect(Date.now() - waited).toBeGreaterThan(500);
-      await eventually(async () => sameHosts(await snapshot(), baseline), 5_000);
+      const after = await listConsoleHosts(process.pid);
+      expect(sameHosts(after, baseline), JSON.stringify({ after, baseline })).toBe(true);
       passed = true;
     } finally {
       if (!passed) await endStrays();
       await stop(started);
     }
-  }, 90_000);
+  }, 120_000);
 
   it('ends the killed session\'s console host and leaves the other session\'s host', async () => {
     let started: TestDaemon | undefined;
@@ -298,7 +144,7 @@ describe.skipIf(process.platform !== 'win32')('Windows console hosts of a test d
       const first = await startSession(started, command);
       const second = await startSession(started, command);
       expect(second).not.toBe(first);
-      const hosts = addedHosts(await snapshot(), baseline);
+      const hosts = addedHosts(await listConsoleHosts(process.pid), baseline);
       expect(hosts, JSON.stringify(hosts)).toHaveLength(2);
       const earlier = hosts[0];
       const later = hosts[1];
@@ -306,11 +152,14 @@ describe.skipIf(process.platform !== 'win32')('Windows console hosts of a test d
       if (earlier.creationTime === later.creationTime) {
         throw new Error('the two console hosts have the same creation time');
       }
+      expect(later.pid).not.toBe(earlier.pid);
       const killed = await api(started.port, started.token, `/sessions/${first}`, { method: 'DELETE' });
       expect(killed.status).toBe(200);
       await whenConsoleHostBatchSettled();
-      await expectHostGone(earlier.pid);
-      expect(processAlive(later.pid)).toBe(true);
+      const after = await listConsoleHosts(process.pid);
+      const left = new Set(after.map(hostKey));
+      expect(left.has(hostKey(earlier)), JSON.stringify(after)).toBe(false);
+      expect(left.has(hostKey(later)), JSON.stringify(after)).toBe(true);
       carried = { daemon: started, survivorPid: later.pid };
       passed = true;
     } finally {
@@ -320,7 +169,7 @@ describe.skipIf(process.platform !== 'win32')('Windows console hosts of a test d
         await stop(started);
       }
     }
-  }, 90_000);
+  }, 180_000);
 
   it('ends a live session\'s console host when the daemon stops', async () => {
     let started: TestDaemon | undefined;
@@ -329,22 +178,31 @@ describe.skipIf(process.platform !== 'win32')('Windows console hosts of a test d
     try {
       started = carried?.daemon ?? (await daemon());
       carried = undefined;
-      const before = await snapshot();
       await startSession(started, { command: shell(), shell: false, openViewer: false });
-      const hosts = addedHosts(await snapshot(), before);
-      expect(hosts, JSON.stringify(hosts)).toHaveLength(1);
-      const host = hosts[0];
-      if (host === undefined) throw new Error('expected one console host');
+      const hosts = addedHosts(await listConsoleHosts(process.pid), baseline);
+      if (survivorPid === undefined) {
+        expect(hosts, JSON.stringify(hosts)).toHaveLength(1);
+      } else {
+        expect(hosts, JSON.stringify(hosts)).toHaveLength(2);
+        const survivor = hosts[0];
+        const opened = hosts[1];
+        if (survivor === undefined || opened === undefined) {
+          throw new Error('expected the surviving host and the new host');
+        }
+        expect(survivor.pid).toBe(survivorPid);
+        if (survivor.creationTime === opened.creationTime) {
+          throw new Error('the two console hosts have the same creation time');
+        }
+      }
       await started.daemon.stop();
       await whenConsoleHostBatchSettled();
-      await expectHostGone(host.pid);
-      if (survivorPid !== undefined) await expectHostGone(survivorPid);
-      await eventually(async () => sameHosts(await snapshot(), baseline), 5_000);
+      const after = await listConsoleHosts(process.pid);
+      expect(sameHosts(after, baseline), JSON.stringify({ after, baseline })).toBe(true);
       passed = true;
     } finally {
       if (!passed) await endStrays();
       await stop(started);
       for (const home of homes) removeTempHome(home);
     }
-  }, 90_000);
+  }, 180_000);
 });
