@@ -28,9 +28,10 @@
  * whose `❯` and aligned lines look like a pointer chooser under a question
  * from an earlier message.
  *
- * A dialog drawn with its choices as one row of buttons (OpenCode, MiMo Code)
- * fits none of these shapes and is recognised by its signature instead
- * (`dialogs.ts`), which config can extend.
+ * A permission dialog drawn with its choices as one row of buttons
+ * (OpenCode, MiMo Code) is recognised by its signature (`dialogs.ts`),
+ * which config can extend. Their numbered question menu is recognised by
+ * its fixed controls and custom-answer choice here.
  */
 
 import { dialogPrompt } from './dialogs.js';
@@ -207,6 +208,13 @@ const GROK_REASONING_START = /^ {2}│ {2}♦ Thinking|^ {3}[|/\\-] \S/;
 /** A `$` on a command row, or a `:` continuation of one. */
 const GROK_COMMAND_MARK = /\$|^ {2}│ {2}:/;
 
+/** The fixed controls at the foot of OpenCode and MiMo Code's question menu. */
+const QUESTION_MENU_FOOTER = /^ *┃ {2}↑↓ select {2}enter submit {2}esc dismiss\s*$/u;
+const QUESTION_MENU_OPTION = /^ *┃ {2}([1-4])\. (\S.*)$/u;
+const QUESTION_MENU_DESCRIPTION = /^ *┃ {5}\S/u;
+const QUESTION_MENU_TEXT = /^ *┃ {2}(\S.*)$/u;
+const QUESTION_MENU_BAR = /^ *┃\s*$/u;
+
 interface Line {
   text: string;
   /** Index into the screen's raw lines, blank ones included. */
@@ -258,6 +266,9 @@ export function detectPrompt(screen: string): DetectedPrompt | null {
   if (lines.length === 0) return null;
   const tail = lines.slice(-TAIL_WINDOW);
 
+  const questionMenu = openCodeQuestionMenu(raw, lines);
+  if (questionMenu !== null) return questionMenu;
+
   // A dialog a program draws on its own screen, recognised by its signature
   // (`dialogs.ts`): the most specific test there is, so it goes first.
   const dialog = dialogPrompt(raw);
@@ -298,6 +309,51 @@ export function detectPrompt(screen: string): DetectedPrompt | null {
   }
 
   return null;
+}
+
+/** A live left-ruled question menu with its fixed footer and custom-answer choice. */
+function openCodeQuestionMenu(raw: string[], lines: Line[]): DetectedPrompt | null {
+  const footer = [...lines].reverse().find((line) => QUESTION_MENU_FOOTER.test(line.text));
+  if (footer === undefined) return null;
+  const after = lines.filter((line) => line.index > footer.index);
+  // The programme may draw a status line below the menu, but another input
+  // box or a resumed transcript means this menu is no longer waiting.
+  if (after.length > 2 || after.some((line) => BUSY_LINE.test(line.text) || /[╭╰│❯›]/u.test(line.text))) return null;
+
+  let cursor = footer.index - 1;
+  while (QUESTION_MENU_BAR.test(raw[cursor] ?? '')) cursor--;
+  const options: string[] = [];
+  for (let count = 0; count < 4 && cursor >= 0; count++) {
+    while (QUESTION_MENU_DESCRIPTION.test(raw[cursor] ?? '')) cursor--;
+    const row = QUESTION_MENU_OPTION.exec(raw[cursor] ?? '');
+    if (row === null) break;
+    options.unshift(row[2]!);
+    cursor--;
+  }
+  // The walk above collects option rows from the bottom. Their numbers must
+  // be consecutive, with the final row offering the custom answer.
+  if (options.length < 2 || options.length > 4 || options.at(-1) !== 'Type your own answer') return null;
+  const firstOption = cursor + 1;
+  const numbered = raw.slice(firstOption, footer.index).map((line) => QUESTION_MENU_OPTION.exec(line)?.[1]);
+  if (numbered.filter((value) => value !== undefined).join(',') !== options.map((_, i) => String(i + 1)).join(',')) return null;
+  if (!QUESTION_MENU_BAR.test(raw[cursor] ?? '')) return null;
+  while (QUESTION_MENU_BAR.test(raw[cursor] ?? '')) cursor--;
+  const question: string[] = [];
+  while (cursor >= 0 && question.length < 8) {
+    const row = QUESTION_MENU_TEXT.exec(raw[cursor] ?? '');
+    if (row === null || QUESTION_MENU_OPTION.test(raw[cursor] ?? '')) break;
+    question.unshift(row[1]!);
+    cursor--;
+  }
+  if (question.length === 0) return null;
+  const first = cursor + 1;
+  return {
+    question: normalise(question.join(' ')),
+    options,
+    signature: normalise(raw.slice(first, footer.index + 1).join(' ')),
+    rows: [first, footer.index],
+    basis: 'footer',
+  };
 }
 
 /**

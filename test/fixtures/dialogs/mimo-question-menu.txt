@@ -1,0 +1,11 @@
+  ┃  Which of these should the build use for the
+  ┃  release notes?
+  ┃
+  ┃  1. Use the existing notes
+  ┃     Keep the notes already in the changelog.
+  ┃  2. Write new notes
+  ┃     Draft notes from the commits since the last release.
+  ┃  3. Type your own answer
+  ┃
+  ┃  ↑↓ select  enter submit  esc dismiss
+  ctrl+p commands

@@ -162,8 +162,10 @@ and Claude Code, Qoder and Grok did not, so a trust they hold for a parent
 folder may carry over.
 
 Antigravity's permission questions are numbered choosers, as are Codex's,
-Qoder's and Grok's; OpenCode and MiMo Code draw a bordered dialog that the
-daemon recognises by its title.
+Qoder's and Grok's; OpenCode and MiMo Code draw a bordered permission dialog
+that the daemon recognises by its title. Their question menu is recognised by
+its `↑↓ select  enter submit  esc dismiss` footer and `Type your own answer`
+choice.
 
 Two Qoder specifics worth knowing:
 
