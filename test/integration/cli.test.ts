@@ -568,6 +568,9 @@ describe('shellpuppet CLI', () => {
       const result = await cli('result', id);
       expect(result.code, whatHappened(result)).toBe(0);
       expect(result.stdout.trim()).toBe('▪ MANGO');
+      const flaggedResult = await cli('result', id, '--hide-reasoning');
+      expect(flaggedResult.code, whatHappened(flaggedResult)).toBe(0);
+      expect(flaggedResult.stdout).toBe(result.stdout);
       const hidden = await cli('snap', id, '--hide-reasoning');
       expect(hidden.code, whatHappened(hidden)).toBe(0);
       expect(hidden.stdout).not.toMatch(/^ │ /m);

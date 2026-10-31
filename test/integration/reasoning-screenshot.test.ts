@@ -106,9 +106,11 @@ describe('filtered screenshot in Chromium', () => {
     expect(lines.join('\n')).not.toContain(SECRET);
     expect(lines.join('\n')).toMatch(/\[reasoning hidden: \d+ lines?\]/);
     const hiddenPng = Buffer.from(String(hidden.body['png']), 'base64');
-    expect(horizontalDetail(plain.png, box.top, box.bottom)).toBeGreaterThan(500);
-    expect(horizontalDetail(hiddenPng, box.top, box.bottom)).toBeLessThan(
-      horizontalDetail(plain.png, box.top, box.bottom) * 0.25,
-    );
+    const plainDetail = horizontalDetail(plain.png, box.top, box.bottom);
+    const hiddenDetail = horizontalDetail(hiddenPng, box.top, box.bottom);
+    expect(plainDetail).toBeGreaterThan(500);
+    // The cover should leave almost no fine detail in the planted text row.
+    // A cover shifted by one row leaves much more than this one per cent bound.
+    expect(hiddenDetail).toBeLessThan(plainDetail * 0.01);
   }, 120_000);
 });

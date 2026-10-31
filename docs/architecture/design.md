@@ -250,9 +250,9 @@ on screenshots it covers those rows with a blurred, dim overlay before capture,
 and on session lists it omits waiting prompt questions. A session whose model's
 safety checks flag another model's reasoning (Claude models at present) passes
 `hideReasoning: true` on every reading call; a session needing the full screen
-leaves it off.
-it reads 400 lines of scrollback over what it returns, so a block whose first line has
-scrolled away is still recognised. A question the program is waiting on is never
+leaves it off. The `hideReasoning` filter reads 400 lines of scrollback over
+what it returns, so a block whose first line has scrolled away is still
+recognised. A question the program is waiting on is never
 hidden: the rows the prompt detection claims for a question on screen, and the
 border rows beside them, stay whatever the signature's rules would take, so a
 permission box drawn in the same style as the reasoning keeps every row of its
