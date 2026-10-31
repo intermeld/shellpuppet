@@ -15,9 +15,9 @@ Releases carry npm provenance through trusted publishing from the first.
 ## Now
 
 - **One window for all your sessions.** A dashboard that holds the sessions
-  as panes, instead of a window per session, and spans more than one screen
-  when you want it to. Each pane is the viewer you have today, with the same
-  typing, badges and sizing.
+  as panes, spreads them across screens, and lets you pop out a pane into its
+  own window. Each pane shares the single-session viewer's terminal client.
+  See [ADR-009](docs/decisions/ADR-009-dashboard-and-sessions-you-start-yourself.md).
 - **Sessions you start yourself.** Start a session from the dashboard and work
   in it, then hand it to an agent over MCP or let one join you: a session is
   the same thing whoever started it, and the CLI already starts sessions that
@@ -33,6 +33,11 @@ Releases carry npm provenance through trusted publishing from the first.
 
 ## Next
 
+- **Parent and child sessions.** Give every daemon-started session its id in
+  `SHELLPUPPET_SESSION`. A ShellPuppet MCP server or CLI running in that
+  session can record it as the parent of sessions it starts. The dashboard
+  can group and tag those children and jump to a parent's waiting children,
+  whichever agent supervises and without changes to agent CLIs.
 - **Named hosts for a tunnel you run.** The daemon stays on loopback. A tunnel
   that ends there and presents its own hostname, such as Tailscale Serve or a
   Cloudflare Tunnel, gets in once you name that host in your configuration:
