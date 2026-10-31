@@ -155,9 +155,9 @@ export function createConsoleHostQueue(options: ConsoleHostQueueOptions): Consol
   const pending: QueuedConsoleHost[] = [];
   const waiters: Array<() => void> = [];
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let running = false;
+  let running = 0;
 
-  const idle = (): boolean => timer === null && !running && pending.length === 0;
+  const idle = (): boolean => timer === null && running === 0 && pending.length === 0;
 
   const notify = (): void => {
     if (!idle()) return;
@@ -166,7 +166,7 @@ export function createConsoleHostQueue(options: ConsoleHostQueueOptions): Consol
   };
 
   const run = (batch: readonly QueuedConsoleHost[]): void => {
-    running = true;
+    running += 1;
     void options.list(options.parentPid).then(
       (hosts) => {
         const ended = new Set<number>();
@@ -201,7 +201,7 @@ export function createConsoleHostQueue(options: ConsoleHostQueueOptions): Consol
         }
       },
     ).finally(() => {
-      running = false;
+      running -= 1;
       notify();
     });
   };
