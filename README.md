@@ -218,12 +218,19 @@ session started through a shell or a launcher script says which CLI it runs
 with `terminal_start`'s `agent`. A session with no signature is refused
 rather than shown unfiltered.
 
-If your model's safety checks flag reasoning read off another model's screen
-(Claude models at present), pass `hideReasoning: true` on every reading call.
-Leave it off when you need the full screen. In a filtered screenshot, hidden
-rows are blurred and dimmed before capture; its returned row text is filtered
-too. A filtered session list reports that a prompt is waiting and for how long
-without its question.
+**Important:** A session whose model is a Claude model should **ALWAYS** pass
+`hideReasoning: true` on every call that reads a screen: `terminal_snapshot`,
+`terminal_wait`, `terminal_find`, `terminal_screenshot`, `terminal_list`, and
+`--hide-reasoning` with their CLI equivalents. Claude models' safety checks can
+flag another model's reasoning read off a screen as an attempt to extract
+reasoning and stop the session. Leaving the reasoning out avoids that;
+`terminal_result` gives the agent's answer. With the flag, a Claude model can
+use every ShellPuppet tool freely. Other models can leave the flag off when
+they need the full screen.
+
+In a filtered screenshot, hidden rows are blurred and dimmed before capture;
+its returned row text is filtered too. A filtered session list reports that a
+prompt is waiting and for how long without its question.
 
 `terminal_start` opens the viewer
 window for you and tells the agent so. It gives the agent a link only when no

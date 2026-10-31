@@ -102,7 +102,13 @@ describe('MCP adapter', () => {
     expect(byName.get('terminal_find')).toContain('UNTRUSTED');
     expect(byName.get('terminal_key')).toContain('escape');
     expect(byName.get('terminal_kill')).toContain('process tree');
-    expect(client.getInstructions()).toContain('hideReasoning: true on every such call');
+    const instructions = client.getInstructions() ?? '';
+    expect(instructions).toContain('Important');
+    expect(instructions).toContain('ALWAYS pass hideReasoning: true');
+    expect(instructions).toContain('terminal_snapshot, terminal_wait, terminal_find, terminal_screenshot, terminal_list');
+    expect(instructions).toContain('every ShellPuppet tool freely');
+    expect(instructions).toContain('attempt to extract reasoning');
+    expect(instructions).toContain('terminal_result gives the agent\'s answer');
     for (const name of ['terminal_snapshot', 'terminal_wait', 'terminal_find', 'terminal_list', 'terminal_screenshot']) {
       expect(byName.get(name)).toContain('Claude models at present');
       const schema = tools.find((tool) => tool.name === name)?.inputSchema;
