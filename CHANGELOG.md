@@ -48,6 +48,9 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- On Windows, a waiter for console-host cleanup now waits for every running
+  batch when process lists overlap. Finishing one list no longer reports the
+  queue settled while another session's host is still being checked.
 - On Windows, a session's console host (`conhost.exe`, or `OpenConsole.exe`
   when that is the host in use) is ended after the session ends, whether its
   program exited or the session was killed, instead of running until the

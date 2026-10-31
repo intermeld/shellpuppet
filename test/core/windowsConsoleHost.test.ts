@@ -309,4 +309,37 @@ describe('createConsoleHostQueue', () => {
     expect(settled).toBe(true);
     expect(ended).toEqual([80]);
   });
+
+  it('waits for both batches when their process lists overlap', async () => {
+    vi.useFakeTimers();
+    const finish: Array<(hosts: readonly ConsoleHostProcess[]) => void> = [];
+    const ended: number[] = [];
+    try {
+      const queue = createConsoleHostQueue({
+        parentPid: daemon,
+        coalesceMs: 20,
+        list: () => new Promise((resolve) => { finish.push(resolve); }),
+        endProcess: (pid) => { ended.push(pid); },
+      });
+      queue.push({ id: 'first', window, log: () => undefined });
+      await vi.advanceTimersByTimeAsync(20);
+      queue.push({ id: 'second', window: { t0: 2_000, t1: 2_100 }, log: () => undefined });
+      await vi.advanceTimersByTimeAsync(20);
+      expect(finish).toHaveLength(2);
+
+      let settled = false;
+      const done = queue.whenSettled().then(() => { settled = true; });
+      finish[0]?.([host({ pid: 80, creationTime: 1_040 })]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(ended).toEqual([80]);
+      expect(settled).toBe(false);
+
+      finish[1]?.([host({ pid: 81, creationTime: 2_040 })]);
+      await done;
+      expect(ended).toEqual([80, 81]);
+      expect(settled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
