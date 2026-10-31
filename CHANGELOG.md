@@ -40,6 +40,20 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- On Windows, a session's console host (`conhost.exe`, or `OpenConsole.exe`
+  when that is the host in use) is ended after the session ends, whether its
+  program exited or the session was killed, instead of running until the
+  daemon exits; a long-lived daemon with many sessions held one host, about
+  8 MB, for each. The session records the time immediately before and after
+  its spawn, during which the host is created; after the end, one list of the
+  daemon's children names the host whose creation time falls in that window,
+  widened by 5 ms, and ends that one process. Sessions that end within a few
+  hundred milliseconds share the list. The list is a short-lived PowerShell
+  `Get-CimInstance` that compiles nothing; it is on no path a caller waits on,
+  and takes about ten seconds. Zero or several hosts in the window, or a list
+  that fails or times out, ends nothing. The daemon's own pseudoconsole handle
+  stays open until the daemon exits, and the host is given no
+  CTRL_CLOSE_EVENT.
 - A dialog signature, built-in or from config `prompts.dialogs`, whose
   pattern runs past the regular-expression time budget is set aside for a
   minute and then tried again, as an agent signature is. The budget is

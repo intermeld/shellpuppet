@@ -318,7 +318,16 @@ Leave it off unless actively debugging, and delete the log afterwards.
   Windows a process on the session's console but outside the killed tree,
   such as one whose parent has exited, can survive too: once the tree kill
   has ended the program, node-pty no longer holds the terminal, so its kill
-  sends no close event.
+  sends no close event. The session's console host is such a process: it is a
+  child of the daemon, created while the session's spawn runs. The session
+  records the time immediately before and after that spawn. After the session
+  ends, one list of the daemon's children ends the one console host
+  (`conhost.exe` or `OpenConsole.exe`) whose creation time falls in that
+  window. Ending it does not close the daemon's pseudoconsole handle and does
+  not send CTRL_CLOSE_EVENT, so the handle stays open until the daemon exits.
+  The list compiles nothing. Zero or several hosts in the window, or a list
+  that fails or times out, ends nothing, and that host can keep running until
+  the daemon exits.
   Two further cases, stated plainly because neither is fixed:
 
   - **If the daemon itself dies without running its teardown**, closing its
