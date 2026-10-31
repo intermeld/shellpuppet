@@ -31,6 +31,8 @@ import {
   recordedExitCode,
   releaseFailedStarts,
 } from './windowsPtyStart.js';
+import { queueConsoleHostEnd, TRACK_WINDOWS_CONSOLE_HOST } from './windowsConsoleHost.js';
+import type { SpawnWindow } from './windowsConsoleHost.js';
 import {
   DEFAULT_COLS,
   DEFAULT_ROWS,
@@ -603,6 +605,13 @@ export class Session implements WaitTarget {
   private readyReasonValue: SessionSummary['readyReason'] = 'not-tracked';
   private geometryHeldFlag: boolean;
   private killed = false;
+  /**
+   * Times taken immediately before and after the spawn, on Windows. ConPTY
+   * creates the console host during that call. Null on any other platform.
+   */
+  private consoleHostWindow: SpawnWindow | null = null;
+  /** The end has been queued once. A kill and an exit must not queue it twice. */
+  private consoleHostQueued = false;
 
   constructor(id: string, options: SessionOptions, deps: SessionDeps = {}) {
     this.id = id;
@@ -647,6 +656,11 @@ export class Session implements WaitTarget {
     // half-built terminal behind (`windowsPtyStart.ts`).
     if (process.platform === 'win32') releaseFailedStarts();
     ensureSpawnHelperExecutable();
+    // On Windows, ConPTY creates the console host inside this synchronous
+    // call, before it returns. The two times are the window a later list
+    // uses to recognise that host. Nothing is listed here, and the start
+    // does not wait.
+    const consoleHostT0 = TRACK_WINDOWS_CONSOLE_HOST ? Date.now() : 0;
     try {
       this.pty = spawn(file, fileArgs, {
         name: 'xterm-256color',
@@ -666,6 +680,9 @@ export class Session implements WaitTarget {
       // On Windows node-pty loads its native module here, as the terminal is
       // built, so a missing binary surfaces now rather than at the load above.
       throw explainSpawnFailure(error);
+    }
+    if (TRACK_WINDOWS_CONSOLE_HOST) {
+      this.consoleHostWindow = { t0: consoleHostT0, t1: Date.now() };
     }
     // An error on a Windows terminal's pipes must not take the daemon down
     // (`windowsPtyStart.ts`). Logged once a stream: for the known cause, the
@@ -726,6 +743,10 @@ export class Session implements WaitTarget {
       this.logger.info('session exit', { id, exitCode });
       if (!this.programEnded) this.endingProgram = this.endProgram();
       for (const listener of this.exitListeners) listener(exitCode);
+      // The console host is a child of the daemon, so the program ending
+      // leaves it running. A later list ends the one host created in this
+      // spawn's window. Nothing here waits for that list.
+      this.queueConsoleHost();
     });
 
     // Readiness (§3.1): first paint ≠ ready. With no condition given the
@@ -1125,7 +1146,11 @@ export class Session implements WaitTarget {
    * console, only while node-pty still holds the terminal: while the program
    * runs. After a tree kill that ended the program it closes nothing, so a
    * process on the session's console outside the killed tree gets no close
-   * event. (The design's Job Object hardening needs a native module and is
+   * event. The console host is not in that tree. After this returns, a later
+   * list ends the one host created during this spawn's window. This does not
+   * wait for that list. The daemon's pseudoconsole handle stays open, and the
+   * host is given no CTRL_CLOSE_EVENT. (The design's Job
+   * Object hardening needs a native module and is
    * deferred. If the daemon itself dies, its ConPTY handles close, which gives
    * console-attached descendants a close signal.)
    *
@@ -1179,7 +1204,26 @@ export class Session implements WaitTarget {
       });
     }
 
+    this.queueConsoleHost();
     this.renderer.dispose();
+  }
+
+  /**
+   * Queue an end of this session's console host, once. The list runs later
+   * and is not awaited. With no window there is nothing to end. On any
+   * platform but Windows the queue does nothing.
+   */
+  private queueConsoleHost(): void {
+    const window = this.consoleHostWindow;
+    if (window === null || this.consoleHostQueued) return;
+    this.consoleHostQueued = true;
+    queueConsoleHostEnd({
+      id: this.id,
+      window,
+      log: (level, message, meta) => {
+        this.logger[level](message, meta);
+      },
+    });
   }
 
   /**
