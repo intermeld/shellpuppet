@@ -27,7 +27,12 @@ export class SessionManager {
   private policy: CompiledPolicy;
   private seq = 0;
 
-  constructor(policy: CompiledPolicy, logger: Logger = NULL_LOGGER, deps: SessionDeps = {}) {
+  constructor(
+    policy: CompiledPolicy,
+    logger: Logger = NULL_LOGGER,
+    deps: SessionDeps = {},
+    private readonly onRemoved: (id: string) => void = () => undefined,
+  ) {
     this.policy = policy;
     this.logger = logger;
     this.sessionDeps = { logger, ...deps };
@@ -95,6 +100,7 @@ export class SessionManager {
       if (!session.exited || session.exitedAt === null) continue;
       if (now - session.exitedAt < graceMs) continue;
       this.sessions.delete(id);
+      this.onRemoved(id);
       // The process is already dead; kill() just releases the PTY handles
       // and disposes the renderer. It deliberately does NOT tree-kill: the
       // root has been gone for the whole grace period, so there is nothing
@@ -117,6 +123,7 @@ export class SessionManager {
     if (session === undefined) return false;
     await session.kill();
     this.sessions.delete(id);
+    this.onRemoved(id);
     return true;
   }
 
@@ -139,7 +146,10 @@ export class SessionManager {
    */
   async killAll(timeoutMs = 10_000): Promise<void> {
     const all = [...this.sessions.values()];
-    this.sessions.clear();
+    for (const session of all) {
+      this.sessions.delete(session.id);
+      this.onRemoved(session.id);
+    }
     await this.killTreesInOneRun(all);
     await Promise.all(
       all.map(async (session) => {

@@ -597,6 +597,7 @@ export class Session implements WaitTarget {
   private modeScanTail = '';
   private readonly dataListeners = new Set<(data: string) => void>();
   private readonly exitListeners = new Set<(exitCode: number | null) => void>();
+  private readonly readyListeners = new Set<() => void>();
 
   /** Whether the program has hidden the cursor (DECTCEM off), carried to viewers. */
   private cursorHidden = false;
@@ -802,6 +803,7 @@ export class Session implements WaitTarget {
             reason: result.reason,
           });
         }
+        for (const listener of this.readyListeners) listener();
       });
     } else {
       // No condition was asked for, so nothing is being checked. `ready` is
@@ -1068,6 +1070,12 @@ export class Session implements WaitTarget {
   onExit(listener: (exitCode: number | null) => void): () => void {
     this.exitListeners.add(listener);
     return () => this.exitListeners.delete(listener);
+  }
+
+  /** Notify the daemon when the readiness condition settles. */
+  onReady(listener: () => void): () => void {
+    this.readyListeners.add(listener);
+    return () => this.readyListeners.delete(listener);
   }
 
   /**
