@@ -41,10 +41,20 @@ async function cli(...args: string[]): Promise<CliResult> {
 /** The same invocation from another daemon home, for tests about what a
  * command leaves behind: the shared `home` above has a daemon running. */
 async function cliFromHome(homeDir: string, ...args: string[]): Promise<CliResult> {
+  return cliFromHomeWithEnv(homeDir, {}, ...args);
+}
+
+/** The same invocation with extra environment variables for the CLI and the
+ * daemon it auto-starts. */
+async function cliFromHomeWithEnv(
+  homeDir: string,
+  env: NodeJS.ProcessEnv,
+  ...args: string[]
+): Promise<CliResult> {
   const startedAt = Date.now();
   try {
     const { stdout, stderr } = await execFileAsync(process.execPath, [cliEntry, ...args], {
-      env: { ...process.env, SHELLPUPPET_HOME: homeDir },
+      env: { ...process.env, SHELLPUPPET_HOME: homeDir, ...env },
       timeout: CLI_BUDGET_MS,
     });
     return { code: 0, stdout, stderr, elapsedMs: Date.now() - startedAt };
@@ -533,6 +543,81 @@ describe('shellpuppet CLI', () => {
     } finally {
       await cliFromHome(windowHome, 'daemon', 'stop', '--force');
       removeTempHome(windowHome);
+    }
+  }, 120_000);
+
+  it('dashboard opens the isolated window, prints no link, and fails without a fallback', async () => {
+    // Node stands in for the isolated browser, so no window opens on the
+    // machine running the suite. `launchMode` says default-browser on purpose:
+    // the dashboard command must still use the isolated profile. COMSPEC
+    // points at nothing so a regression that reaches the system opener fails
+    // here instead of opening a real browser.
+    const windowHome = makeTempHome('shellpuppet-cli-dashboard-');
+    fs.writeFileSync(
+      path.join(windowHome, 'config.json'),
+      JSON.stringify({
+        viewer: { launchMode: 'default-browser', browserPath: process.execPath },
+      }),
+    );
+    const env = { COMSPEC: path.join(windowHome, 'no-such-command.exe') };
+    try {
+      const opened = await cliFromHomeWithEnv(windowHome, env, 'dashboard');
+      expect(opened.code, whatHappened(opened, windowHome)).toBe(0);
+      expect(opened.stdout.trim()).toBe('dashboard: window opened');
+      expect(opened.stdout).not.toContain('dt=');
+      expect(opened.stdout).not.toContain('/dashboard?');
+      expect(opened.stderr).not.toContain('dt=');
+
+      const asJson = await cliFromHomeWithEnv(windowHome, env, 'dashboard', '--json');
+      expect(asJson.code, whatHappened(asJson, windowHome)).toBe(0);
+      expect(JSON.parse(asJson.stdout)).toEqual({ opened: true });
+      expect(asJson.stdout).not.toContain('dt=');
+      expect(asJson.stdout).not.toContain('/dashboard?');
+
+      const auditPath = path.join(windowHome, 'audit.log');
+      const audit = fs.existsSync(auditPath) ? fs.readFileSync(auditPath, 'utf8') : '';
+      const log = fs.existsSync(daemonLogPath(windowHome))
+        ? fs.readFileSync(daemonLogPath(windowHome), 'utf8')
+        : '';
+      expect(`${audit}\n${log}`).not.toContain('dt=');
+      expect(`${audit}\n${log}`).not.toContain('/dashboard?');
+    } finally {
+      await cliFromHome(windowHome, 'daemon', 'stop', '--force');
+      removeTempHome(windowHome);
+    }
+  }, 120_000);
+
+  it('dashboard fails with a clear message and no link when no isolated window can open', async () => {
+    const noWindowHome = makeTempHome('shellpuppet-cli-dashboard-none-');
+    fs.writeFileSync(
+      path.join(noWindowHome, 'config.json'),
+      JSON.stringify({
+        viewer: {
+          launchMode: 'isolated-app',
+          browserPath: path.join(noWindowHome, 'absent-browser.exe'),
+        },
+      }),
+    );
+    try {
+      const failed = await cliFromHomeWithEnv(
+        noWindowHome,
+        { COMSPEC: path.join(noWindowHome, 'no-such-command.exe') },
+        'dashboard',
+      );
+      expect(failed.code, whatHappened(failed, noWindowHome)).toBe(1);
+      expect(failed.stderr).toContain('The dashboard window did not open');
+      expect(failed.stderr).toContain('viewer.browserPath');
+      expect(failed.stdout).not.toContain('dt=');
+      expect(failed.stderr).not.toContain('dt=');
+      expect(failed.stderr).not.toContain('/dashboard?');
+      const log = fs.existsSync(daemonLogPath(noWindowHome))
+        ? fs.readFileSync(daemonLogPath(noWindowHome), 'utf8')
+        : '';
+      expect(log).not.toContain('dt=');
+      expect(log).not.toContain('/dashboard?');
+    } finally {
+      await cliFromHome(noWindowHome, 'daemon', 'stop', '--force');
+      removeTempHome(noWindowHome);
     }
   }, 120_000);
 

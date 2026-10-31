@@ -96,6 +96,9 @@ Usage:
       Links work once and expire after a few minutes; mint another whenever
       the human needs one. --read-only grants watching without typing, and the
       daemon enforces it rather than the page.
+  shellpuppet dashboard                             Open the dashboard in its own window
+      One window for every session, in ShellPuppet's isolated browser profile.
+      Prints whether a window opened, never the link.
   shellpuppet resize <id> <cols> <rows> [--hold]    Set screen geometry
       Without --hold the human's window reshapes it again the moment they
       move it, which is what lets the viewer fill.
@@ -561,6 +564,13 @@ async function main(): Promise<void> {
             `${String(png.length)} bytes`,
         );
       }
+      break;
+    }
+
+    case 'dashboard': {
+      const result = await call(connection, 'POST', '/dashboard/open', {});
+      if (wantJson) printJson(result);
+      else console.log('dashboard: window opened');
       break;
     }
 

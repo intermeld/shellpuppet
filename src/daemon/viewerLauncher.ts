@@ -425,57 +425,118 @@ export async function launchViewer(
   logger: Logger,
   deps: LaunchDependencies = {},
 ): Promise<ViewerLaunchResult> {
+  return launchWindow(url, home, config, logger, deps, true);
+}
+
+/**
+ * Open the dashboard in ShellPuppet's isolated browser profile, and never in
+ * the person's default browser.
+ *
+ * The dashboard URL carries the one-use grant, so the profile it lands in has
+ * to be the one ShellPuppet owns. `viewer.launchMode` is deliberately not
+ * consulted: `shellpuppet dashboard` exists to open a window, and a mode meant
+ * for automatic viewer windows must not turn that into a default-browser
+ * hand-off. `viewer.browserPath` and `viewer.profileDir` still apply.
+ *
+ * `deps` is accepted so a test can inject a recording opener and prove that a
+ * failure never reaches it.
+ */
+export async function launchDashboard(
+  url: string,
+  home: string,
+  config: ViewerLaunchConfig,
+  logger: Logger,
+  deps: LaunchDependencies = {},
+): Promise<ViewerLaunchResult> {
+  return launchWindow(url, home, { ...config, launchMode: 'isolated-app' }, logger, deps, false);
+}
+
+/**
+ * The launch both windows share. The viewer may fall back to the system's
+ * opener so a session start never fails; the dashboard may not, because its
+ * grant would then land in a browser profile with extensions.
+ */
+async function launchWindow(
+  url: string,
+  home: string,
+  config: ViewerLaunchConfig,
+  logger: Logger,
+  deps: LaunchDependencies,
+  allowFallback: boolean,
+): Promise<ViewerLaunchResult> {
   const mode = config.launchMode ?? 'none';
   if (mode === 'none') return { launched: false, mode, reason: 'viewer.launchMode is "none"' };
 
   if (mode === 'isolated-app') {
-    const browser = await findBrowser(config.browserPath, logger);
-    if (browser === null) {
-      // Degrade rather than fail: the system's opener is tried, and when
-      // nothing opens the daemon hands the caller the URL.
-      logger.warn('no Chromium-family browser found for the isolated viewer window', {
-        hint: 'set viewer.browserPath, or viewer.launchMode to "default-browser"',
-      });
-      return openInDefaultBrowser(
-        url,
-        logger,
-        'isolated-app',
-        deps,
-        'no Chromium-family browser found',
-      );
-    }
-    const profileDir = config.profileDir ?? path.join(home, 'viewer-profile');
-    try {
-      fs.mkdirSync(profileDir, { recursive: true });
-    } catch (error) {
-      logger.warn('could not create the viewer profile directory', {
-        profileDir,
-        error: String(error),
-      });
-      return openInDefaultBrowser(
-        url,
-        logger,
-        'isolated-app',
-        deps,
-        'profile directory unavailable',
-      );
-    }
-
-    // The browser is spawned directly, so "opened" means its process started.
-    // Its exit is not judged: a Chromium launched beside a running instance of
-    // the same profile hands the URL over and exits at once, with code 0, and
-    // the window is in the other process.
-    const outcome = await spawnDetached(browser, isolatedWindowArgs(url, profileDir));
-    if (outcome.spawned) {
-      logger.info('viewer window opened', { browser, profileDir });
-      return { launched: true, mode, browser };
-    }
-    const error = outcome.error ?? 'the browser did not start';
-    logger.warn('the viewer browser failed to launch', { browser, error });
-    return openInDefaultBrowser(url, logger, 'isolated-app', deps, error);
+    const isolated = await openIsolatedWindow(
+      url,
+      home,
+      config,
+      logger,
+      allowFallback ? 'viewer' : 'dashboard',
+    );
+    if (isolated.launched) return isolated;
+    if (!allowFallback) return isolated;
+    // Degrade rather than fail: the system's opener is tried, and when
+    // nothing opens the daemon hands the caller the URL.
+    return openInDefaultBrowser(url, logger, 'isolated-app', deps, isolated.reason);
   }
 
+  if (!allowFallback) {
+    // Unreachable for the dashboard, which forces `isolated-app`; kept so a
+    // future caller cannot make this function hand a grant to the default
+    // browser by choosing another mode.
+    return {
+      launched: false,
+      mode: 'isolated-app',
+      reason: 'the dashboard opens only in its isolated window',
+    };
+  }
   return openInDefaultBrowser(url, logger, 'default-browser', deps);
+}
+
+/** Open `url` in the isolated profile, or report why that was not possible. */
+async function openIsolatedWindow(
+  url: string,
+  home: string,
+  config: ViewerLaunchConfig,
+  logger: Logger,
+  kind: 'viewer' | 'dashboard',
+): Promise<ViewerLaunchResult> {
+  const mode: ViewerLaunchMode = 'isolated-app';
+  const browser = await findBrowser(config.browserPath, logger);
+  if (browser === null) {
+    logger.warn(`no Chromium-family browser found for the isolated ${kind} window`, {
+      hint:
+        kind === 'viewer'
+          ? 'set viewer.browserPath, or viewer.launchMode to "default-browser"'
+          : 'set viewer.browserPath',
+    });
+    return { launched: false, mode, reason: 'no Chromium-family browser found' };
+  }
+  const profileDir = config.profileDir ?? path.join(home, 'viewer-profile');
+  try {
+    fs.mkdirSync(profileDir, { recursive: true });
+  } catch (error) {
+    logger.warn(`could not create the ${kind} profile directory`, {
+      profileDir,
+      error: String(error),
+    });
+    return { launched: false, mode, reason: 'profile directory unavailable' };
+  }
+
+  // The browser is spawned directly, so "opened" means its process started.
+  // Its exit is not judged: a Chromium launched beside a running instance of
+  // the same profile hands the URL over and exits at once, with code 0, and
+  // the window is in the other process.
+  const outcome = await spawnDetached(browser, isolatedWindowArgs(url, profileDir));
+  if (outcome.spawned) {
+    logger.info(`${kind} window opened`, { browser, profileDir });
+    return { launched: true, mode, browser };
+  }
+  const error = outcome.error ?? 'the browser did not start';
+  logger.warn(`the ${kind} browser failed to launch`, { browser, error });
+  return { launched: false, mode, reason: error };
 }
 
 /** How to hand a URL to the platform's default browser. */

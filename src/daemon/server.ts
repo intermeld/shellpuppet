@@ -54,7 +54,7 @@ import {
   viewerCookie,
 } from './auth.js';
 import { NULL_AUDITOR } from './audit.js';
-import { findBrowser, launchViewer } from './viewerLauncher.js';
+import { findBrowser, launchDashboard, launchViewer } from './viewerLauncher.js';
 import type { ViewerLaunchResult } from './viewerLauncher.js';
 import {
   DEFAULT_CAPTURE_TIMEOUT_MS,
@@ -1132,7 +1132,10 @@ export class Daemon {
     await readBody(req);
     const grant = this.tokens.mintDashboardGrant({ now: this.now() });
     const pageUrl = `http://127.0.0.1:${String(this.port)}/dashboard?dt=${grant}`;
-    const launch = this.options.launcher ?? launchViewer;
+    // The dashboard opens only in the isolated profile. The viewer launcher
+    // may fall back to the default browser so a session start never fails;
+    // that fallback would hand this grant to a profile with extensions.
+    const launch = this.options.launcher ?? launchDashboard;
     let opened: ViewerLaunchResult;
     try {
       opened = await launch(pageUrl, this.options.home, this.options.viewer ?? {}, this.logger);
@@ -1143,7 +1146,12 @@ export class Daemon {
     if (!opened.launched || opened.mode === 'default-browser') {
       this.tokens.revokeDashboardGrant(grant);
       this.auditDashboardRefusal(req, 'launch-failed');
-      json(res, 502, { error: 'The dashboard window did not open.' });
+      json(res, 502, {
+        error:
+          'The dashboard window did not open. ShellPuppet opens the dashboard only in its ' +
+          'own browser profile; set viewer.browserPath in config.json to a Chromium-family ' +
+          'browser.',
+      });
       return;
     }
     this.audit.record(actor, 'grant-mint', undefined, { credential: 'dashboard' });

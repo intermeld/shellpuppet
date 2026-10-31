@@ -264,9 +264,16 @@ shellpuppet start [options] <command> [args...]   # options BEFORE the command
 shellpuppet list | snap | type | key | wait | find | resize | kill
 shellpuppet screenshot <id> [--out <file>]        # the viewer, as a browser draws it
 shellpuppet viewer-url <id> [--read-only]         # a fresh single-use viewer link
+shellpuppet dashboard                             # the dashboard, in its own isolated window
 shellpuppet daemon status|start|stop|restart     # status and stop never start one
 shellpuppet mcp
 ```
+
+`shellpuppet dashboard` opens one window for every session in ShellPuppet's
+isolated browser profile and prints only whether a window opened. It never
+prints the link, and it never uses your default browser: if the isolated
+window cannot open, the command fails rather than hand the grant to a profile
+with extensions.
 
 `shellpuppet --help` documents every flag. Exit codes: 0 ok · 1 the operation
 failed, such as typing into a session that has exited · 2 the request itself

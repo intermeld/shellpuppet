@@ -69,6 +69,11 @@ Full example, everything optional:
     //                     A session start then hands its caller a viewer link.
     "launchMode": "isolated-app",
 
+    // The dashboard (`shellpuppet dashboard`) always opens in the isolated
+    // profile above, whatever `launchMode` says, and never in your default
+    // browser: its one-use grant must not reach a profile with extensions.
+    // `browserPath` and `profileDir` still apply to it.
+
     // Override detection with a specific binary. Named explicitly means named:
     // if this path does not exist, nothing is detected in its place.
     // "browserPath": "C:/Program Files/Microsoft/Edge/Application/msedge.exe",
