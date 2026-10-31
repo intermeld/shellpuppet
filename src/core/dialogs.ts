@@ -250,6 +250,7 @@ function matchDialog(raw: readonly string[], dialog: CompiledDialog): DetectedPr
         signature: [dialog.name, question, request, ...options].join(' | '),
         // The title down to the row of choices, the request between them included.
         rows: [t, c],
+        basis: 'frame',
       };
     }
   }
