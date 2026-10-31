@@ -15,6 +15,7 @@ The commitments they add up to are collected in [VISION.md](../../VISION.md).
 | [ADR-006](ADR-006-per-agent-modules.md) | A module per agent CLI, declarative from outside (proposed) |
 | [ADR-007](ADR-007-connected-features.md) | Connected features: switched on by a person, and each says who can read what it sends |
 | [ADR-008](ADR-008-clean-session-environment-by-default.md) | Sessions start with a clean environment by default |
+| [ADR-009](ADR-009-dashboard-and-sessions-you-start-yourself.md) | The dashboard and sessions you start yourself |
 
 ## Conventions
 

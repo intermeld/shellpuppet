@@ -45,23 +45,28 @@ MCP servers are spawned per-client. Claude Code, Qoder and Cursor would each spa
 own instance. If each owned its own PTYs then nothing would be shared, and the human
 viewer could not join, which defeats the entire purpose of the tool.
 
-So exactly one **daemon** owns all sessions and serves the viewer. The MCP server and the
+So exactly one **daemon** owns all sessions and serves the viewer and dashboard. The MCP server and the
 CLI are both thin clients over its HTTP API, and either will auto-start it if absent.
 
 ```mermaid
 flowchart BT
-    daemon["shellpuppet daemon<br/>one per user<br/>on 127.0.0.1 only<br/>owns every PTY<br/>renders VT to a screen grid<br/>serves the viewer<br/>enforces policy and auth"]
+    daemon["shellpuppet daemon<br/>one per user<br/>on 127.0.0.1 only<br/>owns every PTY<br/>renders VT to a screen grid<br/>serves the viewer and dashboard<br/>enforces policy and auth"]
     mcp["MCP server (stdio)<br/>one per agent<br/>Claude Code, Qoder, Cursor"]
     cli["CLI (one shot)<br/>one per invocation<br/>scripts, CI, an agent's shell"]
     viewer["browser viewer<br/>the human watches<br/>and types"]
+    dash["dashboard<br/>one document, a pane per session<br/>isolated Chromium profile"]
     mcp -- "HTTP" --> daemon
     cli -- "HTTP" --> daemon
     viewer -- "HTTP + WebSocket" --> daemon
+    dash -- "HTTP + WebSocket" --> daemon
 ```
 
 Both adapters are kept on purpose: MCP for team distribution (one config
 entry per person), CLI for token efficiency in agentic loops and for scripting. The core
 is a library; both are thin shells over it.
+
+The dashboard is another browser client on loopback. It talks only to the
+daemon and adds no outbound connection.
 
 ### 2.2 Daemon auto-start: critical implementation notes
 
@@ -182,12 +187,21 @@ src/
     index.html        # xterm.js page
     viewer.js
     viewer.css
+    pane.js           # shared terminal client: frames, typing, reconnect, badges
+    dashboard.html    # one document, a pane per session
+    dashboard.js      # layout, attention, launch, screen assignment
+    dashboard.css
 test/
 docs/                 # architecture/, reference/, decisions/
 ```
 
 **TypeScript, Node 22+.** Typed for maintainability, and the MCP SDK is
 TypeScript-first.
+
+`viewer.js` and `dashboard.js` use `pane.js`; `term.onData` is registered once
+there. The dashboard uses plain script and the DOM renderer, with no new
+dependency or build step. Its assets join the fixed `STATIC_ASSETS` allowlist;
+`GET /dashboard` serves `dashboard.html` without a request-derived path.
 
 **stdout discipline (hard rule).** The MCP adapter speaks its protocol over stdout. A
 single stray `console.log` anywhere in `core/` or `client/` corrupts it. So `core/` and
@@ -451,13 +465,16 @@ far worse.
 
 ### 4.1 Authentication
 
-Token-based, following the Jupyter / SSH-agent model, with **three credentials**: a client token, a viewer grant and the stream credential a grant becomes:
+Token-based, following the Jupyter / SSH-agent model, with a client token,
+a viewer grant, the stream credential it becomes, and a dashboard grant and
+credential:
 
 - **Client token** (full API access). Generated on daemon start: 32 random bytes, written
   to `~/.shellpuppet/daemon.json` (atomically, see §2.2) alongside port, pid and version.
   Every HTTP request that can read or act on a session requires
-  `Authorization: Bearer <token>`; only `/health`, the viewer page and its static assets
-  answer without one, and none of those touches a session. Clients read it from the
+  `Authorization: Bearer <token>` unless it uses a scoped browser credential;
+  `/health`, the viewer and dashboard pages and their static assets answer
+  without one, but unauthenticated pages contain no session data. Clients read it from the
   file, so same-user access is transparent and cross-user access is denied. Rotates on
   daemon restart.
 - **Viewer grant** (per-session, one use, short life). The `vt` in a viewer URL: the one
@@ -483,6 +500,47 @@ Token-based, following the Jupyter / SSH-agent model, with **three credentials**
   server-side. The viewer's own read-only toggle is a local convenience for a
   read-write link. This is what makes a watch-only link safe to hand to someone who must
   not be able to type.
+- **Dashboard grant and credential.** `shellpuppet dashboard` uses the client
+  token at `POST /dashboard/open`. The daemon mints a one-use `dt` grant with
+  the five-minute viewer-grant lifetime and opens `/dashboard?dt=<grant>` in
+  its isolated Chromium profile. This is not a user sign-in: there is no
+  login, password or account. The page exchanges the grant on a top-level
+  document navigation for `sp_dash`, an `HttpOnly`, `SameSite=Strict` cookie
+  with `Path=/`, no `Max-Age`, `Secure` or `Domain`; every later request
+  carries the cookie and a proof from the dashboard document. The grant and
+  URL appear in no CLI output, tool result, response body or log. A failed
+  isolated-window launch revokes the grant and fails the command, with no
+  default-browser fallback or MCP minting tool. Bad, spent and expired grants
+  return a page without a cookie, proof, session id or profile command.
+  Another successful redemption replaces the credential and its proofs.
+  The cookie may list sessions and profiles, open any session stream, type,
+  resize through a deliberate takeover, kill and launch a named profile. It
+  cannot call free-form `POST /sessions`, viewer minting, screenshot,
+  shutdown, environment report or `hold`; `/events` stays client-token only.
+- **Document proof and cookie checks.** An authenticated `GET /dashboard`,
+  including a reload with a cookie and no grant, embeds a fresh 64-hex proof
+  in `<meta name="sp-csrf">`, with `cache-control: no-store` and the viewer's
+  content security policy. The daemon keeps the newest eight proofs for a
+  credential; the ninth replaces the oldest, and every accepted navigation
+  gets a proof. `POST /dashboard/launch` and dashboard-authenticated `DELETE`
+  send it as `X-ShellPuppet-CSRF`; both strings are hashed and compared in
+  constant time. Form media types are refused. Browser WebSockets cannot set
+  that header, so `/dashboard/events` and session streams carry
+  `sp-csrf.<hex>` as the selected WebSocket subprotocol. A missing, wrong or
+  expired proof refuses the upgrade before attachment. Every `sp_dash`
+  cookie value is tried, so a planted cookie does not hide a valid one.
+- **Fetch Metadata for the dashboard cookie.** `Host` must be the allowed
+  loopback host and port. `Sec-Fetch-Site` must be `none` or `same-origin` on
+  a top-level `GET` or `HEAD` document navigation (`Mode: navigate`,
+  `Dest: document`), where `Origin` may be absent and `dt` may be redeemed.
+  A `GET` or `HEAD` same-origin read with mode `cors`, `no-cors` or
+  `same-origin` may also omit `Origin`. Every other cookie request, including
+  a mutation or WebSocket upgrade, requires `Sec-Fetch-Site: same-origin`
+  and `Origin` matching its `Host`; upgrades also require mode `websocket`.
+  A present `Origin` always has to match. `same-site`, `cross-site` and absent
+  site metadata are refused for every cookie request. The daemon sends no
+  CORS headers. Client-token HTTP still does not consult `Origin` and
+  client-token upgrades may omit it, as before.
 - **WebSocket upgrades** take the client token on the query string (it is the same-user
   secret from `daemon.json` and never appears in a URL a human sees) or the viewer's
   cookie. A grant is refused at the socket outright.
@@ -523,6 +581,12 @@ the user's browser visits, and this is the exact CVE class Jupyter went through:
 - No CORS headers at all (no cross-origin reads), and the bearer-token requirement stops
   blind cross-origin POSTs from doing anything.
 
+Dashboard-cookie requests also follow §4.1. Cookies are not scoped to ports:
+another loopback port is `same-site`, so `SameSite=Strict` alone does not
+separate it from the daemon. Fetch Metadata, matching `Origin` where required,
+and the document proof provide the boundary. They do not change bearer-token
+HTTP behaviour.
+
 **Considered and rejected: Windows named pipes.** A named pipe
 (`\\.\pipe\shellpuppet-<user>`) would give OS-enforced per-user access control with no TCP
 port at all. Rejected because the browser viewer cannot speak to a pipe, and a
@@ -553,6 +617,37 @@ wrapper is applied after the policy decision.
 
 **`maxSessions` is an opt-in cap** on how many sessions may be live at once. There is no
 cap unless it is set.
+
+**Dashboard launch profiles.** `launcher.profiles` is a known top-level
+configuration key and an array of named entries. A bad entry is omitted and
+named in `daemon.log`; other entries still load. An empty launcher is the
+default. Each profile requires a unique lower-case `name` matching
+`^[a-z][a-z0-9-]{0,31}$` and a non-empty `command`. Optional `args` are
+literal strings; `shell` is a boolean; `agent` names a built-in or configured
+signature; `label` and `purpose` are non-empty strings with only `{name}`
+and `{folder}` placeholders. `readyText` is a literal substring and
+`readyQuiet` is non-negative finite milliseconds; both together refuse that
+entry. `cwd` is a fixed path or `ask`, which requires a list of named
+`{ name, path }` folders. `envFromDaemon` lists variable names; invalid
+names are dropped and reported. A profile's `policy` holds only `allow` and
+`deny` regex arrays, never `mode` or `maxSessions`. Unknown entry keys,
+including `envNames` and `passEnv`, refuse the entry.
+`open` is `grid` by default, or `focus` or `window`, and sets the
+session's initial dashboard placement.
+
+`POST /dashboard/launch` accepts JSON containing `profile` and, only when
+that profile has `cwd: "ask"`, one listed `folder` name. Any other key is
+`400` and starts nothing. The folder resolves to its configured existing
+directory as spawn `cwd`, never to a command-line fragment. Global policy
+runs first against `commandLine(command, args)` before the Windows wrap;
+profile `deny` may refuse it, and profile `allow` must match when present.
+The route accepts at most eight starts in any sliding sixty seconds (`429`
+after that) and refuses at thirty-two live sessions when
+`policy.maxSessions` is unset (`403`). A configured `maxSessions` replaces
+the thirty-two cap, and the rate still applies. These route caps do not
+apply to client-token `POST /sessions`. `GET /dashboard/profiles` returns
+profile names, labels, purposes, commands, arguments, folder names and
+paths, `envFromDaemon` names and entry problems, never variable values.
 
 Policy applies to `terminal_start` commands. It deliberately does **not** attempt to filter
 keystrokes: that is unenforceable theatre once a shell is running, and pretending
@@ -589,7 +684,7 @@ Requirements:
 ### 4.5 Audit log
 
 Append-only JSONL at `~/.shellpuppet/audit.log`: timestamp, session id, actor
-(`mcp:<clientInfo.name>` / `cli` / `viewer`; `client` for a client that does not name
+(`mcp:<clientInfo.name>` / `cli` / `viewer` / `dashboard`; `client` for a client that does not name
 itself; `daemon` for what the daemon does on its own, such as reaping an exited session),
 action and metadata.
 
@@ -613,6 +708,11 @@ the bundled xterm.js sends on its own is audited as `report`, with its kind and 
 
 The MCP adapter identifies its calling client from the MCP `initialize` handshake's
 `clientInfo` (name/version) for the actor field.
+
+A dashboard start records its profile name and command line. A dashboard
+grant redemption records `grant-redeem` without the grant. Its resizes and
+kills use actor `dashboard`; `envFromDaemon` contributes names only. Input
+and terminal reports keep the same length-only default.
 
 ### 4.6 Environment hygiene
 
@@ -648,6 +748,14 @@ default (ADR-008).
   a refusal names a variable, never its value.
 - Always inject `TERM=xterm-256color` and `COLORTERM=truecolor` regardless (§7).
 
+A dashboard start uses the same clean baseline. `envFromDaemon` on its
+profile adds only the names explicitly configured there from the daemon's
+environment; unset names do not refuse the start. It has no client
+environment, so `agents.passEnv` is not consulted. The response and audit
+name variables, never their values.
+A variable reserved for a connected feature's own credential stays out of
+sessions under ADR-007, including on this path.
+
 ---
 
 ## 5. Viewer
@@ -680,7 +788,7 @@ default (ADR-008).
   text. One rule decides it: **the grid belongs to whichever viewport is driving it, and
   to the session's declared grid when none is.**
 
-  - **Connecting is passive; acting takes control.** The first viewport to arrive with
+  - **Connecting is passive; acting takes control.** The first single-session viewer to arrive with
     nobody driving picks the grid up and asks for one that fills its window. A later one
     adopts what it finds, rather than reshaping a session someone else is watching. Any
     deliberate act by that human, moving the window or changing the text size,
@@ -712,11 +820,13 @@ default (ADR-008).
     That follows from the grid itself: a fixed grid cannot fill an arbitrary shape without
     changing the grid or stretching the characters. Both alternatives were rejected.
 
-  *Not built, deliberately:* an explicit takeover control. It would mean nothing while a
-  single desktop viewer is the whole product, and the rule above already gives the human
-  an escape by moving the window. The three positions exist
-  in the protocol so a second viewport, on another device for example, needs the
-  affordance added, not the model rewritten.
+  A dashboard pane is the explicit exception: it connects with `drive=0`,
+  adopts the grid and never inherits control when another socket leaves.
+  Its Fit, Enlarge and Restore actions send `resize` with `take: true` and
+  become the geometry controller. A `drive=0` resize without `take` is
+  ignored. A single-session viewer still drives when it is the first
+  read-write viewport; a read-only viewer never drives. `hold` remains a
+  client-token action.
 - **A screenshot is the page, not the cells.** The daemon's text snapshot is what the
   agent reads; the page is what the human sees, and the two can disagree in ways no
   text-level check can see. `screenshot.ts` opens the viewer page in capture mode
@@ -783,6 +893,104 @@ default (ADR-008).
 
 ---
 
+### 5.1 Dashboard
+
+`GET /dashboard` serves a document with no session data for a bad, spent or
+absent grant and no cookie. A valid `dt` on a top-level navigation sets
+`sp_dash` and embeds a fresh proof. An existing cookie with no `dt` also
+gets a fresh proof, without replacing the cookie. The routes are:
+
+| Route | Dashboard behaviour |
+|---|---|
+| `POST /dashboard/open` | Client token only; opens the isolated window and returns `{ "opened": true }`, never its URL or grant |
+| `GET /dashboard/profiles` | Cookie read; profile descriptions and problems, never environment values |
+| `POST /dashboard/launch` | Cookie, document proof and JSON profile name; limits in §4.3 |
+| `GET /sessions` | Cookie may read the existing list, including prompt state |
+| `DELETE /sessions/<id>` | Cookie plus document proof may kill |
+| `/dashboard/events` | Cookie plus subprotocol; outbound WebSocket; inbound ignored |
+| `/sessions/<id>/stream` | Cookie plus subprotocol; `drive=0` for a dashboard pane |
+
+The client token retains these routes where already allowed; `/events`
+remains client-token only. Stream authentication precedes session existence
+checks, preventing unauthenticated enumeration. `/dashboard/events` sends
+`hello` first, then a `snapshot` of sessions. `session-added`,
+`session-updated` and `session-removed` follow lifecycle changes, with
+timestamps after the initial hello. `session-updated` includes prompt state;
+the client-token `/events` keeps its existing `prompt-stall` and
+`prompt-clear` frames. While a dashboard events socket is open, a new
+session opens no separate viewer window and the start response omits
+`viewerUrl`. When the last socket closes, later starts resume the normal
+viewer launch behaviour.
+
+**Arrangement and attention.** Auto uses an even grid while each pane holds
+at least 80 by 24 cells. The floor calculation uses an 8 by 17 px cell,
+12 px horizontal inset and 38 px vertical chrome, making a minimum pane
+652 by 446 px. Thus 1920 by 1080 holds four panes; a fifth uses one large
+pane and a 300 px strip. At 1280 by 720, two side-by-side panes are below
+the floor, so Auto uses focus. Confirm the floor before release by reading
+and typing in shipped agent CLIs at 80 by 24; if it fails, raise it to the
+smallest size proven readable. Forced Grid divides panes evenly in stable
+contiguous order even below the floor. Focus gives one pane most of the
+window and a strip. New panes append. Attention adds a badge and a title
+count after twenty seconds without moving or focusing a pane; the jump key
+selects a waiting pane where it stands. Pin does not reorder a grid; the
+earliest pinned pane takes the large slot in Focus. Only an explicit reorder
+changes order. Mode, order and pin live in `localStorage` in the isolated
+profile; gone session ids are dropped.
+
+**Geometry.** Each pane uses the session's grid and measures whole character
+cells to scale its font between 6 px and 40 px, without stretching glyphs.
+A pane below the floor is marked; it keeps the program's grid. Layout,
+window size, mode, new sessions, attention and the jump key send no PTY
+resize. Fit takes control and fits the pane. Enlarge covers the pane's
+current screen and fits the real terminal to it; Restore sends its previous
+grid. A focused or enlarged pane also fits the real terminal when the
+person takes control. The dashboard window can use the browser's full-screen
+key. The viewport cap remains 400 by 150. Covered panes and panes scrolled
+out of a strip close their stream sockets; a revealed pane receives the
+existing bounded snapshot on reconnect.
+
+**Windows.** On load, query `window-management` permission without a prompt.
+When permission is `prompt`, Allow screens invokes `getScreenDetails()` on
+one click and opens no window during that click or its continuation. Once
+granted, offer one button for each other screen without a window. One click
+opens one window on that screen, using `availLeft`, `availTop`, `availWidth`
+and `availHeight` as `window.open` features. Without the API or permission,
+Open another window opens one unplaced window for the person to move. A
+blocked popup leaves the button and says to press it again. No path retries
+`window.open` during the same click. Panes fill the primary screen to its
+readable capacity, then other screens in stable order; fallback windows use
+creation order and their own viewports. `BroadcastChannel` coordinates the
+window roster and pane assignment, while the daemon remains the source of
+session truth. Each session appears in one window. Closing a window
+returns its panes to the others. Windows share the cookie and never mint a
+new grant.
+
+Pop out uses this window support to put one pane in its own movable window,
+which may be made full screen. It leaves the grid until the window closes,
+then returns in stable order. A profile may set `"open": "grid"` (default),
+`"focus"` or `"window"` for the session it starts. This permits a
+supervising session to open focused or popped out while sessions it starts
+appear in the grid.
+
+**Controls and content.** Terminal mode sends keys to the focused pane.
+The configurable `Ctrl+Shift+A` prefix enters navigation and is consumed
+by the page; `Ctrl+\` is not used because it is the POSIX quit character.
+Navigation uses arrows and digits to select, Enter to return to terminal
+mode, `j` to jump to a waiting pane, `p` to pin, `f` to Fit, `m` to
+Enlarge and `?` for help. Kill is one menu action away from the pane
+header. Copy session id helps an agent join with existing tools; it mints
+no viewer grant and creates no lock. An ended pane remains until dismissed
+or reaped on the existing fifteen-minute grace. Restart is available only
+for a dashboard-started profile and posts its profile and selected folder
+again. Question text, terminal content, labels, errors and URLs are inserted
+as text, never HTML or navigation targets. The focused pane is marked; a
+polite live region and a static mark under reduced motion convey attention.
+There is no sound or operating-system notification. The dashboard uses the
+dark viewer palette with readable chrome contrast.
+
+---
+
 ## 6. Test plan
 
 **Unit**
@@ -812,6 +1020,16 @@ default (ADR-008).
   `start`/`kill`/`list`.
 - **Tree kill**: start a session whose shell spawns a child; `terminal_kill`; assert the
   grandchild is gone (the Windows `taskkill` and POSIX process-group paths both covered).
+- **Dashboard boundary**: bad, spent and expired grants contain no session
+  data; a successful grant is one use; a planted cookie cannot hide the
+  issued one; Fetch Metadata, missing `Origin`, CSRF header and subprotocol
+  cases are covered for reads, mutations and upgrades. Client-token starts
+  and the single-session viewer retain their existing access and geometry.
+- **Dashboard behaviour**: malformed profiles start nothing while valid
+  siblings load; the eight-per-minute and live-session caps apply without
+  `policy.maxSessions`; `drive=0` never takes geometry on connect; Fit,
+  Enlarge, Restore, Focus and Pop out control the real grid as specified;
+  layout and multi-window assignment preserve stable session placement.
 
 **Cross-platform CI**
 Matrix over `windows-latest`, `ubuntu-latest`, `macos-latest`, on Node 22, 24 and 26.
@@ -822,6 +1040,9 @@ matrix is what catches a regression on the other platforms.
 Real agent-CLI smoke tests cannot run in CI, because they need credentials and minutes of
 startup. Keep them as the manual checklist in `docs/reference/agent-profiles.md`, with the
 measured timings, and tag them `@manual`.
+Before releasing the dashboard, read and type in the shipped agent CLIs at
+80 by 24 cells. Raise the floor to the smallest proven readable size if
+that check fails.
 
 ---
 
@@ -865,10 +1086,12 @@ keep a timed one) · **scrollback search** (regex across history: the
 `lastLines` tail and viewer scrolling are in; search is not) · remote access as a feature
 of the daemon (a tunnel you run yourself needs nothing from it: §4.2) · session persistence
 across daemon restart · SSH targets · mouse events · any web UI beyond the single viewer
-page.
+page (the dashboard of §5.1 comes after the first release, under ADR-009).
 
-**By design,** a session starts when an agent asks: connecting ShellPuppet to an agent is
-the approval, and config `policy` decides what the agent may start.
+An agent may start a session without a per-session approval: connecting
+ShellPuppet to that agent is the approval, and config `policy` decides what
+it may start. A person may also start a configured profile from the
+dashboard (§5.1).
 
 ---
 

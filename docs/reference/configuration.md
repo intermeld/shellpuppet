@@ -6,6 +6,11 @@ No file means all defaults. The **daemon** reads it at startup, so run
 `shellpuppet daemon restart` after editing. The MCP adapter reads its own
 `mcp` section at launch.
 
+Dashboard launch profiles (`launcher.profiles`, decided in
+[ADR-009](../decisions/ADR-009-dashboard-and-sessions-you-start-yourself.md))
+are not in this release, and the daemon reports a `launcher` key as unknown.
+They are documented here, with worked examples, in the release that ships them.
+
 Full example, everything optional:
 
 ```jsonc
