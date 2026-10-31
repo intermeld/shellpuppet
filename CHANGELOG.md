@@ -48,6 +48,9 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- OpenCode and MiMo Code question menus now report their wrapped question and
+  numbered choices as a waiting prompt. The menu survives `hideReasoning`, and
+  filtered session lists omit its question text.
 - On Windows, a waiter for console-host cleanup now waits for every running
   batch when process lists overlap. Finishing one list no longer reports the
   queue settled while another session's host is still being checked.

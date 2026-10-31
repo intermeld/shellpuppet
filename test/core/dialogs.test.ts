@@ -23,6 +23,7 @@ const A_MINUTE = 60_000;
 const fixtures = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'dialogs');
 const OPENCODE_DIALOG = fs.readFileSync(path.join(fixtures, 'opencode-permission-dialog.txt'), 'utf8');
 const OPENCODE_ANSWERED = fs.readFileSync(path.join(fixtures, 'opencode-permission-answered.txt'), 'utf8');
+const MIMO_QUESTION = fs.readFileSync(path.join(fixtures, 'mimo-question-menu.txt'), 'utf8');
 
 /** MiMo Code's dialog: two choices under the same title. */
 const MIMO_DIALOG = `
@@ -88,6 +89,35 @@ afterEach(() => {
 });
 
 describe('detectPrompt: OpenCode and MiMo Code dialogs', () => {
+  it('reads a wrapped MiMo Code question, option labels and its claimed rows', () => {
+    const prompt = detectPrompt(MIMO_QUESTION);
+    expect(prompt?.question).toBe('Which of these should the build use for the release notes?');
+    expect(prompt?.options).toEqual(['Use the existing notes', 'Write new notes', 'Type your own answer']);
+    expect(prompt?.basis).toBe('footer');
+    expect(MIMO_QUESTION.split('\n')[prompt!.rows[0]]).toContain('Which of these');
+    expect(MIMO_QUESTION.split('\n')[prompt!.rows[1]]).toContain('esc dismiss');
+    expect(detectPrompt(MIMO_QUESTION.replace('  ┃  ↑↓ select  enter submit  esc dismiss', '  ┃'))).toBeNull();
+    expect(detectPrompt(MIMO_DIALOG)?.options).toEqual(['Allow once', 'Reject']);
+  });
+
+  it('reads two, three and four choices, with or without descriptions', () => {
+    for (const count of [2, 3, 4]) {
+      for (const descriptions of [false, true]) {
+        const names = ['Use old notes', 'Write new notes', 'Check with editor'].slice(0, count - 1);
+        names.push('Type your own answer');
+        const rows = ['  ┃  Which notes should be used?', '  ┃'];
+        names.forEach((name, index) => {
+          rows.push(`  ┃  ${String(index + 1)}. ${name}`);
+          if (descriptions && index < count - 1) rows.push('  ┃     More detail about this choice.');
+        });
+        rows.push('  ┃', '  ┃  ↑↓ select  enter submit  esc dismiss');
+        const prompt = detectPrompt(rows.join('\n'));
+        expect(prompt?.question, `${String(count)} choices, descriptions ${String(descriptions)}`).toBe('Which notes should be used?');
+        expect(prompt?.options).toEqual(names);
+      }
+    }
+  });
+
   it('reads OpenCode’s dialog, sidebar and all, as a prompt with three choices', () => {
     const prompt = detectPrompt(OPENCODE_DIALOG);
     expect(prompt).not.toBeNull();

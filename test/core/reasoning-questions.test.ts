@@ -132,6 +132,11 @@ describe('every question shape the detector knows survives hideReasoning', () =>
 
   const shapes: { name: string; lines: string[]; mustKeep: string[] }[] = [
     {
+      name: 'MiMo Code question menu',
+      lines: ['Thinking', '  ┃  Which notes should be used?', '  ┃', '  ┃  1. Existing notes', '  ┃  2. Type your own answer', '  ┃', '  ┃  ↑↓ select  enter submit  esc dismiss'],
+      mustKeep: ['  ┃  Which notes should be used?', '  ┃  1. Existing notes', '  ┃  2. Type your own answer'],
+    },
+    {
       name: 'numbered',
       lines: ['Thinking', 'Allow this command to run?', '  1 (○) Allow once', '  2 (•) No'],
       mustKeep: ['Allow this command to run?', '  1 (○) Allow once', '  2 (•) No'],
