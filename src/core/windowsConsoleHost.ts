@@ -131,7 +131,10 @@ function matchingHosts(
 }
 
 function unmatchedReason(count: number): string {
-  if (count === 0) return 'no console host was created in the session window';
+  // "Found", not "created": a start that failed part-way created its host and
+  // had it released already (node-pty does that itself), so what is true of
+  // every case is that no host of this session was left to find.
+  if (count === 0) return 'no console host was found in the session window';
   if (count === 1) return 'console host belongs to more than one session window';
   return `${String(count)} console hosts were created in the session window`;
 }

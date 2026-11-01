@@ -5,8 +5,11 @@
  * the terminal's input pipe is refused, inside the constructor), and a real
  * one, a file named as a program that Windows cannot run started with
  * `shell: false`. node-pty 1.2.0-beta.18 creates the program only after the
- * spawn has returned, so the second failure reaches the session as an exit
- * whose code Windows reported (upstream #934), not as a throw to the caller.
+ * spawn has returned and reports the failure as an exit whose code Windows
+ * gave (upstream #934) rather than a throw, so this file drives the session
+ * manager directly; over HTTP the start contract refuses such a start again,
+ * as 1.1.0 did (`start-contract.test.ts`), and what must hold either way is
+ * that no console host is left behind.
  */
 
 import { execFileSync } from 'node:child_process';

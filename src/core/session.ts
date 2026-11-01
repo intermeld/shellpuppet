@@ -16,6 +16,7 @@
 
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import type { IPty } from 'node-pty';
 import type { QueuedConsoleHost, SpawnWindow } from './windowsConsoleHost.js';
@@ -224,6 +225,37 @@ export class CommandNotFoundError extends Error {
 }
 
 /**
+ * The Windows build number of an `os.release()` string (`10.0.19045` → 19045),
+ * or 0 when the string names none.
+ */
+export function windowsBuildNumber(release: string): number {
+  const parts = /(\d+)\.(\d+)\.(\d+)/.exec(release);
+  return parts === null ? 0 : Number(parts[3]);
+}
+
+/**
+ * The first Windows build with ConPTY, as node-pty's own README states:
+ * Windows 10 version 1809, build 18309. node-pty 1.2.0 removed its winpty
+ * fallback, so a session cannot start on a build below this.
+ */
+export const CONPTY_MINIMUM_BUILD = 18309;
+
+/**
+ * A start on a Windows build with no ConPTY, which node-pty 1.2.0 cannot run
+ * a terminal on (it removed the winpty fallback). A caller error, mapped to
+ * 400: nothing about the daemon is wrong, and the message names the floor.
+ */
+export class WindowsWithoutConPTYError extends Error {
+  constructor(build: number) {
+    super(
+      `This Windows build (${String(build)}) has no ConPTY, which node-pty 1.2.0 needs for every terminal: ` +
+        `Windows 10 version 1809 (build ${String(CONPTY_MINIMUM_BUILD)}) or later is required to start a session.`,
+    );
+    this.name = 'WindowsWithoutConPTYError';
+  }
+}
+
+/**
  * Input for a session whose input pipe has failed (Windows): refused, because
  * written it would be lost. The daemon answers it with a 409.
  */
@@ -372,6 +404,16 @@ export interface SessionDeps {
   logger?: Logger;
   /** Platform override, for tests only. Defaults to `process.platform`. */
   platform?: NodeJS.Platform;
+  /**
+   * Windows release override (`os.release()`), for tests only. Defaults to
+   * the real one, whose build number decides the ConPTY floor.
+   */
+  osRelease?: string;
+  /**
+   * How long a kill waits for the deferred program's pid, for tests only.
+   * Defaults to `PROGRAM_PID_WAIT_MS`.
+   */
+  pidWaitMs?: number;
   /** Environment hygiene mode (design §4.6). Defaults to `DEFAULT_SESSION_ENV`. */
   sessionEnv?: SessionEnvMode;
   /** Windows tree killer override, for tests only. Defaults to `taskkillTrees`. */
@@ -611,6 +653,8 @@ export class Session implements WaitTarget {
   private readonly registerConsoleHost: (id: string, window: SpawnWindow, platform: NodeJS.Platform) => void;
   private readonly spawnPty: SessionDeps['spawn'];
   private readonly treeKiller: TreeKiller;
+  /** How long a kill waits for the deferred program's pid (a test seam). */
+  private readonly pidWaitMs: number;
   /** Whether the program has bracketed paste (DEC 2004) enabled. See PASTE_START. */
   private bracketedPaste = false;
   /**
@@ -676,6 +720,16 @@ export class Session implements WaitTarget {
     this.endConsoleHost = deps.queueConsoleHostEnd ?? queueConsoleHostEnd;
     this.registerConsoleHost = deps.registerConsoleHostWindow ?? registerConsoleHostWindow;
     this.spawnPty = deps.spawn;
+    this.pidWaitMs = deps.pidWaitMs ?? PROGRAM_PID_WAIT_MS;
+
+    // node-pty 1.2.0 is ConPTY-only on Windows: the winpty fallback is gone,
+    // so a build below the ConPTY floor cannot start anything. Refused here,
+    // with the floor named, rather than deep inside ConPTY as a bare
+    // "Cannot launch conpty".
+    if (this.platform === 'win32') {
+      const build = windowsBuildNumber(deps.osRelease ?? os.release());
+      if (build < CONPTY_MINIMUM_BUILD) throw new WindowsWithoutConPTYError(build);
+    }
 
     const cols = options.cols ?? DEFAULT_COLS;
     const rows = options.rows ?? DEFAULT_ROWS;
@@ -1282,9 +1336,12 @@ export class Session implements WaitTarget {
     // then not reported as this session's root surviving: it may be someone
     // else's process. A pid that is gone is still the result worth logging.
     // A code recorded by this kill is not that case: the tree was still ours.
-    if (!this.processAlive(pid)) {
+    // A pid of 0 means no program was ever created, and on Windows a liveness
+    // probe of it answers as though something were there: nothing is probed
+    // and no survivor is claimed for it.
+    if (pid > 0 && !this.processAlive(pid)) {
       this.logger.info('session tree killed', { id: this.id, pid });
-    } else if (!exitAlreadyRecorded) {
+    } else if (pid > 0 && !exitAlreadyRecorded) {
       this.logger.error('session root SURVIVED the kill and may still be running', {
         id: this.id,
         pid,
@@ -1322,7 +1379,7 @@ export class Session implements WaitTarget {
    * pid at the spawn, so nothing is waited for there.
    */
   private async programPid(): Promise<number> {
-    const deadline = Date.now() + PROGRAM_PID_WAIT_MS;
+    const deadline = Date.now() + this.pidWaitMs;
     while (this.pty.pid <= 0 && !this.exitedFlag && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
@@ -1330,13 +1387,38 @@ export class Session implements WaitTarget {
   }
 
   /**
+   * The program's pid once node-pty has created it, or null when the session
+   * ended before any program existed: a start whose ConPTY output worker
+   * never connected, or one Windows refused the program of. The start
+   * contract waits here — a session is reported as started only once its
+   * program exists, as node-pty 1.1.0's synchronous spawn guaranteed.
+   */
+  async startedProgramPid(): Promise<number | null> {
+    const pid = await this.programPid();
+    return pid > 0 ? pid : null;
+  }
+
+  /**
+   * What went wrong, for a start that ended before any program existed
+   * (`startedProgramPid` returned null): node-pty 1.1.0's own words for a
+   * program Windows would not create, with Windows' code; for the connection
+   * bound, which 1.1.0 did not have, what actually ran out.
+   */
+  startFailure(): string {
+    const code = this.exitCodeValue;
+    if (code !== null && code > 0) return `Cannot create process, error code: ${String(code)}`;
+    return 'the ConPTY output worker never connected, so node-pty never created the program';
+  }
+
+  /**
    * End the program of a session that ended with no exit code: node-pty
    * closed its terminal when its output failed, and the program would run on
    * where nobody can read or type into it, for an agent CLI still acting and
-   * spending. The same tree kill a kill uses. Never rejects.
+   * spending. The same tree kill a kill uses, including its wait for the pid.
+   * Never rejects.
    */
   private async endProgram(): Promise<void> {
-    const pid = this.pty.pid;
+    const pid = await this.programPid();
     this.logger.warn('session output failed: ending its program', { id: this.id, pid });
     await this.killTree(pid);
   }

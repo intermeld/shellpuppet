@@ -138,6 +138,14 @@ export class SessionManager {
    * bound would cut short the very run it exists for. So shutdown takes
    * at most that cap plus `timeoutMs`.
    *
+   * Before any of that, every session's program is waited for
+   * (`Session.startedProgramPid`): node-pty creates a Windows terminal's
+   * program only after its output worker connects, so a session started in
+   * the moment of shutdown has no pid yet. That wait has its own bound (above
+   * node-pty's five-second connection limit) and sits outside `timeoutMs`, so
+   * the per-session teardown budget is spent on teardown, not on waiting, and
+   * each kill is still awaited and verified.
+   *
    * Each kill is bounded so shutdown ALWAYS completes. An unbounded teardown
    * that wedges leaves the daemon alive but undiscoverable. That is worse than
    * a best-effort kill, because the user can then only end it via Task
@@ -150,6 +158,9 @@ export class SessionManager {
       this.sessions.delete(session.id);
       this.onRemoved(session.id);
     }
+    await Promise.all(all.map(async (session) => {
+      await session.startedProgramPid();
+    }));
     await this.killTreesInOneRun(all);
     await Promise.all(
       all.map(async (session) => {

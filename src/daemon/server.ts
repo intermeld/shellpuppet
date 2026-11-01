@@ -20,6 +20,7 @@ import {
   DEFAULT_SESSION_ENV,
   SessionInputFailedError,
   SessionProgramEndedError,
+  WindowsWithoutConPTYError,
   credentialShapedNames,
 } from '../core/session.js';
 import { NativePtyUnavailableError } from '../core/nativePty.js';
@@ -1547,6 +1548,10 @@ export class Daemon {
         json(res, 400, { error: error.message });
         return;
       }
+      if (error instanceof WindowsWithoutConPTYError) {
+        json(res, 400, { error: error.message });
+        return;
+      }
       this.logger.error('dashboard session start failed', {
         error: error instanceof Error ? (error.stack ?? String(error)) : String(error),
       });
@@ -1557,7 +1562,22 @@ export class Daemon {
       json(res, 500, { error: `Failed to start session: ${String(error)}` });
       return;
     }
+    // Counted the moment the launch is accepted, before the start contract's
+    // wait: the rate check above and this record must sit in the same
+    // synchronous stretch, or twelve launches fired together would all pass
+    // the check before any of them was counted.
     this.launchTimes.push(now);
+
+    // The same start contract as `POST /sessions`: the dashboard's pane is a
+    // session only once its program exists, and a start that ends before any
+    // program did fails as 1.1.0's spawn did, leaving nothing in the grid.
+    if ((await session.startedProgramPid()) === null) {
+      const failure = `Failed to start session: Error: ${session.startFailure()}`;
+      this.logger.error('dashboard session start failed', { id: session.id, error: failure });
+      await this.manager.kill(session.id);
+      json(res, 500, { error: failure });
+      return;
+    }
     // A launch is an API call: the idle timer counts from it, so a session
     // that has just started is not reaped sooner than `idleMinutes` allows.
     this.lastActivity = Date.now();
@@ -2569,6 +2589,12 @@ export class Daemon {
         json(res, 400, { error: error.message });
         return;
       }
+      // The Windows build cannot run a terminal at all: named and refused,
+      // like any other start the caller cannot get.
+      if (error instanceof WindowsWithoutConPTYError) {
+        json(res, 400, { error: error.message });
+        return;
+      }
       this.logger.error('session start failed', {
         error: error instanceof Error ? (error.stack ?? String(error)) : String(error),
       });
@@ -2579,6 +2605,22 @@ export class Daemon {
         return;
       }
       json(res, 500, { error: `Failed to start session: ${String(error)}` });
+      return;
+    }
+
+    // node-pty 1.2.0-beta.18 creates a Windows terminal's program only once
+    // its output worker has connected, a few hundred milliseconds after the
+    // spawn returns, and reports pid 0 until then. The start contract is what
+    // it always was: a started session has a program, and its pid is real, so
+    // the answer waits — bounded by node-pty's own five-second connection
+    // bound plus a margin — for the program to exist. A session that ends
+    // before any program did fails the start exactly as 1.1.0's spawn did,
+    // with Windows' code in the message, and leaves no session behind.
+    if ((await session.startedProgramPid()) === null) {
+      const failure = `Failed to start session: Error: ${session.startFailure()}`;
+      this.logger.error('session start failed', { id: session.id, error: failure });
+      await this.manager.kill(session.id);
+      json(res, 500, { error: failure });
       return;
     }
 

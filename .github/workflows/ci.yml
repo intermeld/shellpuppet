@@ -77,15 +77,16 @@ jobs:
   #   macOS spawn-helper's execute bit itself. The runner's prefix is its own,
   #   so this is the user-owned install. A root-owned one, where the chmod is
   #   refused and the start says which to run, is covered by the unit tests.
-  # - Linux installs with --allow-scripts=node-pty, as the README says. Since
-  #   1.2.0-beta the package ships Linux prebuilds (glibc x64 and arm64), and
-  #   node-pty's loader reads `prebuilds/<platform>-<arch>` directly, so the
-  #   "not allowed" case may now work without the flag where the prebuild
-  #   matches; that is to verify in CI, and the case stays until it is.
-  # - Linux without the flag, where no prebuild matches (another
-  #   architecture, or musl), has no node-pty to load. There a start must
-  #   refuse with the whole reinstall line, and the daemon must keep
-  #   answering.
+  # - Linux installs with --allow-scripts=node-pty, as the README says.
+  # - Linux with no flag also installs and starts: since 1.2.0-beta the
+  #   package ships Linux prebuilds (glibc x64 and arm64), and node-pty's
+  #   loader reads `prebuilds/<platform>-<arch>` directly, so the install
+  #   script is not needed where one matches — ubuntu-latest is glibc x64.
+  #   This case runs the same smoke as the plain package job, which drives a
+  #   whole session, so it proves the start works from the prebuild alone. A
+  #   machine where no prebuild matches (another architecture, or musl in
+  #   place of glibc) still needs the script, and there a start refuses with
+  #   the reinstall line; this matrix has no such runner to assert that on.
   package-npm12:
     strategy:
       fail-fast: false
@@ -94,7 +95,7 @@ jobs:
           - { os: windows-latest, case: 'no flag' }
           - { os: macos-latest, case: 'no flag' }
           - { os: ubuntu-latest, case: 'allowed', install-args: '--allow-scripts=node-pty' }
-          - { os: ubuntu-latest, case: 'not allowed', start-fails-with: 'npm install -g --allow-scripts=node-pty shellpuppet' }
+          - { os: ubuntu-latest, case: 'no flag (prebuilt)' }
     name: package npm 12 (${{ matrix.os }}, ${{ matrix.case }})
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15
