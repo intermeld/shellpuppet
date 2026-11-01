@@ -80,7 +80,7 @@ requires (it removed its winpty fallback); a start on an older build is
 refused with the minimum named. `node-pty` ships prebuilt binaries for
 Windows and macOS and, in the 1.2.0 beta ShellPuppet pins, for mainstream
 Linux too (glibc, x64 and arm64), so no compiler is needed there. Where no
-prebuilt matches — another architecture, or musl in place of glibc — npm
+prebuilt matches (another architecture, or musl in place of glibc), npm
 builds it with node-gyp, which needs Python 3, make and a C++ compiler (on
 Debian and Ubuntu: `sudo apt-get install -y python3 make g++`).
 

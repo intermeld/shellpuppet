@@ -210,9 +210,9 @@ describe('the shutdown batch', () => {
       manager.create({ command: 'cmd.exe', shell: true });
 
       await manager.killAll();
-      // The one batch run holds the real program's pid, and no run — the
+      // The one batch run holds the real program's pid, and no run (the
       // batch, or a session's own fallback walk of a stand-in that never
-      // ends — ever holds a 0. (The second walk of the real pid is the
+      // ends) ever holds a 0. (The second walk of the real pid is the
       // stand-in's own kill: nothing tells it its tree died, as the batch's
       // taskkill would tell a real one.)
       expect(walked[0]).toEqual([program.pid]);

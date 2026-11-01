@@ -110,21 +110,23 @@ version may change behaviour, and every such change is listed here.
 ### Changed
 
 - node-pty 1.2.0-beta.18 creates a Windows session's program only once its
-  ConPTY output worker has connected — a few hundred milliseconds after the
-  spawn returns, and five seconds at most, which is node-pty's own bound.
+  ConPTY output worker has connected: a few hundred milliseconds after the
+  spawn returns, and five seconds at most, a bound node-pty adds.
   The start contract is unchanged from the outside: a start still answers
   only once the program exists, so the `pid` in a start response (over HTTP,
   `terminal_start` and `shellpuppet start --json`) is the program's real pid,
-  never 0, and a start whose program Windows could not create — or whose
-  output worker never connected in those five seconds — fails the start as
-  before the upgrade, with Windows' code in the message, and leaves no
-  session behind. A kill of a session in its first moments waits the same
+  never 0. A start whose program Windows could not create fails as before
+  the upgrade (HTTP 500, "Failed to start session", with Windows' code in
+  the message). A start whose output worker never connected in those five
+  seconds fails with the same status and shape and a message that says so;
+  under node-pty 1.1.0 such a start waited instead. Either way no session is
+  left behind, and none is listed while the start waits. A kill of a session in its first moments waits the same
   way before its process tree is ended, and the daemon's shutdown kills
   every tree only once every program exists, so a teardown is still awaited
   and verified.
 - node-pty now ships Linux prebuilt binaries (glibc, x64 and arm64), so a
-  compiler is needed only where none matches — another architecture, or musl
-  in place of glibc. `npm install -g --allow-scripts=node-pty shellpuppet`
+  compiler is needed only where none matches (another architecture, or musl
+  in place of glibc). `npm install -g --allow-scripts=node-pty shellpuppet`
   stays the documented Linux install, and where no prebuilt matches it is
   still what builds node-pty.
 - The variables a caller may name at start are listed in config `envNames`, at
@@ -165,7 +167,7 @@ version may change behaviour, and every such change is listed here.
   with no lock (microsoft/node-pty#921, fixed by #922 in 1.2.0-beta.13), and
   one unlucky pair of exits could end the whole daemon with every session it
   was running. The mutex arrived in 1.2.0-beta.13; the pin is beta.18.
-  Windows needs ConPTY for every session now — Windows 10 version 1809
+  Windows needs ConPTY for every session now: Windows 10 version 1809
   (build 18309) or later, as node-pty requires; on an older build a start is
   refused with the minimum named, where node-pty 1.1.0 fell back to winpty.
 - On Windows, the console hosts queued in one batch are ended by one

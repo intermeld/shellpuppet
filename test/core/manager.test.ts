@@ -195,6 +195,27 @@ describe('SessionManager.killAll tree kill in one run', () => {
     expect(events).toEqual(['kill s1']);
   });
 
+  it('waits for a program that has no pid yet before the one-run tree kill', async () => {
+    const events: string[] = [];
+    const { treeKiller, standIn } = recorded(events);
+    // s2 was started in the moment of shutdown: node-pty reports pid 0 until
+    // its program exists, which here happens only after a few event-loop turns.
+    const late = standIn('s2', 0);
+    late.startedProgramPid = async () => {
+      for (let turn = 0; turn < 5; turn++) await new Promise((resolve) => setTimeout(resolve, 1));
+      late.pid = 202;
+      events.push('s2 program exists');
+      return 202;
+    };
+    const { manager } = managerWith([standIn('s1', 101), late], { platform: 'win32', treeKiller });
+
+    await manager.killAll(1_000);
+
+    // Without the wait the run would hold only 101, and s2's tree, created a
+    // moment later, would be left to its own kill inside the teardown budget.
+    expect(events).toEqual(['s2 program exists', 'trees 101,202', 'kill s1', 'kill s2']);
+  });
+
   it('leaves other platforms to the process-group kill of each session', async () => {
     const events: string[] = [];
     const { treeKiller, standIn } = recorded(events);

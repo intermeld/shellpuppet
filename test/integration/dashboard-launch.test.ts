@@ -773,6 +773,27 @@ describe('the program is resolved before it is spawned', () => {
   });
 });
 
+describe('a launch whose program never exists fails and leaves nothing', () => {
+  it('answers 500 with the start failure and keeps the session out of the list', async () => {
+    if (process.platform !== 'win32') return;
+    // An `.exe` Windows cannot run: it holds text, not an executable image.
+    // Every check before the spawn passes; node-pty never creates a program.
+    const dir = makeDir('dash-launch-unrunnable-');
+    const file = path.join(dir, 'sink.exe');
+    fs.writeFileSync(file, 'not an executable image');
+    const daemon = await startLaunchDaemon({
+      launcher: profilesOf([{ name: 'sink', command: file, shell: false }]),
+    });
+    const before = await sessionIds(daemon);
+
+    const refused = await launch(daemon, { profile: 'sink' });
+
+    expect(refused.status).toBe(500);
+    expect(refused.body).toMatch(/Failed to start session: Error: Cannot create process, error code: \d+/);
+    expect(await sessionIds(daemon)).toEqual(before);
+  });
+});
+
 describe('the launch body cannot confuse the request', () => {
   it('refuses __proto__, constructor, duplicate keys and arrays, and starts nothing', async () => {
     const daemon = await startLaunchDaemon({

@@ -135,8 +135,7 @@ export class SessionManager {
    * run (`taskkillTrees` says why), so each session's own kill then finds its
    * root gone and only has its terminal left to release. That run is bounded
    * by its own cap (`TREE_KILL_TIMEOUT_MS`), not by `timeoutMs`: a shorter
-   * bound would cut short the very run it exists for. So shutdown takes
-   * at most that cap plus `timeoutMs`.
+   * bound would cut short the very run it exists for.
    *
    * Before any of that, every session's program is waited for
    * (`Session.startedProgramPid`): node-pty creates a Windows terminal's
@@ -145,6 +144,10 @@ export class SessionManager {
    * node-pty's five-second connection limit) and sits outside `timeoutMs`, so
    * the per-session teardown budget is spent on teardown, not on waiting, and
    * each kill is still awaited and verified.
+   *
+   * So shutdown takes at most the program wait (`PROGRAM_PID_WAIT_MS`), plus
+   * the tree kill's cap, plus `timeoutMs`. A session whose program wait ran
+   * out is not waited for again by its own kill.
    *
    * Each kill is bounded so shutdown ALWAYS completes. An unbounded teardown
    * that wedges leaves the daemon alive but undiscoverable. That is worse than

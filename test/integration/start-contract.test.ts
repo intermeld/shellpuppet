@@ -5,8 +5,8 @@
  * with a code instead. The contract is what it was under 1.1.0's synchronous
  * spawn: `POST /sessions` answers only once the program exists, so a start
  * response carries a real pid, and a start that produced no program is a
- * failure — the same status and shape 1.1.0's thrown spawn produced, with
- * Windows' code in the message — leaving no session behind.
+ * failure with the status and shape 1.1.0's thrown spawn produced (Windows'
+ * code in the message), leaving no session behind, and never listed.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -48,9 +48,25 @@ describe.skipIf(process.platform !== 'win32')('the start contract', () => {
       const file = path.join(dir, 'sink.exe');
       writeFileSync(file, 'console.log("not an executable image");\n');
 
-      const refused = await api(td.port, td.token, '/sessions', {
+      // While the start waits for a program that will never exist, the
+      // session is not listed: a client polling sees nothing appear and vanish.
+      let answered = false;
+      const pending = api(td.port, td.token, '/sessions', {
         body: { command: file, shell: false, openViewer: false },
+      }).finally(() => {
+        answered = true;
       });
+      const seenDuringWait: string[] = [];
+      let polls = 0;
+      while (!answered) {
+        const during = await api(td.port, td.token, '/sessions', { method: 'GET' });
+        polls++;
+        for (const s of during.body['sessions'] as Array<{ id: string }>) seenDuringWait.push(s.id);
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+      const refused = await pending;
+      expect(polls).toBeGreaterThan(0);
+      expect(seenDuringWait).toEqual([]);
 
       // The status and shape 1.1.0's thrown spawn produced, with Windows'
       // code in the message (193, not a valid Win32 application, or 216, a
