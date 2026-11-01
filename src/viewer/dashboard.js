@@ -249,6 +249,7 @@
     card.tabIndex = 0;
     const head = document.createElement('div');
     head.className = 'pane-head';
+    head.title = 'Double-click the title bar to Enlarge or Restore; Escape restores an enlarged pane';
     const label = document.createElement('span');
     label.className = 'pane-label';
     const purpose = document.createElement('span');
@@ -304,6 +305,9 @@
     item.menu = menu;
     head.append(label, purpose, badge, state, space, size, item.smaller, item.autoText, item.larger,
       item.fit, item.enlarge, item.pin, item.left, item.right, item.menuButton);
+    head.addEventListener('dblclick', (event) => {
+      if (!event.target.closest('button')) item.enlarge.click();
+    });
     const wrap = document.createElement('div');
     wrap.className = 'pane-wrap';
     const term = document.createElement('div');
@@ -879,6 +883,11 @@
     }
     if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === prefix) {
       event.preventDefault(); event.stopPropagation(); navigation = true; return;
+    }
+    if (event.key === 'Escape' && enlarged) {
+      event.preventDefault(); event.stopPropagation(); navigation = false;
+      panes.get(enlarged)?.enlarge.click();
+      return;
     }
     // Terminal mode: the focused pane's terminal receives the key, including Ctrl+\.
     if (!navigation) return;

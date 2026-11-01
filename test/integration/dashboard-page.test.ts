@@ -382,6 +382,89 @@ describe('passive dashboard page', () => {
     expect(result.resizes).toEqual([]);
   }, 180_000);
 
+  it('double-clicks only the title bar to enlarge and restore the real terminal', async (context) => {
+    if (!browser) { context.skip(); return; }
+    const id = await startSession('double click pane');
+    const shot = await captureDashboard({ browser, viewerUrl: await dashboardUrl(), width: 1280, height: 720,
+      drive: true, timeoutMs: 120_000, beforeNavigateScript: instrument,
+      probe: `(() => {
+        const state = (window.__doubleClickProbe ||= { phase: 0 });
+        const feed = window.__dashSockets?.find(s => s.url.endsWith('/dashboard/events'))?.socket;
+        if (!feed || document.getElementById('connection').textContent !== 'Connected') return null;
+        if (state.phase === 0) {
+          feed.onmessage({ data: JSON.stringify({ type: 'snapshot', sessions: [
+            { id: ${JSON.stringify(id)}, label: 'double click pane', cols: 100, rows: 30 }] }) });
+          state.phase = 1;
+        }
+        const card = document.querySelector('[data-session=${JSON.stringify(id)}]');
+        if (!card || !card.querySelector('.pane-size')?.textContent.includes('100×30')) {
+          if (state.phase === 1) return null;
+        }
+        const root = document.getElementById('panes');
+        const head = card.querySelector('.pane-label');
+        const doubleClick = (element) => element.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        if (state.phase === 1) {
+          doubleClick(card.querySelector('.pane-term'));
+          state.terminalUntouched = root.dataset.layout === 'grid' && window.__dashResizes.length === 0;
+          doubleClick(head);
+          state.enlarged = root.dataset.layout === 'enlarged' &&
+            card.querySelector('button[aria-label="Restore"]') !== null;
+          if (!state.enlarged) return JSON.stringify({ error: 'title did not enlarge', ...state });
+          state.phase = 2;
+          return null;
+        }
+        const frames = window.__dashResizes;
+        const size = card.querySelector('.pane-size')?.textContent || '';
+        if (state.phase === 2) {
+          if (frames.length < 1 || !size.includes(frames[0].cols + '×' + frames[0].rows)) return null;
+          state.enlargedSize = size;
+          doubleClick(head);
+          state.restored = root.dataset.layout === 'grid';
+          if (!state.restored) return JSON.stringify({ error: 'second title click did not restore', ...state });
+          state.phase = 3;
+          return null;
+        }
+        if (state.phase === 3) {
+          if (frames.length < 2 || !size.includes('100×30')) return null;
+          state.restoredSize = size;
+          doubleClick(head);
+          state.phase = 4;
+          return null;
+        }
+        if (state.phase === 4) {
+          if (frames.length < 3 || !size.includes(frames[2].cols + '×' + frames[2].rows)) return null;
+          document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+          state.escapeRestored = root.dataset.layout === 'grid';
+          if (!state.escapeRestored) return JSON.stringify({ error: 'Escape did not restore', ...state });
+          state.phase = 5;
+          return null;
+        }
+        if (frames.length < 4 || !size.includes('100×30')) return null;
+        return JSON.stringify({ ...state, finalSize: size, frames });
+      })()`,
+    });
+    await api(daemon.port, daemon.token, `/sessions/${id}`, { method: 'DELETE' });
+    ids.splice(ids.indexOf(id), 1);
+    const result = JSON.parse(String(shot.probe)) as {
+      error?: string; terminalUntouched: boolean; enlarged: boolean; restored: boolean;
+      escapeRestored: boolean; enlargedSize: string; restoredSize: string; finalSize: string;
+      frames: { cols: number; rows: number; take: boolean }[];
+    };
+    expect(result.error).toBeUndefined();
+    expect(result.terminalUntouched).toBe(true);
+    expect(result.enlarged).toBe(true);
+    expect(result.restored).toBe(true);
+    expect(result.escapeRestored).toBe(true);
+    expect(result.frames).toHaveLength(4);
+    expect(result.frames.every((frame) => frame.take)).toBe(true);
+    expect(result.frames[0]!.cols).toBeGreaterThan(100);
+    expect(result.frames[1]).toMatchObject({ cols: 100, rows: 30 });
+    expect(result.frames[3]).toMatchObject({ cols: 100, rows: 30 });
+    expect(result.enlargedSize).toContain(`${result.frames[0]!.cols}×${result.frames[0]!.rows}`);
+    expect(result.restoredSize).toContain('100×30');
+    expect(result.finalSize).toContain('100×30');
+  }, 180_000);
+
   it('takes the grid only for Fit, Enlarge and Restore, and disconnects covered and scrolled-off panes', async (context) => {
     if (!browser) { context.skip(); return; }
     if (ids.length < 2) { await startSession('geometry first'); await startSession('geometry second'); }
