@@ -379,6 +379,16 @@ tables and status lines everywhere.
 `terminal_list` flags a session holding a prompt with how long it has waited,
 `terminal_wait` accepts `prompt: true` and returns when the session needs an answer, and
 the viewer badges the prompt and marks its window title.
+The daemon keeps the first-seen time and the single stall alert when a repaint
+shows the same question and options, even if the rendered dialog signature
+changes with its width or nearby text. An incomplete screen gets a one-second
+grace period; a one-off check clears a prompt that is still absent then, without
+waiting for the next five-second scan. A different question or choice set starts
+a new prompt. Viewer notices sit in the half of the terminal away from its
+cursor, scroll within at most one third of its height, and pass clicks through
+to the terminal except on their own buttons and links. The identity strip has a
+fixed height, so badges never change the terminal grid. A window resize or a
+person taking control can still change the grid.
 
 **`terminal_wait prompt: true` must never hand back the prompt the caller has just
 answered.** The supervision loop is wait-for-prompt → answer → wait-for-prompt, and the

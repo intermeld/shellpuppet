@@ -104,6 +104,10 @@ const MAX_BODY_BYTES = 1_000_000;
  */
 const PROMPT_SCAN_INTERVAL_MS = 5_000;
 const PROMPT_STALL_MS = 20_000;
+// A repaint can leave a scan with no complete dialog. Keep the held prompt
+// for one second, long enough for a TUI redraw. A one-off check at the end
+// of that grace clears a lasting disappearance between normal scan beats.
+const PROMPT_REPAINT_GRACE_MS = 1_000;
 /**
  * How long `verify` looks for typed text: a base, plus time for each
  * character, up to a ceiling. Some TUIs work through every keystroke before
@@ -484,8 +488,8 @@ export class Daemon {
       since: number;
       alerted: boolean;
       prompt: DetectedPrompt;
-      /** Consecutive scan beats that did not see this prompt (see scanForPromptStalls). */
-      misses: number;
+      /** First scan that saw no complete prompt during a possible repaint. */
+      missingSince: number | null;
     }
   >();
   private readonly version = packageVersion();
@@ -503,6 +507,7 @@ export class Daemon {
   /** The pid of another running daemon already reported as owning daemon.json. */
   private foreignOwnerReported: number | null = null;
   private promptScanTimer: NodeJS.Timeout | null = null;
+  private readonly promptGraceTimers = new Map<string, NodeJS.Timeout>();
   private promptScanRunning = false;
   private stopPromise: Promise<void> | null = null;
 
@@ -855,6 +860,8 @@ export class Daemon {
     if (this.raceCheckTimer !== null) clearTimeout(this.raceCheckTimer);
     if (this.statePublishTimer !== null) clearInterval(this.statePublishTimer);
     if (this.promptScanTimer !== null) clearInterval(this.promptScanTimer);
+    for (const timer of this.promptGraceTimers.values()) clearTimeout(timer);
+    this.promptGraceTimers.clear();
 
     // Stop LISTENING first, before tearing down session trees. Killing process
     // trees is not fast (`taskkill /T` on a loaded machine can take seconds
@@ -1696,7 +1703,11 @@ export class Daemon {
     // Registration is synchronous with creation, before any asynchronous
     // viewer launch or readiness work can publish a change for this id.
     this.sessionFeed.add(this.summaryWithPrompt(session.summary()));
-    session.onExit(() => this.updateFeedSession(session.id));
+    session.onExit(() => {
+      this.clearPromptGraceCheck(session.id);
+      this.promptStates.delete(session.id);
+      this.updateFeedSession(session.id);
+    });
     session.onReady(() => this.updateFeedSession(session.id));
 
     // Commands are policy-visible by definition, so the command line IS
@@ -1939,6 +1950,34 @@ export class Daemon {
     if (session !== undefined) this.sessionFeed.update(this.summaryWithPrompt(session.summary()));
   }
 
+  private clearPromptGraceCheck(id: string): void {
+    const timer = this.promptGraceTimers.get(id);
+    if (timer !== undefined) clearTimeout(timer);
+    this.promptGraceTimers.delete(id);
+  }
+
+  private schedulePromptGraceCheck(id: string, delayMs: number): void {
+    if (this.promptGraceTimers.has(id)) return;
+    const timer = setTimeout(() => {
+      this.promptGraceTimers.delete(id);
+      if (this.stopPromise !== null || !this.promptStates.has(id)) return;
+      if (this.promptScanRunning) {
+        this.schedulePromptGraceCheck(id, 25);
+        return;
+      }
+      this.promptScanRunning = true;
+      this.scanForPromptStalls()
+        .catch((error: unknown) => {
+          this.logger.warn('prompt grace check failed', { id, error: String(error) });
+        })
+        .finally(() => {
+          this.promptScanRunning = false;
+        });
+    }, delayMs);
+    timer.unref();
+    this.promptGraceTimers.set(id, timer);
+  }
+
   /**
    * Scan every live session's screen for a permission prompt and alert when
    * the SAME prompt has been waiting longer than the stall threshold, so an
@@ -1970,19 +2009,18 @@ export class Daemon {
       const previous = this.promptStates.get(session.id);
 
       if (detected === null) {
-        // Tolerate ONE missed beat before believing the prompt is gone.
-        // Detection reads a snapshot rendered concurrently with PTY output, so
-        // a beat can legitimately land mid-repaint and see a half-drawn
-        // screen. Clearing on the first miss would let that transient reset the
-        // stall clock, and a prompt whose redraw kept landing on scan beats
-        // could postpone its alert indefinitely: a silent failure of exactly
-        // the case the alert exists for. The cost of waiting is one scan
-        // interval of staleness on the clear; the cost of not waiting is an
-        // unalerted stall.
-        if (previous !== undefined && previous.misses === 0) {
-          previous.misses = 1;
-          continue;
+        // A snapshot may land midway through a repaint. Keep the prompt and
+        // its clock for a short wall-clock grace period, independent of the
+        // scan interval; a lasting disappearance still clears it.
+        if (previous !== undefined) {
+          if (previous.missingSince === null) previous.missingSince = Date.now();
+          const remaining = previous.missingSince + PROMPT_REPAINT_GRACE_MS - Date.now();
+          if (remaining > 0) {
+            this.schedulePromptGraceCheck(session.id, remaining);
+            continue;
+          }
         }
+        this.clearPromptGraceCheck(session.id);
         if (previous?.alerted === true) {
           this.emitEvent({
             type: 'prompt-clear',
@@ -1999,7 +2037,7 @@ export class Daemon {
         }
         continue;
       }
-      // A real sighting cancels a pending miss: the prompt is still there.
+      // A real sighting cancels a pending repaint gap: the prompt is still there.
       // Refresh the stored prompt with it, too: the signature deliberately
       // normalises Grok's radio markers so that MOVING the selection does not
       // restart the stall clock, which means the same signature can describe a
@@ -2011,11 +2049,17 @@ export class Daemon {
         previous.prompt.options.length !== detected.options.length ||
         previous.prompt.options.some((option, index) => option !== detected.options[index]);
       if (previous !== undefined) {
-        previous.misses = 0;
+        this.clearPromptGraceCheck(session.id);
+        previous.missingSince = null;
         previous.prompt = detected;
       }
 
-      if (previous === undefined || previous.signature !== detected.signature) {
+      // A dialog can redraw at another width, or alongside changing sidebar
+      // text, without changing its question or choices. Its rendered signature
+      // then changes although the person still faces the same decision.
+      // A stable signature also covers focus markers moving among options.
+      const sameContent = previous !== undefined && !promptChanged;
+      if (previous === undefined || (previous.signature !== detected.signature && !sameContent)) {
         // A new (or changed) prompt starts its stall clock; it has not
         // alerted yet, so a prompt answered promptly stays silent.
         if (previous?.alerted === true) {
@@ -2041,11 +2085,13 @@ export class Daemon {
           since: Date.now(),
           alerted: false,
           prompt: detected,
-          misses: 0,
+          missingSince: null,
         });
         if (promptChanged || previous?.alerted === true) this.updateFeedSession(session.id);
         continue;
       }
+
+      previous.signature = detected.signature;
 
       if (promptChanged) this.updateFeedSession(session.id);
 
@@ -2084,6 +2130,7 @@ export class Daemon {
     // Sessions that exited or were reaped take their prompt state with them.
     for (const id of [...this.promptStates.keys()]) {
       if (!seen.has(id)) {
+        this.clearPromptGraceCheck(id);
         this.promptStates.delete(id);
         this.updateFeedSession(id);
       }

@@ -25,25 +25,27 @@ button.active { background: #3d2c14; border-color: #8a6d3b; color: #e8c284; }
 #input-source.agent { color: #6cb6ff; }
 #input-source.human { color: #7ee787; }
 #banner {
-  flex: 0 0 auto; padding: 8px 14px; background: #3d1d1f; color: #ffa198;
+  padding: 8px 14px; background: #3d1d1f; color: #ffa198;
   border-bottom: 1px solid #6e2c30; font-size: 12px;
 }
 
 /* Session identity strip. Quiet by design: it must be readable at a glance
    when switching windows, without competing with the terminal for attention. */
 #identity {
-  flex: 0 0 auto; padding: 6px 14px; background: #12191f; color: #9fb4c7;
+  flex: 0 0 29px; height: 29px; box-sizing: border-box; padding: 6px 14px;
+  background: #12191f; color: #9fb4c7;
   border-bottom: 1px solid #22303c; font-size: 12px;
-  display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap;
+  display: flex; gap: 14px; align-items: center; white-space: nowrap; overflow: hidden;
 }
 #identity-purpose { color: #d7e3ee; font-weight: 600; }
-#identity-meta { color: #7d93a6; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+#identity-meta { color: #7d93a6; font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  overflow: hidden; text-overflow: ellipsis; }
 
 /* Amber, not the banner's red: a held prompt is the session waiting on YOU, not
    a fault. Deliberately loud: the whole feature exists because a held prompt
    can go unnoticed for minutes at a time. */
 #prompt-alert {
-  flex: 0 0 auto; padding: 8px 14px; background: #3d2f14; color: #f0c674;
+  padding: 8px 14px; background: #3d2f14; color: #f0c674;
   border-bottom: 1px solid #7a5c1e; font-size: 12px;
 }
 #prompt-alert .question {
@@ -63,8 +65,17 @@ button.active { background: #3d2c14; border-color: #8a6d3b; color: #e8c284; }
    the top-left corner. */
 #wrap {
   flex: 1 1 auto; min-height: 0; padding: 6px 8px; box-sizing: border-box;
-  overflow: hidden;
+  overflow: hidden; position: relative;
 }
+/* Notices paint above the terminal and never participate in its fit box.
+   The pane places them in the half away from the cursor. */
+#notices {
+  position: absolute; z-index: 2; left: 8px; right: 8px;
+  box-sizing: border-box; overflow-y: auto; pointer-events: none;
+  box-shadow: 0 4px 14px #0009;
+}
+#notices:has(> :not([hidden])) { border: 1px solid #27313d; }
+#notices :is(button, a) { pointer-events: auto; }
 /* #term must keep filling the available box so the fit addon measures the real
    space. So the centring has to happen INSIDE it, on the .xterm element
    the addon actually sizes. Centring #wrap's children does nothing, because
@@ -72,7 +83,7 @@ button.active { background: #3d2c14; border-color: #8a6d3b; color: #e8c284; }
 #term { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
 
 /* Capture mode (headless screenshot): the terminal and nothing else. */
-body.capture header, body.capture #identity, body.capture #banner, body.capture #prompt-alert {
+body.capture header, body.capture #identity, body.capture #notices {
   display: none;
 }
 #term .xterm { margin: 0 auto; }
