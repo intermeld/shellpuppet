@@ -133,6 +133,12 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- On Windows, the console hosts queued in one batch are ended by one
+  asynchronous PowerShell, off the daemon's thread, so the daemon keeps
+  answering `/health` and its other sessions while that call runs. The
+  process is ended only by the handle opened, by reading it, before the name
+  and creation-time checks, and only when it is still the listed host. A call
+  that omits the creation time is refused and leaves the process running.
 - A viewer's waiting and connection notices sit in the half of the terminal
   away from its cursor, scroll within at most one third of its height, and let
   clicks through to the terminal. Its identity strip keeps a fixed height, so
@@ -152,8 +158,8 @@ version may change behaviour, and every such change is listed here.
   daemon exits; a long-lived daemon with many sessions held one host, about
   8 MB, for each. The session records the time immediately before and after
   its spawn, during which the host is created; after the end, one list of the
-  daemon's children names the host whose creation time falls in that window,
-  widened by 5 ms, and ends that one process. Sessions that end within a few
+  daemon's children names the host whose creation time falls in that exact
+  window, and ends that one process. Sessions that end within a few
   hundred milliseconds share the list. The list is a short-lived PowerShell
   `Get-CimInstance` that compiles nothing; it is on no path a caller waits on,
   and takes about ten seconds. Zero or several hosts in the window, or a list

@@ -918,16 +918,20 @@ export class Session implements WaitTarget {
     return this.exitCodeValue;
   }
   /**
-   * Whether the session's program is known to have ended: its exit came with
-   * a code, or node-pty has recorded one since an exit with no code. Until
-   * then its tree is walked. Where node-pty records none (`canReadExitCode`),
-   * such an exit counts as the end: a pid nothing vouches for is never walked.
+   * Whether the session's program is known to have ended: node-pty has
+   * recorded its exit code, or its exit came with a code. Until then its
+   * tree is walked. The recorded code is enough on its own, before this
+   * session's exit event: node-pty closes the process handle first, so the
+   * pid is already free. Where node-pty records none (`canReadExitCode`),
+   * an exit with no code counts as the end: a pid nothing vouches for is
+   * never walked.
    */
   get programEnded(): boolean {
-    return (
-      this.exitedFlag &&
-      (this.exitCodeValue !== null || recordedExitCode(this.pty) !== undefined || !canReadExitCode(this.pty))
-    );
+    // node-pty records the code only after it has closed the process handle,
+    // which frees the pid, and about a second before this session's exit.
+    // The pid is already not the program's, so it is not walked.
+    if (recordedExitCode(this.pty) !== undefined) return true;
+    return this.exitedFlag && (this.exitCodeValue !== null || !canReadExitCode(this.pty));
   }
   /** Whether the input pipe has failed (Windows): input is refused from then on. */
   get inputFailed(): boolean {
@@ -1200,10 +1204,13 @@ export class Session implements WaitTarget {
    * and orphaned agent CLIs keep running and keep spending paid API tokens.
    *
    * Windows: `taskkill /T /F` walks and kills the tree, then `pty.kill()` runs.
-   * node-pty's kill ends no process of its own (`windowsPtyStart.ts`), and it
-   * closes the ConPTY, which sends CTRL_CLOSE_EVENT to the processes on the
-   * console, only while node-pty still holds the terminal: while the program
-   * runs. After a tree kill that ended the program it closes nothing, so a
+   * Under ConPTY, node-pty's kill ends no process of its own
+   * (`listNothingToKill` in `windowsPtyStart.ts`), and it closes the ConPTY,
+   * which sends CTRL_CLOSE_EVENT to the processes on the console, only while
+   * node-pty still holds the terminal: while the program runs. Under winpty
+   * (Windows builds before 18309) that wrapper does not apply: winpty's kill
+   * asks the native helper for the process list of the pid and kills each.
+   * After a tree kill that ended the program, ConPTY's kill closes nothing, so a
    * process on the session's console outside the killed tree gets no close
    * event. The console host is not in that tree. After this returns, a later
    * list ends the one host created during this spawn's window. This does not
@@ -1227,13 +1234,17 @@ export class Session implements WaitTarget {
    * ended. node-pty holds such a program's handle while it runs and closes it
    * as it sees the program end, a moment before the code is recorded, so a
    * kill in that moment can reach a pid just freed: the same kind of race
-   * every kill has while `taskkill` enumerates the processes.
+   * every kill has while `taskkill` enumerates the processes. Once the code
+   * is recorded the pid is not walked.
    */
   async kill(): Promise<void> {
     if (this.killed) return;
     this.killed = true;
     const pid = this.pty.pid;
     this.logger.info('session kill', { id: this.id, pid });
+    // Taken before the kill. The kill itself makes node-pty record the exit,
+    // and that later record must not hide the result of a tree we did walk.
+    const exitAlreadyRecorded = recordedExitCode(this.pty) !== undefined;
 
     if (this.endingProgram !== null) {
       // The session is already ending its program, after an exit with no code.
@@ -1254,9 +1265,14 @@ export class Session implements WaitTarget {
     // descendant walk needs recursive process queries that are far slower than
     // the kill itself (measured in minutes), and the root dying is what the
     // caller actually contracted for.
+    // When the exit was already recorded, node-pty had already closed the
+    // process handle and Windows may have given the pid out. A live pid is
+    // then not reported as this session's root surviving: it may be someone
+    // else's process. A pid that is gone is still the result worth logging.
+    // A code recorded by this kill is not that case: the tree was still ours.
     if (!this.processAlive(pid)) {
       this.logger.info('session tree killed', { id: this.id, pid });
-    } else {
+    } else if (!exitAlreadyRecorded) {
       this.logger.error('session root SURVIVED the kill and may still be running', {
         id: this.id,
         pid,
