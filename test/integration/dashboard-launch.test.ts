@@ -270,6 +270,7 @@ function padLiveSessions(daemon: TestDaemon, count: number): void {
       programEnded: true,
       pid: 0,
       kill: () => Promise.resolve(),
+      startedProgramPid: () => Promise.resolve(null),
     });
   }
 }

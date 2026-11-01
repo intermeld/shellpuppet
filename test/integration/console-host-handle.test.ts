@@ -137,7 +137,6 @@ describe.skipIf(process.platform !== 'win32')('the console-host kill uses the ha
       command: process.execPath,
       args: ['-e', 'setInterval(() => {}, 1000)'],
     });
-    const sessionPid = session.pid;
     let hostPid: number | undefined;
     let script = '';
     try {
@@ -184,6 +183,9 @@ describe.skipIf(process.platform !== 'win32')('the console-host kill uses the ha
       } catch {
         // The tree kill can lose a race with the program exiting.
       }
+      // Read here, not at the create: node-pty reports pid 0 until the
+      // program exists, and this guard must never act on that.
+      const sessionPid = session.pid;
       if (alive(sessionPid)) endRecorded(sessionPid);
       if (hostPid !== undefined && alive(hostPid)) {
         if (script.includes('$proc.Kill()')) {

@@ -74,12 +74,15 @@ this repository runs on your machine and needs nothing we operate.
 Install, then wire it into your agent and ask it for something; or run the
 five commands under *Check the install from any shell*.
 
-You need Node.js 22 or later. `node-pty` ships prebuilt binaries for Windows
-and macOS and, in the 1.2.0 beta ShellPuppet pins, for mainstream Linux too
-(glibc, x64 and arm64), so no compiler is needed there. Where no prebuilt
-matches — another architecture, or musl in place of glibc — npm builds it with
-node-gyp, which needs Python 3, make and a C++ compiler (on Debian and Ubuntu:
-`sudo apt-get install -y python3 make g++`).
+You need Node.js 22 or later. On Windows you need Windows 10 version 1809
+(build 18309) or later: the sessions run on ConPTY, which node-pty 1.2.0
+requires (it removed its winpty fallback); a start on an older build is
+refused with the minimum named. `node-pty` ships prebuilt binaries for
+Windows and macOS and, in the 1.2.0 beta ShellPuppet pins, for mainstream
+Linux too (glibc, x64 and arm64), so no compiler is needed there. Where no
+prebuilt matches — another architecture, or musl in place of glibc — npm
+builds it with node-gyp, which needs Python 3, make and a C++ compiler (on
+Debian and Ubuntu: `sudo apt-get install -y python3 make g++`).
 
 **Install:**
 

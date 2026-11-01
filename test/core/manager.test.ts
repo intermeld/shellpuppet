@@ -23,11 +23,11 @@ describe('SessionManager.killAll bounding', () => {
     // Register stand-in sessions directly: this is about teardown control
     // flow, not about spawning real PTYs (that is covered by integration).
     const sessions = manager as unknown as {
-      sessions: Map<string, { id: string; kill: () => Promise<void> }>;
+      sessions: Map<string, { id: string; kill: () => Promise<void>; startedProgramPid: () => Promise<number | null> }>;
     };
     kills.forEach((kill, index) => {
       const id = `s${String(index + 1)}`;
-      sessions.sessions.set(id, { id, kill });
+      sessions.sessions.set(id, { id, kill, startedProgramPid: () => Promise.resolve(1) });
     });
     return { manager, warnings };
   }
@@ -100,6 +100,7 @@ describe('SessionManager.killAll tree kill in one run', () => {
     exited: boolean;
     programEnded: boolean;
     kill: () => Promise<void>;
+    startedProgramPid: () => Promise<number | null>;
   }
 
   function managerWith(
@@ -132,6 +133,7 @@ describe('SessionManager.killAll tree kill in one run', () => {
           events.push(`kill ${id}`);
           return Promise.resolve();
         },
+        startedProgramPid: () => Promise.resolve(pid > 0 ? pid : null),
       }),
     };
   }
