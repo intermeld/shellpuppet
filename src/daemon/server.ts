@@ -43,11 +43,14 @@ import type {
   WaitCondition,
 } from '../core/types.js';
 import {
+  DASHBOARD_COOKIE,
   TokenStore,
   VIEWER_COOKIE,
   VIEWER_GRANT_TTL_MS,
   bearerToken,
   cookieValues,
+  dashboardCookie,
+  dashboardProofFromProtocol,
   viewerCookie,
 } from './auth.js';
 import { NULL_AUDITOR } from './audit.js';
@@ -194,6 +197,13 @@ const STATIC_ASSETS: Readonly<
   '/vendor/addon-fit.js': { file: nodeRequire.resolve('@xterm/addon-fit'), type: 'text/javascript' },
 };
 const viewerHtmlPath = path.join(viewerDir, 'index.html');
+const dashboardHtmlPath = path.join(viewerDir, 'dashboard.html');
+/**
+ * Shared by the viewer page and the dashboard page. Inline styles are what
+ * xterm uses to size itself. Scripts stay under `default-src 'self'`.
+ */
+const PAGE_CSP = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:";
+const DASHBOARD_PROOF_META = '<meta name="sp-csrf" content="">';
 
 export interface DaemonOptions {
   home: string;
@@ -234,6 +244,11 @@ export interface DaemonOptions {
    * without starting a browser, and check that it may watch but never write.
    */
   capture?: typeof captureViewer;
+  /**
+   * Test seam: the clock dashboard grant expiry is read from. Absent means
+   * `Date.now`. A request cannot choose a grant's lifetime.
+   */
+  now?: () => number;
 }
 
 /** Thrown by `start()` when a healthy daemon already owns this home. */
@@ -263,6 +278,22 @@ function pathOnly(target: string | undefined): string {
   const path = (target ?? '').split(/[?#]/, 1)[0] ?? '';
   const absolute = SCHEME_AND_AUTHORITY.exec(path);
   return absolute === null ? path : path.slice(absolute[0].length) || '/';
+}
+
+function headerOne(req: http.IncomingMessage, name: string): string | undefined {
+  const value = req.headers[name];
+  if (Array.isArray(value)) return value[0];
+  return value;
+}
+
+/** Subprotocols offered on an upgrade, in header order. */
+function offeredProtocols(req: http.IncomingMessage): string[] {
+  const value = req.headers['sec-websocket-protocol'];
+  const raw = Array.isArray(value) ? value.join(',') : (value ?? '');
+  return raw
+    .split(',')
+    .map((part) => part.trim())
+    .filter((part) => part !== '');
 }
 
 /** The 409 for input, a key or a resize sent to a session that has ended. */
@@ -460,7 +491,12 @@ export class Daemon {
   private readonly tokens = new TokenStore();
   private readonly manager: SessionManager;
   private readonly server: http.Server;
-  private readonly wss = new WebSocketServer({ noServer: true });
+  private readonly wss = new WebSocketServer({
+    noServer: true,
+    // Echo a subprotocol only for a live dashboard proof. Any other upgrade
+    // offers none today; returning false keeps it that way if one is offered.
+    handleProtocols: (protocols, request) => this.dashboardProtocol(protocols, request),
+  });
   private readonly sockets = new Set<WebSocket>();
   /** Every watcher of a session, with the gate that orders its stream across snapshots. */
   private readonly sessionSockets = new Map<string, Map<WebSocket, ViewerSync>>();
@@ -477,6 +513,11 @@ export class Daemon {
   private readonly geometryController = new Map<string, WebSocket>();
   /** Subscribers to the daemon-wide event stream (`/events`). */
   private readonly eventSockets = new Set<WebSocket>();
+  /**
+   * Open `/dashboard/events` sockets. While one is open, a session start does
+   * not launch a per-session viewer window and does not hand back a viewer URL.
+   */
+  private readonly dashboardEventSockets = new Set<WebSocket>();
   /**
    * Per-session prompt tracking for stall alerts: the signature of the prompt
    * currently on screen, when it was first seen and whether it has alerted.
@@ -552,6 +593,11 @@ export class Daemon {
   get port(): number {
     if (this.portValue === null) throw new Error('Daemon not started.');
     return this.portValue;
+  }
+
+  /** Clock for dashboard grant expiry. Tests inject one; otherwise wall time. */
+  private now(): number {
+    return this.options.now?.() ?? Date.now();
   }
 
   get token(): string {
@@ -927,6 +973,260 @@ export class Daemon {
     );
   }
 
+  /**
+   * An Origin that is this daemon's own and whose host matches `Host`.
+   * `127.0.0.1` and `localhost` are both allowed names, and they are not the
+   * same host: a cookie minted for one must not be presented as the other.
+   */
+  private originMatchesRequest(req: http.IncomingMessage): boolean {
+    const origin = headerOne(req, 'origin');
+    if (origin === undefined || origin === '') return false;
+    if (!this.originAllowed(origin)) return false;
+    const host = headerOne(req, 'host');
+    if (host === undefined) return false;
+    try {
+      return new URL(origin).host.toLowerCase() === host.toLowerCase();
+    } catch {
+      return false;
+    }
+  }
+
+  /** Top-level document load of the dashboard. Origin may be absent. */
+  private isDocumentNavigation(req: http.IncomingMessage): boolean {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+    if (headerOne(req, 'sec-fetch-mode') !== 'navigate') return false;
+    if (headerOne(req, 'sec-fetch-dest') !== 'document') return false;
+    const site = headerOne(req, 'sec-fetch-site');
+    if (site !== 'none' && site !== 'same-origin') return false;
+    const origin = headerOne(req, 'origin');
+    if (origin === undefined || origin === '') return true;
+    return this.originMatchesRequest(req);
+  }
+
+  /** Same-origin read, such as `GET /sessions` from the dashboard page. */
+  private isSameOriginRead(req: http.IncomingMessage): boolean {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+    if (headerOne(req, 'sec-fetch-site') !== 'same-origin') return false;
+    const mode = headerOne(req, 'sec-fetch-mode');
+    if (mode !== 'cors' && mode !== 'no-cors' && mode !== 'same-origin') return false;
+    const origin = headerOne(req, 'origin');
+    if (origin === undefined || origin === '') return true;
+    return this.originMatchesRequest(req);
+  }
+
+  /** `same-site`, `cross-site`, or any site value that is not a dashboard site. */
+  private forbiddenFetchSite(site: string | undefined): boolean {
+    if (site === undefined || site === '') return false;
+    return site !== 'none' && site !== 'same-origin';
+  }
+
+  private dashboardCookiePresented(header: string | undefined): boolean {
+    if (header === undefined) return false;
+    for (const part of header.split(';')) {
+      const at = part.indexOf('=');
+      if (at === -1) continue;
+      if (part.slice(0, at).trim() === DASHBOARD_COOKIE) return true;
+    }
+    return false;
+  }
+
+  /** The first `sp_dash` value the daemon issued for the current credential. */
+  private dashboardCookieToken(header: string | undefined): string | null {
+    for (const value of cookieValues(header, DASHBOARD_COOKIE)) {
+      if (this.tokens.verifyDashboardToken(value)) return value;
+    }
+    return null;
+  }
+
+  private auditDashboardRefusal(req: http.IncomingMessage, reason: string): void {
+    this.audit.record('dashboard', 'refuse', undefined, {
+      method: req.method ?? '',
+      path: pathOnly(req.url),
+      reason,
+    });
+  }
+
+  /**
+   * Why a presented cookie was refused on a route that may omit Origin:
+   * the dashboard page, outside a document navigation, and `GET /sessions`.
+   * A present Origin that does not match is `origin`. These routes allow an
+   * absent Origin, so that absence is not the reason: the Fetch Metadata is.
+   */
+  private cookieRefusalReason(req: http.IncomingMessage): string {
+    const origin = headerOne(req, 'origin');
+    const originAbsent = origin === undefined || origin === '';
+    if (!originAbsent && !this.originMatchesRequest(req)) return 'origin';
+    return 'fetch-site';
+  }
+
+  private dashboardDocument(proof: string | null): string {
+    const html = fs.readFileSync(dashboardHtmlPath, 'utf8');
+    if (proof === null) return html.replace(DASHBOARD_PROOF_META, '');
+    return html.replace(DASHBOARD_PROOF_META, `<meta name="sp-csrf" content="${proof}">`);
+  }
+
+  private sendDashboardPage(
+    res: http.ServerResponse,
+    proof: string | null,
+    setCookieHeader: string | undefined,
+    head: boolean,
+  ): void {
+    const headers: Record<string, string> = {
+      'content-type': 'text/html; charset=utf-8',
+      'cache-control': 'no-store',
+      'content-security-policy': PAGE_CSP,
+    };
+    if (setCookieHeader !== undefined) headers['set-cookie'] = setCookieHeader;
+    res.writeHead(200, headers);
+    res.end(head ? '' : this.dashboardDocument(proof));
+  }
+
+  /**
+   * `GET` and `HEAD /dashboard`. A grant is spent only by an accepted
+   * document navigation. A fetch of the same URL does not spend it. A bad,
+   * spent or absent grant with no live cookie still returns the page, with
+   * no cookie and no proof, so this route does not say whether a grant was real.
+   */
+  private handleDashboardPage(req: http.IncomingMessage, res: http.ServerResponse, url: URL): void {
+    const site = headerOne(req, 'sec-fetch-site');
+    if (this.forbiddenFetchSite(site)) {
+      this.auditDashboardRefusal(req, 'fetch-site');
+      json(res, 403, { error: 'Forbidden.' });
+      return;
+    }
+    const grant = url.searchParams.get('dt');
+    const grantPresented = grant !== null && grant !== '';
+    const cookiePresented = this.dashboardCookiePresented(req.headers.cookie);
+    const cookie = this.dashboardCookieToken(req.headers.cookie);
+    if (this.isDocumentNavigation(req)) {
+      let freshCookie: string | undefined;
+      if (grantPresented) {
+        const redeemed = this.tokens.redeemDashboardGrant(grant, this.now());
+        if (redeemed !== null) {
+          freshCookie = dashboardCookie(redeemed.token);
+          this.audit.record('dashboard', 'grant-redeem');
+        }
+      }
+      const authed = freshCookie !== undefined || cookie !== null;
+      const proof = authed ? this.tokens.issueDashboardProof() : null;
+      this.sendDashboardPage(res, proof, freshCookie, req.method === 'HEAD');
+      return;
+    }
+    if (grantPresented || cookiePresented) {
+      if (!this.isSameOriginRead(req)) {
+        this.auditDashboardRefusal(req, this.cookieRefusalReason(req));
+        json(res, 403, { error: 'Forbidden.' });
+        return;
+      }
+    }
+    this.sendDashboardPage(res, null, undefined, req.method === 'HEAD');
+  }
+
+  private async handleDashboardOpen(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    actor: string,
+  ): Promise<void> {
+    // The body cannot choose a lifetime. It is read so a keep-alive connection
+    // is not left holding it, and then ignored.
+    await readBody(req);
+    const grant = this.tokens.mintDashboardGrant({ now: this.now() });
+    const pageUrl = `http://127.0.0.1:${String(this.port)}/dashboard?dt=${grant}`;
+    const launch = this.options.launcher ?? launchViewer;
+    let opened: ViewerLaunchResult;
+    try {
+      opened = await launch(pageUrl, this.options.home, this.options.viewer ?? {}, this.logger);
+    } catch {
+      // The thrown text can carry the URL. It is not logged and not returned.
+      opened = { launched: false, mode: 'none' };
+    }
+    if (!opened.launched || opened.mode === 'default-browser') {
+      this.tokens.revokeDashboardGrant(grant);
+      this.auditDashboardRefusal(req, 'launch-failed');
+      json(res, 502, { error: 'The dashboard window did not open.' });
+      return;
+    }
+    this.audit.record(actor, 'grant-mint', undefined, { credential: 'dashboard' });
+    json(res, 200, { opened: true });
+  }
+
+  private writeSessionList(res: http.ServerResponse, url: URL): void {
+    const hide = queryFlag(url, 'hideReasoning');
+    if (hide === null) {
+      json(res, 400, { error: BAD_HIDE_REASONING });
+      return;
+    }
+    json(res, 200, { sessions: this.listWithPrompts(hide), version: this.version });
+  }
+
+  /** Cookie-authenticated `GET /sessions`. A missing or wrong proof is a 403. */
+  private serveDashboardSessionList(req: http.IncomingMessage, res: http.ServerResponse, url: URL): void {
+    const presented = this.dashboardCookiePresented(req.headers.cookie);
+    const cookie = this.dashboardCookieToken(req.headers.cookie);
+    if (cookie === null) {
+      if (presented) this.auditDashboardRefusal(req, 'unauthenticated');
+      json(res, 401, { error: 'Unauthorised: a valid client token is required.' });
+      return;
+    }
+    if (!this.isSameOriginRead(req)) {
+      this.auditDashboardRefusal(req, this.cookieRefusalReason(req));
+      json(res, 403, { error: 'Forbidden.' });
+      return;
+    }
+    const proof = headerOne(req, 'x-shellpuppet-csrf');
+    if (!this.tokens.acceptsDashboardProof(proof)) {
+      this.auditDashboardRefusal(req, 'proof');
+      json(res, 403, { error: 'Forbidden.' });
+      return;
+    }
+    this.lastActivity = Date.now();
+    this.writeSessionList(res, url);
+  }
+
+  /**
+   * Why a `/dashboard/events` upgrade is refused, or null when it may attach.
+   * The client token on the query is not a way in. The proof is the
+   * subprotocol, not `X-ShellPuppet-CSRF`.
+   */
+  private dashboardUpgradeRefusal(
+    req: http.IncomingMessage,
+  ): { code: number; reason: string; audit: string } | null {
+    if (this.dashboardCookieToken(req.headers.cookie) === null) {
+      return { code: 401, reason: 'Unauthorized', audit: 'unauthenticated' };
+    }
+    if (!this.originMatchesRequest(req)) {
+      return { code: 403, reason: 'Forbidden', audit: 'origin' };
+    }
+    if (
+      headerOne(req, 'sec-fetch-site') !== 'same-origin' ||
+      headerOne(req, 'sec-fetch-mode') !== 'websocket'
+    ) {
+      return { code: 403, reason: 'Forbidden', audit: 'fetch-site' };
+    }
+    const accepted = offeredProtocols(req).some((protocol) => {
+      const proof = dashboardProofFromProtocol(protocol);
+      return proof !== null && this.tokens.acceptsDashboardProof(proof);
+    });
+    if (!accepted) return { code: 403, reason: 'Forbidden', audit: 'proof' };
+    return null;
+  }
+
+  /** Select `sp-csrf.<proof>` only for `/dashboard/events` when the proof is live. */
+  private dashboardProtocol(protocols: Set<string>, request: http.IncomingMessage): string | false {
+    let pathname: string;
+    try {
+      pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+    } catch {
+      return false;
+    }
+    if (pathname !== '/dashboard/events') return false;
+    for (const protocol of protocols) {
+      const proof = dashboardProofFromProtocol(protocol);
+      if (proof !== null && this.tokens.acceptsDashboardProof(proof)) return protocol;
+    }
+    return false;
+  }
+
   private async handleRequest(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -934,6 +1234,7 @@ export class Daemon {
     // DNS-rebinding defence (design §4.2): a browser on any website can make
     // requests reach a loopback port; the Host header gives the rebind away.
     if (!this.hostAllowed(req.headers.host)) {
+      if (pathOnly(req.url).startsWith('/dashboard')) this.auditDashboardRefusal(req, 'host');
       json(res, 403, { error: 'Forbidden: unexpected Host header.' });
       return;
     }
@@ -969,8 +1270,7 @@ export class Daemon {
         // without it. Scripts stay strict under `default-src 'self'`: inline
         // styles cannot execute code, and terminal output never reaches the
         // DOM as markup (xterm renders it as text).
-        'content-security-policy':
-          "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:",
+        'content-security-policy': PAGE_CSP,
       };
       const redeemed = this.tokens.redeemViewerGrant(url.searchParams.get('vt'));
       if (redeemed !== null) {
@@ -1017,11 +1317,31 @@ export class Daemon {
       }
     }
 
+    // The dashboard page is served without a client token. A live grant is
+    // redeemed only on an accepted document navigation. Anything else gets
+    // the page with no cookie and no proof, unless Fetch Metadata forbids it.
+    if ((req.method === 'GET' || req.method === 'HEAD') && url.pathname === '/dashboard') {
+      this.handleDashboardPage(req, res, url);
+      return;
+    }
+
     const auth = this.tokens.verify(bearerToken(req.headers.authorization));
     if (auth === null || auth.kind !== 'client') {
-      // Viewer grants and credentials reach only the viewer page and its
-      // socket: the HTTP API is client-token territory (design §4.1: no
-      // start, no kill, no list for viewers).
+      // `GET /sessions` is the one HTTP read the dashboard cookie may make.
+      // A bearer token, handled above, does not reach this branch.
+      if (req.method === 'GET' && segments.length === 1 && segments[0] === 'sessions') {
+        this.serveDashboardSessionList(req, res, url);
+        return;
+      }
+      // A dashboard cookie on any other route, and any other dashboard path,
+      // is a refusal. An ordinary missing client token is not: that 401 is
+      // what every unauthenticated API call already gets.
+      if (
+        this.dashboardCookiePresented(req.headers.cookie) ||
+        url.pathname.startsWith('/dashboard')
+      ) {
+        this.auditDashboardRefusal(req, 'unauthenticated');
+      }
       json(res, 401, { error: 'Unauthorised: a valid client token is required.' });
       return;
     }
@@ -1065,18 +1385,18 @@ export class Daemon {
         return;
       }
 
+      if (req.method === 'POST' && segments[0] === 'dashboard' && segments[1] === 'open' && segments.length === 2) {
+        await this.handleDashboardOpen(req, res, actor);
+        return;
+      }
+
       if (segments[0] !== 'sessions') {
         json(res, 404, { error: 'Not found.', path: url.pathname });
         return;
       }
 
       if (req.method === 'GET' && segments.length === 1) {
-        const hide = queryFlag(url, 'hideReasoning');
-        if (hide === null) {
-          json(res, 400, { error: BAD_HIDE_REASONING });
-          return;
-        }
-        json(res, 200, { sessions: this.listWithPrompts(hide), version: this.version });
+        this.writeSessionList(res, url);
         return;
       }
 
@@ -1740,9 +2060,13 @@ export class Daemon {
     // nothing; the session is listed as any other, and `viewer-url` gives a
     // link to it whenever someone asks.
     const wantsViewer = body['openViewer'] !== false;
-    const viewerUrl = wantsViewer
-      ? this.viewerUrlFor(session.id, this.tokens.mintViewerGrant(session.id))
-      : '';
+    // A connected dashboard is the human's window. Do not mint a viewer grant
+    // that would sit unused, and do not open a second window.
+    const dashboardWatching = wantsViewer && this.dashboardEventSockets.size > 0;
+    const viewerUrl =
+      wantsViewer && !dashboardWatching
+        ? this.viewerUrlFor(session.id, this.tokens.mintViewerGrant(session.id))
+        : '';
 
     // Open the window for the human, and wait to hear whether anything
     // opened: the launcher only spawns, detached, so the wait costs the start
@@ -1752,7 +2076,9 @@ export class Daemon {
     // failure here is logged and counts as "nothing opened".
     const launch = this.options.launcher ?? launchViewer;
     let opened: ViewerLaunchResult;
-    if (!wantsViewer) {
+    if (dashboardWatching) {
+      opened = { launched: false, mode: 'none', reason: 'a dashboard is connected' };
+    } else if (!wantsViewer) {
       opened = { launched: false, mode: 'none', reason: 'not requested at start' };
     } else {
       try {
@@ -1774,7 +2100,7 @@ export class Daemon {
     // human's way in, audited like any other link under the actor that asked
     // for the session. A window's use of its grant shows in the log as the
     // `grant-redeem` its page performs.
-    const handOver = wantsViewer && !opened.launched;
+    const handOver = wantsViewer && !dashboardWatching && !opened.launched;
     if (handOver) this.audit.record(actor, 'grant-mint', session.id, { readOnly: false });
 
     json(res, 200, {
@@ -2162,12 +2488,17 @@ export class Daemon {
     };
 
     if (!this.hostAllowed(req.headers.host)) {
+      if (pathOnly(req.url).startsWith('/dashboard')) this.auditDashboardRefusal(req, 'host');
       reject(403, 'Forbidden');
       return;
     }
-    // Browsers always send Origin on WS; a foreign one means a hostile page
-    // is probing the loopback daemon (design §4.2).
+    // A foreign Origin is refused before the target is parsed and before any
+    // credential is read, on every upgrade (design §4.2). A missing Origin
+    // stays allowed here: non-browser clients send none on `/events` and on a
+    // session stream. `/dashboard/events` still requires a present Origin
+    // whose host matches `Host`, with its other cookie rules, below.
     if (!this.originAllowed(req.headers.origin)) {
+      if (pathOnly(req.url).startsWith('/dashboard')) this.auditDashboardRefusal(req, 'origin');
       reject(403, 'Forbidden');
       return;
     }
@@ -2185,9 +2516,25 @@ export class Daemon {
     }
     const segments = url.pathname.split('/').filter((s) => s !== '');
 
+    // The dashboard feed is cookie-only. Its Origin rule is stricter than the
+    // client-token sockets below, which still allow a missing Origin.
+    if (segments[0] === 'dashboard' && segments[1] === 'events' && segments.length === 2) {
+      const refusal = this.dashboardUpgradeRefusal(req);
+      if (refusal !== null) {
+        this.auditDashboardRefusal(req, refusal.audit);
+        reject(refusal.code, refusal.reason);
+        return;
+      }
+      this.wss.handleUpgrade(req, socket, head, (ws) => {
+        this.attachDashboardSocket(ws);
+      });
+      return;
+    }
+
     // Daemon-wide event stream: prompt-stall alerts and their clears, as TEXT
     // JSON frames. CLIENT token only: viewer credentials are session-scoped
-    // and must not see other sessions' prompts.
+    // and must not see other sessions' prompts. A foreign Origin was refused
+    // above. A missing Origin stays allowed: non-browser clients send none.
     if (segments.length === 1 && segments[0] === 'events') {
       const auth = this.tokens.verify(url.searchParams.get('token'));
       if (auth === null || auth.kind !== 'client') {
@@ -2206,9 +2553,11 @@ export class Daemon {
     }
     const sessionId = segments[1] ?? '';
 
-    // Auth BEFORE existence: session ids are sequential, and answering 404 to
-    // an unauthenticated prober would let it enumerate which ones exist,
+    // Auth BEFORE existence: session ids are sequential, and answering 404
+    // to an unauthenticated prober would let it enumerate which ones exist,
     // the same leak the unauthenticated viewer route deliberately avoids.
+    // A foreign Origin was already refused above, so that probe is a 403
+    // and never a 401. A dashboard cookie is not a credential for this socket.
     //
     // Two ways in, and a viewer grant is neither (§4.1). A client token may
     // ride the query, because it is the same-user secret from `daemon.json`
@@ -2263,6 +2612,33 @@ export class Daemon {
       ws.close();
     });
     // The stream is outbound-only; inbound frames are ignored by design.
+  }
+
+  /**
+   * Attach a subscriber to the dashboard session feed. Frames are the feed's
+   * own: hello, a snapshot, then session deltas. Inbound frames are ignored.
+   * The socket counts as connected so idle shutdown waits while the dashboard
+   * is open.
+   */
+  private attachDashboardSocket(ws: WebSocket): void {
+    this.sockets.add(ws);
+    this.dashboardEventSockets.add(ws);
+    this.lastActivity = Date.now();
+    const unsubscribe = this.subscribeDashboardFeed((frame) => {
+      if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(frame));
+    });
+    ws.on('message', () => {
+      // Outbound only. A frame is not a keystroke, a resize or a launch.
+    });
+    ws.on('close', () => {
+      unsubscribe();
+      this.sockets.delete(ws);
+      this.dashboardEventSockets.delete(ws);
+      this.lastActivity = Date.now();
+    });
+    ws.on('error', () => {
+      ws.close();
+    });
   }
 
   /** Send a JSON control message (TEXT frame) to every watcher of a session. */

@@ -475,18 +475,16 @@ far worse.
 
 ### 4.1 Authentication
 
-Token-based, following the Jupyter / SSH-agent model, with a client token,
-a viewer grant, the stream credential it becomes, and a dashboard grant and
-credential:
+Token-based, following the Jupyter / SSH-agent model, with **five credentials**: a client token, a viewer grant, the stream credential a grant becomes, a dashboard grant and the dashboard credential that grant becomes:
 
 - **Client token** (full API access). Generated on daemon start: 32 random bytes, written
   to `~/.shellpuppet/daemon.json` (atomically, see §2.2) alongside port, pid and version.
   Every HTTP request that can read or act on a session requires
-  `Authorization: Bearer <token>` unless it uses a scoped browser credential;
-  `/health`, the viewer and dashboard pages and their static assets answer
-  without one, but unauthenticated pages contain no session data. Clients read it from the
-  file, so same-user access is transparent and cross-user access is denied. Rotates on
-  daemon restart.
+  `Authorization: Bearer <token>`, except `GET /sessions`, which the dashboard cookie may
+  also read. `/health`, the viewer page, the dashboard page and the static assets answer
+  without a client token, and none of those pages returns a session. Clients read the
+  token from the file, so same-user access is transparent and cross-user access is denied.
+  Rotates on daemon restart.
 - **Viewer grant** (per-session, one use, short life). The `vt` in a viewer URL: the one
   the daemon's own window opens, the one `terminal_start` returns when no window opened,
   or one minted on request. It is **not a session credential and cannot open a stream**:
@@ -505,6 +503,28 @@ credential:
   never hold a credential** and cannot leak one; a credential for one session is never
   even sent on another's socket. It survives reconnects, because a dropped socket must
   not cost the human a fresh URL. Grants and credentials both die with the session.
+- **Dashboard grant** (one use, short life, not a session credential). The `dt` in a
+  dashboard URL. `POST /dashboard/open`, which takes the client token, mints it and asks
+  the same launcher that opens a viewer to open `GET /dashboard`. The grant is not
+  returned in the response, not printed and not written to the audit log or `daemon.log`.
+  Its only use is to be exchanged, once, on a top-level document navigation to
+  `GET /dashboard` or `HEAD /dashboard`. A fetch of that URL does not spend it. A launcher
+  that does not open an isolated window, including a fallback to the default browser,
+  revokes the grant. The lifetime is `VIEWER_GRANT_TTL_MS`, five minutes. The HTTP client
+  cannot choose a shorter or longer one.
+- **Dashboard credential.** What that grant becomes: one `HttpOnly`, `SameSite=Strict`
+  cookie named `sp_dash`, `Path=/`, with no `Max-Age`, no `Secure` and no `Domain`. A
+  second successful redemption replaces it and drops its proofs. Each accepted navigation
+  embeds a fresh proof in `<meta name="sp-csrf">`. The daemon keeps the eight newest.
+  The file on disk has an empty content, and the daemon fills it only for an authenticated
+  navigation. `GET /sessions` requires the proof in `X-ShellPuppet-CSRF`. `/dashboard/events`
+  requires it as the WebSocket subprotocol `sp-csrf.` plus the 64 hex digits. A header on
+  the upgrade is not the proof. The compare hashes both strings and then compares the
+  digests in constant time, the same way bearer tokens are compared. The cookie may open
+  `GET /dashboard`, `GET /sessions` and `/dashboard/events`. It does not open `/events`, a
+  session stream, a start, a kill, a shutdown, a screenshot, a viewer mint or anything
+  else. While a `/dashboard/events` socket is open, a session start does not launch a
+  per-session viewer window and the response omits `viewerUrl`.
 - **Read-only is a property of the grant**, carried into the credential and enforced by
   the daemon: input and geometry changes from a watch-only credential are dropped
   server-side. The viewer's own read-only toggle is a local convenience for a
@@ -553,7 +573,9 @@ credential:
   client-token upgrades may omit it, as before.
 - **WebSocket upgrades** take the client token on the query string (it is the same-user
   secret from `daemon.json` and never appears in a URL a human sees) or the viewer's
-  cookie. A grant is refused at the socket outright.
+  cookie. A grant is refused at the socket outright. `/dashboard/events` is the exception:
+  it takes the dashboard cookie and the `sp-csrf` subprotocol, and a client token on the
+  query is refused.
 - **`GET /health` is deliberately unauthenticated** and returns only `{ ok, version,
   pid }`. Clients must be able to poll it before the token file settles (§2.2), and it
   reveals nothing sensitive.
@@ -588,8 +610,27 @@ the user's browser visits, and this is the exact CVE class Jupyter went through:
 - Reject any request whose `Host` header is not `127.0.0.1:<port>` or
   `localhost:<port>`.
 - Reject WebSocket upgrades whose `Origin` is present and not the daemon's own origin.
+  A missing `Origin` stays allowed on `/events` and on a session stream, which non-browser
+  clients open with the client token. It is not allowed on `/dashboard/events`.
 - No CORS headers at all (no cross-origin reads), and the bearer-token requirement stops
-  blind cross-origin POSTs from doing anything.
+  blind cross-origin POSTs from doing anything. A client-token HTTP request does not
+  consult `Origin`.
+
+**Dashboard cookie requests add Fetch Metadata.** This does not change the client-token
+path. A document navigation is `GET` or `HEAD`, `Sec-Fetch-Mode: navigate`,
+`Sec-Fetch-Dest: document`, and `Sec-Fetch-Site` of `none` or `same-origin`. `Origin` may
+be absent. When it is present it must be the daemon's own origin and its host must match
+`Host`. The dashboard grant is redeemed only on that navigation. A same-origin read is
+`GET` or `HEAD`, `Sec-Fetch-Site: same-origin`, and `Sec-Fetch-Mode` of `cors`, `no-cors`
+or `same-origin`, again with `Origin` optional under the same matching rule. That is
+`GET /sessions`. Every other cookie-authenticated request, including the events upgrade,
+requires `Origin` and `Sec-Fetch-Site: same-origin`. The upgrade also requires
+`Sec-Fetch-Mode: websocket`. `Sec-Fetch-Site` of `same-site`, `cross-site` or absent is a
+refusal on every cookie request, navigation included. Another port of `127.0.0.1` is
+`same-site`, and `SameSite=Strict` does not refuse it, so Fetch Metadata does. A forbidden
+`Sec-Fetch-Site` is refused even for the anonymous dashboard page. An anonymous
+`GET /dashboard` with no cookie, no grant and no forbidden site returns the page with no
+credential.
 
 Dashboard-cookie requests also follow §4.1. Cookies are not scoped to ports:
 another loopback port is `same-site`, so `SameSite=Strict` alone does not
@@ -696,7 +737,14 @@ Requirements:
 Append-only JSONL at `~/.shellpuppet/audit.log`: timestamp, session id, actor
 (`mcp:<clientInfo.name>` / `cli` / `viewer` / `dashboard`; `client` for a client that does not name
 itself; `daemon` for what the daemon does on its own, such as reaping an exited session),
-action and metadata.
+action and metadata. Minting a dashboard grant is `grant-mint` under the calling client
+actor, with metadata that names the credential kind and nothing secret. Redeeming it is
+`grant-redeem` under actor `dashboard`, and the grant is not recorded. A refused dashboard
+request is `refuse` under actor `dashboard`, with the method, the path and a reason code
+(`host`, `origin`, `fetch-site`, `proof`, `unauthenticated`, `launch-failed`). The query,
+the headers, the cookie, the proof and the grant are not recorded. A bad `Host` is audited
+only when the path is a dashboard path. The anonymous dashboard page, which answers 200
+with no credential, is not audited.
 
 **Typed content is never logged by default.** Keystrokes are where the secrets
 are: an SSH passphrase or API key typed into a prompt must not end up in a plaintext
@@ -900,6 +948,11 @@ sessions under ADR-007, including on this path.
   sees. Observed live: a session launched at 150×42 ran at 264×67 once the browser
   connected. That is the deliberate rule (above), and a run
   that cannot take it asks for `hold`.
+- **The dashboard page** is `GET /dashboard` (and `HEAD`). It is a separate document from
+  the viewer. `POST /dashboard/open` mints the one-use grant and opens that page through
+  the existing launcher. `/dashboard/events` is the session feed already kept by the
+  daemon: hello, a snapshot, then `session-added`, `session-updated` and `session-removed`.
+  It is outbound only. `prompt-stall` stays on `/events`, which remains client-token only.
 
 ---
 

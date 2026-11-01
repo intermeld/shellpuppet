@@ -1,7 +1,7 @@
 /**
  * Token generation and verification (design §4.1).
  *
- * Three credentials, deliberately different in kind:
+ * Five credentials, deliberately different in kind:
  *
  * - **Client token**: full API access; generated per daemon run, written to
  *   `daemon.json`, read by same-user clients. Rotates on restart. Travels in an
@@ -25,6 +25,13 @@
  * becomes: it is enforced by the daemon, not by the viewer page. The page's
  * own toggle stops that tab sending keystrokes and is a convenience; a
  * read-only credential means the daemon will not accept them.
+ * - **Dashboard grant**: the `dt` in a dashboard URL. One use, short life,
+ *   not a session credential, and it cannot open a stream. Its only use is
+ *   to be exchanged, once, at `GET /dashboard` for the cookie below. The
+ *   daemon mints it and never returns it to the caller.
+ * - **Dashboard credential**: what that grant becomes. One `HttpOnly` cookie
+ *   for the whole dashboard, plus a ring of the eight newest per-document
+ *   proofs. A second redemption replaces the credential and drops its proofs.
  */
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
@@ -44,6 +51,9 @@ export type AuthResult =
  * transcript is inert. Expired is not a dead end: mint another.
  */
 export const VIEWER_GRANT_TTL_MS = 5 * 60_000;
+
+/** How many per-document proofs the current dashboard credential keeps. */
+export const DASHBOARD_PROOF_RING = 8;
 
 interface ViewerGrant {
   sessionId: string;
@@ -94,10 +104,29 @@ function findKey<T>(store: Map<string, T>, presented: string): string | null {
   return null;
 }
 
+interface DashboardGrant {
+  expiresAt: number;
+}
+
+interface DashboardCredential {
+  /** The cookie value. */
+  token: string;
+  /**
+   * The grant this was exchanged for, kept so the minter can take back what
+   * it handed out. A grant is one-use, so this names exactly one credential.
+   */
+  grant: string;
+  /** Newest proofs last. The ring holds `DASHBOARD_PROOF_RING` of them. */
+  proofs: string[];
+}
+
 export class TokenStore {
   private readonly clientToken: string;
   private readonly grants = new Map<string, ViewerGrant>();
   private readonly streams = new Map<string, StreamCredential>();
+  private readonly dashboardGrants = new Map<string, DashboardGrant>();
+  /** The one live dashboard credential. A new redemption replaces it. */
+  private dashboardCredential: DashboardCredential | null = null;
 
   constructor(clientToken: string = generateToken()) {
     this.clientToken = clientToken;
@@ -199,9 +228,92 @@ export class TokenStore {
   }
 
   /**
+   * Mint a one-use dashboard grant. It is not a session credential. The HTTP
+   * client cannot choose its lifetime: only a test passes `ttlMs`.
+   */
+  mintDashboardGrant(options: { ttlMs?: number; now?: number } = {}): string {
+    const now = options.now ?? Date.now();
+    this.pruneExpiredDashboard(now);
+    const token = generateToken();
+    this.dashboardGrants.set(token, {
+      expiresAt: now + (options.ttlMs ?? VIEWER_GRANT_TTL_MS),
+    });
+    return token;
+  }
+
+  /**
+   * Exchange a dashboard grant for the one dashboard credential, consuming
+   * the grant. Returns null for an unknown, already-redeemed or expired
+   * grant. The three cases are deliberately indistinguishable. A successful
+   * redemption replaces whatever credential was current and drops its proofs.
+   * A failed redemption leaves the current credential alone.
+   */
+  redeemDashboardGrant(
+    presented: string | undefined | null,
+    now: number = Date.now(),
+  ): { token: string } | null {
+    this.pruneExpiredDashboard(now);
+    if (presented === undefined || presented === null || presented === '') return null;
+    const key = findKey(this.dashboardGrants, presented);
+    if (key === null) return null;
+    const grant = this.dashboardGrants.get(key);
+    this.dashboardGrants.delete(key);
+    if (grant === undefined || grant.expiresAt <= now) return null;
+    const token = generateToken();
+    this.dashboardCredential = { token, grant: key, proofs: [] };
+    return { token };
+  }
+
+  /** The dashboard cookie value, or false when nothing current matches. */
+  verifyDashboardToken(presented: string | undefined | null): boolean {
+    if (presented === undefined || presented === null || presented === '') return false;
+    if (this.dashboardCredential === null) return false;
+    return tokensEqual(presented, this.dashboardCredential.token);
+  }
+
+  /**
+   * Take back a dashboard grant and the credential it became. An unspent
+   * grant is deleted. A spent one drops the credential and its proofs.
+   */
+  revokeDashboardGrant(grant: string): void {
+    if (grant === '') return;
+    const key = findKey(this.dashboardGrants, grant);
+    if (key !== null) this.dashboardGrants.delete(key);
+    if (this.dashboardCredential !== null && tokensEqual(this.dashboardCredential.grant, grant)) {
+      this.dashboardCredential = null;
+    }
+  }
+
+  /**
+   * A fresh proof for the current credential, or null when there is none.
+   * The ninth proof drops the oldest.
+   */
+  issueDashboardProof(): string | null {
+    if (this.dashboardCredential === null) return null;
+    const proof = generateToken();
+    this.dashboardCredential.proofs.push(proof);
+    while (this.dashboardCredential.proofs.length > DASHBOARD_PROOF_RING) {
+      this.dashboardCredential.proofs.shift();
+    }
+    return proof;
+  }
+
+  /**
+   * Whether `presented` is one of the proofs still in the ring. The compare
+   * hashes both strings, so a wrong proof of the same length takes the same
+   * path as a right one.
+   */
+  acceptsDashboardProof(presented: string | undefined | null): boolean {
+    if (presented === undefined || presented === null || presented === '') return false;
+    if (this.dashboardCredential === null) return false;
+    return this.dashboardCredential.proofs.some((proof) => tokensEqual(presented, proof));
+  }
+
+  /**
    * Verify a bearer token. Only the client token authenticates this way:
    * viewer credentials are cookie-borne and session-scoped, and are checked
-   * with `verifyStreamToken`.
+   * with `verifyStreamToken`. The dashboard cookie is checked with
+   * `verifyDashboardToken`.
    */
   verify(presented: string | undefined | null): AuthResult {
     if (presented === undefined || presented === null || presented === '') return null;
@@ -212,6 +324,12 @@ export class TokenStore {
   private pruneExpired(now: number): void {
     for (const [token, grant] of this.grants) {
       if (grant.expiresAt <= now) this.grants.delete(token);
+    }
+  }
+
+  private pruneExpiredDashboard(now: number): void {
+    for (const [token, grant] of this.dashboardGrants) {
+      if (grant.expiresAt <= now) this.dashboardGrants.delete(token);
     }
   }
 }
@@ -274,4 +392,28 @@ export function viewerCookie(sessionId: string, streamToken: string): string {
     `; Path=/sessions/${encodeURIComponent(sessionId)}` +
     '; HttpOnly; SameSite=Strict'
   );
+}
+
+/**
+ * The dashboard's cookie name. One credential for the dashboard, so one
+ * path: `/`. Cookies ignore ports, and `cookieValues` tries every value.
+ */
+export const DASHBOARD_COOKIE = 'sp_dash';
+
+/**
+ * The `Set-Cookie` value delivering the dashboard credential.
+ *
+ * `HttpOnly` keeps it out of `document.cookie`. `SameSite=Strict` stops any
+ * other site's navigation carrying it. No `Max-Age`: it dies with the
+ * browsing session. No `Secure`: the daemon is loopback-only http, and a
+ * `Secure` cookie would never be stored. No `Domain`: it stays host-only.
+ */
+export function dashboardCookie(token: string): string {
+  return `${DASHBOARD_COOKIE}=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Strict`;
+}
+
+/** The proof inside `sp-csrf.<64 hex>`, or null when the protocol is not that. */
+export function dashboardProofFromProtocol(protocol: string): string | null {
+  const match = /^sp-csrf\.([0-9a-f]{64})$/.exec(protocol);
+  return match?.[1] ?? null;
 }
