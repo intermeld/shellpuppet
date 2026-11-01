@@ -765,7 +765,11 @@ function findQuestion(tail: Line[], blockStart: number): Line | null {
     const line = above[i]!;
     if (RULE_LINE.test(line.text)) continue;
     inspected++;
-    const cleaned = normalise(line.text);
+    // Only Grok's exact box prefix is chrome. A question may itself begin
+    // with `>` or a box character, so leave everything after that prefix.
+    const cleaned = normalise(GROK_BOX_QUESTION.test(line.text)
+      ? line.text.replace(GROK_BOX_QUESTION, '')
+      : line.text);
     if (
       GROK_BOX_QUESTION.test(line.text) ||
       /\?/.test(cleaned) ||
