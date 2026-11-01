@@ -6,7 +6,9 @@
  * kills that pid. A session's kill ends the process tree first, and once the
  * program has ended Windows may give its pid to another process, so either
  * way node-pty would end processes that are not the session's
- * (`src/core/windowsPtyStart.ts`).
+ * (`src/core/windowsPtyStart.ts`). The session's own console host is ended
+ * later by the handle of the process the list named, not by `process.kill`:
+ * a pid-based kill in this window is what this file forbids.
  */
 
 import { spawn } from 'node:child_process';

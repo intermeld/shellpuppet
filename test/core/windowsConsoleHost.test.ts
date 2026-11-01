@@ -18,13 +18,25 @@ import {
 import type { ConsoleHostProcess, QueuedConsoleHost, SpawnWindow } from '../../src/core/windowsConsoleHost.js';
 
 /** What the stand-in for `execFile` last saw. No PowerShell is started. */
-const listed = vi.hoisted(() => ({ timeout: undefined as number | undefined, stdout: '' }));
+const listed = vi.hoisted(() => ({
+  timeout: undefined as number | undefined,
+  stdout: '',
+  endScripts: [] as string[],
+}));
 
 vi.mock('node:child_process', () => ({
   execFile: (...args: unknown[]) => {
+    const commandArgs = args[1] as string[];
     const options = args[2] as { timeout?: number } | undefined;
-    listed.timeout = options?.timeout;
     const callback = args[3] as (error: Error | null, stdout: string) => void;
+    const script = commandArgs.join('\n');
+    if (script.includes('$proc.Kill()')) {
+      listed.endScripts.push(script);
+      const pids = [...script.matchAll(/\$targetId = (\d+)/g)].map((match) => match[1]);
+      callback(null, pids.map((pid) => `${pid ?? ''} 0`).join('\n'));
+      return { unref(): void {} };
+    }
+    listed.timeout = options?.timeout;
     callback(null, listed.stdout);
     return { unref(): void {} };
   },
@@ -316,13 +328,35 @@ describe('createConsoleHostQueue', () => {
           `71 ${String(process.pid)} conhost.exe ${String(edge + 1)}`,
         ].join('\n');
         kills.mockClear();
+        listed.endScripts = [];
         queueConsoleHostEnd({ id: 'daemon', window, log: () => undefined });
         await vi.advanceTimersByTimeAsync(CONSOLE_HOST_COALESCE_MS - 1);
         expect(listed.timeout).toBeUndefined();
         expect(kills).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1);
         expect(listed.timeout).toBe(CONSOLE_HOST_QUERY_TIMEOUT_MS);
-        expect(kills.mock.calls.map((call) => call[0])).toEqual([70]);
+        // The host is ended by a handle opened for that pid, not process.kill,
+        // which would follow the pid if Windows had reused it. The call is
+        // asynchronous: one PowerShell for the batch, via execFile.
+        expect(kills).not.toHaveBeenCalled();
+        expect(listed.endScripts).toHaveLength(1);
+        expect(listed.endScripts[0]).toContain('$targetId = 70');
+        expect(listed.endScripts[0]).toContain(`$expected = ${String(edge)}`);
+        expect(listed.endScripts[0]).toContain('$proc.Kill()');
+
+        const other: SpawnWindow = { t0: 2_000, t1: 2_100 };
+        listed.stdout = [
+          `70 ${String(process.pid)} conhost.exe ${String(edge)}`,
+          `71 ${String(process.pid)} conhost.exe ${String(other.t1)}`,
+        ].join('\n');
+        listed.endScripts = [];
+        queueConsoleHostEnd({ id: 'batch-a', window, log: () => undefined });
+        queueConsoleHostEnd({ id: 'batch-b', window: other, log: () => undefined });
+        await vi.advanceTimersByTimeAsync(CONSOLE_HOST_COALESCE_MS);
+        expect(listed.endScripts).toHaveLength(1);
+        expect(listed.endScripts[0]).toContain('$targetId = 70');
+        expect(listed.endScripts[0]).toContain('$targetId = 71');
+        expect(listed.endScripts[0]).toContain(`$expected = ${String(other.t1)}`);
       }
     } finally {
       kills.mockRestore();
@@ -397,6 +431,37 @@ describe('createConsoleHostQueue', () => {
       finish[1]?.([host({ pid: 81, creationTime: 2_040 })]);
       await done;
       expect(ended).toEqual([80, 81]);
+      expect(settled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('settles only after an asynchronous end has finished', async () => {
+    vi.useFakeTimers();
+    let release: () => void = () => undefined;
+    const ended: number[] = [];
+    try {
+      const queue = createConsoleHostQueue({
+        parentPid: daemon,
+        coalesceMs: 10,
+        list: () => Promise.resolve([host({ pid: 80, creationTime: 1_040 })]),
+        endProcess: (pid) => new Promise<void>((resolve) => {
+          ended.push(pid);
+          release = resolve;
+        }),
+      });
+      queue.push({ id: 's', window, log: () => undefined });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(ended).toEqual([80]);
+      let settled = false;
+      const done = queue.whenSettled().then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(settled).toBe(false);
+      release();
+      await done;
       expect(settled).toBe(true);
     } finally {
       vi.useRealTimers();

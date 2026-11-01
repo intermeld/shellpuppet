@@ -495,7 +495,20 @@ Leave it off unless actively debugging, and delete the log afterwards.
     from a pid: node-pty holds a running program's handle and closes it as it
     sees the program end, a moment before the exit code is recorded, so a kill
     in that moment can reach a pid just freed, the same kind of race every
-    kill has while `taskkill` enumerates the processes.
+    kill has while `taskkill` enumerates the processes. Once the code is
+    recorded the pid is not walked. Under ConPTY, a pid that is still live is not logged as
+    this session's root having survived, because the handle is already closed
+    and the pid may have been given out. The console host
+    ended afterwards is killed through the handle opened by reading it before
+    the name and creation-time checks, and only when that process is still the
+    listed host, so a reused pid is left alone. The open handle keeps Windows
+    from reusing the pid until it is closed. A call with no creation time is
+    refused and leaves the process running. The hosts of one batch are ended
+    by one asynchronous PowerShell, so the daemon keeps answering while it
+    runs. Under winpty (Windows builds before 18309) node-pty's own kill is
+    not wrapped: it still asks the native helper for the process list of the
+    program's pid and kills each. The list-nothing wrapper applies only where
+    the ConPTY kill lists the console.
 - A screenshot starts a headless browser with a DevTools port on loopback for
   the seconds the capture takes. Another process running as your user could
   attach to it in that window. The same-user model above already grants such

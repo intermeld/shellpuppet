@@ -23,7 +23,9 @@
  *
  * The same wrapper makes a ConPTY kill end no process of its own
  * (`listNothingToKill`): node-pty would look them up by a pid the program may
- * no longer hold. It drops a ConPTY resize that arrives once node-pty has seen
+ * no longer hold. `_getConsoleProcessList` exists only under ConPTY. winpty's
+ * kill still asks the native helper for the process list of the pid and kills
+ * each one. It drops a ConPTY resize that arrives once node-pty has seen
  * the program end, where node-pty would throw `Cannot resize a pty that has
  * already exited`. node-pty holds a resize asked for before the terminal's
  * first output and runs it from the output socket's first 'data' event, so
@@ -131,7 +133,10 @@ export function wrapWindowsPtyAgent(agents: AgentModule): void {
  * A session's processes are ended by its tree kill instead (`session.ts`):
  * every kill of a session whose program has not been seen to end runs
  * `taskkill /T /F` from the program's pid, before node-pty's kill, and a
- * program that has ended has nothing left for the helper to find. node-pty's
+ * program that has ended has nothing left for the helper to find. This
+ * replaces `_getConsoleProcessList` only, which ConPTY's kill calls. winpty's
+ * kill does not: it asks the native helper for the process list of the pid
+ * and kills each one. node-pty's
  * kill still closes the pseudoconsole while it holds the terminal, which it
  * does until the program ends, so a program a tree kill left running is sent
  * CTRL_CLOSE_EVENT with the rest of its console.
