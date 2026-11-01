@@ -287,8 +287,10 @@ prints the link, and it never uses your default browser: if the isolated
 window cannot open, the command fails rather than hand the grant to a profile
 with extensions.
 
-Double-click a pane's title bar to Enlarge or Restore it; Escape also restores
-an enlarged pane. Double-clicking inside the terminal still selects text.
+Double-click a pane's title bar to Enlarge or Restore it. Escape restores an
+enlarged pane in navigation mode or when focus is outside the terminal;
+inside the terminal, Escape goes to the program. Double-clicking inside the
+terminal still selects text.
 In dashboard panes, on Windows and Linux, Ctrl+V pastes; to send a literal
 Ctrl+V to the program, there is no in-pane shortcut. Ctrl+C copies selected
 terminal text, and sends `^C` when nothing is selected. On macOS, Cmd+V

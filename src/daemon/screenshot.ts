@@ -57,6 +57,11 @@ export interface CaptureOptions {
   cpuThrottlingRate?: number;
   /** A test-only expression read after a capture times out. */
   timeoutProbe?: string;
+  /** Test-only DevTools interaction after the readiness probe succeeds. */
+  interact?: (page: {
+    evaluate: (expression: string) => Promise<unknown>;
+    send: (method: string, params?: Record<string, unknown>, browserWide?: boolean) => Promise<unknown>;
+  }) => Promise<unknown>;
   /**
    * The folder the capture's own browser profile is made in, created when
    * absent. The daemon passes `captureProfileRoot(home)`, which it sweeps of
@@ -422,7 +427,7 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
     const evaluate = async (expression: string): Promise<unknown> => {
       const evaluated = await activeCdp.send<{ result: { value?: unknown } }>(
         'Runtime.evaluate',
-        { expression, returnByValue: true },
+        { expression, returnByValue: true, awaitPromise: true },
         activeSessionId,
       );
       return evaluated.result.value;
@@ -449,6 +454,14 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
       }
       if (Date.now() >= deadline) throw new Error('The viewer did not paint in time.');
       await sleep(POLL_MS);
+    }
+
+    if (options.interact !== undefined) {
+      probed = await options.interact({
+        evaluate,
+        send: (method, params = {}, browserWide = false) =>
+          activeCdp.send(method, params, browserWide ? undefined : activeSessionId),
+      });
     }
 
     const rows = await cdp.send<{ result: { value?: unknown } }>(
