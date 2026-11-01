@@ -2,8 +2,9 @@
  * Dashboard access credential (design §4.1, §5.1).
  *
  * The grant is one use. The cookie it becomes may open the dashboard page,
- * the session list, `/dashboard/events` and a session stream. It does not
- * open the client-token routes. `/events` stays on the client token.
+ * the session list, `/dashboard/events` and a session stream. It may kill
+ * with the document proof and a same-origin `Origin`. It does not open the
+ * other client-token routes. `/events` stays on the client token.
  */
 
 import * as fs from 'node:fs';
@@ -817,7 +818,7 @@ describe('a planted cookie must not shadow sp_dash', () => {
 });
 
 describe('the cookie does not open the routes outside the dashboard', () => {
-  it('refuses shutdown, screenshot, start, viewer mint, environment, kill and /events, and opens a session stream', async () => {
+  it('refuses shutdown, screenshot, start, viewer mint, environment and /events, refuses a kill that has no Origin, and opens a session stream', async () => {
     const daemon = await startDash();
     const id = await startQuiet(daemon, 'closed-routes');
     const { grant } = await openDashboard(daemon);
@@ -839,8 +840,10 @@ describe('the cookie does not open the routes outside the dashboard', () => {
     expect(viewer.status).toBe(401);
     const environment = await raw(daemon.port, 'GET', '/environment', authed);
     expect(environment.status).toBe(401);
+    // This request has the cookie and the proof, and no Origin. A kill needs
+    // the same Origin check as launch, so the session stays.
     const killed = await raw(daemon.port, 'DELETE', `/sessions/${id}`, authed);
-    expect(killed.status).toBe(401);
+    expect(killed.status).toBe(403);
     expect(await sessionIds(daemon)).toContain(id);
 
     const typed = await raw(daemon.port, 'POST', `/sessions/${id}/input`, {

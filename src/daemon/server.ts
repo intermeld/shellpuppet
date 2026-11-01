@@ -1588,6 +1588,61 @@ export class Daemon {
   }
 
   /**
+   * `DELETE /sessions/<id>` for the dashboard cookie. Origin, Fetch Metadata
+   * and the document proof are the same checks as launch. One call kills the
+   * session and audits actor `dashboard`. A client token never reaches here.
+   */
+  private async handleDashboardKill(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    id: string,
+  ): Promise<void> {
+    const presented = this.dashboardCookiePresented(req.headers.cookie);
+    const cookie = this.dashboardCookieToken(req.headers.cookie);
+    if (cookie === null) {
+      if (presented) this.auditDashboardRefusal(req, 'unauthenticated');
+      json(res, 401, { error: 'Unauthorised: a valid client token is required.' });
+      return;
+    }
+    if (!this.isSameOriginMutation(req)) {
+      this.auditDashboardRefusal(req, this.mutationRefusalReason(req));
+      json(res, 403, { error: 'Forbidden.' });
+      return;
+    }
+    if (!this.tokens.acceptsDashboardProof(headerOne(req, 'x-shellpuppet-csrf'))) {
+      this.auditDashboardRefusal(req, 'proof');
+      json(res, 403, { error: 'Forbidden.' });
+      return;
+    }
+    // Drain the body so a keep-alive connection is not left holding it. The
+    // kill takes nothing from the body: a command there cannot change it.
+    try {
+      await readBody(req);
+    } catch (error) {
+      if (error instanceof RequestBodyTooLargeError) {
+        this.auditDashboardRefusal(req, 'body-size');
+        json(res, 413, { error: error.message });
+        return;
+      }
+      if (error instanceof Error && error.message.startsWith('Request body')) {
+        this.auditDashboardRefusal(req, 'body');
+        json(res, 400, { error: error.message });
+        return;
+      }
+      throw error;
+    }
+    if (this.manager.get(id) === undefined) {
+      json(res, 404, { error: `No such session: ${id}` });
+      return;
+    }
+    this.lastActivity = Date.now();
+    this.audit.record('dashboard', 'kill', id);
+    await this.manager.kill(id);
+    this.dropSessionArtifacts(id);
+    json(res, 200, { ok: true, killed: id });
+  }
+
+  /**
    * Why a `/dashboard/events` upgrade is refused, or null when it may attach.
    * The client token on the query is not a way in. The proof is the
    * subprotocol, not `X-ShellPuppet-CSRF`.
@@ -1814,10 +1869,16 @@ export class Daemon {
 
     const auth = this.tokens.verify(bearerToken(req.headers.authorization));
     if (auth === null || auth.kind !== 'client') {
-      // `GET /sessions` is the one HTTP read the dashboard cookie may make.
-      // A bearer token, handled above, does not reach this branch.
+      // `GET /sessions` is the HTTP read the dashboard cookie may make.
+      // `DELETE /sessions/<id>` is the kill: the same origin, Fetch Metadata
+      // and document proof as launch. A bearer token, handled above, does
+      // not reach this branch, so a client-token kill keeps its own actor.
       if (req.method === 'GET' && segments.length === 1 && segments[0] === 'sessions') {
         this.serveDashboardSessionList(req, res, url);
+        return;
+      }
+      if (req.method === 'DELETE' && segments.length === 2 && segments[0] === 'sessions') {
+        await this.handleDashboardKill(req, res, segments[1] ?? '');
         return;
       }
       // A dashboard cookie on any other route, and any other dashboard path,

@@ -658,7 +658,7 @@ describe('stream refusals', () => {
 });
 
 describe('the cookie still opens nothing else', () => {
-  it('leaves shutdown, screenshot, start, viewer mint, environment, kill, HTTP input, HTTP key and /events shut, and starts no unknown profile', async () => {
+  it('leaves shutdown, screenshot, start, viewer mint, environment, HTTP input, HTTP key and /events shut, kills with one DELETE, and starts no unknown profile', async () => {
     const daemon = await startPane();
     const id = await startGrid(daemon, 'closed-routes');
     const { cookie, proof } = await openDashboard(daemon);
@@ -678,7 +678,6 @@ describe('the cookie still opens nothing else', () => {
     }, JSON.stringify({ command: process.execPath, shell: false }))).status).toBe(401);
     expect((await raw(daemon.port, 'POST', `/sessions/${id}/viewer`, authed, '{}')).status).toBe(401);
     expect((await raw(daemon.port, 'GET', '/environment', authed)).status).toBe(401);
-    expect((await raw(daemon.port, 'DELETE', `/sessions/${id}`, authed)).status).toBe(401);
     expect((await raw(daemon.port, 'POST', `/sessions/${id}/input`, {
       ...authed,
       'content-type': 'application/json',
@@ -699,8 +698,10 @@ describe('the cookie still opens nothing else', () => {
 
     const health = await api(daemon.port, null, '/health');
     expect(health.status).toBe(200);
+    const killed = await raw(daemon.port, 'DELETE', `/sessions/${id}`, authed);
+    expect(killed.status).toBe(200);
     const list = await api(daemon.port, daemon.token, '/sessions');
     const ids = ((list.body['sessions'] as { id: string }[] | undefined) ?? []).map((session) => session.id);
-    expect(ids).toEqual([id]);
+    expect(ids).toEqual([]);
   });
 });

@@ -37,5 +37,13 @@ button.active { color: #9dd4ff; border-color: #4b9adc; background: #173249; }
 .pane-size { color: #8b97a6; font-size: 11px; }
 #empty { position: absolute; top: 50%; width: 100%; text-align: center; pointer-events: none; }
 #help { position: absolute; z-index: 5; top: 50px; right: 12px; max-width: 330px; padding: 12px; background: #192331; border: 1px solid #6cb6ff; line-height: 1.5; }
+#launcher, #folder-field { display: inline-flex; align-items: center; gap: 4px; }
+#launcher[hidden], #folder-field[hidden], #watch-only[hidden], #fullscreen[hidden], #profile-problems[hidden] { display: none; }
+select { font: inherit; color: #d7e3ee; background: #1c2633; border: 1px solid #455366; border-radius: 4px; }
+#profile-problems { margin: 0; padding: 4px 12px; background: #3d2f14; color: #e8b85f; }
+.pane-menu { display: flex; flex-wrap: wrap; gap: 5px; padding: 4px 7px; background: #101820; border-bottom: 1px solid #303b4a; }
+.pane-menu[hidden] { display: none; }
+.pane.ended { border-color: #8b97a6; }
+.pane-state:empty { display: none; }
 .xterm-viewport { overflow-y: auto !important; }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; animation: none !important; } }
