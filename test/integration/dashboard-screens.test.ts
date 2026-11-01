@@ -6,7 +6,8 @@ import * as vm from 'node:vm';
 import * as os from 'node:os';
 import { spawn } from 'node:child_process';
 import WebSocket from 'ws';
-import { captureBrowserArgs, captureViewer } from '../../src/daemon/screenshot.js';
+import { captureBrowserArgs } from '../../src/daemon/screenshot.js';
+import { captureDashboard, dashboardDiagnosticsScript, dashboardTimeoutProbe } from './dashboardCapture.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
 import { api, makeTempHome, repoRoot, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
@@ -24,7 +25,7 @@ async function freshUrl(): Promise<string> {
 }
 
 async function browserProbe(beforeNavigateScript: string, probe: string): Promise<Record<string, unknown>> {
-  const shot = await captureViewer({ browser: browser!, viewerUrl: await freshUrl(), width: 1280,
+  const shot = await captureDashboard({ browser: browser!, viewerUrl: await freshUrl(), width: 1280,
     height: 720, drive: true, timeoutMs: 30_000, beforeNavigateScript, probe });
   return JSON.parse(String(shot.probe)) as Record<string, unknown>;
 }
@@ -63,7 +64,13 @@ async function multiWindowProbe(url: string): Promise<{
     });
     const send = async (method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<Record<string, unknown>> => {
       const id = ++serial;
-      const answer = new Promise<Record<string, unknown>>((resolve) => pending.set(id, resolve));
+      const answer = new Promise<Record<string, unknown>>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          pending.delete(id);
+          reject(new Error(`DevTools did not answer ${method} after 30000 ms; page did not answer`));
+        }, 30_000);
+        pending.set(id, (value) => { clearTimeout(timer); resolve(value); });
+      });
       socket!.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
       const result = await answer;
       if (result.error) throw new Error(JSON.stringify(result.error));
@@ -75,6 +82,9 @@ async function multiWindowProbe(url: string): Promise<{
       const attached = await send('Target.attachToTarget', { targetId, flatten: true });
       const sessionId = String(attached.sessionId);
       await send('Page.enable', {}, sessionId);
+      await send('Page.addScriptToEvaluateOnNewDocument', { source: dashboardDiagnosticsScript }, sessionId);
+      const rate = Number(process.env['SP_DASHBOARD_CPU_RATE'] || '1');
+      if (rate > 1) await send('Emulation.setCPUThrottlingRate', { rate }, sessionId);
       await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 720,
         deviceScaleFactor: 1, mobile: false }, sessionId);
       await send('Page.navigate', { url: pageUrl }, sessionId);
@@ -86,16 +96,29 @@ async function multiWindowProbe(url: string): Promise<{
     };
     const ids = (sessionId: string) => evaluate(sessionId,
       `[...document.querySelectorAll('#panes .pane')].map((pane) => pane.dataset.session)`);
+    const pages: string[] = [];
     const waitFor = async (condition: () => Promise<boolean>): Promise<void> => {
+      const started = Date.now();
       for (let attempt = 0; attempt < 160; attempt++) {
-        try { if (await condition()) return; } catch { /* Navigation may replace the execution context. */ }
+        try { if (await condition()) return; } catch (error) {
+          if (String(error).includes('DevTools did not answer')) {
+            throw new Error(`${String(error)} after ${String(Date.now() - started)} ms`, { cause: error });
+          }
+          // Navigation may replace the execution context.
+        }
         await new Promise((resolve) => setTimeout(resolve, 100));
       }
-      throw new Error('The two dashboard windows did not settle.');
+      const details = await Promise.all(pages.map(async (page) => {
+        try { return await evaluate(page, dashboardTimeoutProbe); }
+        catch { return 'page did not answer'; }
+      }));
+      throw new Error(`The dashboard windows did not settle after ${String(Date.now() - started)} ms; diagnostics: ${JSON.stringify(details)}`);
     };
     const primary = await makePage(url);
+    pages.push(primary.sessionId);
     await waitFor(async () => (await ids(primary.sessionId) as string[] | undefined)?.length === 3);
     const second = await makePage(`${new URL(url).origin}/dashboard#screen=second&rank=1001`);
+    pages.push(second.sessionId);
     await waitFor(async () => {
       const a = await ids(primary.sessionId) as string[] | undefined;
       const b = await ids(second.sessionId) as string[] | undefined;
@@ -109,6 +132,7 @@ async function multiWindowProbe(url: string): Promise<{
       other: await ids(second.sessionId) as string[],
       childConnected: String(await evaluate(second.sessionId, "document.getElementById('connection')?.textContent")) };
     const third = await makePage(`${new URL(url).origin}/dashboard#screen=third&rank=1002`);
+    pages.push(third.sessionId);
     await waitFor(async () => {
       const a = await ids(primary.sessionId) as string[] | undefined;
       const b = await ids(second.sessionId) as string[] | undefined;

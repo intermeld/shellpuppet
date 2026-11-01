@@ -17,7 +17,7 @@ import { createAuditor } from '../../src/daemon/audit.js';
 import { parseDaemonConfig } from '../../src/daemon/config.js';
 import { createFileLogger } from '../../src/daemon/logger.js';
 import type { LauncherConfig } from '../../src/daemon/launchProfiles.js';
-import { captureViewer } from '../../src/daemon/screenshot.js';
+import { captureDashboard } from './dashboardCapture.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
 import { api, eventually, makeTempHome, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
@@ -403,7 +403,7 @@ describe('human controls in the browser', () => {
     const first = await startLive(daemon, 'first');
     const second = await startLive(daemon, 'second');
     const url = await freshDashboardUrl(daemon);
-    const shot = await captureViewer({
+    const shot = await captureDashboard({
       browser, viewerUrl: url, width: 1920, height: 1080,
       drive: true, timeoutMs: 120_000, beforeNavigateScript: instrument,
       probe: `(() => { try {
@@ -569,7 +569,7 @@ describe('human controls in the browser', () => {
       return session?.exited === true && session.exitCode === 0;
     }, 15_000);
     const url = await freshDashboardUrl(daemon);
-    const shot = await captureViewer({
+    const shot = await captureDashboard({
       browser, viewerUrl: url, width: 1920, height: 1080,
       drive: true, timeoutMs: 120_000, beforeNavigateScript: instrument,
       probe: `(() => { try {
@@ -711,7 +711,7 @@ describe('human controls in the browser', () => {
     const beforeNames = fs.readdirSync(daemon.home).sort();
     const beforeConfig = fs.readFileSync(path.join(daemon.home, 'config.json'));
     const url = await freshDashboardUrl(daemon);
-    const shot = await captureViewer({
+    const shot = await captureDashboard({
       browser, viewerUrl: url, width: 1920, height: 1080,
       drive: true, timeoutMs: 120_000, beforeNavigateScript: instrument,
       probe: `(() => { try {
@@ -768,7 +768,7 @@ describe('human controls in the browser', () => {
     const daemon = await startPageDaemon();
     const id = await startLive(daemon, 'pop-target');
     const url = await freshDashboardUrl(daemon);
-    const shot = await captureViewer({
+    const shot = await captureDashboard({
       browser, viewerUrl: url, width: 1280, height: 720,
       drive: true, timeoutMs: 90_000,
       beforeNavigateScript: `(() => { if (!location.hash.startsWith('#pop=')) history.replaceState(null, '', location.pathname + location.search + '#pop=' + encodeURIComponent(${JSON.stringify(id)})); })()`,

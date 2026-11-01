@@ -2,7 +2,7 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { captureViewer } from '../../src/daemon/screenshot.js';
+import { captureDashboard } from './dashboardCapture.js';
 import { createAuditor } from '../../src/daemon/audit.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
 import { api, eventually, makeTempHome, repoRoot, startTestDaemon } from './helpers.js';
@@ -97,14 +97,12 @@ describe('passive dashboard page', () => {
     const first = await startSession('first');
     const second = await startSession('second');
     const url = await dashboardUrl();
-    const capture = captureViewer({ browser, viewerUrl: url, width: 1920, height: 1080,
+    const capture = captureDashboard({ browser, viewerUrl: url, width: 1920, height: 1080,
       drive: true, timeoutMs: 120_000, beforeNavigateScript: instrument,
       probe: `(() => {
-        const count = document.querySelectorAll('.pane').length;
-        const state = (window.__feedProbe ||= { seen: [] });
-        if (count > 0 && state.seen.at(-1) !== count) state.seen.push(count);
-        if (state.seen.join(',') !== '2,3,2') return null;
-        return JSON.stringify({ seen: state.seen, ids: [...document.querySelectorAll('.pane')].map(p => p.dataset.session),
+        const seen = window.__dashboardDiagnostics.paneCounts;
+        if (seen.join(',') !== '2,3,2') return null;
+        return JSON.stringify({ seen, ids: [...document.querySelectorAll('.pane')].map(p => p.dataset.session),
           sockets: window.__dashSockets.map(s => ({ url: s.url, protocol: s.protocol })),
           labels: [...document.querySelectorAll('.pane-label')].map(e => e.textContent),
           resizes: window.__dashResizes });
@@ -135,7 +133,7 @@ describe('passive dashboard page', () => {
     let third: string | null = null;
     try {
       const url = await dashboardUrl();
-      const capture = captureViewer({ browser, viewerUrl: url, width: 1920, height: 1080,
+      const capture = captureDashboard({ browser, viewerUrl: url, width: 1920, height: 1080,
       drive: true, timeoutMs: 120_000,
       beforeNavigateScript: `(() => {
         window.__dashboardTrace = { arrangements: 0, visibility: 0, arrangeDepth: 0,
@@ -151,11 +149,9 @@ describe('passive dashboard page', () => {
         };
       })()`,
       probe: `(() => {
-        const state = (window.__loopProbe ||= { seen: [] });
-        const count = document.querySelectorAll('.pane').length;
-        if (count > 0 && state.seen.at(-1) !== count) state.seen.push(count);
-        if (state.seen.join(',') !== '2,3,2') return null;
-        return JSON.stringify({ ...window.__dashboardTrace, seen: state.seen });
+        const seen = window.__dashboardDiagnostics.paneCounts;
+        if (seen.join(',') !== '2,3,2') return null;
+        return JSON.stringify({ ...window.__dashboardTrace, seen });
       })()`,
       });
       await eventually(() => daemon.daemon.connectedSockets >= 3, 90_000);
@@ -183,10 +179,59 @@ describe('passive dashboard page', () => {
     }
   }, 180_000);
 
+  it('keeps pane nodes and streams attached through a slow window resize', async (context) => {
+    if (!browser) { context.skip(); return; }
+    if (ids.length < 2) { await startSession('resize first'); await startSession('resize second'); }
+    const url = await dashboardUrl();
+    const shot = await captureDashboard({ browser, viewerUrl: url, width: 1920, height: 1080,
+      drive: true, timeoutMs: 60_000, beforeNavigateScript: instrument,
+      probe: `(() => {
+        const state = (window.__slowResize ||= {});
+        if (!state.observer) {
+          const cards = [...document.querySelectorAll('#panes .pane')];
+          if (cards.length < 2 || cards.some(card => !card.querySelector('.pane-size')?.textContent)) return null;
+          state.cards = cards;
+          state.root = document.getElementById('panes');
+          state.streamsBefore = window.__dashSockets.length;
+          state.removals = 0;
+          state.step = 0;
+          state.width = state.root.clientWidth;
+          state.originalWidth = Object.getOwnPropertyDescriptor(state.root, 'clientWidth');
+          state.observer = new MutationObserver(records => {
+            for (const record of records) state.removals += [...record.removedNodes].filter(node => node.classList?.contains('pane')).length;
+          });
+          state.observer.observe(state.root, { childList: true, subtree: true });
+          Object.defineProperty(state.root, 'clientWidth', { configurable: true, get: () => state.width });
+        }
+        if (state.step < 20) {
+          state.width -= 5;
+          state.step++;
+          window.dispatchEvent(new Event('resize'));
+          return null;
+        }
+        for (const record of state.observer.takeRecords()) {
+          state.removals += [...record.removedNodes].filter(node => node.classList?.contains('pane')).length;
+        }
+        if (state.originalWidth) Object.defineProperty(state.root, 'clientWidth', state.originalWidth);
+        else delete state.root.clientWidth;
+        state.observer.disconnect();
+        return JSON.stringify({ removals: state.removals, streamsBefore: state.streamsBefore,
+          streamsAfter: window.__dashSockets.length, sameCards: state.cards.every(card => card.isConnected),
+          resizeEvents: state.step });
+      })()`,
+    });
+    const result = JSON.parse(String(shot.probe)) as { removals: number; streamsBefore: number;
+      streamsAfter: number; sameCards: boolean; resizeEvents: number };
+    expect(result.resizeEvents).toBe(20);
+    expect(result.removals).toBe(0);
+    expect(result.streamsAfter).toBe(result.streamsBefore);
+    expect(result.sameCards).toBe(true);
+  }, 90_000);
+
   it('lays out one to five panes at 1920 by 1080, keeps order, attention and geometry passive', async (context) => {
     if (!browser) { context.skip(); return; }
     const url = await dashboardUrl();
-    const shot = await captureViewer({ browser, viewerUrl: url, width: 1920, height: 1080,
+    const shot = await captureDashboard({ browser, viewerUrl: url, width: 1920, height: 1080,
       drive: true, timeoutMs: 120_000, beforeNavigateScript: instrument,
       probe: `(() => {
         if (!window.__dashSockets) return null;
@@ -278,7 +323,7 @@ describe('passive dashboard page', () => {
   it('uses focus at 1280 by 720 and marks a forced small grid without resizing', async (context) => {
     if (!browser) { context.skip(); return; }
     const url = await dashboardUrl();
-    const shot = await captureViewer({ browser, viewerUrl: url, width: 1280, height: 720,
+    const shot = await captureDashboard({ browser, viewerUrl: url, width: 1280, height: 720,
       drive: true, timeoutMs: 120_000, beforeNavigateScript: instrument,
       probe: `(() => {
         const feed = window.__dashSockets?.find(s => s.url.endsWith('/dashboard/events'))?.socket;
@@ -304,7 +349,7 @@ describe('passive dashboard page', () => {
     if (!browser) { context.skip(); return; }
     if (ids.length < 2) { await startSession('geometry first'); await startSession('geometry second'); }
     const url = await dashboardUrl();
-    const shot = await captureViewer({ browser, viewerUrl: url, width: 1280, height: 720,
+    const shot = await captureDashboard({ browser, viewerUrl: url, width: 1280, height: 720,
       drive: true, timeoutMs: 120_000, beforeNavigateScript: instrument,
       probe: `(() => {
         const state = (window.__geometryProbe ||= { phase: 0, at: 0 });
@@ -396,7 +441,7 @@ describe('passive dashboard page', () => {
   it('updates covered and scrolled panes immediately while assignment and visibility frames lag', async (context) => {
     if (!browser) { context.skip(); return; }
     if (ids.length < 2) { await startSession('geometry first'); await startSession('geometry second'); }
-    const shot = await captureViewer({ browser, viewerUrl: await dashboardUrl(), width: 1280, height: 720,
+    const shot = await captureDashboard({ browser, viewerUrl: await dashboardUrl(), width: 1280, height: 720,
       drive: true, timeoutMs: 30_000, beforeNavigateScript: instrument,
       probe: `(() => {
         const state = (window.__restoreProbe ||= { phase: 0, started: Date.now() });
