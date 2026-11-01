@@ -13,11 +13,12 @@ ADR-005 and ADR-007.
 
 ## What running ShellPuppet grants
 
-This page describes the release you have installed. The dashboard decided in
-[ADR-009](../decisions/ADR-009-dashboard-and-sessions-you-start-yourself.md) is
-being built ([ROADMAP.md](../../ROADMAP.md)); its credential, routes and launch
-profiles are specified in the [design](../architecture/design.md), and each is
-added here in the release that ships it.
+This page describes ShellPuppet as it stands in this repository. The dashboard
+decided in [ADR-009](../decisions/ADR-009-dashboard-and-sessions-you-start-yourself.md)
+is being built ([ROADMAP.md](../../ROADMAP.md)): its access credential, below,
+is in place and not yet released; its page, panes and launch profiles are
+specified in the [design](../architecture/design.md) and are added here as they
+are built.
 
 The daemon owns real terminals. Anything that can reach its API can run
 commands as you. The protections below narrow *who* can reach it. They do not
@@ -85,12 +86,38 @@ make a reachable terminal safe.
   not type keeps saying so until it is reloaded. The daemon enforces read-only
   per credential and never per page, so no profile gains an access it did not
   redeem.
+
+  A **dashboard grant** is the same kind of one-use, five-minute grant, and it
+  is not a session credential. `POST /dashboard/open` takes the client token,
+  mints the grant and opens the page through the launcher the viewer already
+  uses. The grant is not in the response, not printed, and not written to
+  `audit.log` or `daemon.log`. Loading `GET /dashboard` as a document exchanges
+  it, once, for an `HttpOnly` `SameSite=Strict` cookie named `sp_dash` at
+  `Path=/`, with no `Max-Age`, no `Secure` and no `Domain`. That cookie may
+  open the dashboard page, `GET /sessions` and the `/dashboard/events`
+  socket. It does not open `/events`, a session stream, a start, a kill, a
+  shutdown, a screenshot or a viewer mint. Each accepted navigation puts a
+  fresh proof in the page. The daemon keeps the eight newest. `GET /sessions`
+  sends the proof as `X-ShellPuppet-CSRF`. The socket sends it as the
+  subprotocol `sp-csrf.` followed by the proof. A header on the upgrade is
+  not accepted. Both sides are hashed and then compared in constant time.
+  While a dashboard events socket is open, starting a session does not open a
+  per-session viewer window and the response carries no viewer URL. A second
+  redemption replaces the cookie and drops the proofs it had. Cookies ignore
+  ports, so a planted `sp_dash` is tried and skipped. The value the daemon
+  issued still wins.
 - **DNS-rebinding defences.** Any website you visit can make your browser send
   requests to loopback ports. The daemon rejects requests whose `Host` header
   is not its own, rejects WebSocket upgrades from foreign `Origin`s, sends no
   CORS headers and requires the bearer token everywhere but `/health`, the
-  viewer page and its static assets, none of which can read or act on a
-  session.
+  viewer page, the dashboard page and the static assets. None of those pages
+  returns a session. A client-token HTTP request does not consult `Origin`.
+  A request that presents the dashboard cookie does. A document navigation
+  and a same-origin read may omit `Origin`. Any other cookie-authenticated
+  request, including `/dashboard/events`, requires an `Origin` whose host
+  matches `Host`, and `Sec-Fetch-Site: same-origin`. `same-site`, `cross-site`
+  and a missing `Sec-Fetch-Site` are refused, including on a navigation.
+  Another loopback port is `same-site`. `SameSite=Strict` does not stop it.
 - **Directory hardening.** `~/.shellpuppet/` is created `0700` on POSIX; on
   Windows, ACL inheritance is stripped and only your user is granted access
   (`fs.chmod` is a near-no-op there).
@@ -301,10 +328,14 @@ itself.
 ## Audit log
 
 `~/.shellpuppet/audit.log` (append-only JSONL) records who did what: actor
-(`mcp:<client>`, `cli`, `viewer`, `client`, `daemon`), action (`start`,
+(`mcp:<client>`, `cli`, `viewer`, `dashboard`, `client`, `daemon`), action (`start`,
 `input`, `report`, `key`, `resize`, `kill`, `shutdown`, `reap`, `screenshot`,
-`grant-mint`, `grant-redeem`, `prompt-stall`, `ws-connect`, `ws-close`,
-`events-connect`), session id and metadata. (`report` is a viewer's terminal
+`grant-mint`, `grant-redeem`, `refuse`, `prompt-stall`, `ws-connect`, `ws-close`,
+`events-connect`), session id and metadata. A dashboard `grant-mint` names the
+credential kind and not the grant. A dashboard `grant-redeem` is actor
+`dashboard` and does not record the grant. A dashboard `refuse` records the
+method, the path and a reason code, and never a header, a query, a cookie, a
+proof or a grant. (`report` is a viewer's terminal
 answering the program rather than a person typing, as described under
 *Screen content is untrusted input*; `reap` is the daemon's own cleanup of a
 naturally-exited session once its grace period lapses; `prompt-stall` is the

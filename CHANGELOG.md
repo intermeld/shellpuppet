@@ -9,6 +9,15 @@ version may change behaviour, and every such change is listed here.
 
 ### Added
 
+- The dashboard has its own one-use grant, which lives for five minutes and is
+  minted only by the daemon. `POST /dashboard/open` (client token) mints it and opens
+  the page through the existing launcher. The grant is not returned to the
+  caller. A top-level navigation to `GET /dashboard` redeems it for an
+  `HttpOnly` `sp_dash` cookie. That cookie may open the dashboard page,
+  `GET /sessions` and `/dashboard/events`. Each accepted navigation embeds a
+  fresh proof. `GET /sessions` requires `X-ShellPuppet-CSRF`. The events
+  socket requires the `sp-csrf` subprotocol. While that socket is open, a
+  session start does not open a per-session viewer window.
 - `hideReasoning` now covers screenshots and session lists, including their CLI
   commands. Screenshots blur and dim reasoning rows in the image and replace
   their row text. Filtered lists omit waiting prompt questions. Filtered waits
