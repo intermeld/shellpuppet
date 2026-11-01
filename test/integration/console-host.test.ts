@@ -13,7 +13,7 @@
 
 import { execFile } from 'node:child_process';
 import { afterAll, describe, expect, it } from 'vitest';
-import { listConsoleHosts, whenConsoleHostBatchSettled } from '../../src/core/windowsConsoleHost.js';
+import { CONSOLE_HOST_GUARD_MS, listConsoleHosts, whenConsoleHostBatchSettled } from '../../src/core/windowsConsoleHost.js';
 import type { ConsoleHostProcess } from '../../src/core/windowsConsoleHost.js';
 import { api, eventually, makeTempHome, removeTempHome, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
@@ -26,7 +26,8 @@ interface SessionStart { id: string; from: number; to: number }
 
 function recordedFor(host: ConsoleHostProcess, starts: readonly SessionStart[]): string[] {
   return starts
-    .filter((start) => host.creationTime >= start.from - 5 && host.creationTime <= start.to + 5)
+    .filter((start) => host.creationTime >= start.from - CONSOLE_HOST_GUARD_MS &&
+      host.creationTime <= start.to + CONSOLE_HOST_GUARD_MS)
     .map((start) => start.id);
 }
 
@@ -102,8 +103,10 @@ describe.skipIf(process.platform !== 'win32')('Windows console hosts of a test d
   it('counts hosts from session starts without counting a later query host', () => {
     const recorded = [{ id: 'session', from: 1_000, to: 1_100 }];
     const session = { pid: 1, parentPid: process.pid, name: 'conhost.exe', creationTime: 1_050 };
-    const query = { pid: 2, parentPid: process.pid, name: 'conhost.exe', creationTime: 1_101 + 5 };
-    expect(sessionHosts([session, query], recorded)).toEqual([session]);
+    const query = { pid: 2, parentPid: process.pid, name: 'conhost.exe', creationTime: 1_117 };
+    const early = { ...session, pid: 3, creationTime: 995 };
+    const late = { ...session, pid: 4, creationTime: 1_105 };
+    expect(sessionHosts([session, query, early, late], recorded)).toEqual([session, early, late]);
     expect(recordedFor(query, recorded)).toEqual([]);
   });
 

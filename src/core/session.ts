@@ -32,7 +32,7 @@ import {
   recordedExitCode,
   releaseFailedStarts,
 } from './windowsPtyStart.js';
-import { queueConsoleHostEnd } from './windowsConsoleHost.js';
+import { queueConsoleHostEnd, registerConsoleHostWindow } from './windowsConsoleHost.js';
 import {
   DEFAULT_COLS,
   DEFAULT_ROWS,
@@ -372,6 +372,8 @@ export interface SessionDeps {
    * A session calls it only when `platform` is Windows.
    */
   queueConsoleHostEnd?: (item: QueuedConsoleHost) => void;
+  /** Window registration override, for tests only. */
+  registerConsoleHostWindow?: (id: string, window: SpawnWindow, platform: NodeJS.Platform) => void;
   /** PTY spawn, for tests only. Defaults to node-pty. No process is started. */
   spawn?: (
     file: string,
@@ -597,6 +599,7 @@ export class Session implements WaitTarget {
   private readonly logger: Logger;
   private readonly platform: NodeJS.Platform;
   private readonly endConsoleHost: (item: QueuedConsoleHost) => void;
+  private readonly registerConsoleHost: (id: string, window: SpawnWindow, platform: NodeJS.Platform) => void;
   private readonly spawnPty: SessionDeps['spawn'];
   private readonly treeKiller: TreeKiller;
   /** Whether the program has bracketed paste (DEC 2004) enabled. See PASTE_START. */
@@ -662,6 +665,7 @@ export class Session implements WaitTarget {
     this.platform = deps.platform ?? process.platform;
     this.treeKiller = deps.treeKiller ?? taskkillTrees;
     this.endConsoleHost = deps.queueConsoleHostEnd ?? queueConsoleHostEnd;
+    this.registerConsoleHost = deps.registerConsoleHostWindow ?? registerConsoleHostWindow;
     this.spawnPty = deps.spawn;
 
     const cols = options.cols ?? DEFAULT_COLS;
@@ -730,6 +734,7 @@ export class Session implements WaitTarget {
     }
     if (trackConsoleHost) {
       this.consoleHostWindow = { t0: consoleHostT0, t1: Date.now() };
+      this.registerConsoleHost(this.id, this.consoleHostWindow, this.platform);
     }
     // An error on a Windows terminal's pipes must not take the daemon down
     // (`windowsPtyStart.ts`). Logged once a stream: for the known cause, the
