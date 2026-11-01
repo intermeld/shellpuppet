@@ -22,7 +22,7 @@ import {
 import type { HelperFs } from '../../src/core/nativePty.js';
 
 /**
- * node-pty 1.1.0's own words when no native module loads (lib/utils.js), with
+ * node-pty's own words when no native module loads (lib/utils.js), with
  * the require stack Node appends to it.
  */
 const MISSING =
@@ -42,7 +42,7 @@ const WRONG_NODE =
   'NODE_MODULE_VERSION 137. Please try re-compiling or re-installing\n' +
   'the module (for instance, using `npm rebuild` or `npm install`).';
 
-/** node-pty 1.1.0 on Windows, when the terminal is built without a conpty binary. */
+/** node-pty on Windows, when the terminal is built without a conpty binary. */
 const MISSING_ON_WINDOWS =
   "Failed to load native module: conpty.node, checked: build/Release, build/Debug, prebuilds/win32-x64: Error: Cannot find module './prebuilds/win32-x64//conpty.node'\n" +
   'Require stack:\n' +

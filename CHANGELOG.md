@@ -140,6 +140,20 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- A daemon on Windows no longer crashes when two sessions end at the same
+  moment. `node-pty` is pinned to 1.2.0-beta.18 (the beta VS Code ships):
+  its exit watchers once removed their terminals from a list every terminal
+  shares with no lock (microsoft/node-pty#921, fixed by #922 in
+  1.2.0-beta.13), and one unlucky pair of exits could end the whole daemon
+  with every session it was running. Kills, resizes, recorded exits, the
+  Windows prebuilt path and the macOS spawn-helper handling are unchanged.
+  A start whose program Windows cannot create (for example a file named
+  `.exe` that Windows cannot run, started with `shell: false`) now begins a
+  session that ends at once with the code Windows reported, instead of
+  failing the start. node-pty also ships Linux prebuilt binaries now (glibc,
+  x64 and arm64); `npm install -g --allow-scripts=node-pty shellpuppet`
+  stays the documented Linux install, and where no prebuilt matches it is
+  still what builds node-pty.
 - On Windows, the console hosts queued in one batch are ended by one
   asynchronous PowerShell, off the daemon's thread, so the daemon keeps
   answering `/health` and its other sessions while that call runs. The

@@ -79,10 +79,7 @@ export async function startTestDaemon(
       // run of its own: about six seconds with little else running, and up
       // to its 30 s cap on a loaded machine. A file that leaves dozens of
       // sessions would take minutes to drain one at a time, past the 60 s
-      // afterAll hook budget. Batches of four stay inside it, and end fewer
-      // programs at the same moment than the daemon's killAll, whose one
-      // `taskkill` run ends them all together; node-pty 1.1.0 can crash
-      // natively when programs end together (design §7). Test-harness
+      // afterAll hook budget. Batches of four stay inside it. Test-harness
       // plumbing only: killAll stays covered by the manager unit tests and
       // the forced-shutdown lifecycle test.
       try {

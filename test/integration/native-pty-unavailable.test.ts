@@ -85,7 +85,7 @@ describe('a start that node-pty cannot serve', () => {
   });
 
   it('explains a native module that fails to load as the terminal is built, as on Windows', async () => {
-    // node-pty 1.1.0's own words when conpty.node will not load.
+    // node-pty's own words when conpty.node will not load.
     const failure = new Error(
       "Failed to load native module: conpty.node, checked: build/Release, build/Debug, prebuilds/win32-x64: Error: Cannot find module '../build/Release/conpty.node'",
     );

@@ -75,7 +75,9 @@ Install, then wire it into your agent and ask it for something; or run the
 five commands under *Check the install from any shell*.
 
 You need Node.js 22 or later. `node-pty` ships prebuilt binaries for Windows
-and macOS, so no compiler is needed there. On Linux npm builds it with
+and macOS and, in the 1.2.0 beta ShellPuppet pins, for mainstream Linux too
+(glibc, x64 and arm64), so no compiler is needed there. Where no prebuilt
+matches — another architecture, or musl in place of glibc — npm builds it with
 node-gyp, which needs Python 3, make and a C++ compiler (on Debian and Ubuntu:
 `sudo apt-get install -y python3 make g++`).
 
@@ -92,8 +94,10 @@ On Windows, npm installs `shellpuppet` as a PowerShell script as well as a
 window first, or run ShellPuppet from Command Prompt.
 
 npm 12 runs a dependency's install script only when you allow it. On Linux,
-node-pty's install script is what builds it. Without the flag the install
-still completes, but `shellpuppet start` then refuses and names the flag.
+node-pty's install script is what builds it where no prebuilt binary matches
+the machine. Without the flag the install still completes; where a prebuilt
+binary is present it loads that, and otherwise `shellpuppet start` refuses and
+names the flag.
 
 Recent npm 11 releases and npm 12 print a warning that node-pty has install
 scripts. On Windows and macOS ShellPuppet needs none of them, so there the

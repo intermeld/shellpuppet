@@ -28,9 +28,12 @@ jobs:
       - run: npm run build
       - run: npm run typecheck
       - run: npm run lint
-      # node-pty 1.1.0 can access-violate a Windows integration fork while
-      # its native exit threads use a shared terminal list. Retry the full
-      # suite once only for that exact crash and only with no failed tests.
+      # node-pty's exit watchers access-violated a Windows integration fork
+      # while using a shared terminal list without a lock. That race is fixed
+      # upstream from 1.2.0-beta.13 (microsoft/node-pty#922) and the pin is
+      # 1.2.0-beta.18, so this retry is transitional: kept for one release of
+      # evidence that the pin holds, then to be dropped. Retry the full suite
+      # once only for that exact crash and only with no failed tests.
       - run: node --test scripts/retry-native-worker-crash.test.mjs
       - run: node scripts/retry-native-worker-crash.mjs
         if: runner.os == 'Windows'
@@ -74,9 +77,15 @@ jobs:
   #   macOS spawn-helper's execute bit itself. The runner's prefix is its own,
   #   so this is the user-owned install. A root-owned one, where the chmod is
   #   refused and the start says which to run, is covered by the unit tests.
-  # - Linux installs with --allow-scripts=node-pty, as the README says.
-  # - Linux without the flag has no node-pty to load. There a start must refuse
-  #   with the whole reinstall line, and the daemon must keep answering.
+  # - Linux installs with --allow-scripts=node-pty, as the README says. Since
+  #   1.2.0-beta the package ships Linux prebuilds (glibc x64 and arm64), and
+  #   node-pty's loader reads `prebuilds/<platform>-<arch>` directly, so the
+  #   "not allowed" case may now work without the flag where the prebuild
+  #   matches; that is to verify in CI, and the case stays until it is.
+  # - Linux without the flag, where no prebuild matches (another
+  #   architecture, or musl), has no node-pty to load. There a start must
+  #   refuse with the whole reinstall line, and the daemon must keep
+  #   answering.
   package-npm12:
     strategy:
       fail-fast: false

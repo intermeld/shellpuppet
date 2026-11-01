@@ -67,6 +67,15 @@ import type {
  */
 export const TREE_KILL_TIMEOUT_MS = 30_000;
 
+/**
+ * How long a kill waits for node-pty's deferred program creation (Windows):
+ * the pid is 0 from the spawn until the output worker has connected and the
+ * program exists. node-pty gives the connection up after five seconds of its
+ * own and reports an exit instead, so this bound is never what ends the wait:
+ * either the pid arrives, or the session does.
+ */
+const PROGRAM_PID_WAIT_MS = 8_000;
+
 /** What a `taskkill` run reported when it did not simply succeed. */
 export interface TreeKillFailure {
   /** Our timeout fired and `taskkill` was terminated mid-walk. */
@@ -1204,21 +1213,19 @@ export class Session implements WaitTarget {
    * and orphaned agent CLIs keep running and keep spending paid API tokens.
    *
    * Windows: `taskkill /T /F` walks and kills the tree, then `pty.kill()` runs.
-   * Under ConPTY, node-pty's kill ends no process of its own
-   * (`listNothingToKill` in `windowsPtyStart.ts`), and it closes the ConPTY,
-   * which sends CTRL_CLOSE_EVENT to the processes on the console, only while
-   * node-pty still holds the terminal: while the program runs. Under winpty
-   * (Windows builds before 18309) that wrapper does not apply: winpty's kill
-   * asks the native helper for the process list of the pid and kills each.
-   * After a tree kill that ended the program, ConPTY's kill closes nothing, so a
-   * process on the session's console outside the killed tree gets no close
-   * event. The console host is not in that tree. After this returns, a later
-   * list ends the one host created during this spawn's window. This does not
-   * wait for that list. The daemon's pseudoconsole handle stays open, and the
-   * host is given no CTRL_CLOSE_EVENT. (The design's Job
+   * node-pty's kill ends no process of its own
+   * (`listNothingToKill` in `windowsPtyStart.ts`), and it closes the
+   * pseudoconsole, which sends CTRL_CLOSE_EVENT to the processes on the
+   * console, only while node-pty still holds the terminal: while the program
+   * runs. After a tree kill that ended the program, its kill closes nothing,
+   * so a process on the session's console outside the killed tree gets no
+   * close event. The console host is not in that tree. After this returns, a
+   * later list ends the one host created during this spawn's window. This does
+   * not wait for that list. The daemon's pseudoconsole handle stays open, and
+   * the host is given no CTRL_CLOSE_EVENT. (The design's Job
    * Object hardening needs a native module and is
-   * deferred. If the daemon itself dies, its ConPTY handles close, which gives
-   * console-attached descendants a close signal.)
+   * deferred. If the daemon itself dies, its pseudoconsole handles close,
+   * which gives console-attached descendants a close signal.)
    *
    * POSIX: the PTY child is the session leader of its own process group, so
    * signalling the negated pid takes the group down.
@@ -1240,7 +1247,12 @@ export class Session implements WaitTarget {
   async kill(): Promise<void> {
     if (this.killed) return;
     this.killed = true;
-    const pid = this.pty.pid;
+    // node-pty creates a Windows terminal's program only once its output
+    // worker has connected, a few tens of milliseconds after the spawn
+    // returns, and reports pid 0 until then; a start whose connection fails
+    // reports an exit instead. The wait keeps the tree kill below from
+    // skipping a program that is about to exist (`programPid`).
+    const pid = await this.programPid();
     this.logger.info('session kill', { id: this.id, pid });
     // Taken before the kill. The kill itself makes node-pty record the exit,
     // and that later record must not hide the result of a tree we did walk.
@@ -1303,6 +1315,21 @@ export class Session implements WaitTarget {
   }
 
   /**
+   * The program's pid, waiting for node-pty's deferred program creation:
+   * on Windows the pid is 0 from the spawn until the output worker has
+   * connected and the program exists, and a start whose connection fails
+   * reports an exit instead of a pid, which ends the wait. POSIX reports the
+   * pid at the spawn, so nothing is waited for there.
+   */
+  private async programPid(): Promise<number> {
+    const deadline = Date.now() + PROGRAM_PID_WAIT_MS;
+    while (this.pty.pid <= 0 && !this.exitedFlag && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    return this.pty.pid;
+  }
+
+  /**
    * End the program of a session that ended with no exit code: node-pty
    * closed its terminal when its output failed, and the program would run on
    * where nobody can read or type into it, for an agent CLI still acting and
@@ -1320,6 +1347,11 @@ export class Session implements WaitTarget {
    * Never rejects.
    */
   private async killTree(pid: number): Promise<void> {
+    // A pid of 0 is a program node-pty has not created (its deferred
+    // connection) or never created (a failed start): there is no tree, and on
+    // Windows a liveness probe of pid 0 answers as though something were
+    // there, so the checks below would not say no.
+    if (pid <= 0) return;
     if (this.platform === 'win32') {
       // A root that has already died leaves no tree to walk. At daemon
       // shutdown this is the usual case: `killAll` has just killed every
