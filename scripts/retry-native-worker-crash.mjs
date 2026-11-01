@@ -1,7 +1,10 @@
 /**
- * Windows node-pty 1.1.0 can crash a Vitest fork while its ConPTY exit threads
- * access their shared terminal list. Keep an ordinary test failure fatal; only
- * an access violation in an integration worker gets one full-suite retry.
+ * Windows node-pty before 1.2.0-beta.13 could crash a Vitest fork while its
+ * ConPTY exit threads accessed a shared terminal list without a lock. The
+ * pin is now 1.2.0-beta.18, where the race is fixed, so this retry is
+ * transitional: kept for one release of evidence, then to be dropped. Keep an
+ * ordinary test failure fatal; only an access violation in an integration
+ * worker gets one full-suite retry.
  */
 
 import { spawn } from 'node:child_process';

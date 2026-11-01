@@ -77,12 +77,14 @@ one will be asked to change, however good the rest is.
 
 ## Working on the code
 
-Node.js 22 or later. `npm install` pulls prebuilt native modules, so Windows
-and macOS need no compiler toolchain. On Linux, `node-pty` is built from source
-with `node-gyp`, so `python3`, `make` and a C++ compiler have to be present
-(the README says the same). npm 12 runs a dependency's install script only
-when the project allows it. The `allowScripts` entry in `package.json` allows
-node-pty's, at the pinned version, and nothing else. Then:
+Node.js 22 or later. `npm install` pulls prebuilt native modules, so Windows,
+macOS and mainstream Linux (glibc, x64 and arm64) need no compiler toolchain.
+Where no prebuilt matches — another architecture, or musl in place of glibc —
+`node-pty` is built from source with `node-gyp`, so `python3`, `make` and a
+C++ compiler have to be present (the README says the same). npm 12 runs a
+dependency's install script only when the project allows it. The `allowScripts`
+entry in `package.json` allows node-pty's, at the pinned version, and nothing
+else. Then:
 
 ```
 npm run build        # compile to dist/

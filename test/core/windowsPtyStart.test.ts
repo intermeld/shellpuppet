@@ -1,12 +1,12 @@
 /**
  * A Windows start that fails part-way releases what node-pty had built: the
- * output worker, both sockets and, under ConPTY, the pseudoconsole. These
- * drive the wrapper with a stand-in for node-pty's agent module;
- * `test/integration/failed-start.test.ts` drives the real one. The rest cover
- * what the same wrapper decides and listens to: the list of pids node-pty's
- * kill ends, which is empty and found with no helper started (and in
- * `test/integration/kill-reused-pid.test.ts` with real terminals), a resize
- * that arrives after the program has ended (and in
+ * deferred program creation is cancelled, the output worker, both sockets and
+ * the pseudoconsole are ended. These drive the wrapper with a stand-in for
+ * node-pty's agent module; `test/integration/failed-start.test.ts` drives the
+ * real one. The rest cover what the same wrapper decides and listens to: the
+ * list of pids node-pty's kill ends, which is empty and found with no helper
+ * started (and in `test/integration/kill-reused-pid.test.ts` with real
+ * terminals), a resize that arrives after the program has ended (and in
  * `test/integration/resize-before-first-output.test.ts` with a real one), a
  * live terminal's streams and the exit code node-pty records.
  */
@@ -22,16 +22,19 @@ import type { AgentModule, HalfBuiltAgent } from '../../src/core/windowsPtyStart
 type StandInAgent = HalfBuiltAgent & { started?: true; describe(): string };
 
 /** Where the stand-in's start fails, as node-pty's can: or not at all. */
-type FailAt = 'input pipe' | 'process' | 'nowhere';
+type FailAt = 'input pipe' | 'nowhere';
 
 /**
  * A stand-in agent module whose constructor sets node-pty's fields in
- * node-pty's order, failing where told.
+ * node-pty's order, failing where told. The connection timer is real and
+ * short, so a test can tell whether the release cleared it, and the half-built
+ * agent is captured so its deferred connection can be read afterwards.
  */
-function standInModule(failAt: FailAt, useConpty = true): { module: AgentModule; events: string[] } {
+function standInModule(failAt: FailAt): { module: AgentModule; events: string[]; built: () => StandInAgent | null } {
   const events: string[] = [];
+  const built: StandInAgent[] = [];
   function WindowsPtyAgent(this: StandInAgent): void {
-    this._useConpty = useConpty;
+    built.push(this);
     this._useConptyDll = false;
     this._ptyNative = { kill: (pty, dll) => events.push(`native kill ${String(pty)} ${String(dll)}`) };
     this._pty = 7;
@@ -45,15 +48,16 @@ function standInModule(failAt: FailAt, useConpty = true): { module: AgentModule;
         terminate: () => events.push('worker terminated'),
       },
     };
+    this._pendingPtyInfo = { pty: this._pty };
+    this._connectionTimeout = setTimeout(() => events.push('connection timer fired'), 25);
     if (failAt === 'input pipe') throw new Error("EPERM: operation not permitted, open '\\\\.\\pipe\\conpty-1-in'");
     this._inSocket = { destroy: () => events.push('input socket destroyed') };
-    if (failAt === 'process') throw new Error('Cannot create process, error code: 193');
     this.started = true;
   }
   (WindowsPtyAgent.prototype as { describe(): string }).describe = function describe(): string {
     return 'agent';
   };
-  return { module: { WindowsPtyAgent } as unknown as AgentModule, events };
+  return { module: { WindowsPtyAgent } as unknown as AgentModule, events, built: () => built[0] ?? null };
 }
 
 function construct(module: AgentModule): StandInAgent {
@@ -62,60 +66,39 @@ function construct(module: AgentModule): StandInAgent {
 }
 
 describe('wrapWindowsPtyAgent', () => {
-  it('releases the worker, its socket and the pseudoconsole when the input pipe cannot be opened', () => {
-    const { module, events } = standInModule('input pipe');
-    wrapWindowsPtyAgent(module);
+  it('releases the worker, its socket and the pseudoconsole when the input pipe cannot be opened', async () => {
+    const standIn = standInModule('input pipe');
+    wrapWindowsPtyAgent(standIn.module);
 
-    expect(() => construct(module)).toThrow('EPERM');
-    expect(events).toEqual([
+    expect(() => construct(standIn.module)).toThrow('EPERM');
+    expect(standIn.events).toEqual([
       'worker listens for error',
       'worker terminated',
       'output socket listens for error',
       'output socket destroyed',
       'native kill 7 false',
     ]);
-  });
-
-  it('releases the input socket as well when the process cannot be created', () => {
-    const { module, events } = standInModule('process');
-    wrapWindowsPtyAgent(module);
-
-    expect(() => construct(module)).toThrow('Cannot create process');
-    expect(events).toEqual([
-      'worker listens for error',
-      'worker terminated',
-      'input socket destroyed',
-      'output socket listens for error',
-      'output socket destroyed',
-      'native kill 7 false',
-    ]);
-  });
-
-  it('leaves the native kill alone under winpty, whose kill takes a pid', () => {
-    const { module, events } = standInModule('input pipe', false);
-    wrapWindowsPtyAgent(module);
-
-    expect(() => construct(module)).toThrow('EPERM');
-    expect(events).toEqual([
-      'worker listens for error',
-      'worker terminated',
-      'output socket listens for error',
-      'output socket destroyed',
-    ]);
+    // The deferred connection is cancelled, so a worker that became ready now
+    // could not run it; the timer it armed is cleared, which the short real
+    // timer above would prove by firing.
+    expect(standIn.built()?._pendingPtyInfo).toBeUndefined();
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(standIn.events).not.toContain('connection timer fired');
   });
 
   it('leaves a start that succeeds as node-pty built it', () => {
-    const { module, events } = standInModule('nowhere');
-    const prototype = module.WindowsPtyAgent.prototype;
-    wrapWindowsPtyAgent(module);
+    const standIn = standInModule('nowhere');
+    const prototype = standIn.module.WindowsPtyAgent.prototype;
+    wrapWindowsPtyAgent(standIn.module);
 
-    const agent = construct(module);
+    const agent = construct(standIn.module);
     expect(agent.started).toBe(true);
     expect(agent.describe()).toBe('agent');
     // The module still reports node-pty's own prototype, as it did before.
-    expect(module.WindowsPtyAgent.prototype).toBe(prototype);
-    expect(agent).toBeInstanceOf(module.WindowsPtyAgent);
-    expect(events).toEqual([]);
+    expect(standIn.module.WindowsPtyAgent.prototype).toBe(prototype);
+    expect(agent).toBeInstanceOf(standIn.module.WindowsPtyAgent);
+    expect(standIn.events).toEqual([]);
+    expect(agent._pendingPtyInfo).toEqual({ pty: 7 });
   });
 
   it('replaces the list of pids a kill ends with an empty one', async () => {
@@ -145,7 +128,7 @@ describe('wrapIfKnownVersion', () => {
     const original = module.WindowsPtyAgent;
     let loaded = false;
 
-    const result = wrapIfKnownVersion('1.2.0', () => {
+    const result = wrapIfKnownVersion('1.2.0-beta.17', () => {
       loaded = true;
       return module;
     });
@@ -191,9 +174,13 @@ describe("the list of pids node-pty's kill ends", () => {
   });
 });
 
-type ResizingAgent = { _useConpty?: boolean; _exitCode?: number; _pty?: number; _pid?: number };
+type ResizingAgent = {
+  _exitCode?: number;
+  _pty?: number;
+  _ptyNative?: { resize(pty: number, cols: number, rows: number): void };
+};
 
-/** node-pty 1.1.0's agent resize, as `lib/windowsPtyAgent.js` has it, recording what reaches the terminal. */
+/** node-pty 1.2.0-beta.18's agent resize, as `lib/windowsPtyAgent.js` has it, recording what reaches the native module. */
 function standInResizeModule(): { module: AgentModule; calls: string[] } {
   const calls: string[] = [];
   function WindowsPtyAgent(): void {
@@ -204,12 +191,8 @@ function standInResizeModule(): { module: AgentModule; calls: string[] } {
     cols: number,
     rows: number,
   ): void {
-    if (this._useConpty === true) {
-      if (this._exitCode !== undefined) throw new Error('Cannot resize a pty that has already exited');
-      calls.push(`resize pseudoconsole ${String(this._pty)} to ${String(cols)}x${String(rows)}`);
-      return;
-    }
-    calls.push(`resize winpty ${String(this._pid)} to ${String(cols)}x${String(rows)}`);
+    if (this._exitCode !== undefined) throw new Error('Cannot resize a pty that has already exited');
+    calls.push(`resize pseudoconsole ${String(this._pty)} to ${String(cols)}x${String(rows)}`);
   };
   return { module: { WindowsPtyAgent }, calls };
 }
@@ -220,15 +203,14 @@ function resizeOn(module: AgentModule, agent: ResizingAgent, cols: number, rows:
   resize.call(agent, cols, rows);
 }
 
-describe('a resize of a ConPTY terminal whose program node-pty has seen end', () => {
+describe('a resize of a terminal whose program node-pty has seen end', () => {
   it('is dropped rather than thrown, and every other resize reaches the terminal', () => {
     const { module, calls } = standInResizeModule();
     wrapWindowsPtyAgent(module);
 
-    expect(() => resizeOn(module, { _useConpty: true, _pty: 7, _exitCode: 3 }, 100, 30)).not.toThrow();
-    resizeOn(module, { _useConpty: true, _pty: 8 }, 100, 30);
-    resizeOn(module, { _useConpty: false, _pid: 4321 }, 90, 20);
-    expect(calls).toEqual(['resize pseudoconsole 8 to 100x30', 'resize winpty 4321 to 90x20']);
+    expect(() => resizeOn(module, { _pty: 7, _exitCode: 3 }, 100, 30)).not.toThrow();
+    resizeOn(module, { _pty: 8 }, 100, 30);
+    expect(calls).toEqual(['resize pseudoconsole 8 to 100x30']);
   });
 
   it("is dropped by the installed node-pty's agent once wrapped", () => {
@@ -245,8 +227,8 @@ describe('a resize of a ConPTY terminal whose program node-pty has seen end', ()
         calls.push(`native resize ${String(pty)} to ${String(cols)}x${String(rows)}`);
       },
     };
-    const ended = { _useConpty: true, _useConptyDll: false, _pty: 7, _exitCode: 3, _ptyNative: native };
-    const live = { _useConpty: true, _useConptyDll: false, _pty: 8, _ptyNative: native };
+    const ended = { _useConptyDll: false, _pty: 7, _exitCode: 3, _ptyNative: native };
+    const live = { _useConptyDll: false, _pty: 8, _ptyNative: native };
 
     expect(() => WindowsPtyAgent.prototype.resize.call(ended, 100, 30)).not.toThrow();
     WindowsPtyAgent.prototype.resize.call(live, 100, 30);
@@ -259,7 +241,7 @@ describe('a resize of a ConPTY terminal whose program node-pty has seen end', ()
     const { module, calls } = standInResizeModule();
     wrapWindowsPtyAgent(module);
 
-    expect(() => resizeOn(module, { _useConpty: true, _pty: 1, _exitCode: 0 }, 100, 30)).not.toThrow();
+    expect(() => resizeOn(module, { _pty: 1, _exitCode: 0 }, 100, 30)).not.toThrow();
     expect(calls).toEqual([]);
   });
 
@@ -271,7 +253,7 @@ describe('a resize of a ConPTY terminal whose program node-pty has seen end', ()
     };
     const calls: string[] = [];
     const native = { resize: (pty: number): void => void calls.push(`native resize ${String(pty)}`) };
-    const ended = { _useConpty: true, _useConptyDll: false, _pty: 9, _exitCode: 0, _ptyNative: native };
+    const ended = { _useConptyDll: false, _pty: 9, _exitCode: 0, _ptyNative: native };
 
     expect(() => WindowsPtyAgent.prototype.resize.call(ended, 100, 30)).not.toThrow();
     expect(calls).toEqual([]);
@@ -316,30 +298,26 @@ describe('recordedExitCode', () => {
     // A fresh copy of the module, which has wrapped nothing yet.
     vi.resetModules();
     const fresh = await import('../../src/core/windowsPtyStart.js');
-    const ended = { _agent: { _useConpty: true, exitCode: 3 } };
+    const ended = { _agent: { exitCode: 3 } };
 
     expect(fresh.recordedExitCode(ended)).toBeUndefined();
     expect(fresh.releaseFailedStarts()).toBe(true);
     expect(fresh.recordedExitCode(ended)).toBe(3);
     // node-pty's agent reports no code while the program runs.
-    expect(fresh.recordedExitCode({ _agent: { _useConpty: true } })).toBeUndefined();
-    // Under winpty the agent asks Windows about whatever process has the pid
-    // now, which answers 259 (still active) for a live one: not a code.
-    expect(fresh.recordedExitCode({ _agent: { _useConpty: false, exitCode: 259 } })).toBeUndefined();
+    expect(fresh.recordedExitCode({ _agent: {} })).toBeUndefined();
   });
 });
 
 describe('canReadExitCode', () => {
-  it('holds only for a ConPTY terminal of the wrapped node-pty', async () => {
+  it('holds only for a terminal of the wrapped node-pty', async () => {
     // A fresh copy of the module, which has wrapped nothing yet.
     vi.resetModules();
     const fresh = await import('../../src/core/windowsPtyStart.js');
-    const conpty = { _agent: { _useConpty: true } };
+    const terminal = { _agent: {} };
 
-    expect(fresh.canReadExitCode(conpty)).toBe(false);
+    expect(fresh.canReadExitCode(terminal)).toBe(false);
     expect(fresh.releaseFailedStarts()).toBe(true);
-    expect(fresh.canReadExitCode(conpty)).toBe(true);
-    expect(fresh.canReadExitCode({ _agent: { _useConpty: false } })).toBe(false);
+    expect(fresh.canReadExitCode(terminal)).toBe(true);
     expect(fresh.canReadExitCode({})).toBe(false);
   });
 });

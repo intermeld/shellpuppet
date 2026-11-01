@@ -3,11 +3,15 @@
  * terminal.
  *
  * npm 12 runs a dependency's install scripts only when the person installing
- * allows them. node-pty has prebuilt binaries for Windows and macOS but not for
- * Linux, where its install script builds one; without that script there is no
- * native module to load. On macOS the prebuilt `spawn-helper` ships without its
- * execute bit (microsoft/node-pty#850). npm 12 would block an install script
- * that restored it, and every spawn would then fail with "posix_spawnp failed".
+ * allows them. node-pty ships prebuilt binaries for Windows and macOS and,
+ * since 1.2.0-beta, for mainstream Linux; its install script builds one only
+ * where no prebuilt matches (another architecture, or musl in place of
+ * glibc). Its loader searches `build/Release`, `build/Debug` and then
+ * `prebuilds/<platform>-<arch>`, so an install whose script never ran still
+ * loads a prebuilt binary that is there. On macOS the prebuilt `spawn-helper`
+ * ships without its execute bit (microsoft/node-pty#850). npm 12 would block
+ * an install script that restored it, and every spawn would then fail with
+ * "posix_spawnp failed".
  *
  * So node-pty is loaded on the first start rather than when the daemon starts,
  * and the helper's execute bit is checked there. Either failure reaches the
@@ -87,7 +91,8 @@ export function explainLoadFailure(error: unknown): string {
       "node-pty's native module is missing, or was built for another version of Node.js, " +
       'so ShellPuppet cannot open a terminal. ' +
       "npm 12 runs a dependency's install script only when you allow it; reinstall with " +
-      `${REINSTALL} (on Linux that builds node-pty, which needs Python 3, make and a C++ compiler). (${detail})`
+      `${REINSTALL} (on a machine node-pty ships no prebuilt binary for, that builds it, ` +
+      `which needs Python 3, make and a C++ compiler). (${detail})`
     );
   }
   return `node-pty could not be loaded, so ShellPuppet cannot open a terminal: ${detail}`;

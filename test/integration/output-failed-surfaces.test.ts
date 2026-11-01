@@ -2,9 +2,10 @@
  * Every surface of a session whose output failed, read after node-pty has
  * recorded the code of the program the session ended
  * (a later viewer's identity frame and replayed notice, a refused keystroke,
- * the 409 on input, key and resize, snapshot, wait, list); the
- * `canReadExitCode` fail-safe of `programEnded`; and normal exits, which
- * still report their own code everywhere.
+ * the 409 on input, key and resize, snapshot, wait, list); and normal exits,
+ * which still report their own code everywhere. The `programEnded` fail-safe
+ * for a node-pty that records no code is covered in
+ * `test/core/sessionKillRecordedExit.test.ts`.
  */
 
 import type * as net from 'node:net';
@@ -24,7 +25,7 @@ afterEach(async () => {
   while (daemons.length > 0) await daemons.pop()?.stop();
 });
 
-type Agent = { outSocket?: net.Socket; exitCode?: number; _useConpty?: boolean };
+type Agent = { outSocket?: net.Socket; exitCode?: number };
 function agentOf(session: Session): Agent {
   const agent = (session as unknown as { pty: { _agent?: Agent } }).pty._agent;
   if (agent === undefined) throw new Error('no Windows agent on this terminal');
@@ -103,26 +104,6 @@ describe.skipIf(process.platform !== 'win32')('a session whose output failed', (
     expect(session.summary().exitCode).toBeNull();
     expect((await session.snapshot()).exitCode).toBeNull();
   }, 120_000);
-
-  it('counts as ended at once where node-pty records no code (canReadExitCode false)', async () => {
-    const manager = new SessionManager(compilePolicy(undefined), quiet);
-    managers.push(manager);
-    const session = manager.create({ ...interactiveShell(), cols: 80, rows: 24 });
-    await eventually(() => session.getScreen().trim() !== '');
-    const agent = agentOf(session);
-
-    failOutput(session);
-    await eventually(() => session.exited, 10_000);
-    // Read as winpty would be: node-pty records nothing that can be trusted.
-    agent._useConpty = false;
-    try {
-      expect(session.programEnded).toBe(true);
-      expect(session.exitCode).toBeNull();
-    } finally {
-      agent._useConpty = true;
-    }
-    await eventually(() => !processAlive(session.pid), 30_000);
-  }, 60_000);
 });
 
 describe.skipIf(process.platform !== 'win32')('a program that exits by itself or is killed', () => {

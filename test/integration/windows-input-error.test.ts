@@ -1,9 +1,10 @@
 /**
  * A failed write on a live Windows terminal's pipes must not take the daemon
- * down. node-pty 1.1.0 listens for no error on the socket it writes input
- * through, nor on the worker that copies the output pipe, and throws an
- * output-socket error while its own handler is the socket's only listener,
- * so each would be an uncaught exception. The input pipe refuses a write once
+ * down. node-pty 1.2.0-beta.18 listens for no error on the socket it writes
+ * input through, and throws an output-socket error while its own handler is
+ * the socket's only listener, so each would be an uncaught exception; a
+ * worker error after it has connected is swallowed, so the listener here is
+ * what records it. The input pipe refuses a write once
  * the console host has closed its end (`write EAGAIN`): the last test makes
  * that happen for real by ending the session's own console host. The others
  * emit the errors libuv and the worker would deliver, on the session's own

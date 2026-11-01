@@ -2,9 +2,11 @@
  * A Windows start that fails after node-pty has created the pseudoconsole
  * must not leave its console host running. Two failures are driven: a
  * sandbox that denies pipe access, simulated where it strikes (the open of
- * the terminal's input pipe is refused), and a real one, a file named as a
- * program that Windows cannot run started with `shell: false`, which
- * node-pty finds out only once both pipes are open.
+ * the terminal's input pipe is refused, inside the constructor), and a real
+ * one, a file named as a program that Windows cannot run started with
+ * `shell: false`. node-pty 1.2.0-beta.18 creates the program only after the
+ * spawn has returned, so the second failure reaches the session as an exit
+ * whose code Windows reported (upstream #934), not as a throw to the caller.
  */
 
 import { execFileSync } from 'node:child_process';
@@ -45,12 +47,15 @@ function consoleHosts(): number[] {
 }
 
 /** Run a start that fails, then check it left no console host running. */
-async function expectNoConsoleHostLeft(manager: SessionManager, failingStart: () => void): Promise<void> {
+async function expectNoConsoleHostLeft(
+  manager: SessionManager,
+  failingStart: () => void | Promise<void>,
+): Promise<void> {
   const before = new Set(consoleHosts());
   const newHosts = (): number[] => consoleHosts().filter((pid) => !before.has(pid));
   let left: number[] | undefined;
   try {
-    failingStart();
+    await failingStart();
     await new Promise((resolve) => setTimeout(resolve, 2_000));
     left = newHosts();
     expect(left).toEqual([]);
@@ -99,8 +104,16 @@ describe('a Windows start that fails part-way', () => {
       const manager = new SessionManager(compilePolicy(undefined));
       const { dir, file } = notAProgram();
       try {
-        await expectNoConsoleHostLeft(manager, () => {
-          expect(() => manager.create({ command: file, shell: false })).toThrow('Cannot create process');
+        await expectNoConsoleHostLeft(manager, async () => {
+          const session = manager.create({ command: file, shell: false });
+          // Windows cannot run the file (193, not a valid Win32 application,
+          // or 216, a machine-type mismatch), and the failed start reports
+          // that code as its exit.
+          const exited = new Promise<number | null>((resolve) => session.onExit(resolve));
+          const code = await exited;
+          expect([193, 216]).toContain(code);
+          expect(session.exitCode).toBe(code);
+          expect(session.programEnded).toBe(true);
         });
       } finally {
         rmSync(dir, { recursive: true, force: true, maxRetries: 3 });

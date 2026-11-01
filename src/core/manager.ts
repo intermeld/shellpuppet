@@ -176,7 +176,12 @@ export class SessionManager {
    */
   private async killTreesInOneRun(sessions: readonly Session[]): Promise<void> {
     if ((this.sessionDeps.platform ?? process.platform) !== 'win32') return;
-    const pids = sessions.filter((session) => !session.programEnded).map((session) => session.pid);
+    // A pid of 0 is a program node-pty has not created yet (its deferred
+    // connection); such a session's own kill waits for the pid and then walks
+    // its tree, and a start whose connection failed has nothing to walk.
+    const pids = sessions
+      .filter((session) => !session.programEnded && session.pid > 0)
+      .map((session) => session.pid);
     if (pids.length === 0) return;
     const failure = await (this.sessionDeps.treeKiller ?? taskkillTrees)(pids);
     if (failure !== null) {

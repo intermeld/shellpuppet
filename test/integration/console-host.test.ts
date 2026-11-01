@@ -1,6 +1,6 @@
 /**
  * On Windows a session's console host is a child of the daemon, and node-pty
- * 1.1.0 leaves it running after the session ends. These tests start sessions
+ * leaves it running after the session ends. These tests start sessions
  * on a daemon of their own. Each end waits until the daemon's queue has
  * listed and ended the host, then polls for the host to leave the process
  * list. A PowerShell query can create a console host of its own, so the

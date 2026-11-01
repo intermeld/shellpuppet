@@ -1,5 +1,5 @@
 /**
- * Windows console hosts that node-pty 1.1.0 leaves behind.
+ * Windows console hosts that node-pty leaves behind.
  *
  * ConPTY creates the host while `spawn` runs, and that call returns only
  * after the host exists. The session stores the time immediately before and

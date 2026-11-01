@@ -59,7 +59,7 @@ of Intermeld, by Red Eagle Tech.
 ## Build / test commands
 
 ```
-npm install            # node-pty: prebuilt on Windows and macOS; node-gyp builds it on Linux
+npm install            # node-pty: prebuilt on Windows, macOS and mainstream Linux; built where no prebuilt matches
 npm run build          # tsc → dist/, plus the viewer assets
 npm run typecheck      # src + test, no emit
 npm run lint           # ESLint incl. the scoped no-console rule

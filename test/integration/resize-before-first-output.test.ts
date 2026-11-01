@@ -2,7 +2,7 @@
  * A resize made before a Windows terminal's first output must not take the
  * daemon down when the program has ended by the time that output arrives.
  *
- * node-pty 1.1.0 holds a resize asked for before the terminal's first output
+ * node-pty holds a resize asked for before the terminal's first output
  * and runs it from the output socket's first 'data' event; once it has seen
  * the program end, its agent throws `Cannot resize a pty that has already
  * exited`. Thrown from that handler, the error reaches no caller and is an

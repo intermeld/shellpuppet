@@ -1,6 +1,6 @@
 /**
  * A session's kill on Windows ends the session's processes and nothing else,
- * including later. node-pty 1.1.0's own kill asks a helper process to attach
+ * including later. node-pty's own kill asks a helper process to attach
  * to the console of whichever process holds the program's pid and kills every
  * process on it; when the helper cannot answer, it waits five seconds and
  * kills that pid. A session's kill ends the process tree first, and once the

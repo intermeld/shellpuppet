@@ -78,8 +78,16 @@ describe('shutdown', () => {
         for (const program of [sink, sink, detaching]) {
           const session = manager.create({ command: process.execPath, args: [program] });
           sessions.push(session);
-          pids.push(session.pid);
         }
+        // node-pty creates each Windows terminal's program only once its
+        // output worker has connected, and the pid is 0 until then; the tree
+        // kill this test drives needs the programs' real pids.
+        if (!(await eventually(() => sessions.every((session) => session.pid > 0), 30_000))) {
+          throw new Error(
+            `a program never started: ${sessions.filter((session) => session.pid <= 0).map((session) => session.id).join(', ')}`,
+          );
+        }
+        pids.push(...sessions.map((session) => session.pid));
         grandchild = await grandchildOf(sessions[2] as Session);
         await manager.killAll();
         killed = true;
