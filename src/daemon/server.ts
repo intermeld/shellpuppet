@@ -1528,6 +1528,9 @@ export class Daemon {
         json(res, 400, { error: error.message });
         return;
       }
+      this.logger.error('dashboard session start failed', {
+        error: error instanceof Error ? (error.stack ?? String(error)) : String(error),
+      });
       if (error instanceof NativePtyUnavailableError) {
         json(res, 500, { error: error.message });
         return;
@@ -2410,6 +2413,9 @@ export class Daemon {
         json(res, 400, { error: error.message });
         return;
       }
+      this.logger.error('session start failed', {
+        error: error instanceof Error ? (error.stack ?? String(error)) : String(error),
+      });
       // The install cannot open a terminal at all. The message says what to
       // do, so it goes out as written.
       if (error instanceof NativePtyUnavailableError) {
