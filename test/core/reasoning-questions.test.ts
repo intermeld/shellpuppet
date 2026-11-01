@@ -202,6 +202,24 @@ describe('every question shape the detector knows survives hideReasoning', () =>
 describe('Grok box question row', () => {
   const grok = builtIn('grok');
 
+  it('reports only the question text from a Grok Build permission box', () => {
+    const lines = [
+      '  │  >  Rebuild the sample index',
+      '  │  │ pwsh -NoProfile -File C:\\work\\sample.ps1',
+      '  │',
+      "  │  1 (○) Yes, and don't ask again for anything (always-approve mode)",
+      '  │  3 (•) Yes, proceed',
+      '  │  4 (○) No, reject (type to add feedback)',
+    ];
+    const prompt = detectPrompt(lines.join('\n'));
+    expect(prompt?.question).toBe('Rebuild the sample index');
+    expect(prompt?.options).toEqual([
+      "1 (○) Yes, and don't ask again for anything (always-approve mode)",
+      '3 (•) Yes, proceed',
+      '4 (○) No, reject (type to add feedback)',
+    ]);
+  });
+
   it('reads the two-space question row as the question, and not a question mark above it', () => {
     const lines = [
       '  │  Which file should be restored?',
