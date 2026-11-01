@@ -53,6 +53,10 @@ export interface CaptureOptions {
   probe?: string;
   /** Script installed before navigation, for browser integration probes. */
   beforeNavigateScript?: string;
+  /** Browser integration tests may slow the renderer to match CI runners. */
+  cpuThrottlingRate?: number;
+  /** A test-only expression read after a capture times out. */
+  timeoutProbe?: string;
   /**
    * The folder the capture's own browser profile is made in, created when
    * absent. The daemon passes `captureProfileRoot(home)`, which it sweeps of
@@ -199,7 +203,7 @@ export class DevTools {
 
   constructor(
     private readonly ws: WebSocket,
-    private readonly deadline: number,
+    private deadline: number,
   ) {
     ws.on('message', (data: Buffer | string) => {
       let message: { id?: number; result?: unknown; error?: { message?: string } };
@@ -224,6 +228,10 @@ export class DevTools {
       }
       this.pending.clear();
     });
+  }
+
+  extendDeadline(ms: number): void {
+    this.deadline = Date.now() + ms;
   }
 
   send<T>(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<T> {
@@ -353,7 +361,8 @@ export function captureBrowserArgs(profileDir: string, width: number, height: nu
  */
 export async function captureViewer(options: CaptureOptions): Promise<Capture> {
   const logger = options.logger ?? NULL_LOGGER;
-  const deadline = Date.now() + (options.timeoutMs ?? DEFAULT_CAPTURE_TIMEOUT_MS);
+  const started = Date.now();
+  const deadline = started + (options.timeoutMs ?? DEFAULT_CAPTURE_TIMEOUT_MS);
   const profileRoot = options.profileRoot ?? os.tmpdir();
   fs.mkdirSync(profileRoot, { recursive: true });
   const profileDir = fs.mkdtempSync(path.join(profileRoot, PROFILE_PREFIX));
@@ -368,19 +377,25 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
   });
 
   let ws: WebSocket | null = null;
+  let cdp: DevTools | null = null;
+  let sessionId: string | null = null;
   try {
     const endpoint = await waitForDevTools(profileDir, child, deadline);
     ws = await connect(endpoint, deadline);
-    const cdp = new DevTools(ws, deadline);
+    cdp = new DevTools(ws, deadline);
 
     const { targetId } = await cdp.send<{ targetId: string }>('Target.createTarget', {
       url: 'about:blank',
     });
-    const { sessionId } = await cdp.send<{ sessionId: string }>('Target.attachToTarget', {
+    const attached = await cdp.send<{ sessionId: string }>('Target.attachToTarget', {
       targetId,
       flatten: true,
     });
+    sessionId = attached.sessionId;
     await cdp.send('Page.enable', {}, sessionId);
+    if (options.cpuThrottlingRate !== undefined) {
+      await cdp.send('Emulation.setCPUThrottlingRate', { rate: options.cpuThrottlingRate }, sessionId);
+    }
     if (options.beforeNavigateScript !== undefined) {
       await cdp.send('Page.addScriptToEvaluateOnNewDocument',
         { source: options.beforeNavigateScript }, sessionId);
@@ -402,11 +417,13 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
         : `${options.viewerUrl}${options.viewerUrl.includes('?') ? '&' : '?'}capture=1${options.hiddenRows === undefined ? '' : '&redact=1'}`;
     await cdp.send('Page.navigate', { url }, sessionId);
 
+    const activeCdp = cdp;
+    const activeSessionId = sessionId;
     const evaluate = async (expression: string): Promise<unknown> => {
-      const evaluated = await cdp.send<{ result: { value?: unknown } }>(
+      const evaluated = await activeCdp.send<{ result: { value?: unknown } }>(
         'Runtime.evaluate',
         { expression, returnByValue: true },
-        sessionId,
+        activeSessionId,
       );
       return evaluated.result.value;
     };
@@ -428,7 +445,7 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
         // document is being replaced has no context yet, and the next poll
         // reads the new document. Any other DevTools error still fails the capture.
         const message = error instanceof Error ? error.message : '';
-        if (!/Execution context was destroyed|Cannot find context/i.test(message)) throw error;
+        if (!/Execution context was destroyed|Cannot find context|Inspected target navigated or closed/i.test(message)) throw error;
       }
       if (Date.now() >= deadline) throw new Error('The viewer did not paint in time.');
       await sleep(POLL_MS);
@@ -461,6 +478,19 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
       rows: normaliseRows(rows.result.value),
       ...(probed === undefined ? {} : { probe: probed }),
     };
+  } catch (error) {
+    if (options.timeoutProbe === undefined) throw error;
+    const elapsed = Date.now() - started;
+    let details = 'page did not answer';
+    if (cdp !== null && sessionId !== null && ws?.readyState === WebSocket.OPEN) {
+      try {
+        cdp.extendDeadline(2_000);
+        const response = await cdp.send<{ result: { value?: unknown } }>('Runtime.evaluate',
+          { expression: options.timeoutProbe, returnByValue: true }, sessionId);
+        details = JSON.stringify(response.result.value ?? null);
+      } catch { /* A busy renderer has no page-side facts to report. */ }
+    }
+    throw new Error(`${String(error)} after ${String(elapsed)} ms; dashboard diagnostics: ${details}`, { cause: error });
   } finally {
     ws?.close();
     if (child.exitCode === null) child.kill();

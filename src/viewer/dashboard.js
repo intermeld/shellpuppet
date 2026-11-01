@@ -65,7 +65,14 @@
   let pendingArrange = false;
   let pendingVisibility = false;
   let followUpFrame = false;
+  const diagnostics = window.__dashboardDiagnostics;
+  function traceArrange(trigger) {
+    if (!diagnostics) return;
+    diagnostics.arrangeTriggers.push({ at: Math.round(window.performance.now()), trigger });
+    if (diagnostics.arrangeTriggers.length > 20) diagnostics.arrangeTriggers.shift();
+  }
   let lastLayout = null;
+  let lastStructure = null;
   let lastVisibilityGeometry = null;
   if (popSelf === null) windows.set(windowId, { id: windowId, rank: windowRank, key: screenKey,
     width: window.innerWidth - 12, height: window.innerHeight - 54 });
@@ -134,7 +141,7 @@
     const next = new Set(ids);
     if (assigned !== null && next.size === assigned.size && [...next].every((id) => assigned.has(id))) return;
     assigned = next;
-    arrange();
+    arrange('assignment');
   }
   function publishAssignment() {
     if (popSelf !== null) return;
@@ -154,7 +161,7 @@
     const watch = childWatches.get(id);
     if (watch !== undefined) { clearInterval(watch); childWatches.delete(id); }
     renderScreens();
-    arrange();
+    arrange('window removed');
   }
   function openDashboard(hash, name, features) {
     const child = window.open(`${location.origin}/dashboard${hash}`, name, features);
@@ -263,19 +270,19 @@
       select(item.id);
       if (enlarged === item.id) {
         enlarged = null;
-        arrange();
+        arrange('restore');
         if (item.previousGrid) item.client?.takeGrid(item.previousGrid.cols, item.previousGrid.rows);
         item.previousGrid = null;
       } else {
         item.previousGrid = item.client?.getGrid() || null;
         enlarged = item.id;
-        arrange();
+        arrange('enlarge');
         window.requestAnimationFrame(() => item.client?.fitGrid());
       }
     });
     item.pin = makeButton('Pin', () => {
       pins = pins.includes(item.id) ? pins.filter((id) => id !== item.id) : [...pins, item.id];
-      persist(); arrange();
+      persist(); arrange('pin');
     });
     item.left = makeButton('Move left', () => move(item.id, -1));
     item.right = makeButton('Move right', () => move(item.id, 1));
@@ -362,7 +369,7 @@
     const target = index + delta;
     if (target < 0 || target >= order.length) return;
     [order[index], order[target]] = [order[target], order[index]];
-    persist(); arrange();
+    persist(); arrange('move');
   }
   function activate(item) {
     const width = item.term.clientWidth;
@@ -402,11 +409,13 @@
   function queueFollowUp() {
     if (followUpFrame) return;
     followUpFrame = true;
+    if (diagnostics) diagnostics.pendingFrames++;
     window.requestAnimationFrame(() => {
       followUpFrame = false;
+      if (diagnostics) diagnostics.pendingFrames--;
       if (pendingArrange) {
         pendingArrange = false;
-        arrange();
+        arrange('follow-up');
       }
       if (pendingVisibility) {
         pendingVisibility = false;
@@ -425,6 +434,7 @@
       strip.scrollHeight, stripBox.top, stripBox.bottom]);
     if (geometry === lastVisibilityGeometry) return;
     syncingVisibility = true;
+    if (diagnostics) diagnostics.visibilityPasses++;
     if (window.__dashboardTrace) {
       window.__dashboardTrace.visibility++;
       window.__dashboardTrace.visibilityDepth++;
@@ -441,13 +451,15 @@
       if (window.__dashboardTrace) window.__dashboardTrace.visibilityDepth--;
     }
   }
-  function arrange() {
+  function arrange(trigger = 'unspecified') {
+    traceArrange(trigger);
     if (arranging || syncingVisibility) {
       pendingArrange = true;
       queueFollowUp();
       return;
     }
     arranging = true;
+    if (diagnostics) diagnostics.arrangements++;
     if (window.__dashboardTrace) {
       window.__dashboardTrace.arrangements++;
       window.__dashboardTrace.arrangeDepth++;
@@ -466,23 +478,27 @@
       const layoutKey = JSON.stringify([items.map((item) => item.id), width, height, layout, mode,
         columns, rows, primary, enlarged, pins]);
       if (layoutKey !== lastLayout) {
+        const structureKey = JSON.stringify([items.map((item) => item.id), layout, primary, enlarged]);
         empty.hidden = items.length > 0;
-        root.textContent = '';
         root.className = layout;
         root.dataset.layout = layout;
         root.style.setProperty('--columns', String(Math.max(1, columns)));
         root.style.setProperty('--rows', String(Math.max(1, rows)));
         for (const name of ['auto', 'grid', 'focus']) document.getElementById(name).classList.toggle('active', mode === name);
-        if (layout === 'grid') {
-          for (const item of items) root.append(item.card);
-        } else if (layout === 'focus') {
-          main.textContent = '';
-          strip.textContent = '';
-          for (const item of items) (item.id === primary ? main : strip).append(item.card);
-          root.append(main, strip);
-        } else {
-          const item = panes.get(popSelf || enlarged);
-          if (item) root.append(item.card);
+        if (structureKey !== lastStructure) {
+          root.textContent = '';
+          if (layout === 'grid') {
+            for (const item of items) root.append(item.card);
+          } else if (layout === 'focus') {
+            main.textContent = '';
+            strip.textContent = '';
+            for (const item of items) (item.id === primary ? main : strip).append(item.card);
+            root.append(main, strip);
+          } else {
+            const item = panes.get(popSelf || enlarged);
+            if (item) root.append(item.card);
+          }
+          lastStructure = structureKey;
         }
         for (const item of items) {
           const measuredWidth = layout === 'grid' ? width / columns : item.card.parentElement === strip ? 300 : width - 300;
@@ -532,7 +548,7 @@
     if (!panes.has(selected)) selected = order.find((id) => panes.has(id)) || null;
     if (!panes.has(focusId)) focusId = null;
     if (!panes.has(enlarged)) enlarged = null;
-    persist(); arrange(); updateAttention();
+    persist(); arrange('feed reconcile'); updateAttention();
     for (const id of [...pendingOpen.keys()]) enactOpen(id);
   }
   function receive(frame) {
@@ -603,7 +619,7 @@
     const watch = popWatches.get(id);
     if (watch !== undefined) { clearInterval(watch); popWatches.delete(id); }
     if (!popped.delete(id)) return;
-    arrange();
+    arrange('pop release');
   }
 
   function popOut(id) {
@@ -614,7 +630,7 @@
       'popup,width=960,height=720');
     if (child === null) return;
     popped.add(id);
-    arrange();
+    arrange('pop out');
     const watch = setInterval(() => {
       if (!child.closed) return;
       releasePop(id);
@@ -645,7 +661,7 @@
       selected = id;
       enlarged = null;
       persist();
-      arrange();
+      arrange('focus open');
       fitWhenReady(id);
     }
   }
@@ -764,7 +780,7 @@
     if (enlarged === id) enlarged = null;
     releasePop(id);
     persist();
-    arrange();
+    arrange('dismiss');
     updateAttention();
   }
 
@@ -796,7 +812,7 @@
     if (data.type === 'pop-claim') {
       if (data.id === popSelf) return;
       popped.add(data.id);
-      arrange();
+      arrange('pop claim');
     } else if (data.type === 'pop-release') {
       if (data.id === popSelf) return;
       releasePop(data.id);
@@ -806,7 +822,7 @@
   for (const name of ['auto', 'grid', 'focus']) {
     document.getElementById(name).addEventListener('click', () => {
       if (name === 'focus') focusId = selected;
-      mode = name; enlarged = null; persist(); arrange();
+      mode = name; enlarged = null; persist(); arrange('mode');
       if (name === 'focus') {
         const items = shown();
         const primary = pins.find((id) => items.some((item) => item.id === id)) || focusId;
@@ -832,7 +848,7 @@
     void Promise.resolve(next).catch(() => showError('The browser did not make this window full screen.'));
   });
   if (channel !== null) channel.onmessage = onWindowMessage;
-  window.addEventListener('resize', () => { advertise(); arrange(); });
+  window.addEventListener('resize', () => { advertise(); arrange('window resize'); });
   window.addEventListener('beforeunload', () => {
     clearTimeout(retry);
     feed?.close();
