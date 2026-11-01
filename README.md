@@ -276,11 +276,14 @@ shellpuppet daemon status|start|stop|restart     # status and stop never start o
 shellpuppet mcp
 ```
 
-`shellpuppet dashboard` opens one window for every session in ShellPuppet's
+`shellpuppet dashboard` opens a window with a pane for every session in ShellPuppet's
 isolated browser profile and prints only whether a window opened. It never
 prints the link, and it never uses your default browser: if the isolated
 window cannot open, the command fails rather than hand the grant to a profile
 with extensions.
+
+Double-click a pane's title bar to Enlarge or Restore it; Escape also restores
+an enlarged pane. Double-clicking inside the terminal still selects text.
 
 `shellpuppet --help` documents every flag. Exit codes: 0 ok · 1 the operation
 failed, such as typing into a session that has exited · 2 the request itself
