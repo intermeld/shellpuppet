@@ -9,6 +9,27 @@ version may change behaviour, and every such change is listed here.
 
 ### Added
 
+- The dashboard page's human controls. Terminal mode types into the focused
+  pane. The configurable `Ctrl+Shift+A` prefix enters navigation and is not
+  sent to the session; `Ctrl+\` is not that prefix. Kill is one menu action
+  away from the pane header, not a header icon, and sends one
+  `DELETE /sessions/<id>` with the dashboard cookie and the page proof. That
+  kill is audited as `dashboard`. The same cookie still cannot shut the daemon
+  down, mint a viewer link, take a screenshot, read the environment report,
+  start an arbitrary command, or call an HTTP input or key route. The page
+  lists profiles from `GET /dashboard/profiles` and starts one with
+  `POST /dashboard/launch`: a profile name and, where the profile offers
+  folders, a folder name. It never sends a command. The response's `open`
+  value adds the pane (`grid`), focuses it (`focus`) or pops it out
+  (`window`). Pop out opens that pane in its own window at
+  `/dashboard#pop=<id>`, with no grant in the URL. The window can be made
+  full screen, and closing it returns the pane to its place in the grid.
+  Restart is offered only for a session this page started from a profile, and
+  it repeats that profile and folder. Copy session id copies the id only.
+  An ended pane stays until it is dismissed or the existing reap removes it.
+  Mode, order and pin stay in `localStorage`. The profile and folder a start
+  used stay there too. Nothing is written to the daemon home or to
+  `config.json`.
 - The dashboard page shows passive terminal panes from the live session feed.
   Auto uses an even grid while panes meet the 80 by 24 floor, then a large
   pane and strip; Grid and Focus are available too. Pin, reorder, attention,
@@ -70,8 +91,9 @@ version may change behaviour, and every such change is listed here.
   client-token socket only, and `drive=false` is not a spelling. The echoed
   subprotocol names the dashboard credential; a client token on the same
   request selects none. A read-only viewer cookie does not become a dashboard
-  credential. The cookie still does not open `/events`, a start, a kill, a
+  credential. The cookie still does not open `/events`, a raw start, a
   shutdown, a screenshot, a viewer mint, or an HTTP input or key call.
+  `DELETE /sessions/<id>` is the kill, and it needs the document proof.
 - `hideReasoning` now covers screenshots and session lists, including their CLI
   commands. Screenshots blur and dim reasoning rows in the image and replace
   their row text. Filtered lists omit waiting prompt questions. Filtered waits

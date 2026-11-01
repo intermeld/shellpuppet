@@ -17,9 +17,12 @@ This page describes ShellPuppet as it stands in this repository. The dashboard
 decided in [ADR-009](../decisions/ADR-009-dashboard-and-sessions-you-start-yourself.md)
 is being built ([ROADMAP.md](../../ROADMAP.md)): its access credential, the
 `shellpuppet dashboard` command that opens its window and its launch profiles,
-below, are in place and not yet released. Its page now watches the session
-feed and opens passive panes. Start, kill, Pop out and several screens are
-specified in the [design](../architecture/design.md) for later steps.
+below, are in place and not yet released. Its page watches the session
+feed and opens panes. From that page a person can type, move between panes,
+start a configured profile, kill a session, pop a pane out, restart a
+profile the page started, and copy a session id. Layout memory stays in the
+browser. Several screens are specified in the
+[design](../architecture/design.md) for a later step.
 
 The daemon owns real terminals. Anything that can reach its API can run
 commands as you. The protections below narrow *who* can reach it. They do not
@@ -99,8 +102,14 @@ make a reachable terminal safe.
   `sp_dash` at
   `Path=/`, with no `Max-Age`, no `Secure` and no `Domain`. That cookie may
   open the dashboard page, `GET /sessions`, the `/dashboard/events` socket
-  and a session stream. It does not open `/events`, a start, a kill, a
-  shutdown, a screenshot, a viewer mint, or an HTTP input or key call. Each
+  and a session stream. It may kill with `DELETE /sessions/<id>` when the
+  request also carries the document proof, an `Origin` whose host matches
+  `Host`, and `Sec-Fetch-Site: same-origin`: the same rules as
+  `POST /dashboard/launch`. That kill is audited as `dashboard`. A missing
+  proof, a missing or foreign `Origin`, or any other `Sec-Fetch-Site` refuses
+  the call and kills nothing. It does not open `/events`, a raw start
+  (`POST /sessions`), a shutdown, a screenshot, a viewer mint, or an HTTP
+  input or key call. Each
   accepted navigation puts a fresh proof in the page. The daemon keeps the
   eight newest. `GET /sessions` sends the proof as `X-ShellPuppet-CSRF`.
   `/dashboard/events` and a session stream send it as the subprotocol
@@ -529,13 +538,15 @@ Leave it off unless actively debugging, and delete the log afterwards.
   session: connecting ShellPuppet to an agent is the approval, and config
   `policy` (an allowlist or denylist when a mode is set, and `maxSessions` when
   set) decides what the agent may start, not a prompt.
-- **The dashboard cookie can start the profiles you configured.** That is
+- **The dashboard cookie can start the profiles you configured, and it can
+  kill any live session.** That is
   wider than a viewer link, because `Path=/` covers every session and the
   profile list is the page's authority. Script that runs in the dashboard
   page is script on this same origin, so it can use the cookie. `HttpOnly`
   does not prevent that. What such script can start is the configured profile
   list, not an arbitrary command line, and the launch route still rate-limits
-  it and caps live sessions.
+  it and caps live sessions. What it can kill is one session per `DELETE`,
+  and only with the document proof.
 - **`envFromDaemon` puts those values in the session.** A program there, or
   anyone typing into it, can print them. List a name only if every
   dashboard-started session of that profile may see it. A variable reserved

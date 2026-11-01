@@ -417,11 +417,19 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
     // is what says the page has settled.
     let probed: unknown;
     for (;;) {
-      const painted =
-        options.drive === true ||
-        (await evaluate('window.__shellpuppetPainted === true')) === true;
-      probed = options.probe === undefined ? undefined : await evaluate(options.probe);
-      if (painted && (options.probe === undefined || Boolean(probed))) break;
+      try {
+        const painted =
+          options.drive === true ||
+          (await evaluate('window.__shellpuppetPainted === true')) === true;
+        probed = options.probe === undefined ? undefined : await evaluate(options.probe);
+        if (painted && (options.probe === undefined || Boolean(probed))) break;
+      } catch (error) {
+        // A probe can reload the page. The evaluation that lands while the
+        // document is being replaced has no context yet, and the next poll
+        // reads the new document. Any other DevTools error still fails the capture.
+        const message = error instanceof Error ? error.message : '';
+        if (!/Execution context was destroyed|Cannot find context/i.test(message)) throw error;
+      }
       if (Date.now() >= deadline) throw new Error('The viewer did not paint in time.');
       await sleep(POLL_MS);
     }

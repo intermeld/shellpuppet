@@ -1074,15 +1074,27 @@ appear in the grid.
 
 **Controls and content.** Terminal mode sends keys to the focused pane.
 The configurable `Ctrl+Shift+A` prefix enters navigation and is consumed
-by the page; `Ctrl+\` is not used because it is the POSIX quit character.
-Navigation uses arrows and digits to select, Enter to return to terminal
+by the page, and so is every follow-up key while navigation is active,
+including one that does nothing. A `Ctrl+Shift` chord for a different
+letter is not this prefix, so the page does not take it. `Ctrl+\` is not
+used because it is the POSIX quit character. Navigation
+uses arrows and digits to select, Enter to return to terminal
 mode, `j` to jump to a waiting pane, `p` to pin, `f` to Fit, `m` to
 Enlarge and `?` for help. Kill is one menu action away from the pane
-header. Copy session id helps an agent join with existing tools; it mints
-no viewer grant and creates no lock. An ended pane remains until dismissed
-or reaped on the existing fifteen-minute grace. Restart is available only
-for a dashboard-started profile and posts its profile and selected folder
-again. Question text, terminal content, labels, errors and URLs are inserted
+header, not an icon on the header itself, and it is one
+`DELETE /sessions/<id>`. Copy session id copies the id only: it helps an
+agent join with existing tools, mints no viewer grant and creates no lock.
+An ended pane remains until dismissed or reaped on the existing
+fifteen-minute grace. The page does not start a timer of its own for that.
+Restart is available only for a session the page started from a profile,
+and posts its profile and selected folder again. The page remembers that
+profile name and folder name in `localStorage` in the same browser profile,
+separate from the layout record, so a reload can still restart. It does not
+write them to the daemon home or to `config.json`. Pop out opens
+`/dashboard#pop=<session id>` in one new window. The URL has no grant and
+no cookie value. That window can be made full screen. The pane leaves the
+grid and returns, in its previous order, when the window closes.
+Question text, terminal content, labels, errors and URLs are inserted
 as text, never HTML or navigation targets. The focused pane is marked; a
 polite live region and a static mark under reduced motion convey attention.
 There is no sound or operating-system notification. The dashboard uses the
