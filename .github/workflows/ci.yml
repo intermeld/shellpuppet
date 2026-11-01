@@ -17,7 +17,7 @@ jobs:
         os: [windows-latest, ubuntu-latest, macos-latest]
         node: ['22.x', '24.x', '26.x']
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -28,7 +28,14 @@ jobs:
       - run: npm run build
       - run: npm run typecheck
       - run: npm run lint
+      # node-pty 1.1.0 can access-violate a Windows integration fork while
+      # its native exit threads use a shared terminal list. Retry the full
+      # suite once only for that exact crash and only with no failed tests.
+      - run: node --test scripts/retry-native-worker-crash.test.mjs
+      - run: node scripts/retry-native-worker-crash.mjs
+        if: runner.os == 'Windows'
       - run: npm test
+        if: runner.os != 'Windows'
       # The viewer page as headless Chromium drew it, for a human to look at
       # (test/integration/viewer-capture.test.ts). Absent where the test skipped.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
