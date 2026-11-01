@@ -37,9 +37,9 @@ const ROUNDS = HEAVY ? 6 : 2;
 const SESSIONS = HEAVY ? 40 : 16;
 /**
  * How long a program waits for the marker before failing the round. It must
- * cover the whole paced start of the round — every program starts waiting
+ * cover the whole paced start of the round (every program starts waiting
  * while its neighbours are still being started, and a start can take seconds
- * of its own — so that a program leaving with 9 means the round went wrong,
+ * of its own), so that a program leaving with 9 means the round went wrong,
  * not that the starts were slow. The round's worst case is well under this.
  */
 const WAIT_FOR_MARKER_MS = 120_000;

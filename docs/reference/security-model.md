@@ -508,8 +508,8 @@ Leave it off unless actively debugging, and delete the log afterwards.
     runs. There is no winpty path any more: node-pty 1.2.0 removed it, so
     every Windows session runs on ConPTY and the list-nothing wrapper covers
     every kill. A Windows build below the ConPTY floor (Windows 10 version
-    1809, build 18309) cannot start a session at all — the start is refused
-    with the minimum named — so no unwrapped console kill exists there
+    1809, build 18309) cannot start a session at all (the start is refused
+    with the minimum named), so no unwrapped console kill exists there
     either.
 - A screenshot starts a headless browser with a DevTools port on loopback for
   the seconds the capture takes. Another process running as your user could

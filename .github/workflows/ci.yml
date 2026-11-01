@@ -81,7 +81,7 @@ jobs:
   # - Linux with no flag also installs and starts: since 1.2.0-beta the
   #   package ships Linux prebuilds (glibc x64 and arm64), and node-pty's
   #   loader reads `prebuilds/<platform>-<arch>` directly, so the install
-  #   script is not needed where one matches — ubuntu-latest is glibc x64.
+  #   script is not needed where one matches (ubuntu-latest is glibc x64).
   #   This case runs the same smoke as the plain package job, which drives a
   #   whole session, so it proves the start works from the prebuild alone. A
   #   machine where no prebuild matches (another architecture, or musl in

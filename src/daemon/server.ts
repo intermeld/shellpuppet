@@ -617,6 +617,11 @@ export class Daemon {
   private readonly compiledPolicy: CompiledPolicy;
   /** Accepted launch times, for the sliding sixty-second cap. */
   private readonly launchTimes: number[] = [];
+  /**
+   * Sessions created whose program does not exist yet (`programStarted`):
+   * not listed and not in the feed until the start contract is met.
+   */
+  private readonly startingIds = new Set<string>();
 
   constructor(options: DaemonOptions) {
     this.options = options;
@@ -630,7 +635,7 @@ export class Daemon {
     }, (id) => this.sessionFeed.remove(id));
     this.sessionFeed = new SessionFeed(
       this.version,
-      () => this.manager.list().map((summary) => this.summaryWithPrompt(summary)),
+      () => this.listedSummaries().map((summary) => this.summaryWithPrompt(summary)),
       this.logger,
     );
     this.server = http.createServer((req, res) => {
@@ -1571,13 +1576,7 @@ export class Daemon {
     // The same start contract as `POST /sessions`: the dashboard's pane is a
     // session only once its program exists, and a start that ends before any
     // program did fails as 1.1.0's spawn did, leaving nothing in the grid.
-    if ((await session.startedProgramPid()) === null) {
-      const failure = `Failed to start session: Error: ${session.startFailure()}`;
-      this.logger.error('dashboard session start failed', { id: session.id, error: failure });
-      await this.manager.kill(session.id);
-      json(res, 500, { error: failure });
-      return;
-    }
+    if (!(await this.programStarted(session, res, 'dashboard session start failed'))) return;
     // A launch is an API call: the idle timer counts from it, so a session
     // that has just started is not reaped sooner than `idleMinutes` allows.
     this.lastActivity = Date.now();
@@ -2611,18 +2610,8 @@ export class Daemon {
     // node-pty 1.2.0-beta.18 creates a Windows terminal's program only once
     // its output worker has connected, a few hundred milliseconds after the
     // spawn returns, and reports pid 0 until then. The start contract is what
-    // it always was: a started session has a program, and its pid is real, so
-    // the answer waits — bounded by node-pty's own five-second connection
-    // bound plus a margin — for the program to exist. A session that ends
-    // before any program did fails the start exactly as 1.1.0's spawn did,
-    // with Windows' code in the message, and leaves no session behind.
-    if ((await session.startedProgramPid()) === null) {
-      const failure = `Failed to start session: Error: ${session.startFailure()}`;
-      this.logger.error('session start failed', { id: session.id, error: failure });
-      await this.manager.kill(session.id);
-      json(res, 500, { error: failure });
-      return;
-    }
+    // it always was: a started session has a program, and its pid is real.
+    if (!(await this.programStarted(session, res, 'session start failed'))) return;
 
     // Registration is synchronous with creation, before any asynchronous
     // viewer launch or readiness work can publish a change for this id.
@@ -2849,11 +2838,42 @@ export class Daemon {
    * The cost is staleness bounded by the scan interval: 5 s, immaterial
    * against prompts that sit for minutes.
    */
+  /**
+   * Wait, for a session just created, until its program exists (the start
+   * contract; bounded by node-pty's five-second connection bound plus a
+   * margin). Until then the session is starting: it holds a capacity slot but
+   * is not listed and not in the dashboard feed, so nobody sees a session
+   * that may never exist. A session that ends before any program did fails
+   * the start with the status and shape 1.1.0's thrown spawn had (500,
+   * "Failed to start session: Error: ..."), is ended and discarded, and false
+   * is returned with the response already sent.
+   */
+  private async programStarted(session: Session, res: http.ServerResponse, logMessage: string): Promise<boolean> {
+    this.startingIds.add(session.id);
+    let started: boolean;
+    try {
+      started = (await session.startedProgramPid()) !== null;
+    } finally {
+      this.startingIds.delete(session.id);
+    }
+    if (started) return true;
+    const failure = `Failed to start session: Error: ${session.startFailure()}`;
+    this.logger.error(logMessage, { id: session.id, error: failure });
+    await this.manager.kill(session.id);
+    json(res, 500, { error: failure });
+    return false;
+  }
+
+  /** The sessions a client or the dashboard may see: every one but those still starting. */
+  private listedSummaries(): SessionSummary[] {
+    return this.manager.list().filter((summary) => !this.startingIds.has(summary.id));
+  }
+
   private listWithPrompts(hideReasoning = false): (SessionSummary & {
     waitingOnPrompt?: { question?: string; options?: string[]; selectedOption?: number; waitingMs: number; alerted: boolean };
   })[] {
     const now = Date.now();
-    return this.manager.list().map((summary) => {
+    return this.listedSummaries().map((summary) => {
       const full = this.summaryWithPrompt(summary, now);
       const waiting = full.waitingOnPrompt;
       if (!hideReasoning || waiting === undefined) return full;

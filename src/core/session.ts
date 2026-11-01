@@ -655,6 +655,8 @@ export class Session implements WaitTarget {
   private readonly treeKiller: TreeKiller;
   /** How long a kill waits for the deferred program's pid (a test seam). */
   private readonly pidWaitMs: number;
+  /** Set once a wait for the program's pid has run out (`programPid`). */
+  private programWaitExpired = false;
   /** Whether the program has bracketed paste (DEC 2004) enabled. See PASTE_START. */
   private bracketedPaste = false;
   /**
@@ -726,8 +728,12 @@ export class Session implements WaitTarget {
     // so a build below the ConPTY floor cannot start anything. Refused here,
     // with the floor named, rather than deep inside ConPTY as a bare
     // "Cannot launch conpty".
-    if (this.platform === 'win32') {
-      const build = windowsBuildNumber(deps.osRelease ?? os.release());
+    // The real release is read only on a real Windows host: a test that
+    // simulates Windows elsewhere (`platform`) would otherwise read a POSIX
+    // kernel version as build 0. A test of the floor passes `osRelease`.
+    const release = deps.osRelease ?? (process.platform === 'win32' ? os.release() : undefined);
+    if (this.platform === 'win32' && release !== undefined) {
+      const build = windowsBuildNumber(release);
       if (build < CONPTY_MINIMUM_BUILD) throw new WindowsWithoutConPTYError(build);
     }
 
@@ -1379,10 +1385,15 @@ export class Session implements WaitTarget {
    * pid at the spawn, so nothing is waited for there.
    */
   private async programPid(): Promise<number> {
+    // One full wait per session: once a wait has run out with no program,
+    // node-pty's own connection bound has passed too, and a later caller (a
+    // kill after shutdown's pre-wait) must not spend its budget waiting again.
+    if (this.programWaitExpired) return this.pty.pid;
     const deadline = Date.now() + this.pidWaitMs;
     while (this.pty.pid <= 0 && !this.exitedFlag && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
+    if (this.pty.pid <= 0 && !this.exitedFlag) this.programWaitExpired = true;
     return this.pty.pid;
   }
 
@@ -1390,7 +1401,7 @@ export class Session implements WaitTarget {
    * The program's pid once node-pty has created it, or null when the session
    * ended before any program existed: a start whose ConPTY output worker
    * never connected, or one Windows refused the program of. The start
-   * contract waits here — a session is reported as started only once its
+   * contract waits here: a session is reported as started only once its
    * program exists, as node-pty 1.1.0's synchronous spawn guaranteed.
    */
   async startedProgramPid(): Promise<number | null> {
@@ -1414,8 +1425,9 @@ export class Session implements WaitTarget {
    * End the program of a session that ended with no exit code: node-pty
    * closed its terminal when its output failed, and the program would run on
    * where nobody can read or type into it, for an agent CLI still acting and
-   * spending. The same tree kill a kill uses, including its wait for the pid.
-   * Never rejects.
+   * spending. The same tree kill a kill uses. It runs only after the exit, so
+   * the pid is never waited for here; a pid of 0 (no program was created) is
+   * skipped by the tree kill. Never rejects.
    */
   private async endProgram(): Promise<void> {
     const pid = await this.programPid();
