@@ -191,6 +191,11 @@ viewer-url <id>` mints a fresh link whenever you want one, and `--read-only`
 makes it a link that can watch but never type. The options are in
 [`docs/reference/configuration.md`](docs/reference/configuration.md).
 
+In the viewer, on Windows and Linux, Ctrl+V pastes; to send a literal Ctrl+V
+to the program, there is no in-pane shortcut. Ctrl+C copies selected terminal
+text, and sends `^C` when nothing is selected. On macOS, Cmd+V pastes and
+Ctrl+V still sends `^V`.
+
 **How long it takes.** On clean machines:
 
 - **Windows 11** (a fresh Windows Sandbox, Node 24): installing ShellPuppet with
@@ -284,6 +289,10 @@ with extensions.
 
 Double-click a pane's title bar to Enlarge or Restore it; Escape also restores
 an enlarged pane. Double-clicking inside the terminal still selects text.
+In dashboard panes, on Windows and Linux, Ctrl+V pastes; to send a literal
+Ctrl+V to the program, there is no in-pane shortcut. Ctrl+C copies selected
+terminal text, and sends `^C` when nothing is selected. On macOS, Cmd+V
+pastes and Ctrl+V still sends `^V`.
 
 `shellpuppet --help` documents every flag. Exit codes: 0 ok · 1 the operation
 failed, such as typing into a session that has exited · 2 the request itself
