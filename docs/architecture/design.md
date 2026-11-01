@@ -521,9 +521,10 @@ Token-based, following the Jupyter / SSH-agent model, with **five credentials**:
   requires it as the WebSocket subprotocol `sp-csrf.` plus the 64 hex digits. A header on
   the upgrade is not the proof. The compare hashes both strings and then compares the
   digests in constant time, the same way bearer tokens are compared. The cookie may open
-  `GET /dashboard`, `GET /sessions` and `/dashboard/events`. It does not open `/events`, a
-  session stream, a start, a kill, a shutdown, a screenshot, a viewer mint or anything
-  else. While a `/dashboard/events` socket is open, a session start does not launch a
+  `GET /dashboard`, `GET /sessions`, `GET /dashboard/profiles` and `/dashboard/events`, and
+  may call `POST /dashboard/launch` with the proof. It does not open `/events`, a free-form
+  `POST /sessions`, a shutdown, a screenshot, a viewer mint or the environment report.
+  While a `/dashboard/events` socket is open, a session start does not launch a
   per-session viewer window and the response omits `viewerUrl`.
 - **Read-only is a property of the grant**, carried into the credential and enforced by
   the daemon: input and geometry changes from a watch-only credential are dropped

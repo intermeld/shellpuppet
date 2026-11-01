@@ -40,6 +40,8 @@ import type { AgentSignature } from '../core/reasoning.js';
 import { ENV_NAME_PATTERN } from '../core/types.js';
 import type { PolicyConfig, PolicyMode, SessionEnvMode } from '../core/types.js';
 import type { ViewerLaunchConfig, ViewerLaunchMode } from './viewerLauncher.js';
+import { parseLauncher } from './launchProfiles.js';
+import type { LauncherConfig } from './launchProfiles.js';
 
 export interface DaemonConfig {
   policy?: PolicyConfig;
@@ -51,6 +53,12 @@ export interface DaemonConfig {
   audit?: { captureContent?: boolean };
   /** How the viewer window is opened. */
   viewer?: ViewerLaunchConfig;
+  /**
+   * The named programs the dashboard may start (`launcher.profiles`, design
+   * §4.3). Absent means a watch-only dashboard. Invalid entries are named in
+   * `problems` and left out; their siblings still load.
+   */
+  launcher?: LauncherConfig;
   /**
    * Permission dialogs to recognise beyond the built-in ones (`dialogs.ts`):
    * the entries that compile. The rest are reported and left out.
@@ -101,6 +109,7 @@ const TOP_LEVEL_KEYS = new Set([
   'prompts',
   'agents',
   'envNames',
+  'launcher',
 ]);
 const VIEWER_KEYS = new Set(['launchMode', 'browserPath', 'profileDir']);
 const VIEWER_LAUNCH_MODES: readonly ViewerLaunchMode[] = [
@@ -398,6 +407,18 @@ export function parseDaemonConfig(raw: unknown): ParsedDaemonConfig {
         if (passEnv !== undefined) config.agentPassEnv = passEnv;
       }
     }
+  }
+
+  // Dashboard launch profiles. A broken entry is named and left out; its
+  // siblings still load, and nothing here changes policy.
+  if (raw['launcher'] !== undefined) {
+    const known = new Set([
+      ...BUILT_IN_SIGNATURES.map((signature) => signature.name),
+      ...(config.agentSignatures ?? []).map((signature) => signature.name),
+    ]);
+    const parsed = parseLauncher(raw['launcher'], known);
+    config.launcher = parsed.launcher;
+    problems.push(...parsed.problems);
   }
 
   // The variables a caller may name at start. A list under `mcp.passEnv` is

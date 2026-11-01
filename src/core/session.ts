@@ -39,6 +39,7 @@ import {
   DEFAULT_SCROLLBACK,
   MAX_WAIT_TIMEOUT_MS,
   NULL_LOGGER,
+  RESERVED_FEATURE_CREDENTIALS,
 } from './types.js';
 import type {
   Logger,
@@ -524,17 +525,30 @@ export function credentialShapedNames(source: NodeJS.ProcessEnv = process.env): 
  * (`SessionOptions.env`), set on top of whatever the mode gave. On Windows a
  * passed name replaces the inherited variable of the same name in any case,
  * rather than sitting beside it as a second copy.
+ *
+ * A name reserved for a connected feature's credential (ADR-007) is never
+ * carried, whichever mode is in force: `passthrough` copies the daemon's
+ * environment and a list mode can name anything, so the filter has to sit
+ * here rather than in one caller. A session's own `passed` value is not the
+ * daemon's copy and is left alone.
  */
 export function buildSessionEnv(
   mode: SessionEnvMode,
   platform: NodeJS.Platform,
   source: NodeJS.ProcessEnv = process.env,
   passed: Record<string, string> = {},
+  reserved: ReadonlySet<string> = RESERVED_FEATURE_CREDENTIALS,
 ): Record<string, string> {
   const env: Record<string, string> = {};
+  // Windows reads variable names without case, so a reserved name is matched
+  // that way there and exactly elsewhere, as every other name is.
+  const isReserved = (name: string): boolean =>
+    platform === 'win32'
+      ? [...reserved].some((entry) => entry.toUpperCase() === name.toUpperCase())
+      : reserved.has(name);
   if (mode === 'passthrough') {
     for (const [key, value] of Object.entries(source)) {
-      if (value !== undefined) env[key] = value;
+      if (value !== undefined && !isReserved(key)) env[key] = value;
     }
   } else {
     const baseline = CLEAN_ENV_KEYS[platform === 'win32' ? 'win32' : 'posix'];
@@ -542,7 +556,9 @@ export function buildSessionEnv(
       (mode === 'clean' ? baseline : [...baseline, ...mode]).map((k) => k.toUpperCase()),
     );
     for (const [key, value] of Object.entries(source)) {
-      if (value !== undefined && wanted.has(key.toUpperCase())) env[key] = value;
+      if (value !== undefined && wanted.has(key.toUpperCase()) && !isReserved(key)) {
+        env[key] = value;
+      }
     }
   }
   const setOnly = (name: string, value: string): void => {

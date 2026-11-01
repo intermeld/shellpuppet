@@ -828,11 +828,6 @@ describe('the cookie does not open the routes outside this step', () => {
       'content-type': 'application/json',
     }, JSON.stringify({ command: process.execPath, shell: false }));
     expect(start.status).toBe(401);
-    const form = await raw(daemon.port, 'POST', '/dashboard/launch', {
-      ...authed,
-      'content-type': 'application/x-www-form-urlencoded',
-    }, `profile=shell`);
-    expect(form.status).toBe(401);
     const viewer = await raw(daemon.port, 'POST', `/sessions/${id}/viewer`, authed, '{}');
     expect(viewer.status).toBe(401);
     const environment = await raw(daemon.port, 'GET', '/environment', authed);

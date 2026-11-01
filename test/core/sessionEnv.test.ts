@@ -50,6 +50,46 @@ describe('buildSessionEnv with variables of the session’s own', () => {
   });
 });
 
+describe('a reserved feature credential (ADR-007)', () => {
+  const reserved = new Set(['INTERMELD_TOKEN']);
+
+  it('is kept out under passthrough, which copies the daemon’s whole environment', () => {
+    const env = buildSessionEnv(
+      'passthrough',
+      'linux',
+      { PATH: '/bin', INTERMELD_TOKEN: 'secret' },
+      {},
+      reserved,
+    );
+    expect(env['PATH']).toBe('/bin');
+    expect(env['INTERMELD_TOKEN']).toBeUndefined();
+  });
+
+  it('is kept out when a list names it', () => {
+    const env = buildSessionEnv(
+      ['INTERMELD_TOKEN', 'WANTED'],
+      'linux',
+      { INTERMELD_TOKEN: 'secret', WANTED: 'value' },
+      {},
+      reserved,
+    );
+    expect(env['INTERMELD_TOKEN']).toBeUndefined();
+    expect(env['WANTED']).toBe('value');
+  });
+
+  it('is matched without case on Windows, where the platform reads it that way', () => {
+    const env = buildSessionEnv(
+      'passthrough',
+      'win32',
+      { PATH: 'C:/Windows', interMeld_Token: 'secret' },
+      {},
+      reserved,
+    );
+    expect(env['interMeld_Token']).toBeUndefined();
+    expect(env['PATH']).toBe('C:/Windows');
+  });
+});
+
 describe('the clean baseline (ADR-008)', () => {
   it('is the default', () => {
     expect(DEFAULT_SESSION_ENV).toBe('clean');

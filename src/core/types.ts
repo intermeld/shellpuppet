@@ -327,6 +327,15 @@ export type SessionEnvMode = 'passthrough' | 'clean' | string[];
  */
 export const ENV_NAME_PATTERN = /^(?!__proto__$)[A-Za-z_][A-Za-z0-9_]*$/;
 
+/**
+ * Names reserved for a connected feature's own credential (ADR-007). No
+ * connected feature ships yet, so nothing is reserved today. A feature that
+ * reads a credential from a named variable adds that name here; no session
+ * environment carries it, whatever `sessionEnv` says, and a launch profile
+ * cannot copy it with `envFromDaemon` either.
+ */
+export const RESERVED_FEATURE_CREDENTIALS: ReadonlySet<string> = new Set();
+
 // ----------------------------------------------------------------------- defaults
 
 /** The grid a session starts with when the caller names none. */

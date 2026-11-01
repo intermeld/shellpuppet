@@ -23,7 +23,8 @@ import {
   credentialShapedNames,
 } from '../core/session.js';
 import { NativePtyUnavailableError } from '../core/nativePty.js';
-import { commandLine, compilePolicy } from '../core/policy.js';
+import { checkSessionCapacity, commandLine, compilePolicy, evaluateCommand } from '../core/policy.js';
+import type { CompiledPolicy } from '../core/policy.js';
 import { keyToBytes, knownKeys } from '../core/keys.js';
 import { findOnScreen } from '../core/find.js';
 import { screenShows } from '../core/echo.js';
@@ -83,6 +84,14 @@ import { terminalReportKind } from './terminalReports.js';
 import { ViewerSync } from './viewerSync.js';
 import { SessionFeed } from './sessionFeed.js';
 import type { FeedFrame, FeedSummary } from './sessionFeed.js';
+import {
+  compileProfilePolicy,
+  copyDaemonEnv,
+  describeProfileText,
+  expandProfileText,
+  resolveLaunchCommand,
+} from './launchProfiles.js';
+import type { LaunchFolder, LaunchProfile, LauncherConfig } from './launchProfiles.js';
 
 const DEFAULT_IDLE_MS = 30 * 60_000;
 const IDLE_CHECK_INTERVAL_MS = 60_000;
@@ -249,6 +258,12 @@ export interface DaemonOptions {
    * `Date.now`. A request cannot choose a grant's lifetime.
    */
   now?: () => number;
+  /**
+   * The named programs the dashboard may start (`launcher.profiles`, design
+   * §4.3). Absent means a watch-only dashboard. Problems are served with the
+   * profile list and logged by the entry point at start.
+   */
+  launchProfiles?: LauncherConfig;
 }
 
 /** Thrown by `start()` when a healthy daemon already owns this home. */
@@ -317,20 +332,38 @@ function json(res: http.ServerResponse, code: number, body: unknown): void {
   res.end(payload);
 }
 
+/**
+ * A request body over `MAX_BODY_BYTES`. Answered with 413, not a reset: the
+ * reader keeps consuming and discarding what is left so the response can be
+ * read, rather than destroying the socket mid-upload.
+ */
+class RequestBodyTooLargeError extends Error {
+  constructor() {
+    super(`Request body too large: the limit is ${String(MAX_BODY_BYTES)} bytes.`);
+    this.name = 'RequestBodyTooLargeError';
+  }
+}
+
 function readBody(req: http.IncomingMessage): Promise<JsonBody> {
   return new Promise((resolve, reject) => {
     let size = 0;
+    let tooLarge = false;
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => {
+      if (tooLarge) return; // discard the rest, so the 413 can be read
       size += chunk.length;
       if (size > MAX_BODY_BYTES) {
-        reject(new Error('Request body too large.'));
-        req.destroy();
+        tooLarge = true;
+        chunks.length = 0;
         return;
       }
       chunks.push(chunk);
     });
     req.on('end', () => {
+      if (tooLarge) {
+        reject(new RequestBodyTooLargeError());
+        return;
+      }
       if (chunks.length === 0) {
         resolve({});
         return;
@@ -558,12 +591,20 @@ export class Daemon {
    * that what the daemon reports is what its sessions get.
    */
   private readonly sessionEnv: SessionEnvMode;
+  /** The profiles the dashboard may name, and the entries that did not load. */
+  private readonly launchProfiles: LauncherConfig;
+  /** The global policy, kept here so a launch can report it before creating. */
+  private readonly compiledPolicy: CompiledPolicy;
+  /** Accepted launch times, for the sliding sixty-second cap. */
+  private readonly launchTimes: number[] = [];
 
   constructor(options: DaemonOptions) {
     this.options = options;
     this.logger = options.logger;
     this.audit = options.audit ?? NULL_AUDITOR;
     this.sessionEnv = options.sessionEnv ?? DEFAULT_SESSION_ENV;
+    this.launchProfiles = options.launchProfiles ?? { profiles: [], problems: [] };
+    this.compiledPolicy = compilePolicy(options.policy);
     this.manager = new SessionManager(compilePolicy(options.policy), this.logger, {
       sessionEnv: this.sessionEnv,
     }, (id) => this.sessionFeed.remove(id));
@@ -1191,6 +1232,341 @@ export class Daemon {
     this.writeSessionList(res, url);
   }
 
+  /** A cookie mutation: same-origin Fetch Metadata and a matching Origin. */
+  private isSameOriginMutation(req: http.IncomingMessage): boolean {
+    if (headerOne(req, 'sec-fetch-site') !== 'same-origin') return false;
+    return this.originMatchesRequest(req);
+  }
+
+  /**
+   * Why a cookie mutation is refused, for the audit. A missing or foreign
+   * `Origin` is `origin`; a request whose `Origin` is this page's but whose
+   * `Sec-Fetch-Site` is not `same-origin` is `fetch-site`. The route needs
+   * both, so this only decides the reason a request failing both is recorded
+   * under: naming the Origin keeps the two defences apart in the log.
+   */
+  private mutationRefusalReason(req: http.IncomingMessage): string {
+    const origin = headerOne(req, 'origin');
+    if (origin === undefined || origin === '' || !this.originMatchesRequest(req)) return 'origin';
+    return 'fetch-site';
+  }
+
+  /**
+   * What the page needs to show a profile, and nothing secret: the command
+   * and arguments are the profile's own, and `envFromDaemon` contributes
+   * names. `{folder}` stays unexpanded here because it depends on the click.
+   */
+  private profileDescription(profile: LaunchProfile): Record<string, unknown> {
+    return {
+      name: profile.name,
+      label: describeProfileText(profile.label ?? '', profile.name),
+      purpose: describeProfileText(profile.purpose ?? '', profile.name),
+      command: profile.command,
+      args: [...profile.args],
+      folderRequired: profile.askCwd,
+      folders: profile.folders.map((folder) => ({ name: folder.name, path: folder.path })),
+      envFromDaemon: [...profile.envFromDaemon],
+    };
+  }
+
+  /** Cookie-authenticated `GET /dashboard/profiles`. A missing proof is a 403. */
+  private serveDashboardProfiles(req: http.IncomingMessage, res: http.ServerResponse): void {
+    const presented = this.dashboardCookiePresented(req.headers.cookie);
+    const cookie = this.dashboardCookieToken(req.headers.cookie);
+    if (cookie === null) {
+      if (presented) this.auditDashboardRefusal(req, 'unauthenticated');
+      json(res, 401, { error: 'Unauthorised: a valid client token is required.' });
+      return;
+    }
+    if (!this.isSameOriginRead(req)) {
+      this.auditDashboardRefusal(req, this.cookieRefusalReason(req));
+      json(res, 403, { error: 'Forbidden.' });
+      return;
+    }
+    if (!this.tokens.acceptsDashboardProof(headerOne(req, 'x-shellpuppet-csrf'))) {
+      this.auditDashboardRefusal(req, 'proof');
+      json(res, 403, { error: 'Forbidden.' });
+      return;
+    }
+    this.lastActivity = Date.now();
+    json(res, 200, {
+      profiles: this.launchProfiles.profiles.map((profile) => this.profileDescription(profile)),
+      problems: [...this.launchProfiles.problems],
+    });
+  }
+
+  /**
+   * The directory a launch starts in: the selected folder's configured path,
+   * the profile's fixed path, or the user's home. Relative paths are taken
+   * from the user's home, as a direct `POST /sessions` does. The path is a
+   * spawn `cwd`, never a command-line fragment.
+   */
+  private resolveLaunchCwd(
+    profile: LaunchProfile,
+    folder: LaunchFolder | undefined,
+  ): { cwd: string } | { error: string } {
+    const configured = folder?.path ?? profile.cwd;
+    const cwd = configured === undefined ? os.homedir() : path.resolve(os.homedir(), configured);
+    try {
+      if (!fs.statSync(cwd).isDirectory()) return { error: `Working directory is not a directory: ${cwd}` };
+    } catch {
+      return { error: `Working directory does not exist: ${cwd}` };
+    }
+    return { cwd };
+  }
+
+  /** Accepted launch times inside the last sixty seconds, oldest first. */
+  private pruneLaunchTimes(now: number): void {
+    while (this.launchTimes.length > 0 && (this.launchTimes[0] ?? now) <= now - 60_000) {
+      this.launchTimes.shift();
+    }
+  }
+
+  /**
+   * `POST /dashboard/launch`: one configured profile, and nothing else. The
+   * body names a profile and, when that profile asks, one of its folders. It
+   * cannot supply a command, arguments, a path or an environment value.
+   */
+  private async handleDashboardLaunch(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+  ): Promise<void> {
+    const presented = this.dashboardCookiePresented(req.headers.cookie);
+    const cookie = this.dashboardCookieToken(req.headers.cookie);
+    if (cookie === null) {
+      if (presented) this.auditDashboardRefusal(req, 'unauthenticated');
+      json(res, 401, { error: 'Unauthorised: a valid client token is required.' });
+      return;
+    }
+    if (!this.isSameOriginMutation(req)) {
+      this.auditDashboardRefusal(req, this.mutationRefusalReason(req));
+      json(res, 403, { error: 'Forbidden.' });
+      return;
+    }
+    // Only `application/json`, with optional parameters such as `charset`.
+    // A missing header and `application/jsonp` are both refused: the launch
+    // body is JSON and nothing else.
+    const mediaType = (headerOne(req, 'content-type') ?? '').split(';', 1)[0]?.trim().toLowerCase() ?? '';
+    if (mediaType !== 'application/json') {
+      this.auditDashboardRefusal(req, 'content-type');
+      json(res, 415, { error: 'The launch body must be JSON (application/json).' });
+      return;
+    }
+    if (!this.tokens.acceptsDashboardProof(headerOne(req, 'x-shellpuppet-csrf'))) {
+      this.auditDashboardRefusal(req, 'proof');
+      json(res, 403, { error: 'Forbidden.' });
+      return;
+    }
+
+    let body: JsonBody;
+    try {
+      body = await readBody(req);
+    } catch (error) {
+      if (error instanceof RequestBodyTooLargeError) {
+        this.auditDashboardRefusal(req, 'body-size');
+        json(res, 413, { error: error.message });
+        return;
+      }
+      if (error instanceof Error && error.message.startsWith('Request body')) {
+        this.auditDashboardRefusal(req, 'body');
+        json(res, 400, { error: error.message });
+        return;
+      }
+      throw error;
+    }
+    const profileName = asString(body['profile']);
+    if (profileName === undefined || profileName === '') {
+      json(res, 400, { error: 'profile (string) is required.' });
+      return;
+    }
+    for (const key of Object.keys(body)) {
+      if (key !== 'profile' && key !== 'folder') {
+        this.auditDashboardRefusal(req, 'body');
+        json(res, 400, {
+          error:
+            `The launch body may name only profile and folder: "${key}" is not accepted. ` +
+            'A command, arguments, a path and an environment value come from the profile.',
+        });
+        return;
+      }
+    }
+    const profile = this.launchProfiles.profiles.find((entry) => entry.name === profileName);
+    if (profile === undefined) {
+      json(res, 400, { error: `No such launch profile: ${profileName}` });
+      return;
+    }
+
+    const folderName = body['folder'];
+    let folder: LaunchFolder | undefined;
+    if (profile.askCwd) {
+      if (folderName === undefined) {
+        json(res, 400, { error: `folder (string) is required for profile "${profileName}".` });
+        return;
+      }
+      if (typeof folderName !== 'string') {
+        json(res, 400, { error: 'folder must be a string.' });
+        return;
+      }
+      folder = profile.folders.find((entry) => entry.name === folderName);
+      if (folder === undefined) {
+        json(res, 400, {
+          error: `No such folder for profile "${profileName}": ${folderName}`,
+        });
+        return;
+      }
+    } else if (folderName !== undefined) {
+      json(res, 400, {
+        error: `Profile "${profileName}" uses a fixed working directory and does not accept a folder.`,
+      });
+      return;
+    }
+
+    const resolved = this.resolveLaunchCwd(profile, folder);
+    if ('error' in resolved) {
+      json(res, 400, { error: resolved.error });
+      return;
+    }
+
+    // Global policy runs first, then the profile's own deny and allow lists.
+    // Both see the real command line, before any Windows shell wrap.
+    const globalDecision = evaluateCommand(this.compiledPolicy, profile.command, profile.args);
+    if (!globalDecision.allowed) {
+      this.auditDashboardRefusal(req, 'policy');
+      json(res, 403, { error: globalDecision.reason ?? 'Command refused by policy.' });
+      return;
+    }
+    if (profile.policy !== undefined) {
+      const ownDecision = evaluateCommand(
+        compileProfilePolicy(profile.policy),
+        profile.command,
+        profile.args,
+      );
+      if (!ownDecision.allowed) {
+        this.auditDashboardRefusal(req, 'policy');
+        json(res, 403, { error: ownDecision.reason ?? 'Command refused by policy.' });
+        return;
+      }
+    }
+
+    // Resolve the command to the file that will run before anything starts.
+    // Policy and the page keep the written command; the spawn gets the
+    // absolute path, so the folder's contents cannot choose the program.
+    const resolvedCommand = resolveLaunchCommand(profile.command, resolved.cwd);
+    if ('error' in resolvedCommand) {
+      this.auditDashboardRefusal(req, 'command');
+      json(res, 400, {
+        error: `Profile "${profile.name}" cannot be started: ${resolvedCommand.error}`,
+      });
+      return;
+    }
+
+    const now = this.now();
+    this.pruneLaunchTimes(now);
+    if (this.launchTimes.length >= 8) {
+      this.auditDashboardRefusal(req, 'rate');
+      json(res, 429, {
+        error:
+          'Dashboard launch rate reached (8 in 60 seconds). Wait before starting another profile.',
+      });
+      return;
+    }
+
+    const live = this.manager.liveCount();
+    if (this.compiledPolicy.maxSessions === undefined) {
+      if (live >= 32) {
+        this.auditDashboardRefusal(req, 'limit');
+        json(res, 403, {
+          error:
+            'Session limit reached (32 live sessions). Kill a session or set policy.maxSessions.',
+        });
+        return;
+      }
+    } else {
+      const capacity = checkSessionCapacity(this.compiledPolicy, live);
+      if (!capacity.allowed) {
+        this.auditDashboardRefusal(req, 'limit');
+        json(res, 403, { error: capacity.reason ?? 'Session limit reached.' });
+        return;
+      }
+    }
+
+    const { env, copied } = copyDaemonEnv(profile.envFromDaemon, process.env);
+    const envNames = Object.keys(env);
+    const folderLabel = folder?.name;
+    const options = {
+      command: resolvedCommand.file,
+      args: [...profile.args],
+      cwd: resolved.cwd,
+      ...(profile.shell !== undefined ? { shell: profile.shell } : {}),
+      ...(profile.agent !== undefined ? { agent: profile.agent } : {}),
+      ...(profile.readyText !== undefined ? { readyText: profile.readyText } : {}),
+      ...(profile.readyQuiet !== undefined ? { readyQuiet: profile.readyQuiet } : {}),
+      // The written command stays the session's label, as it was before the
+      // path was resolved: the page shows the profile, not a machine path.
+      ...(profile.label !== undefined
+        ? { label: expandProfileText(profile.label, profile.name, folderLabel) }
+        : { label: profile.command }),
+      ...(profile.purpose !== undefined
+        ? { purpose: expandProfileText(profile.purpose, profile.name, folderLabel) }
+        : {}),
+      ...(envNames.length > 0 ? { env } : {}),
+      // The audit actor, not a caller-declared identity: the dashboard page
+      // has no client environment and no other way to name itself.
+      startedBy: 'dashboard',
+    };
+
+    let session: Session;
+    try {
+      session = this.manager.create(options);
+    } catch (error) {
+      if (error instanceof PolicyViolationError) {
+        this.auditDashboardRefusal(req, 'policy');
+        json(res, 403, { error: error.message });
+        return;
+      }
+      if (error instanceof CommandNotFoundError) {
+        json(res, 400, { error: error.message });
+        return;
+      }
+      if (error instanceof NativePtyUnavailableError) {
+        json(res, 500, { error: error.message });
+        return;
+      }
+      json(res, 500, { error: `Failed to start session: ${String(error)}` });
+      return;
+    }
+    this.launchTimes.push(now);
+    // A launch is an API call: the idle timer counts from it, so a session
+    // that has just started is not reaped sooner than `idleMinutes` allows.
+    this.lastActivity = Date.now();
+
+    this.sessionFeed.add(this.summaryWithPrompt(session.summary()));
+    session.onExit(() => this.updateFeedSession(session.id));
+    session.onReady(() => this.updateFeedSession(session.id));
+
+    // The profile name and the written command line, the file that was
+    // actually resolved and started, and the names of the variables actually
+    // copied from the daemon. Never a value.
+    this.audit.record('dashboard', 'start', session.id, {
+      profile: profile.name,
+      command: profile.command,
+      args: profile.args,
+      resolvedCommand: resolvedCommand.file,
+      ...(copied.length > 0 ? { envFromDaemon: copied } : {}),
+      ...(folder !== undefined ? { folder: folder.name } : {}),
+      ...(session.label !== '' ? { label: session.label } : {}),
+    });
+
+    // No viewer window and no viewer grant: the dashboard page is the
+    // window, and it acts on the profile's `open` value.
+    json(res, 200, {
+      id: session.id,
+      open: profile.open,
+      profile: profile.name,
+      ...(copied.length > 0 ? { envFromDaemon: [...copied] } : {}),
+    });
+  }
+
   /**
    * Why a `/dashboard/events` upgrade is refused, or null when it may attach.
    * The client token on the query is not a way in. The proof is the
@@ -1330,6 +1706,18 @@ export class Daemon {
     // the page with no cookie and no proof, unless Fetch Metadata forbids it.
     if ((req.method === 'GET' || req.method === 'HEAD') && url.pathname === '/dashboard') {
       this.handleDashboardPage(req, res, url);
+      return;
+    }
+
+    // The two launch routes are dashboard-cookie routes. They are checked
+    // before the client token so a bearer token cannot take the profile list
+    // or the launch path as an ordinary API call.
+    if (req.method === 'GET' && url.pathname === '/dashboard/profiles') {
+      this.serveDashboardProfiles(req, res);
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/dashboard/launch') {
+      await this.handleDashboardLaunch(req, res);
       return;
     }
 
@@ -1920,6 +2308,10 @@ export class Daemon {
     } catch (error) {
       if (error instanceof WaitConditionError) {
         json(res, 400, { error: error.message });
+        return;
+      }
+      if (error instanceof RequestBodyTooLargeError) {
+        json(res, 413, { error: error.message });
         return;
       }
       if (error instanceof Error && error.message.startsWith('Request body')) {
