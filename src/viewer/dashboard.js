@@ -249,7 +249,7 @@
     card.tabIndex = 0;
     const head = document.createElement('div');
     head.className = 'pane-head';
-    head.title = 'Double-click the title bar to Enlarge or Restore; Escape restores an enlarged pane';
+    head.title = 'Double-click the title bar to Enlarge or Restore; Escape restores outside the terminal';
     const label = document.createElement('span');
     label.className = 'pane-label';
     const purpose = document.createElement('span');
@@ -884,7 +884,8 @@
     if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === prefix) {
       event.preventDefault(); event.stopPropagation(); navigation = true; return;
     }
-    if (event.key === 'Escape' && enlarged) {
+    const terminalFocused = document.activeElement?.closest('.pane-term') !== null;
+    if (event.key === 'Escape' && enlarged && (navigation || !terminalFocused)) {
       event.preventDefault(); event.stopPropagation(); navigation = false;
       panes.get(enlarged)?.enlarge.click();
       return;

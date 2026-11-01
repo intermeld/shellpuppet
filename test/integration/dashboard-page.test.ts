@@ -465,6 +465,69 @@ describe('passive dashboard page', () => {
     expect(result.finalSize).toContain('100×30');
   }, 180_000);
 
+  it('delivers Escape to an enlarged focused terminal and restores from navigation', async (context) => {
+    if (!browser) { context.skip(); return; }
+    const started = await api(daemon.port, daemon.token, '/sessions', {
+      body: { command: process.execPath, args: ['-e',
+        "process.stdin.setRawMode?.(true); process.stdin.resume(); process.stdin.on('data', b => { if (b.includes(27)) process.stdout.write('ESC-RECEIVED\\r\\n'); }); process.stdout.write('ESC-READY\\r\\n'); setInterval(() => {}, 1000)"],
+      shell: false, openViewer: false, label: 'Escape probe', cols: 100, rows: 30 },
+    });
+    expect(started.status).toBe(200);
+    const id = String(started.body['id']);
+    try {
+      const ready = await api(daemon.port, daemon.token, `/sessions/${id}/wait?text=ESC-READY&timeout=10000`);
+      expect(ready.body['matched']).toBe(true);
+      const shot = await captureDashboard({ browser, viewerUrl: await dashboardUrl(), width: 1280, height: 720,
+        drive: true, timeoutMs: 90_000,
+        probe: `(() => document.getElementById('connection')?.textContent === 'Connected' &&
+          document.querySelector('[data-session=${JSON.stringify(id)}] textarea') ? true : null)()`,
+        interact: async (page) => {
+          await page.evaluate(`(() => {
+            const card = document.querySelector('[data-session=${JSON.stringify(id)}]');
+            card.querySelector('button[aria-label="Enlarge"]').click();
+            card.querySelector('textarea').focus();
+          })()`);
+          const focusedBeforeEscape = await page.evaluate("document.activeElement?.closest('.pane-term') !== null");
+          const press = async (key: string, code: string, keyCode: number, modifiers = 0): Promise<void> => {
+            const details = { key, code, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode, modifiers };
+            await page.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...details });
+            await page.send('Input.dispatchKeyEvent', { type: 'keyUp', ...details });
+          };
+          await press('Escape', 'Escape', 27);
+          const terminalEscape = await page.evaluate(`(() => ({
+            enlarged: document.getElementById('panes').dataset.layout === 'enlarged'
+          }))()`);
+          const echoedInPane = await page.evaluate(`new Promise(resolve => {
+            const deadline = Date.now() + 5000;
+            const check = () => {
+              const rows = document.querySelector('[data-session=${JSON.stringify(id)}] .xterm-rows');
+              if (rows?.textContent.includes('ESC-RECEIVED')) resolve(true);
+              else if (Date.now() > deadline) resolve(false);
+              else setTimeout(check, 50);
+            };
+            check();
+          })`);
+          await press('A', 'KeyA', 65, 10);
+          await press('Escape', 'Escape', 27);
+          const navigationEscape = await page.evaluate(`(() => ({
+            restored: document.getElementById('panes').dataset.layout !== 'enlarged'
+          }))()`);
+          return { focusedBeforeEscape, terminalEscape, echoedInPane, navigationEscape };
+        },
+      });
+      const result = shot.probe as {
+        focusedBeforeEscape: boolean; terminalEscape: { enlarged: boolean }; echoedInPane: boolean;
+        navigationEscape: { restored: boolean };
+      };
+      expect(result.focusedBeforeEscape).toBe(true);
+      expect(result.terminalEscape.enlarged).toBe(true);
+      expect(result.echoedInPane).toBe(true);
+      expect(result.navigationEscape.restored).toBe(true);
+    } finally {
+      await api(daemon.port, daemon.token, `/sessions/${id}`, { method: 'DELETE' });
+    }
+  }, 150_000);
+
   it('takes the grid only for Fit, Enlarge and Restore, and disconnects covered and scrolled-off panes', async (context) => {
     if (!browser) { context.skip(); return; }
     if (ids.length < 2) { await startSession('geometry first'); await startSession('geometry second'); }
