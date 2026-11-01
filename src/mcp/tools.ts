@@ -124,13 +124,21 @@ function readinessLine(ready: unknown, readyReason: unknown): string {
 type Body = Record<string, unknown>;
 
 /**
- * How the human reaches a session that has just started. When the daemon
- * opened a viewer window there is no link to pass on, and none was minted, so
- * the agent has nothing to paste into a transcript. When nothing opened, the
- * one-use URL in the payload is the human's way in and has to reach them.
+ * How the human reaches a session that has just started. A dashboard or
+ * viewer window needs no link in the transcript. If no window is connected
+ * or opening, the one-use viewer URL is the human's way in.
  */
 export function viewerLine(payload: Body): string {
-  const viewer = payload['viewer'] as { opened?: boolean; reason?: string } | undefined;
+  const viewer = payload['viewer'] as { opened?: boolean; mode?: string; reason?: string } | undefined;
+  if (viewer?.mode === 'dashboard' && viewer.opened === true) {
+    return 'Viewer: opened in the dashboard on this machine for the human (watch + type). They need no link.';
+  }
+  if (viewer?.mode === 'dashboard' && viewer.reason === 'a dashboard is connected') {
+    return 'Viewer: the session is in the connected dashboard. They need no link.';
+  }
+  if (viewer?.mode === 'dashboard' && viewer.reason === 'a dashboard window is opening') {
+    return 'Viewer: the session will appear in the dashboard window that is opening. They need no link.';
+  }
   if (viewer?.opened === true) {
     const how = viewer.reason !== undefined ? `; ${viewer.reason}` : '';
     return (
@@ -201,10 +209,11 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
     {
       title: 'Start a terminal session',
       description:
-        'Launch a program in a new PTY session and return its id. A viewer window opens on this ' +
+        'Launch a program in a new PTY session and return its id. The dashboard opens on this ' +
         'machine for the human, who watches and can type into the SAME live session; the result ' +
-        'says whether one opened. Only when none did does the result carry a viewer URL: give that ' +
-        'to the human. Otherwise hand out no link unless they ask for one (terminal_viewer_url). ' +
+        'says whether one opened. If no dashboard is connected or opening and no window opened, ' +
+        'the result carries a viewer URL: give that to the human. Otherwise hand out no link ' +
+        'unless they ask for one (terminal_viewer_url). ' +
         'IMPORTANT: first paint is NOT readiness. Some agent CLIs (Qoder, Goose) take tens of ' +
         'seconds to draw anything and may silently discard input while still loading, so pass ' +
         'readyText or readyQuiet, or use terminal_wait before typing. Commands are shell-wrapped ' +

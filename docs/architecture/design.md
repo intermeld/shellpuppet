@@ -331,10 +331,11 @@ is resolved from the session's working directory, and the absolute path is what 
 and started.
 
 **`terminal_start` must say how the human reaches the session.** When the daemon opened a
-viewer window, the response says so and carries no link: the window holds the only grant
-minted for the start, and a link nobody asked for would sit in a transcript as a live
-capability until it expired. When nothing opened (`viewer.launchMode` is `none`, or no
-browser would start), the response carries the viewer URL, so the agent can hand the human
+dashboard or single-session viewer window, the response says so and carries no link. A
+connected dashboard, or one whose window is opening, also needs no viewer link. A link
+nobody asked for would sit in a transcript as a live capability until it expired. When
+nothing opened (`viewer.launchMode` is `none`, or no browser would start), the
+response carries the viewer URL, so the agent can hand the human
 a link at once instead of the human having to be told separately. The URL carries a
 *one-use viewer grant*, not the client token (§4.1). A link on request, for a second
 device or a watch-only viewer, is `terminal_viewer_url`.
@@ -957,10 +958,15 @@ sessions under ADR-007, including on this path.
   untouched for 10 minutes, far longer than a capture can run.
 - The viewer link carries a one-use grant, exchanged at page load for an `HttpOnly` cookie
   scoped to that one session, so the page itself holds no credential (§3.1, §4.1).
-- The viewer opens by default in ShellPuppet's own chromeless browser profile
-  (`viewer.launchMode`), falling back to the default browser when no Chromium-family
-  browser is found. See `../reference/configuration.md`. The start response says whether
-  a window opened, and carries a link only when none did (§3.1). A window counts as opened
+- New sessions open in the dashboard by default (`viewer.launchMode: "dashboard"`).
+  The daemon uses the same one-use grant and isolated launch path as
+  `POST /dashboard/open`, and opens at most one window while it waits up to
+  30 seconds for `/dashboard/events` to connect. A failed launch revokes its
+  grant and returns a single-session viewer link without failing the start.
+  `isolated-app` still opens a single-session viewer and may fall back to the
+  default browser when no Chromium-family browser is found. See
+  `../reference/configuration.md`. The start response says whether
+  a window opened, and carries a link only when no dashboard window is opening or connected and none did (§3.1). A window counts as opened
   once the browser process started, or once the system's opener exited with success; a
   browser that cannot be executed, or an opener that exits with failure, counts as nothing
   opened, and the response says why. The daemon begins detecting the browser as it starts
@@ -1036,8 +1042,8 @@ timestamps after the initial hello. `session-updated` includes prompt state;
 the client-token `/events` keeps its existing `prompt-stall` and
 `prompt-clear` frames. While a dashboard events socket is open, a new
 session opens no separate viewer window and the start response omits
-`viewerUrl`. When the last socket closes, later starts resume the normal
-viewer launch behaviour.
+`viewerUrl`. When the last socket closes, a later start opens the dashboard
+again after any pending launch has had 30 seconds to connect.
 
 **Arrangement and attention.** Auto uses an even grid while each pane holds
 at least 80 by 24 cells. The floor calculation uses an 8 by 17 px cell,

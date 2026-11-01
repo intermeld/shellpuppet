@@ -168,7 +168,7 @@ describe('shellpuppet CLI', () => {
     );
     expect(started.code, whatHappened(started)).toBe(0);
     expect(started.stdout).toMatch(/^s\d+ {2}cli-e2e/m);
-    expect(started.stdout).toContain('viewer: http://127.0.0.1:');
+    expect(started.stdout).toContain('link: http://127.0.0.1:');
     const id = /^(s\d+)/m.exec(started.stdout)?.[1] ?? '';
 
     // Every one-shot invocation must exit promptly: the §2.2 guarantee.
@@ -547,6 +547,24 @@ describe('shellpuppet CLI', () => {
       const body = JSON.parse(asJson.stdout) as Record<string, unknown>;
       expect(body['viewer']).toEqual({ opened: true, mode: 'isolated-app' });
       expect(body['viewerUrl']).toBeUndefined();
+    } finally {
+      await cliFromHome(windowHome, 'daemon', 'stop', '--force');
+      removeTempHome(windowHome);
+    }
+  }, 120_000);
+
+  it('starts in the dashboard by default and reuses the pending window', async () => {
+    const windowHome = makeTempHome('shellpuppet-cli-default-dashboard-');
+    fs.writeFileSync(path.join(windowHome, 'config.json'), JSON.stringify({ viewer: { browserPath: process.execPath } }));
+    try {
+      const first = await cliFromHome(windowHome, 'start', '--no-shell', process.execPath, '-e', 'setInterval(() => {}, 200)');
+      expect(first.code, whatHappened(first, windowHome)).toBe(0);
+      expect(first.stdout).toContain('viewer: opened in the dashboard');
+      expect(first.stdout).not.toContain('dt=');
+      const second = await cliFromHome(windowHome, 'start', '--no-shell', process.execPath, '-e', 'setInterval(() => {}, 200)');
+      expect(second.code, whatHappened(second, windowHome)).toBe(0);
+      expect(second.stdout).toContain('dashboard window that is opening');
+      expect(second.stdout).not.toContain('dt=');
     } finally {
       await cliFromHome(windowHome, 'daemon', 'stop', '--force');
       removeTempHome(windowHome);

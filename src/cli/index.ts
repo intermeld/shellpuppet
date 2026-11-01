@@ -34,7 +34,7 @@ Usage:
       --label <s> --purpose <s> --cols <n> --rows <n> --cwd <dir>
       --ready-text <s> --ready-quiet <ms> --no-shell --hold --agent <name>
       --env-name <NAME> (repeatable) --no-viewer
-      --no-viewer opens no viewer window, for a short scripted session nobody
+      --no-viewer opens no dashboard or viewer window, for a short scripted session nobody
       needs to watch; viewer-url still gives a link to it.
       --cwd sets the folder the session starts in; it defaults to THIS shell's
       working directory, and a relative --cwd is taken from there.
@@ -362,12 +362,19 @@ async function main(): Promise<void> {
       if (wantJson) printJson(result);
       else {
         console.log(`${String(result['id'])}  ${String(result['label'])}`);
-        const viewer = result['viewer'] as { opened?: boolean; reason?: string } | undefined;
-        if (viewer?.opened === true) {
+        const viewer = result['viewer'] as { opened?: boolean; mode?: string; reason?: string } | undefined;
+        if (viewer?.mode === 'dashboard' && viewer.opened === true) {
+          console.log('viewer: opened in the dashboard');
+        } else if (viewer?.mode === 'dashboard' && viewer.reason === 'a dashboard is connected') {
+          console.log('viewer: session is in the connected dashboard');
+        } else if (viewer?.mode === 'dashboard' && viewer.reason === 'a dashboard window is opening') {
+          console.log('viewer: session will appear in the dashboard window that is opening');
+        } else if (viewer?.opened === true) {
           const how = viewer.reason !== undefined ? `, ${viewer.reason}` : '';
           console.log(`viewer: window opened${how} (viewer-url ${String(result['id'])} mints a link)`);
         } else if (typeof result['viewerUrl'] === 'string') {
-          console.log(`viewer: ${result['viewerUrl']}`);
+          const why = viewer?.reason !== undefined ? ` (${viewer.reason})` : '';
+          console.log(`viewer: none opened${why}; link: ${result['viewerUrl']}`);
         } else {
           console.log(`viewer: none opened (--no-viewer); viewer-url ${String(result['id'])} mints a link`);
         }
