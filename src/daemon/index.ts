@@ -52,6 +52,7 @@ async function main(): Promise<void> {
     // windows on someone's desktop by forgetting to opt out. Set
     // `viewer.launchMode` to "none" in config.json for unattended machines.
     viewer: { launchMode: 'isolated-app', ...config.viewer },
+    ...(config.launcher !== undefined ? { launchProfiles: config.launcher } : {}),
     onSelfStop: () => process.exit(0),
   });
 

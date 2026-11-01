@@ -14,6 +14,32 @@ version may change behaviour, and every such change is listed here.
   daemon's dashboard opener never falls back to the default browser: a window
   that cannot open revokes the grant and fails the command, with a message
   naming `viewer.browserPath`.
+- The dashboard's launch API can start a session from a profile you write in
+  `launcher.profiles` in `config.json`, and from nothing else. `GET
+  /dashboard/profiles` lists the profiles and any entry that did not load;
+  `POST /dashboard/launch` takes a profile name and, when the profile offers
+  them, one folder name. The body cannot supply a command, arguments, a path
+  or an environment value. Global policy and the profile's own allow and deny
+  lists see the real command before the Windows shell wrap, and the command
+  is resolved to the file that runs. The route accepts eight starts in any
+  sixty seconds and refuses at thirty-two live sessions
+  when `policy.maxSessions` is unset; a configured cap replaces that number.
+  Sessions start clean, plus the names a profile lists in `envFromDaemon`,
+  copied from the daemon's environment. The response and the audit line carry
+  the names, never the values. The started session's id and the profile's
+  `open` value are returned. An invalid profile is named in `daemon.log` and
+  left out, and its siblings still load. With no launcher, the dashboard is
+  watch-only. A profile's `command` is resolved
+  to an absolute executable before the session starts (a bare name on `PATH`
+  only, never the session's folder; a relative path with a separator from the
+  profile's folder); one that cannot be resolved refuses the launch and starts
+  nothing, and the audit records the resolved file beside the written command.
+  The route takes only `application/json`, answers malformed JSON with 400 and
+  an oversized body with 413, and audits a missing or foreign `Origin` as
+  `origin`. `envFromDaemon` copies only variables the daemon's environment
+  holds as strings, and a variable reserved for a connected feature's
+  credential never reaches a session. The page that calls these routes is still to come:
+  `src/viewer/dashboard.html` is a stub, so this release is the API half.
 - The dashboard has its own one-use grant, which lives for five minutes and is
   minted only by the daemon. `POST /dashboard/open` (client token) mints it and opens
   the page in the isolated browser profile, never the default browser. The grant is not returned to the

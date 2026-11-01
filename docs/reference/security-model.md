@@ -15,10 +15,11 @@ ADR-005 and ADR-007.
 
 This page describes ShellPuppet as it stands in this repository. The dashboard
 decided in [ADR-009](../decisions/ADR-009-dashboard-and-sessions-you-start-yourself.md)
-is being built ([ROADMAP.md](../../ROADMAP.md)): its access credential and the
-`shellpuppet dashboard` command that opens its window, below, are in place and
-not yet released; its page content, panes and launch profiles are specified in
-the [design](../architecture/design.md) and are added here as they are built.
+is being built ([ROADMAP.md](../../ROADMAP.md)): its access credential, the
+`shellpuppet dashboard` command that opens its window and its launch profiles,
+below, are in place and not yet released; its page content and panes are
+specified in the [design](../architecture/design.md) and are added here as
+they are built.
 
 The daemon owns real terminals. Anything that can reach its API can run
 commands as you. The protections below narrow *who* can reach it. They do not
@@ -136,6 +137,46 @@ An optional allowlist/denylist evaluates every `terminal_start` command (see
   running, filtering what gets typed into it is unenforceable theatre, and we
   do not pretend otherwise. **Starting a shell session grants shell access.**
   If that matters, allowlist specific non-shell programs instead.
+
+**A profile is a command the page may name, not one it may invent.**
+`launcher.profiles` in `config.json` lists the programs the dashboard can
+start. `launcher` is a known top-level key. Each entry has a short lower-case
+name and a command; the optional fields are arguments, an agent signature,
+the shell flag, a label, a purpose, one readiness condition, a fixed working
+directory or `"cwd": "ask"` with a list of named folders, `envFromDaemon`,
+that profile's own allow and deny lists, and an `open` placement. The page
+sends the profile name, and a folder name when the profile listed folders. A
+body that also carries a command, arguments, an environment map, a raw path,
+a label or a purpose is refused and starts nothing. A path typed into the
+page is not a profile.
+
+Policy sees the profile's command and arguments, the real command, before the
+Windows shell wrap, under the same modes and failure rules as
+`terminal_start`. Before anything starts, the command is resolved to an
+absolute file: a bare name on `PATH` only, a relative path with a separator
+from the profile's working directory. The folder's contents never choose the
+program, and a command that cannot be resolved refuses the launch with a 400.
+The audit line records both the written command and the file that ran.
+Global policy runs first; a profile `deny` can refuse a line the global mode
+allowed, and a profile `allow`, when present, must also match. A profile that
+does not parse is left out and named in `daemon.log`; the rest of the file
+still loads. With no profiles, the dashboard has nothing to start, and it can
+still watch and type. The page does not grow a way to edit profiles or
+policy: both are configuration, read when the daemon starts.
+
+Under the Windows default shell, arguments are shell text: a metacharacter in
+a configured argument (`&`, `|`, `<`, `>`, `^`, `%`) is interpreted by
+`cmd.exe` after the policy decision, as it is for any other shell start.
+Write arguments for the program, and set `"shell": false` for a program that
+does not need the wrap.
+
+**The launch route has a cap even when you set no `policy.maxSessions`.**
+`POST /dashboard/launch` accepts at most eight starts in any sixty seconds,
+and it refuses when thirty-two sessions are already live. A refused call
+starts no process. If you set `policy.maxSessions`, that number is the live
+cap instead, whether it is lower or higher, and the rate still applies. This
+cap is on the dashboard route. The client token's `POST /sessions` stays
+uncapped unless you set `policy.maxSessions`.
 
 ## Screen content is untrusted input
 
@@ -309,6 +350,19 @@ results, `daemon.log`, the audit trail (which records the names, even with
 readable as any other variable there: a program in the session, or the agent
 typing into it, can print it.
 
+A session the dashboard starts is under the same clean default. The profile
+may name `envFromDaemon`. Those names are copied from the daemon's
+environment, which is the environment of whichever client first started the
+daemon, into that profile's sessions only. The page cannot send a value. A
+listed name that is unset does not refuse the start; the dashboard shows the
+name and not the value. `agents.passEnv` is not read on this path, because
+there is no client environment to copy from. A name you want a
+dashboard-started agent CLI to see is written in that profile's
+`envFromDaemon`. Once in the session, the value is as readable as any other
+variable there. A variable reserved for a connected feature's own credential
+is never copied, whatever `sessionEnv` says
+([ADR-007](../decisions/ADR-007-connected-features.md)).
+
 Where a secret has to reach a process at all, the best place for it is that
 process's environment, put there for the process's lifetime by a credential
 manager and never written to a file. The 1Password CLI, Bitwarden Secrets
@@ -337,8 +391,14 @@ itself.
 `events-connect`), session id and metadata. A dashboard `grant-mint` names the
 credential kind and not the grant. A dashboard `grant-redeem` is actor
 `dashboard` and does not record the grant. A dashboard `refuse` records the
-method, the path and a reason code, and never a header, a query, a cookie, a
-proof or a grant. (`report` is a viewer's terminal
+method, the path and a reason code (`origin` for a missing or foreign
+`Origin`, `fetch-site` for a `Sec-Fetch-Site` that is not this page,
+`content-type`, `proof`, `body`, `body-size`, `policy`, `rate`, `limit`,
+`command` and `unauthenticated`), and never a header, a query, a cookie, a
+proof or a grant. A dashboard start records the profile name, the real
+command line, the resolved file that ran, plus the names in `envFromDaemon`
+that were actually copied and the folder name when one was chosen; it never
+records a variable value. (`report` is a viewer's terminal
 answering the program rather than a person typing, as described under
 *Screen content is untrusted input*; `reap` is the daemon's own cleanup of a
 naturally-exited session once its grace period lapses; `prompt-stall` is the
@@ -447,8 +507,19 @@ Leave it off unless actively debugging, and delete the log afterwards.
   session: connecting ShellPuppet to an agent is the approval, and config
   `policy` (an allowlist or denylist when a mode is set, and `maxSessions` when
   set) decides what the agent may start, not a prompt.
-- **No limit on live sessions unless one is configured.** The daemon starts
-  every session a token holder asks for, so a client that starts sessions in
-  a loop can run the machine out of memory or processes. `policy.maxSessions`
-  caps live sessions (see `configuration.md`); it does not limit what an
-  allowed program starts itself.
+- **The dashboard cookie can start the profiles you configured.** That is
+  wider than a viewer link, because `Path=/` covers every session and the
+  profile list is the page's authority. Script that runs in the dashboard
+  page is script on this same origin, so it can use the cookie. `HttpOnly`
+  does not prevent that. What such script can start is the configured profile
+  list, not an arbitrary command line, and the launch route still rate-limits
+  it and caps live sessions.
+- **`envFromDaemon` puts those values in the session.** A program there, or
+  anyone typing into it, can print them. List a name only if every
+  dashboard-started session of that profile may see it. A variable reserved
+  for a connected feature's credential is never copied.
+- **No limit on live sessions unless one is configured,** for the client
+  token. The dashboard launch route is the exception: eight starts in sixty
+  seconds, and thirty-two live sessions when `policy.maxSessions` is unset.
+  That exception does not limit what an allowed program starts inside a
+  session, and it does not limit `POST /sessions`.

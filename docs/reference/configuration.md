@@ -8,8 +8,9 @@ No file means all defaults. The **daemon** reads it at startup, so run
 
 Dashboard launch profiles (`launcher.profiles`, decided in
 [ADR-009](../decisions/ADR-009-dashboard-and-sessions-you-start-yourself.md))
-are not in this release, and the daemon reports a `launcher` key as unknown.
-They are documented here, with worked examples, in the release that ships them.
+are the only programs the dashboard may start. They are optional: no
+`launcher` section means a watch-only dashboard. They are described below,
+with worked examples.
 
 Full example, everything optional:
 
@@ -21,6 +22,37 @@ Full example, everything optional:
     "allow": ["^qodercli", "^goose", "^gemini", "^grok"],
     "deny": ["rm\\s+-rf\\s+/", "format\\s", "^shutdown"],
     "maxSessions": 10                 // no cap unless set
+  },
+
+  // Programs the dashboard may start (ADR-009, design §5.1). Empty by
+  // default. Nothing adds profiles for you and nothing scans PATH.
+  "launcher": {
+    "profiles": [
+      {
+        "name": "shell",
+        "label": "A shell in {folder}",
+        "purpose": "Run commands by hand",
+        "command": "cmd.exe",
+        "args": ["/k"],
+        "cwd": "ask",
+        "folders": [
+          { "name": "repo", "path": "C:/work/repo" },
+          { "name": "notes", "path": "C:/work/notes" }
+        ],
+        "envFromDaemon": ["GIT_AUTHOR_NAME"],
+        "policy": { "deny": ["rm\\s+-rf\\s+/"] },
+        "open": "grid"
+      },
+      {
+        "name": "claude",
+        "label": "Claude Code",
+        "purpose": "Supervise the repository",
+        "command": "claude",
+        "agent": "claude",
+        "cwd": "C:/work/repo",
+        "open": "focus"
+      }
+    ]
   },
 
   // Minutes with no sessions, no viewers and no API calls before the daemon
@@ -315,6 +347,142 @@ logs, the audit trail or the viewer; the audit trail records the names. An
 entry that is not a variable name is left out, and a value that is not a list
 passes nothing; either is reported in `daemon.log` as a `CONFIG PROBLEM`, by
 the MCP server on stderr, and by the CLI on a start that names a variable.
+
+## Dashboard launch profiles
+
+The dashboard may start a program only by naming a profile from
+`launcher.profiles`. The page sends the profile's name and, when the profile
+offers folders, one folder name. It can never send a command, arguments, a
+path or an environment value, so a profile is the complete description of
+what one click may run. There is no `PATH` scan, no auto-detection and no
+route that writes a profile: you write them here, and the daemon reads them
+at startup.
+
+Each entry has these keys. Unknown keys refuse that entry.
+
+| Key | Required | Meaning |
+|---|---|---|
+| `name` | yes | Unique, `^[a-z][a-z0-9-]{0,31}$`. The page names this. |
+| `command` | yes | The real program, not a shell wrapper. A bare name is found on `PATH` only; a relative path with a separator is taken from the profile's working directory. A launch whose command cannot be resolved is refused. |
+| `args` | no | Array of strings, stored literally. |
+| `shell` | no | Boolean. Omitted means the platform default. |
+| `cwd` | no | A fixed directory, or `"ask"`. A relative path is from your home directory. |
+| `folders` | when `cwd` is `"ask"` | Non-empty array of `{ "name", "path" }`. The page chooses one by name. |
+| `agent` | no | A built-in signature name, or one from `agents.signatures`. |
+| `envFromDaemon` | no | Variable names copied from the daemon's environment. Names only. |
+| `readyText` | no | A literal substring that marks the session ready. |
+| `readyQuiet` | no | Milliseconds of quiet that mark the session ready. Not with `readyText`. |
+| `label`, `purpose` | no | Non-empty text for the page. Placeholders: `{name}` and `{folder}`. |
+| `policy` | no | `{ "allow": [...], "deny": [...] }` regex lists. No `mode`, no `maxSessions`. |
+| `open` | no | `"grid"` (default), `"focus"` or `"window"`. Returned when the profile starts. |
+
+An entry that cannot be read whole is left out and named in `daemon.log`; its
+siblings still load. The dashboard's profile list shows the problem sentence
+beside the entries that did load, so a mistyped profile is visible without
+reading the log. A profile with `"cwd": "ask"` and no `folders` does not load:
+a path typed into the page is not a profile.
+
+**Policy and limits.** Global policy runs first, then the profile's own
+`deny` and `allow` lists, both against the real command line before any
+Windows shell wrap. A profile can refuse a line the global mode allowed; it
+cannot widen the global policy. Before anything starts, the command is
+resolved to an absolute file: a bare name is searched for on `PATH` only,
+never in the session's folder, and a relative path with a separator is taken
+from the profile's working directory. That is the file that runs, and the
+audit records it beside the written command. A command that cannot be
+resolved refuses the launch and starts nothing. The launch route accepts at
+most eight starts in any sixty seconds, and refuses at thirty-two live
+sessions when `policy.maxSessions` is unset. If you set `policy.maxSessions`,
+that number is the live cap instead, and the rate still applies. A refusal
+starts nothing. These caps are on the dashboard route only: a client token's
+`POST /sessions` keeps its existing behaviour.
+
+Under the Windows default shell, `args` are shell text: `cmd.exe` interprets
+a metacharacter in a configured argument (`&`, `|`, `<`, `>`, `^`, `%`) after
+policy has seen the line, as it does for any shell start. Write the
+arguments the program expects, and set `"shell": false` for a program that
+does not need the wrap.
+
+**Environment.** A dashboard start uses the same clean `sessionEnv` baseline
+as any other session. `envFromDaemon` adds only the names listed on that
+profile, read from the daemon's own environment, which is the environment of
+whichever client started the daemon. A listed name that is unset is skipped
+and does not refuse the start. The response and the audit line carry the
+names, never the values. `agents.passEnv` and `envNames` are not read on this
+path: there is no client environment to copy from, so a name you want a
+dashboard-started agent to see belongs in that profile's `envFromDaemon`. A
+variable reserved for a connected feature's own credential is never copied
+([ADR-007](../decisions/ADR-007-connected-features.md)).
+
+A fixed directory, with no folder choice:
+
+```jsonc
+{
+  "launcher": {
+    "profiles": [
+      {
+        "name": "claude-repo",
+        "label": "Claude Code in the repository",
+        "command": "claude",
+        "agent": "claude",
+        "cwd": "C:/work/repo",
+        "open": "focus"
+      }
+    ]
+  }
+}
+```
+
+A profile that asks which folder to use:
+
+```jsonc
+{
+  "launcher": {
+    "profiles": [
+      {
+        "name": "shell",
+        "label": "A shell in {folder}",
+        "purpose": "Run commands by hand",
+        "command": "cmd.exe",
+        "args": ["/k"],
+        "cwd": "ask",
+        "folders": [
+          { "name": "repo", "path": "C:/work/repo" },
+          { "name": "notes", "path": "C:/work/notes" }
+        ],
+        "open": "grid"
+      }
+    ]
+  }
+}
+```
+
+A profile with its own policy and one daemon variable:
+
+```jsonc
+{
+  "launcher": {
+    "profiles": [
+      {
+        "name": "codex-repo",
+        "label": "Codex",
+        "command": "codex",
+        "agent": "codex",
+        "cwd": "C:/work/repo",
+        "envFromDaemon": ["OPENAI_BASE_URL"],
+        "policy": {
+          "allow": ["^codex"],
+          "deny": ["--dangerously"]
+        },
+        "open": "window"
+      }
+    ]
+  }
+}
+```
+
+Starting a shell profile grants shell access. Policy sees the start line; it
+does not see what you, or an agent, type after the shell is up.
 
 ## Policy notes
 
