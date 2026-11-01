@@ -60,6 +60,13 @@
   let screens = [];
   let screenState = 'unavailable';
   let nextFallback = 0;
+  let arranging = false;
+  let syncingVisibility = false;
+  let pendingArrange = false;
+  let pendingVisibility = false;
+  let followUpFrame = false;
+  let lastLayout = null;
+  let lastVisibilityGeometry = null;
   if (popSelf === null) windows.set(windowId, { id: windowId, rank: windowRank, key: screenKey,
     width: window.innerWidth - 12, height: window.innerHeight - 54 });
   let channel = null;
@@ -358,7 +365,18 @@
     persist(); arrange();
   }
   function activate(item) {
-    if (item.client) { item.client.relayout(false); return; }
+    const width = item.term.clientWidth;
+    const height = item.term.clientHeight;
+    if (item.client) {
+      if (item.clientWidth !== width || item.clientHeight !== height) {
+        item.clientWidth = width;
+        item.clientHeight = height;
+        item.client.relayout(false);
+      }
+      return;
+    }
+    item.clientWidth = width;
+    item.clientHeight = height;
     item.client = ShellPuppetPane.create({
       container: item.term, sessionId: item.id, dashboardProof: proof,
       elements: { banner: item.banner, promptAlert: item.prompt, size: item.size },
@@ -367,8 +385,9 @@
   }
   function deactivate(item) {
     if (!item.client) return;
-    item.client.destroy();
+    const client = item.client;
     item.client = null;
+    client.destroy();
     item.term.textContent = '';
   }
   function visible(item) {
@@ -380,49 +399,105 @@
     const container = item.card.parentElement === strip ? strip.getBoundingClientRect() : root.getBoundingClientRect();
     return box.bottom > container.top && box.top < container.bottom && box.right > container.left && box.left < container.right;
   }
+  function queueFollowUp() {
+    if (followUpFrame) return;
+    followUpFrame = true;
+    window.requestAnimationFrame(() => {
+      followUpFrame = false;
+      if (pendingArrange) {
+        pendingArrange = false;
+        arrange();
+      }
+      if (pendingVisibility) {
+        pendingVisibility = false;
+        syncVisibility();
+      }
+    });
+  }
   function syncVisibility() {
-    for (const item of panes.values()) {
-      if (visible(item)) activate(item);
-      else deactivate(item);
+    if (syncingVisibility) {
+      pendingVisibility = true;
+      queueFollowUp();
+      return;
+    }
+    const stripBox = strip.getBoundingClientRect();
+    const geometry = JSON.stringify([lastLayout, strip.scrollTop, strip.clientWidth, strip.clientHeight,
+      strip.scrollHeight, stripBox.top, stripBox.bottom]);
+    if (geometry === lastVisibilityGeometry) return;
+    syncingVisibility = true;
+    if (window.__dashboardTrace) {
+      window.__dashboardTrace.visibility++;
+      window.__dashboardTrace.visibilityDepth++;
+      window.__dashboardTrace.maxVisibilityDepth = Math.max(window.__dashboardTrace.maxVisibilityDepth, window.__dashboardTrace.visibilityDepth);
+    }
+    try {
+      for (const item of panes.values()) {
+        if (visible(item)) activate(item);
+        else deactivate(item);
+      }
+      lastVisibilityGeometry = geometry;
+    } finally {
+      syncingVisibility = false;
+      if (window.__dashboardTrace) window.__dashboardTrace.visibilityDepth--;
     }
   }
   function arrange() {
-    const items = shown();
-    empty.hidden = items.length > 0;
-    root.textContent = '';
-    root.className = '';
-    const width = root.clientWidth - 12;
-    const height = root.clientHeight - 12;
-    const columns = Math.ceil(Math.sqrt(items.length));
-    const rows = Math.ceil(items.length / Math.max(1, columns));
-    const autoGrid = items.length <= 1 || (width / columns >= 652 && height / rows >= 446);
-    const layout = popSelf !== null || enlarged ? 'enlarged' : mode === 'auto' ? (autoGrid ? 'grid' : 'focus') : mode;
-    root.classList.add(layout);
-    root.dataset.layout = layout;
-    root.style.setProperty('--columns', String(Math.max(1, columns)));
-    root.style.setProperty('--rows', String(Math.max(1, rows)));
-    for (const name of ['auto', 'grid', 'focus']) document.getElementById(name).classList.toggle('active', mode === name);
-    if (layout === 'grid') {
-      for (const item of items) root.append(item.card);
-    } else if (layout === 'focus') {
-      main.textContent = '';
-      strip.textContent = '';
-      const primary = pins.find((id) => items.some((item) => item.id === id)) ||
-        (mode === 'focus' && items.some((item) => item.id === focusId) ? focusId : items[0]?.id);
-      for (const item of items) (item.id === primary ? main : strip).append(item.card);
-      root.append(main, strip);
-    } else {
-      const item = panes.get(popSelf || enlarged);
-      if (item) root.append(item.card);
+    if (arranging || syncingVisibility) {
+      pendingArrange = true;
+      queueFollowUp();
+      return;
     }
-    for (const item of items) {
-      const measuredWidth = layout === 'grid' ? width / columns : item.card.parentElement === strip ? 300 : width - 300;
-      const measuredHeight = layout === 'grid' ? height / rows : item.card.parentElement === strip ? 170 : height;
-      item.card.classList.toggle('below-floor', measuredWidth < 652 || measuredHeight < 446);
-      updateCard(item);
+    arranging = true;
+    if (window.__dashboardTrace) {
+      window.__dashboardTrace.arrangements++;
+      window.__dashboardTrace.arrangeDepth++;
+      window.__dashboardTrace.maxArrangeDepth = Math.max(window.__dashboardTrace.maxArrangeDepth, window.__dashboardTrace.arrangeDepth);
     }
-    syncVisibility();
-    publishAssignment();
+    try {
+      const items = shown();
+      const width = root.clientWidth - 12;
+      const height = root.clientHeight - 12;
+      const columns = Math.ceil(Math.sqrt(items.length));
+      const rows = Math.ceil(items.length / Math.max(1, columns));
+      const autoGrid = items.length <= 1 || (width / columns >= 652 && height / rows >= 446);
+      const layout = popSelf !== null || enlarged ? 'enlarged' : mode === 'auto' ? (autoGrid ? 'grid' : 'focus') : mode;
+      const primary = layout === 'focus' ? pins.find((id) => items.some((item) => item.id === id)) ||
+        (mode === 'focus' && items.some((item) => item.id === focusId) ? focusId : items[0]?.id) : null;
+      const layoutKey = JSON.stringify([items.map((item) => item.id), width, height, layout, mode,
+        columns, rows, primary, enlarged, pins]);
+      if (layoutKey !== lastLayout) {
+        empty.hidden = items.length > 0;
+        root.textContent = '';
+        root.className = layout;
+        root.dataset.layout = layout;
+        root.style.setProperty('--columns', String(Math.max(1, columns)));
+        root.style.setProperty('--rows', String(Math.max(1, rows)));
+        for (const name of ['auto', 'grid', 'focus']) document.getElementById(name).classList.toggle('active', mode === name);
+        if (layout === 'grid') {
+          for (const item of items) root.append(item.card);
+        } else if (layout === 'focus') {
+          main.textContent = '';
+          strip.textContent = '';
+          for (const item of items) (item.id === primary ? main : strip).append(item.card);
+          root.append(main, strip);
+        } else {
+          const item = panes.get(popSelf || enlarged);
+          if (item) root.append(item.card);
+        }
+        for (const item of items) {
+          const measuredWidth = layout === 'grid' ? width / columns : item.card.parentElement === strip ? 300 : width - 300;
+          const measuredHeight = layout === 'grid' ? height / rows : item.card.parentElement === strip ? 170 : height;
+          item.card.classList.toggle('below-floor', measuredWidth < 652 || measuredHeight < 446);
+          updateCard(item);
+        }
+        lastLayout = layoutKey;
+        syncVisibility();
+      }
+      publishAssignment();
+    } finally {
+      arranging = false;
+      if (window.__dashboardTrace) window.__dashboardTrace.arrangeDepth--;
+    }
   }
 
   function dropLaunch(id) {

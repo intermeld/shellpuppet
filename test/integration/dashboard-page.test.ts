@@ -127,6 +127,62 @@ describe('passive dashboard page', () => {
     expect(result.resizes).toEqual([]);
   }, 180_000);
 
+  it('bounds arrangement when layout fires resize and scroll during visibility', async (context) => {
+    if (!browser) { context.skip(); return; }
+    const loopIds = ids.length < 2
+      ? [await startSession('loop-first'), await startSession('loop-second')]
+      : [];
+    let third: string | null = null;
+    try {
+      const url = await dashboardUrl();
+      const capture = captureViewer({ browser, viewerUrl: url, width: 1920, height: 1080,
+      drive: true, timeoutMs: 120_000,
+      beforeNavigateScript: `(() => {
+        window.__dashboardTrace = { arrangements: 0, visibility: 0, arrangeDepth: 0,
+          visibilityDepth: 0, maxArrangeDepth: 0, maxVisibilityDepth: 0, events: 0 };
+        const rect = Element.prototype.getBoundingClientRect;
+        Element.prototype.getBoundingClientRect = function() {
+          if (this.classList?.contains('pane') && window.__dashboardTrace.events < 12) {
+            window.__dashboardTrace.events++;
+            window.dispatchEvent(new Event('resize'));
+            document.getElementById('strip')?.dispatchEvent(new Event('scroll'));
+          }
+          return rect.call(this);
+        };
+      })()`,
+      probe: `(() => {
+        const state = (window.__loopProbe ||= { seen: [] });
+        const count = document.querySelectorAll('.pane').length;
+        if (count > 0 && state.seen.at(-1) !== count) state.seen.push(count);
+        if (state.seen.join(',') !== '2,3,2') return null;
+        return JSON.stringify({ ...window.__dashboardTrace, seen: state.seen });
+      })()`,
+      });
+      await eventually(() => daemon.daemon.connectedSockets >= 3, 90_000);
+      third = await startSession('loop-third');
+      await new Promise((resolve) => setTimeout(resolve, 1200));
+      await api(daemon.port, daemon.token, `/sessions/${third}`, { method: 'DELETE' });
+      const shot = await capture;
+      const trace = JSON.parse(String(shot.probe)) as { arrangements: number; visibility: number;
+        maxArrangeDepth: number; maxVisibilityDepth: number; events: number; seen: number[] };
+      expect(trace.seen).toEqual([2, 3, 2]);
+      expect(trace.events).toBeGreaterThanOrEqual(1);
+      expect(trace.maxArrangeDepth).toBe(1);
+      expect(trace.maxVisibilityDepth).toBe(1);
+      expect(trace.arrangements).toBeLessThanOrEqual(10);
+      expect(trace.visibility).toBeLessThanOrEqual(10);
+    } finally {
+      const cleanupIds = [...loopIds, ...(third === null ? [] : [third])];
+      for (const id of cleanupIds) {
+        await api(daemon.port, daemon.token, `/sessions/${id}`, { method: 'DELETE' });
+      }
+      await eventually(async () => {
+        const list = await api(daemon.port, daemon.token, '/sessions');
+        return cleanupIds.every((id) => !((list.body['sessions'] as { id: string }[]) ?? []).some((item) => item.id === id));
+      }, 10_000);
+    }
+  }, 180_000);
+
   it('lays out one to five panes at 1920 by 1080, keeps order, attention and geometry passive', async (context) => {
     if (!browser) { context.skip(); return; }
     const url = await dashboardUrl();
