@@ -194,8 +194,10 @@ describe.skipIf(process.platform !== 'win32')('Windows console hosts of a test d
       const before = await listConsoleHosts(process.pid);
       const hosts = sessionHosts(before, starts);
       if (hosts.length !== 2) throw new Error(`Expected two session hosts: ${await hostDiagnostic(before, starts)}`);
-      const earlier = hosts.find((host) => recordedFor(host, starts).includes(first));
-      const later = hosts.find((host) => recordedFor(host, starts).includes(second));
+      // The sessions start one after the other, so their hosts were created in
+      // the same order. Two starts closer together than the guard both match a
+      // host by window, so the window alone cannot tell them apart here.
+      const [earlier, later] = [...hosts].sort((a, b) => a.creationTime - b.creationTime);
       if (earlier === undefined || later === undefined) {
         throw new Error(`Could not match the hosts to their sessions: ${await hostDiagnostic(before, starts)}`);
       }
