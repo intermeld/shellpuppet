@@ -337,7 +337,7 @@ describe('passive dashboard page', () => {
     expect(result.transform).toBe('none');
   }, 180_000);
 
-  it('reconnects a restored pane immediately while the single-window roster and visibility frame lag', async (context) => {
+  it('updates covered and scrolled panes immediately while assignment and visibility frames lag', async (context) => {
     if (!browser) { context.skip(); return; }
     if (ids.length < 2) { await startSession('geometry first'); await startSession('geometry second'); }
     const shot = await captureViewer({ browser, viewerUrl: await dashboardUrl(), width: 1280, height: 720,
@@ -351,29 +351,50 @@ describe('passive dashboard page', () => {
           if (cards.length !== 2 || !cards.every(c => c.querySelector('.pane-size')?.textContent)) return null;
           state.first = cards[0].dataset.session; state.second = cards[1].dataset.session;
           state.original = sockets().length;
+          const assign = ShellPuppetDashboardLayout.assign;
+          ShellPuppetDashboardLayout.assign = () => ({});
+          setTimeout(() => { ShellPuppetDashboardLayout.assign = assign; }, 4000);
+          const frame = window.requestAnimationFrame;
+          window.requestAnimationFrame = (callback) => setTimeout(() => callback(performance.now()), 1500);
+          setTimeout(() => { window.requestAnimationFrame = frame; }, 4000);
           cards[0].querySelector('button[aria-label="Enlarge"]').click();
+          state.coveredClosed = sockets()[0]?.socket.readyState >= 2;
           state.phase = 1; return null;
         }
         if (state.phase === 1) {
           if (sockets()[0]?.socket.readyState !== 3) return null;
-          const assign = ShellPuppetDashboardLayout.assign;
-          ShellPuppetDashboardLayout.assign = () => ({});
-          setTimeout(() => { ShellPuppetDashboardLayout.assign = assign; }, 1500);
-          const frame = window.requestAnimationFrame;
-          window.requestAnimationFrame = (callback) => setTimeout(() => callback(performance.now()), 1500);
-          setTimeout(() => { window.requestAnimationFrame = frame; }, 1500);
-          cards[0].querySelector('button[aria-label="Restore"]').click();
-          state.phase = 2; state.at = Date.now(); return null;
+          state.phase = 2; return null;
         }
-        if (state.phase === 2 && Date.now() - state.at > 500) return JSON.stringify({
-          returned: sockets().length > state.original && sockets().at(-1)?.socket.readyState === 1,
-          visible: document.querySelector('[data-session="' + state.second + '"]')?.isConnected === true,
-          elapsed: Date.now() - state.at });
+        if (state.phase === 2) {
+          cards[0].querySelector('button[aria-label="Restore"]').click();
+          state.phase = 3; state.at = Date.now(); return null;
+        }
+        if (state.phase === 3 && Date.now() - state.at > 500) {
+          state.returned = sockets().length > state.original && sockets().at(-1)?.socket.readyState === 1;
+          state.visible = document.querySelector('[data-session="' + state.second + '"]')?.isConnected === true;
+          document.getElementById('focus').click();
+          const strip = document.getElementById('strip');
+          strip.style.height = '80px'; strip.style.paddingTop = '180px';
+          strip.dispatchEvent(new Event('scroll'));
+          state.scrolledClosed = sockets().at(-1)?.socket.readyState >= 2;
+          strip.scrollTop = 180; strip.dispatchEvent(new Event('scroll'));
+          state.phase = 4; state.at = Date.now(); return null;
+        }
+        if (state.phase === 4 && Date.now() - state.at > 500) return JSON.stringify({
+          coveredClosed: state.coveredClosed, returned: state.returned, visible: state.visible,
+          scrolledClosed: state.scrolledClosed,
+          scrolledReturned: sockets().at(-1)?.socket.readyState === 1 });
         return null;
       })()`,
     });
-    const result = JSON.parse(String(shot.probe)) as { returned: boolean; visible: boolean; elapsed: number };
+    const result = JSON.parse(String(shot.probe)) as {
+      coveredClosed: boolean; returned: boolean; visible: boolean;
+      scrolledClosed: boolean; scrolledReturned: boolean;
+    };
+    expect(result.coveredClosed, JSON.stringify(result)).toBe(true);
     expect(result.visible, JSON.stringify(result)).toBe(true);
     expect(result.returned, JSON.stringify(result)).toBe(true);
+    expect(result.scrolledClosed, JSON.stringify(result)).toBe(true);
+    expect(result.scrolledReturned, JSON.stringify(result)).toBe(true);
   }, 60_000);
 });
