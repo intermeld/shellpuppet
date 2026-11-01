@@ -9,6 +9,10 @@ version may change behaviour, and every such change is listed here.
 
 ### Added
 
+- New sessions open in the dashboard by default. The daemon opens one isolated
+  dashboard window when needed and waits for it to connect before trying another.
+  If the window cannot open, the start still succeeds and returns a viewer link.
+
 - The dashboard can assign panes across several windows. It asks for screen
   permission only on an Allow screens click, opens at most one window per
   click, places granted windows in each screen's available rectangle and

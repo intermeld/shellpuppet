@@ -7,7 +7,7 @@
 
 import { Daemon, AlreadyRunningError } from './server.js';
 import { createAuditor } from './audit.js';
-import { readDaemonConfig, signatureOverBudgetLog } from './config.js';
+import { DEFAULT_VIEWER_LAUNCH_MODE, readDaemonConfig, signatureOverBudgetLog } from './config.js';
 import { useDialogSignatures } from '../core/dialogs.js';
 import { useAgentSignatures } from '../core/reasoning.js';
 import { createFileLogger } from './logger.js';
@@ -47,11 +47,11 @@ async function main(): Promise<void> {
     ...(config.policy !== undefined ? { policy: config.policy } : {}),
     ...(config.sessionEnv !== undefined ? { sessionEnv: config.sessionEnv } : {}),
     ...(config.idleMinutes !== undefined ? { idleMs: config.idleMinutes * 60_000 } : {}),
-    // The PRODUCT default is to open the viewer window; the library default in
+    // The product default is to open the dashboard; the library default in
     // DaemonOptions stays "none" so a test daemon can never put browser
     // windows on someone's desktop by forgetting to opt out. Set
     // `viewer.launchMode` to "none" in config.json for unattended machines.
-    viewer: { launchMode: 'isolated-app', ...config.viewer },
+    viewer: { launchMode: DEFAULT_VIEWER_LAUNCH_MODE, ...config.viewer },
     ...(config.launcher !== undefined ? { launchProfiles: config.launcher } : {}),
     onSelfStop: () => process.exit(0),
   });

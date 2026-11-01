@@ -10,6 +10,11 @@ import { viewerLine } from '../../src/mcp/tools.js';
 const url = 'http://127.0.0.1:1/view?s=s1&vt=0123abcd';
 
 describe('viewerLine', () => {
+  it('says the session opened in the dashboard without leaking a link', () => {
+    const line = viewerLine({ viewer: { opened: true, mode: 'dashboard' }, viewerUrl: url });
+    expect(line).toContain('opened in the dashboard');
+    expect(line).not.toContain('vt=');
+  });
   it('names the window and carries no link when one opened', () => {
     const line = viewerLine({ viewer: { opened: true, mode: 'isolated-app' } });
     expect(line).toContain('a window has opened on this machine');

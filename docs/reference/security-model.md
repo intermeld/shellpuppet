@@ -52,10 +52,12 @@ make a reachable terminal safe.
 
   A **viewer URL** is different in kind. The `vt` it carries is a *grant*: it
   works **once**, expires in about five minutes and cannot open a stream by
-  itself. A session start mints one grant, unless it asks for no viewer
-  (`--no-viewer`), when it mints none. The viewer window the daemon opens
-  holds it, and the caller is given a URL only when no window opened, or when
-  one is asked for, so a start that opened a window leaves no link in a
+  itself. A session start mints one viewer grant when it opens a single-session
+  viewer or must hand back a link. The default dashboard launch mints a
+  separate dashboard grant. A start with `--no-viewer` mints neither. The
+  viewer window the daemon opens holds its grant, and the caller is given a
+  URL only when no window opened, or when one is asked for, so a start that
+  opened a window leaves no link in a
   transcript. Loading the page exchanges it for an `HttpOnly` cookie scoped to
   that one session, which the browser attaches to the socket on its own. No
   script on the page holds the cookie value to steal.
@@ -135,7 +137,10 @@ make a reachable terminal safe.
   read-only viewer cookie stays read-only. It is not a dashboard credential,
   and its input and resizes are still dropped. While a
   dashboard events socket is open, starting a session does not open a
-  per-session viewer window and the response carries no viewer URL. A second
+  per-session viewer window and the response carries no viewer URL. With the
+  default `viewer.launchMode: "dashboard"`, a start opens the dashboard in
+  the isolated profile when it is not connected; a failed launch revokes the
+  dashboard grant and returns a single-session viewer link. A second
   redemption replaces the cookie and drops the proofs it had. Cookies ignore
   ports, so a planted `sp_dash` is tried and skipped. The value the daemon
   issued still wins.
@@ -523,9 +528,10 @@ Leave it off unless actively debugging, and delete the log afterwards.
   for a while, later (design §5).
 - The version-mismatch warning (two clones sharing one daemon) is loud but
   advisory; `shellpuppet daemon restart` is the remedy.
-- **Viewer browsing context.** The viewer opens by
-  default in ShellPuppet's own browser profile (`viewer.launchMode:
-  "isolated-app"`), a chromeless window with its own cookie jar, storage and
+- **Viewer browsing context.** The dashboard opens by default in
+  ShellPuppet's own browser profile (`viewer.launchMode: "dashboard"`).
+  The `isolated-app` mode opens a single-session viewer in that profile,
+  a chromeless window with its own cookie jar, storage and
   history, so the viewer grant in the URL stays out of your normal
   browsing history, and the viewer shares no browsing context with
   arbitrary pages you have open.

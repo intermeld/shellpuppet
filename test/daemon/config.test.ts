@@ -147,6 +147,11 @@ describe('parseDaemonConfig: other fields fail SAFE', () => {
 });
 
 describe('viewer launch config', () => {
+  it('accepts dashboard launch mode', () => {
+    const { config, problems } = parseDaemonConfig({ viewer: { launchMode: 'dashboard' } });
+    expect(config.viewer?.launchMode).toBe('dashboard');
+    expect(problems).toEqual([]);
+  });
   it('accepts a valid viewer section', () => {
     const { config, problems } = parseDaemonConfig({
       viewer: { launchMode: 'isolated-app', browserPath: 'C:/browser.exe' },

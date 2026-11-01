@@ -85,9 +85,12 @@ Full example, everything optional:
     "captureContent": false
   },
 
-  // How the viewer window opens when a session starts.
+  // How the human's window opens when a session starts.
   "viewer": {
-    //   "isolated-app"    (default): a chromeless window in ShellPuppet's OWN
+    //   "dashboard"       (default): open one dashboard window in ShellPuppet's
+    //                     own isolated browser profile. New sessions appear in
+    //                     it. If the window cannot open, return a viewer link.
+    //   "isolated-app":   a chromeless single-session window in ShellPuppet's OWN
     //                     browser profile, so the viewer shares no cookie jar,
     //                     storage or history with your normal browsing, and
     //                     the viewer grant in the URL stays out of your normal
@@ -99,7 +102,7 @@ Full example, everything optional:
     //   "none":           open nothing. Use this on unattended or headless
     //                     machines, where a window nobody sees just piles up.
     //                     A session start then hands its caller a viewer link.
-    "launchMode": "isolated-app",
+    "launchMode": "dashboard",
 
     // The dashboard (`shellpuppet dashboard`) always opens in the isolated
     // profile above, whatever `launchMode` says, and never in your default

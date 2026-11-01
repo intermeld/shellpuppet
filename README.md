@@ -47,8 +47,8 @@ this repository runs on your machine and needs nothing we operate.
   or take just the answer that ended the latest turn, and so keep another
   model's reasoning out of its own context. A screenshot shows the whole
   screen.
-- **A human in the same session.** When a session starts, a viewer window
-  opens on your machine. You see what the agent sees, live, and you can type
+- **A human in the same session.** When the first session starts, the dashboard
+  opens on your machine. Later sessions appear there. You see what the agent sees, live, and you can type
   into it: to answer a prompt, to correct course or to take over. Your window
   sets the size: the terminal reshapes itself to fill it, as a terminal
   should. To watch from another device, or to let someone else watch, ask the
@@ -168,7 +168,7 @@ you can drive a session by hand:
 
 ```sh
 # 1. Start a Node REPL in a real PTY. The daemon starts itself, you get a
-#    session id (s1) and a viewer window opens (or a link, if no window can).
+#    session id (s1) and the dashboard opens (or a viewer link, if no window can).
 #    s1 is the first session on a fresh daemon: use whatever id start printed.
 shellpuppet start --label demo --no-shell node
 
@@ -189,10 +189,11 @@ Step 2 prints the REPL banner and prompt, step 3 says `typed 6 bytes (verified
 on screen).` and step 4 shows `42` under your input. That exercises daemon
 auto-start, the PTY, the renderer, waiting, input verification and tree-kill.
 
-**No window?** By default a session start opens the viewer in ShellPuppet's
-own chromeless browser window, falling back to your default browser. On a
-headless machine, or if you'd rather have a link, set `viewer.launchMode` to
-`"none"` in `~/.shellpuppet/config.json`: `start` then prints a viewer link,
+**No window?** By default a session start opens the dashboard in ShellPuppet's
+own isolated browser profile. If that window cannot open, `start` prints a
+single-session viewer link. On a headless machine, or if you'd rather have a
+link, set `viewer.launchMode` to `"none"` in `~/.shellpuppet/config.json`:
+`start` then prints a viewer link,
 and an agent is given one to pass to you. Whatever the setting, `shellpuppet
 viewer-url <id>` mints a fresh link whenever you want one, and `--read-only`
 makes it a link that can watch but never type. The options are in
@@ -254,9 +255,9 @@ In a filtered screenshot, hidden rows are blurred and dimmed before capture;
 its returned row text is filtered too. A filtered session list reports that a
 prompt is waiting and for how long without its question.
 
-`terminal_start` opens the viewer
-window for you and tells the agent so. It gives the agent a link only when no
-window could open, and `terminal_viewer_url` mints one whenever you ask: for a
+`terminal_start` opens the dashboard for you when needed and tells the agent
+what happened. It gives the agent a viewer link when no window could open, and
+`terminal_viewer_url` mints one whenever you ask: for a
 second device, a closed window or someone who should watch without typing.
 Links work once and for a few minutes. An agent CLI that needs a key held only in the
 client's environment gets the names you list for it in `agents.passEnv`, and any

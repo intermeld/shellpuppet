@@ -243,7 +243,7 @@ export interface DaemonOptions {
    * How the viewer window is opened on session start. Absent means
    * "none", a deliberately inert default, so a test daemon cannot put browser
    * windows on someone's desktop by forgetting to opt out. The daemon entry
-   * point supplies the product default of `isolated-app`.
+   * point supplies the product default of `dashboard`.
    */
   viewer?: ViewerLaunchConfig;
   /**
@@ -571,6 +571,9 @@ export class Daemon {
    * not launch a per-session viewer window and does not hand back a viewer URL.
    */
   private readonly dashboardEventSockets = new Set<WebSocket>();
+  /** A launched dashboard has 30 seconds to connect before a start may retry. */
+  private dashboardWindowStartedAt = 0;
+  private dashboardOpenPromise: Promise<boolean> | null = null;
   /**
    * Per-session prompt tracking for stall alerts: the signature of the prompt
    * currently on screen, when it was first seen and whether it has alerted.
@@ -733,7 +736,7 @@ export class Daemon {
     // a session start waits for its viewer launch, so look once now and let the
     // memoised answer serve every start. It never holds the event loop, so the
     // daemon answers /health and everything else while it runs.
-    if ((this.options.viewer?.launchMode ?? 'none') === 'isolated-app') {
+    if (['dashboard', 'isolated-app'].includes(this.options.viewer?.launchMode ?? 'none')) {
       void findBrowser(this.options.viewer?.browserPath, this.logger).catch(() => undefined);
     }
 
@@ -1188,14 +1191,7 @@ export class Daemon {
     this.sendDashboardPage(res, null, undefined, req.method === 'HEAD');
   }
 
-  private async handleDashboardOpen(
-    req: http.IncomingMessage,
-    res: http.ServerResponse,
-    actor: string,
-  ): Promise<void> {
-    // The body cannot choose a lifetime. It is read so a keep-alive connection
-    // is not left holding it, and then ignored.
-    await readBody(req);
+  private async openDashboardWindow(req: http.IncomingMessage, actor: string): Promise<boolean> {
     const grant = this.tokens.mintDashboardGrant({ now: this.now() });
     const pageUrl = `http://127.0.0.1:${String(this.port)}/dashboard?dt=${grant}`;
     // The dashboard opens only in the isolated profile. The viewer launcher
@@ -1212,16 +1208,54 @@ export class Daemon {
     if (!opened.launched || opened.mode === 'default-browser') {
       this.tokens.revokeDashboardGrant(grant);
       this.auditDashboardRefusal(req, 'launch-failed');
+      return false;
+    }
+    this.audit.record(actor, 'grant-mint', undefined, { credential: 'dashboard' });
+    return true;
+  }
+
+  private async handleDashboardOpen(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    actor: string,
+  ): Promise<void> {
+    // The body cannot choose a lifetime. It is read so a keep-alive connection
+    // is not left holding it, and then ignored.
+    await readBody(req);
+    if (await this.openDashboardWindow(req, actor)) {
+      this.dashboardWindowStartedAt = Date.now();
+      json(res, 200, { opened: true });
+    } else {
       json(res, 502, {
         error:
           'The dashboard window did not open. ShellPuppet opens the dashboard only in its ' +
           'own browser profile; set viewer.browserPath in config.json to a Chromium-family ' +
           'browser.',
       });
-      return;
     }
-    this.audit.record(actor, 'grant-mint', undefined, { credential: 'dashboard' });
-    json(res, 200, { opened: true });
+  }
+
+  private async openDashboardForStart(req: http.IncomingMessage, actor: string): Promise<ViewerLaunchResult> {
+    if (this.dashboardEventSockets.size > 0) {
+      return { launched: false, mode: 'dashboard', reason: 'a dashboard is connected' };
+    }
+    if (this.dashboardWindowStartedAt > 0 && Date.now() - this.dashboardWindowStartedAt < 30_000) {
+      return { launched: false, mode: 'dashboard', reason: 'a dashboard window is opening' };
+    }
+    if (this.dashboardOpenPromise !== null) {
+      const opened = await this.dashboardOpenPromise;
+      return opened
+        ? { launched: false, mode: 'dashboard', reason: 'a dashboard window is opening' }
+        : { launched: false, mode: 'dashboard', reason: 'the dashboard window did not open' };
+    }
+    this.dashboardOpenPromise = this.openDashboardWindow(req, actor).then((opened) => {
+      if (opened) this.dashboardWindowStartedAt = Date.now();
+      return opened;
+    }).finally(() => { this.dashboardOpenPromise = null; });
+    const opened = await this.dashboardOpenPromise;
+    return opened
+      ? { launched: true, mode: 'dashboard', reason: 'opened in the dashboard' }
+      : { launched: false, mode: 'dashboard', reason: 'the dashboard window did not open' };
   }
 
   private writeSessionList(res: http.ServerResponse, url: URL): void {
@@ -2635,9 +2669,9 @@ export class Daemon {
       label: session.label,
     });
 
-    // The human's way in (design §3.1): a viewer window the daemon opens for
-    // them or, when nothing opened, a viewer URL the caller hands them. Either
-    // carries a one-use viewer grant, never the client token (§4.1).
+    // The human's way in (design §3.1): the dashboard, a single-session viewer
+    // window, or a viewer URL the caller hands them when no window opened.
+    // Dashboard and viewer grants are separate; neither is the client token.
     // The session id goes in the QUERY, not the path, and that is load-bearing
     // on Windows. Chrome derives an `--app` window's AppUserModelID from
     // host + PATH only, and Windows groups taskbar buttons
@@ -2656,8 +2690,9 @@ export class Daemon {
     // A connected dashboard is the human's window. Do not mint a viewer grant
     // that would sit unused, and do not open a second window.
     const dashboardWatching = wantsViewer && this.dashboardEventSockets.size > 0;
-    const viewerUrl =
-      wantsViewer && !dashboardWatching
+    const mode = this.options.viewer?.launchMode ?? 'none';
+    let viewerUrl =
+      wantsViewer && !dashboardWatching && mode !== 'dashboard'
         ? this.viewerUrlFor(session.id, this.tokens.mintViewerGrant(session.id))
         : '';
 
@@ -2670,9 +2705,14 @@ export class Daemon {
     const launch = this.options.launcher ?? launchViewer;
     let opened: ViewerLaunchResult;
     if (dashboardWatching) {
-      opened = { launched: false, mode: 'none', reason: 'a dashboard is connected' };
+      opened = { launched: false, mode: 'dashboard', reason: 'a dashboard is connected' };
     } else if (!wantsViewer) {
       opened = { launched: false, mode: 'none', reason: 'not requested at start' };
+    } else if (mode === 'dashboard') {
+      opened = await this.openDashboardForStart(req, actor);
+      if (!opened.launched && opened.reason === 'the dashboard window did not open') {
+        viewerUrl = this.viewerUrlFor(session.id, this.tokens.mintViewerGrant(session.id));
+      }
     } else {
       try {
         opened = await launch(viewerUrl, this.options.home, this.options.viewer ?? {}, this.logger);
@@ -2686,14 +2726,13 @@ export class Daemon {
       }
     }
 
-    // One grant per start, and the window has it. A window that opened gives
-    // the caller no link: a link nobody asked for would sit in a transcript as
-    // a live capability until it expired (§4.1). When nothing opened, the
-    // grant never reached a browser, so the same URL goes to the caller as the
-    // human's way in, audited like any other link under the actor that asked
-    // for the session. A window's use of its grant shows in the log as the
-    // `grant-redeem` its page performs.
-    const handOver = wantsViewer && !dashboardWatching && !opened.launched;
+    // A window that opened gives the caller no link: a link nobody asked for
+    // would sit in a transcript as a live capability until it expired (§4.1).
+    // When a viewer window did not open, its unspent link goes to the caller.
+    // When a dashboard launch failed, the revoked dashboard grant is replaced
+    // with a fresh viewer link. A handed-over link is audited under the actor
+    // that asked for the session.
+    const handOver = wantsViewer && !dashboardWatching && !opened.launched && viewerUrl !== '';
     if (handOver) this.audit.record(actor, 'grant-mint', session.id, { readOnly: false });
 
     json(res, 200, {
@@ -3245,6 +3284,7 @@ export class Daemon {
   private attachDashboardSocket(ws: WebSocket): void {
     this.sockets.add(ws);
     this.dashboardEventSockets.add(ws);
+    this.dashboardWindowStartedAt = 0;
     this.lastActivity = Date.now();
     const unsubscribe = this.subscribeDashboardFeed((frame) => {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(frame));
@@ -3256,6 +3296,7 @@ export class Daemon {
       unsubscribe();
       this.sockets.delete(ws);
       this.dashboardEventSockets.delete(ws);
+      if (this.dashboardEventSockets.size === 0) this.dashboardWindowStartedAt = 0;
       this.lastActivity = Date.now();
     });
     ws.on('error', () => {

@@ -43,6 +43,8 @@ import type { ViewerLaunchConfig, ViewerLaunchMode } from './viewerLauncher.js';
 import { parseLauncher } from './launchProfiles.js';
 import type { LauncherConfig } from './launchProfiles.js';
 
+export const DEFAULT_VIEWER_LAUNCH_MODE: ViewerLaunchMode = 'dashboard';
+
 export interface DaemonConfig {
   policy?: PolicyConfig;
   /** Idle self-shutdown threshold in minutes; fractions allowed (design §2.3). */
@@ -113,6 +115,7 @@ const TOP_LEVEL_KEYS = new Set([
 ]);
 const VIEWER_KEYS = new Set(['launchMode', 'browserPath', 'profileDir']);
 const VIEWER_LAUNCH_MODES: readonly ViewerLaunchMode[] = [
+  'dashboard',
   'isolated-app',
   'default-browser',
   'none',

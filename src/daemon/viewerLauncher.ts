@@ -45,7 +45,7 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { NULL_LOGGER, type Logger } from '../core/types.js';
 
-export type ViewerLaunchMode = 'isolated-app' | 'default-browser' | 'none';
+export type ViewerLaunchMode = 'dashboard' | 'isolated-app' | 'default-browser' | 'none';
 
 export interface ViewerLaunchConfig {
   launchMode?: ViewerLaunchMode;

@@ -39,7 +39,7 @@ afterEach(async () => {
   for (const daemon of pending) await daemon.stop();
 });
 
-async function startDash(extra: { clock?: boolean; maxSessions?: number } = {}): Promise<DashDaemon> {
+async function startDash(extra: { clock?: boolean; maxSessions?: number; viewerMode?: 'dashboard' } = {}): Promise<DashDaemon> {
   const home = makeTempHome('dash-cred-');
   const logPath = path.join(home, 'daemon.log');
   const urls: string[] = [];
@@ -50,6 +50,7 @@ async function startDash(extra: { clock?: boolean; maxSessions?: number } = {}):
     audit: createAuditor(home),
     policy: { mode: 'allow-all', ...(extra.maxSessions !== undefined ? { maxSessions: extra.maxSessions } : {}) },
     promptScanIntervalMs: 600_000,
+    ...(extra.viewerMode !== undefined ? { viewer: { launchMode: extra.viewerMode } } : {}),
     idleCheckIntervalMs: 600_000,
     ...(extra.clock === true ? { now: () => clock.now } : {}),
     launcher: (url) => {
@@ -1124,6 +1125,23 @@ describe('/dashboard/events', () => {
     });
     expect(third.status).toBe(403);
     expect(await sessionIds(daemon)).toHaveLength(2);
+  });
+
+  it('a connected dashboard suppresses automatic dashboard launch', async () => {
+    const daemon = await startDash({ viewerMode: 'dashboard' });
+    const { grant } = await openDashboard(daemon);
+    const page = await redeem(daemon, grant);
+    const feed = await connectFeed(daemon.port, cookiePair(page.headers), csrfMeta(page.body) ?? '');
+    await eventually(() => feed.frames.some((frame) => frame['type'] === 'hello'));
+    const before = daemon.urls.length;
+    const result = await api(daemon.port, daemon.token, '/sessions', {
+      body: { command: process.execPath, args: ['-e', 'setInterval(() => {}, 200)'], shell: false },
+    });
+    expect(result.status).toBe(200);
+    expect(result.body['viewer']).toMatchObject({ opened: false, mode: 'dashboard', reason: 'a dashboard is connected' });
+    expect(result.body['viewerUrl']).toBeUndefined();
+    expect(daemon.urls).toHaveLength(before);
+    feed.close();
   });
 });
 
