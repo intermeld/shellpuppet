@@ -190,6 +190,7 @@ const STATIC_ASSETS: Readonly<
   '/viewer/pane.js': { file: path.join(viewerDir, 'pane.js'), type: 'text/javascript' },
   '/viewer/viewer.css': { file: path.join(viewerDir, 'viewer.css'), type: 'text/css' },
   '/viewer/dashboard.js': { file: path.join(viewerDir, 'dashboard.js'), type: 'text/javascript' },
+  '/viewer/dashboard-layout.js': { file: path.join(viewerDir, 'dashboard-layout.js'), type: 'text/javascript' },
   '/viewer/dashboard.css': { file: path.join(viewerDir, 'dashboard.css'), type: 'text/css' },
   // The mark. SVG first (crisp at any size, and what the tab uses); the PNGs
   // are for Windows, which wants a raster for the taskbar button of a Chrome

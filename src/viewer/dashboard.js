@@ -1,5 +1,5 @@
 /** The dashboard's feed, arrangement, launch controls and human controls. */
-/* global ShellPuppetPane */
+/* global ShellPuppetPane, ShellPuppetDashboardLayout */
 (() => {
   'use strict';
 
@@ -48,6 +48,21 @@
   const pendingOpen = new Map();
   const popWatches = new Map();
   const windowToken = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  const screenParams = new URLSearchParams(location.hash.slice(1));
+  const windowId = screenParams.get('screen') || windowToken;
+  const windowRank = screenParams.has('screen') ? Number(screenParams.get('rank')) || 1000 : 0;
+  const screenKey = screenParams.get('key');
+  let currentScreenKey = screenKey;
+  const windows = new Map();
+  const lastSeen = new Map();
+  const childWatches = new Map();
+  let rosterTimer = null;
+  let assigned = screenParams.has('screen') ? new Set() : null;
+  let screens = [];
+  let screenState = 'unavailable';
+  let nextFallback = 0;
+  if (popSelf === null) windows.set(windowId, { id: windowId, rank: windowRank, key: screenKey,
+    width: window.innerWidth - 12, height: window.innerHeight - 54 });
   let channel = null;
   try { channel = new BroadcastChannel('shellpuppet.dashboard'); } catch { /* This window still tracks a pop-out it opened. */ }
 
@@ -83,10 +98,10 @@
     document.getElementById('shortcut-help').textContent = `Ctrl+Shift+${prefix.toUpperCase()}`;
   };
   const sorted = () => order.map((id) => panes.get(id)).filter(Boolean);
-  /** Panes this window is showing. A popped pane is in another window. */
+  /** Panes this window holds after the roster's assignment. */
   const shown = () => sorted().filter((item) => {
     if (popSelf !== null) return item.id === popSelf;
-    return !popped.has(item.id);
+    return !popped.has(item.id) && (windows.size === 1 || assigned === null || assigned.has(item.id));
   });
   const showError = (message) => { error.textContent = message; error.hidden = false; };
   const makeButton = (label, action) => {
@@ -97,6 +112,107 @@
     button.addEventListener('click', (event) => { event.stopPropagation(); action(); });
     return button;
   };
+
+  const screenIdentity = (screen) => [screen.availLeft, screen.availTop,
+    screen.availWidth, screen.availHeight].join(',');
+  const orderedWindows = () => [...windows.values()].sort((a, b) => a.rank - b.rank || a.id.localeCompare(b.id));
+  const ownWindow = () => ({ id: windowId, rank: windowRank, key: currentScreenKey,
+    width: Math.max(1, root.clientWidth - 12), height: Math.max(1, root.clientHeight - 12) });
+  function advertise() {
+    if (popSelf !== null || channel === null) return;
+    windows.set(windowId, ownWindow());
+    lastSeen.set(windowId, Date.now());
+    channel.postMessage({ type: 'window-roster', window: ownWindow(), token: windowToken });
+  }
+  function applyAssignment(ids) {
+    const next = new Set(ids);
+    if (assigned !== null && next.size === assigned.size && [...next].every((id) => assigned.has(id))) return;
+    assigned = next;
+    arrange();
+  }
+  function publishAssignment() {
+    if (popSelf !== null) return;
+    windows.set(windowId, ownWindow());
+    const roster = orderedWindows();
+    if (roster[0]?.id !== windowId) return;
+    const ids = sorted().map((item) => item.id).filter((id) => !popped.has(id));
+    if (roster.length === 1) { applyAssignment(ids); return; }
+    if (channel === null) return;
+    const byWindow = ShellPuppetDashboardLayout.assign(ids, roster);
+    channel.postMessage({ type: 'window-assignment', owner: windowId, byWindow, token: windowToken });
+    applyAssignment(byWindow[windowId] || []);
+  }
+  function removeWindow(id) {
+    if (!windows.delete(id)) return;
+    lastSeen.delete(id);
+    const watch = childWatches.get(id);
+    if (watch !== undefined) { clearInterval(watch); childWatches.delete(id); }
+    renderScreens();
+    publishAssignment();
+  }
+  function openDashboard(hash, name, features) {
+    const child = window.open(`${location.origin}/dashboard${hash}`, name, features);
+    if (child === null) showError('The browser blocked the window. Press the button again.');
+    return child;
+  }
+  function openScreen(screen, screenRank) {
+    const id = `${windowToken}-${++nextFallback}`;
+    const key = screen === null ? null : screenIdentity(screen);
+    const rank = screen === null ? Date.now() * 1000 + nextFallback % 1000 : screenRank;
+    const hash = new URLSearchParams({ screen: id, rank: String(rank),
+      ...(key === null ? {} : { key, left: String(screen.availLeft), top: String(screen.availTop),
+        width: String(screen.availWidth), height: String(screen.availHeight) }) });
+    const features = screen === null ? 'popup' :
+      `popup,left=${screen.availLeft},top=${screen.availTop},width=${screen.availWidth},height=${screen.availHeight}`;
+    const child = openDashboard(`#${hash}`, `shellpuppet-screen-${id}`, features);
+    if (child === null) return;
+    windows.set(id, { id, rank, key, width: screen?.availWidth || window.innerWidth,
+      height: (screen?.availHeight || window.innerHeight) - 54 });
+    lastSeen.set(id, Date.now());
+    renderScreens();
+    publishAssignment();
+    childWatches.set(id, setInterval(() => { if (child.closed) removeWindow(id); }, 500));
+  }
+  function renderScreens() {
+    const control = document.getElementById('screens');
+    control.textContent = '';
+    if (popSelf !== null) return;
+    if (screenState === 'prompt') {
+      control.append(makeButton('Allow screens', async () => {
+        control.querySelector('button').disabled = true;
+        try {
+          const details = await window.getScreenDetails();
+          screenState = 'granted';
+          setScreens(details);
+        } catch { screenState = 'denied'; renderScreens(); }
+      }));
+    } else if (screenState === 'granted') {
+      screens.forEach(({ screen, rank }) => {
+        if ([...windows.values()].some((entry) => entry.key === screenIdentity(screen))) return;
+        control.append(makeButton(`Open on screen ${rank}`, () => openScreen(screen, rank)));
+      });
+    } else control.append(makeButton('Open another window', () => openScreen(null, 0)));
+  }
+  function setScreens(details) {
+    const current = details.currentScreen || details.screens.find((screen) => screen.isPrimary) || details.screens[0];
+    currentScreenKey = current ? screenIdentity(current) : screenKey;
+    screens = details.screens.map((screen, index) => ({ screen, rank: index + 1 }))
+      .filter((entry) => screenIdentity(entry.screen) !== screenIdentity(current));
+    advertise();
+    renderScreens();
+  }
+  async function discoverScreens() {
+    if (popSelf !== null || !navigator.permissions?.query) {
+      renderScreens(); return;
+    }
+    try {
+      const permission = await navigator.permissions.query({ name: 'window-management' });
+      if (!window.getScreenDetails) { renderScreens(); return; }
+      screenState = permission.state;
+      if (screenState === 'granted') setScreens(await window.getScreenDetails());
+      else renderScreens();
+    } catch { screenState = 'unavailable'; renderScreens(); }
+  }
 
   function rememberLaunch(id, profile, folder) {
     if (typeof id !== 'string' || !NAME.test(profile)) return;
@@ -142,6 +258,10 @@
       if (enlarged === item.id) {
         enlarged = null;
         arrange();
+        // Restore has attached the covered cards again. Reconnect them in this
+        // click, even if the next animation frame or roster pass is late.
+        if (visibilityFrame !== null) window.cancelAnimationFrame(visibilityFrame);
+        syncVisibility();
         if (item.previousGrid) item.client?.takeGrid(item.previousGrid.cols, item.previousGrid.rows);
         item.previousGrid = null;
       } else {
@@ -312,6 +432,7 @@
       updateCard(item);
     }
     scheduleVisibility();
+    publishAssignment();
   }
 
   function dropLaunch(id) {
@@ -424,15 +545,9 @@
     if (popSelf === id || popped.has(id)) return;
     // One window, and never a second open in the same click. The URL carries
     // the session id only: no grant and no cookie value.
-    const child = window.open(
-      `${location.origin}/dashboard#pop=${encodeURIComponent(id)}`,
-      `shellpuppet-pop-${id}`,
-      'popup,width=960,height=720',
-    );
-    if (child === null) {
-      showError('The browser blocked the window. Press the button again.');
-      return;
-    }
+    const child = openDashboard(`#pop=${encodeURIComponent(id)}`, `shellpuppet-pop-${id}`,
+      'popup,width=960,height=720');
+    if (child === null) return;
     popped.add(id);
     arrange();
     const watch = setInterval(() => {
@@ -591,6 +706,27 @@
   function onWindowMessage(event) {
     const data = event.data;
     if (typeof data !== 'object' || data === null || data.token === windowToken) return;
+    if (data.type === 'window-roster' && popSelf === null && data.window &&
+        typeof data.window.id === 'string' && Number.isFinite(data.window.rank) &&
+        Number.isFinite(data.window.width) && Number.isFinite(data.window.height)) {
+      const fresh = !windows.has(data.window.id);
+      const previous = windows.get(data.window.id);
+      windows.set(data.window.id, data.window);
+      lastSeen.set(data.window.id, Date.now());
+      if (fresh) advertise();
+      if (fresh || previous.key !== data.window.key) renderScreens();
+      publishAssignment();
+      return;
+    }
+    if (data.type === 'window-leave' && typeof data.id === 'string') {
+      removeWindow(data.id);
+      return;
+    }
+    if (data.type === 'window-assignment' && popSelf === null &&
+        data.owner === orderedWindows()[0]?.id && Array.isArray(data.byWindow?.[windowId])) {
+      applyAssignment(data.byWindow[windowId]);
+      return;
+    }
     if (typeof data.id !== 'string') return;
     if (data.type === 'pop-claim') {
       if (data.id === popSelf) return;
@@ -631,12 +767,15 @@
     void Promise.resolve(next).catch(() => showError('The browser did not make this window full screen.'));
   });
   if (channel !== null) channel.onmessage = onWindowMessage;
-  window.addEventListener('resize', arrange);
+  window.addEventListener('resize', () => { advertise(); arrange(); });
   window.addEventListener('beforeunload', () => {
     clearTimeout(retry);
     feed?.close();
     for (const item of panes.values()) deactivate(item);
     for (const watch of popWatches.values()) clearInterval(watch);
+    for (const watch of childWatches.values()) clearInterval(watch);
+    clearInterval(rosterTimer);
+    if (popSelf === null) channel?.postMessage({ type: 'window-leave', id: windowId, token: windowToken });
   });
   window.addEventListener('pagehide', () => {
     if (popSelf === null || channel === null) return;
@@ -679,6 +818,17 @@
     else if (key === '?') document.getElementById('help').hidden = !document.getElementById('help').hidden;
   }, true);
   showPrefix();
+  if (popSelf === null) {
+    advertise();
+    rosterTimer = setInterval(() => {
+      advertise();
+      for (const [id, seen] of lastSeen) {
+        if (id !== windowId && Date.now() - seen > 4000) removeWindow(id);
+      }
+    }, 1000);
+    renderScreens();
+    void discoverScreens();
+  }
   if (popSelf !== null) {
     document.getElementById('fullscreen').hidden = false;
     if (channel !== null) channel.postMessage({ type: 'pop-claim', id: popSelf, token: windowToken });

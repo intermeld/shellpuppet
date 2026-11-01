@@ -9,6 +9,13 @@ version may change behaviour, and every such change is listed here.
 
 ### Added
 
+- The dashboard can assign panes across several windows. It asks for screen
+  permission only on an Allow screens click, opens at most one window per
+  click, places granted windows in each screen's available rectangle and
+  offers an unplaced window when placement is unavailable. A blocked popup
+  leaves its button available. Browser windows share the dashboard cookie,
+  coordinate their roster and pane assignment over `BroadcastChannel`, and
+  return panes when a window closes.
 - The dashboard page's human controls. Terminal mode types into the focused
   pane. The configurable `Ctrl+Shift+A` prefix enters navigation and is not
   sent to the session; `Ctrl+\` is not that prefix. Kill is one menu action
