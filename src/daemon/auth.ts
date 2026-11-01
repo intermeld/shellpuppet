@@ -32,6 +32,8 @@
  * - **Dashboard credential**: what that grant becomes. One `HttpOnly` cookie
  *   for the whole dashboard, plus a ring of the eight newest per-document
  *   proofs. A second redemption replaces the credential and drops its proofs.
+ *   The cookie opens a session stream when the upgrade carries a live proof
+ *   as the `sp-csrf` subprotocol. A viewer cookie is not this credential.
  */
 
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';

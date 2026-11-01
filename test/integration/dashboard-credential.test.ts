@@ -2,8 +2,8 @@
  * Dashboard access credential (design §4.1, §5.1).
  *
  * The grant is one use. The cookie it becomes may open the dashboard page,
- * the session list and `/dashboard/events`. It does not open the client-token
- * routes. `/events` stays on the client token.
+ * the session list, `/dashboard/events` and a session stream. It does not
+ * open the client-token routes. `/events` stays on the client token.
  */
 
 import * as fs from 'node:fs';
@@ -715,10 +715,17 @@ describe('the document proof', () => {
     }));
     expect(wrongProtocol.status).toBe(403);
 
+    const streamMissing = await upgradeStatus(
+      daemon.port,
+      `/sessions/${id}/stream`,
+      eventsHeaders(daemon.port, cookie),
+    );
+    expect(streamMissing.status).toBe(403);
     const stream = await upgradeStatus(daemon.port, `/sessions/${id}/stream`, eventsHeaders(daemon.port, cookie, {
       'sec-websocket-protocol': `sp-csrf.${proof}`,
     }));
-    expect(stream.status).toBe(401);
+    expect(stream.status).toBe(101);
+    expect(stream.protocol).toBe(`sp-csrf.${proof}`);
 
     const feed = await connectFeed(daemon.port, cookie, proof);
     expect(feed.protocol).toBe(`sp-csrf.${proof}`);
@@ -809,8 +816,8 @@ describe('a planted cookie must not shadow sp_dash', () => {
   });
 });
 
-describe('the cookie does not open the routes outside this step', () => {
-  it('refuses shutdown, screenshot, start, viewer mint, environment, kill, the stream and /events', async () => {
+describe('the cookie does not open the routes outside the dashboard', () => {
+  it('refuses shutdown, screenshot, start, viewer mint, environment, kill and /events, and opens a session stream', async () => {
     const daemon = await startDash();
     const id = await startQuiet(daemon, 'closed-routes');
     const { grant } = await openDashboard(daemon);
@@ -850,7 +857,8 @@ describe('the cookie does not open the routes outside this step', () => {
     const stream = await upgradeStatus(daemon.port, `/sessions/${id}/stream`, eventsHeaders(daemon.port, cookie, {
       'sec-websocket-protocol': `sp-csrf.${proof}`,
     }));
-    expect(stream.status).toBe(401);
+    expect(stream.status).toBe(101);
+    expect(stream.protocol).toBe(`sp-csrf.${proof}`);
     const events = await upgradeStatus(daemon.port, '/events', eventsHeaders(daemon.port, cookie, {
       'sec-websocket-protocol': `sp-csrf.${proof}`,
     }));

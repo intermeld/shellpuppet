@@ -454,6 +454,17 @@ function queryFlag(url: URL, name: string): boolean | null {
   return null;
 }
 
+/**
+ * `drive=0` on a session stream: a viewer or client socket adopts the grid
+ * and does not become the controller by connecting. An absent flag is not
+ * this request. The single-session viewer sends none and still drives.
+ * `drive=false` is not a spelling. A dashboard credential does not consult
+ * this flag: that socket is always passive.
+ */
+function passiveDrive(url: URL): boolean {
+  return url.searchParams.get('drive') === '0';
+}
+
 const BAD_HIDE_REASONING = 'hideReasoning must be true or false (or 1 or 0).';
 
 /**
@@ -526,8 +537,10 @@ export class Daemon {
   private readonly server: http.Server;
   private readonly wss = new WebSocketServer({
     noServer: true,
-    // Echo a subprotocol only for a live dashboard proof. Any other upgrade
-    // offers none today; returning false keeps it that way if one is offered.
+    // Echo a subprotocol only when the dashboard credential opens the feed
+    // or a session stream. A client token wins a session stream, so that
+    // upgrade selects none even if the cookie and a live proof are also
+    // offered. Returning false leaves the upgrade with none selected.
     handleProtocols: (protocols, request) => this.dashboardProtocol(protocols, request),
   });
   private readonly sockets = new Set<WebSocket>();
@@ -536,12 +549,14 @@ export class Daemon {
   /**
    * The viewport currently driving each session's grid (§5).
    *
-   * Connecting is passive and acting takes control: the first viewport to
-   * arrive with nobody driving picks the grid up, a later one adopts what it
-   * finds and any deliberate act by that human, such as resizing the window
-   * or changing the text size, hands control over. So there is always a way back
-   * from a grid somebody else chose, without a control that would mean nothing
-   * while a single viewer is the whole product.
+   * Connecting is passive and acting takes control: the first single-session
+   * viewport to arrive with nobody driving picks the grid up, a later one
+   * adopts what it finds, and a resize from that human hands control over.
+   * A dashboard credential is the exception, whatever the query says. It
+   * adopts and does not pick the grid up on connect, and it does not inherit
+   * the grid when the controlling socket leaves. Its resize counts only when
+   * the frame carries `take: true`. `drive=0` is the same opt-out for a
+   * viewer or client socket, and it cannot make a dashboard socket drive.
    */
   private readonly geometryController = new Map<string, WebSocket>();
   /** Subscribers to the daemon-wide event stream (`/events`). */
@@ -1598,20 +1613,88 @@ export class Daemon {
     return null;
   }
 
-  /** Select `sp-csrf.<proof>` only for `/dashboard/events` when the proof is live. */
+  /**
+   * Select `sp-csrf.<proof>` when this upgrade's credential is the dashboard
+   * cookie: the dashboard feed, or a session stream the client token did not
+   * take. The echo names that credential. A viewer or client socket, including
+   * a client token that also carries the cookie and offers a live proof,
+   * selects none. Returning false leaves the upgrade with none selected.
+   */
   private dashboardProtocol(protocols: Set<string>, request: http.IncomingMessage): string | false {
-    let pathname: string;
+    let url: URL;
     try {
-      pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+      url = new URL(request.url ?? '/', 'http://127.0.0.1');
     } catch {
       return false;
     }
-    if (pathname !== '/dashboard/events') return false;
+    const segments = url.pathname.split('/').filter((part) => part !== '');
+    const sessionStream =
+      segments.length === 3 && segments[0] === 'sessions' && segments[2] === 'stream';
+    if (url.pathname !== '/dashboard/events' && !sessionStream) return false;
+    // Same preference as sessionStreamDecision: a live client token opens a
+    // client socket, so the echoed protocol must not say this is the dashboard.
+    if (sessionStream && this.tokens.verify(url.searchParams.get('token'))?.kind === 'client') {
+      return false;
+    }
+    if (this.dashboardCookieToken(request.headers.cookie) === null) return false;
     for (const protocol of protocols) {
       const proof = dashboardProofFromProtocol(protocol);
       if (proof !== null && this.tokens.acceptsDashboardProof(proof)) return protocol;
     }
     return false;
+  }
+
+  /**
+   * Who may open `/sessions/<id>/stream`, or why not.
+   *
+   * A client token and a viewer cookie for this session keep the check they
+   * already have: a missing Origin is allowed, and a foreign one is refused.
+   * The dashboard cookie is a third way in, and only with the events
+   * upgrade's rules: a live `sp-csrf` subprotocol, a matching Origin, and
+   * same-origin Fetch Metadata. A header is not the proof. A viewer cookie,
+   * including a read-only one, is never treated as the dashboard credential.
+   * When both are present and the proof is live, the dashboard cookie is the
+   * one that opens the socket, so a read-only viewer cookie in the same jar
+   * does not mask it. When the proof is missing, a viewer cookie for this
+   * session still opens the socket on its own rules.
+   */
+  private sessionStreamDecision(
+    req: http.IncomingMessage,
+    url: URL,
+    sessionId: string,
+  ):
+    | { ok: true; credential: { kind: 'client' | 'viewer' | 'dashboard'; readOnly: boolean } }
+    | { ok: false; code: number; reason: string; audit: string | null } {
+    const client = this.tokens.verify(url.searchParams.get('token'));
+    if (client?.kind === 'client') {
+      if (!this.originAllowed(req.headers.origin)) {
+        return { ok: false, code: 403, reason: 'Forbidden', audit: null };
+      }
+      return { ok: true, credential: { kind: 'client', readOnly: false } };
+    }
+
+    const dashboard = this.dashboardUpgradeRefusal(req);
+    if (dashboard === null) {
+      return { ok: true, credential: { kind: 'dashboard', readOnly: false } };
+    }
+
+    const viewer = cookieValues(req.headers.cookie, VIEWER_COOKIE)
+      .map((value) => this.tokens.verifyStreamToken(value))
+      .find((found) => found?.kind === 'viewer' && found.sessionId === sessionId);
+    if (viewer?.kind === 'viewer') {
+      if (!this.originAllowed(req.headers.origin)) {
+        return { ok: false, code: 403, reason: 'Forbidden', audit: null };
+      }
+      return { ok: true, credential: { kind: 'viewer', readOnly: viewer.readOnly } };
+    }
+
+    // The dashboard cookie was offered and did not authenticate. Say why,
+    // including a planted value. A stream with no dashboard cookie and no
+    // other credential is the ordinary 401, and it is not a dashboard refusal.
+    if (this.dashboardCookiePresented(req.headers.cookie)) {
+      return { ok: false, code: dashboard.code, reason: dashboard.reason, audit: dashboard.audit };
+    }
+    return { ok: false, code: 401, reason: 'Unauthorized', audit: null };
   }
 
   private async handleRequest(
@@ -2963,30 +3046,19 @@ export class Daemon {
     // to an unauthenticated prober would let it enumerate which ones exist,
     // the same leak the unauthenticated viewer route deliberately avoids.
     // A foreign Origin was already refused above, so that probe is a 403
-    // and never a 401. A dashboard cookie is not a credential for this socket.
-    //
-    // Two ways in, and a viewer grant is neither (§4.1). A client token may
-    // ride the query, because it is the same-user secret from `daemon.json`
-    // and never travels in a URL a human sees. A browser presents the
-    // HttpOnly cookie it was given when its grant was redeemed, which is why
-    // nothing a page script holds can open a socket.
-    // Every cookie of that name is tried, not the first: cookies ignore ports,
-    // so a page served from any other loopback port can plant one beside the
-    // daemon's own, and a value that will not even decode is skipped rather
-    // than thrown on. And only a credential for THIS session counts: one the
-    // daemon issued for another session, planted ahead of the right one, is
-    // passed over rather than taken as the answer.
-    const auth =
-      this.tokens.verify(url.searchParams.get('token')) ??
-      cookieValues(req.headers.cookie, VIEWER_COOKIE)
-        .map((value) => this.tokens.verifyStreamToken(value))
-        .find((found) => found?.kind === 'viewer' && found.sessionId === sessionId) ??
-      null;
-    if (auth === null || (auth.kind === 'viewer' && auth.sessionId !== sessionId)) {
-      reject(401, 'Unauthorized');
+    // and never a 401.
+    // A viewer grant is not a way in (§4.1). A client token may ride the
+    // query, because it is the same-user secret from `daemon.json` and never
+    // travels in a URL a human sees. A browser presents the HttpOnly cookie
+    // it was given when its grant was redeemed. The dashboard cookie is the
+    // third way in, with the proof as the subprotocol and the events
+    // upgrade's Origin rules, which are stricter than a viewer cookie's.
+    const decision = this.sessionStreamDecision(req, url, sessionId);
+    if (!decision.ok) {
+      if (decision.audit !== null) this.auditDashboardRefusal(req, decision.audit);
+      reject(decision.code, decision.reason);
       return;
     }
-    const readOnly = auth.kind === 'viewer' && auth.readOnly;
 
     const session = this.manager.get(sessionId);
     if (session === undefined) {
@@ -2994,11 +3066,16 @@ export class Daemon {
       return;
     }
 
+    // `drive=0` opts a viewer or client socket out of taking the grid. A
+    // dashboard credential is made passive in attachSocket, whatever the
+    // query says, so this flag cannot turn that socket into a driver.
+    const passive = passiveDrive(url);
     this.wss.handleUpgrade(req, socket, head, (ws) => {
       // Which credential opened the socket travels with it, so the audit log
       // names that credential rather than assuming a browser: `client` for
-      // the client token on the query, `viewer` for a viewer cookie.
-      this.attachSocket(ws, session, { kind: auth.kind, readOnly });
+      // the client token on the query, `viewer` for a viewer cookie,
+      // `dashboard` for the dashboard cookie.
+      this.attachSocket(ws, session, decision.credential, { passive });
     });
   }
 
@@ -3127,14 +3204,22 @@ export class Daemon {
   private attachSocket(
     ws: WebSocket,
     session: Session,
-    credential: { kind: 'client' | 'viewer'; readOnly: boolean },
+    credential: { kind: 'client' | 'viewer' | 'dashboard'; readOnly: boolean },
+    options: { passive?: boolean } = {},
   ): void {
     const { readOnly } = credential;
+    // A dashboard credential is always passive, whatever the query says.
+    // Connecting does not make it the controller, and a resize is ignored
+    // unless the frame says `take`. `drive=0` is that same opt-out for a
+    // viewer or client socket. The query cannot turn a dashboard socket
+    // into a driver.
+    const passive = credential.kind === 'dashboard' || options.passive === true;
     // The audit actor is the credential that opened this socket, not the
     // route: `viewer` means the socket presented a viewer cookie (what a
-    // viewer link's grant becomes when it is opened), and `client` means the
-    // same-user client token rode the query. The actor names the credential,
-    // not the person or program behind it.
+    // viewer link's grant becomes when it is opened), `client` means the
+    // same-user client token rode the query, and `dashboard` means the
+    // dashboard cookie did. The actor names the credential, not the person
+    // or program behind it.
     const actor = credential.kind;
     this.sockets.add(ws);
     let watchers = this.sessionSockets.get(session.id);
@@ -3189,10 +3274,15 @@ export class Daemon {
     //
     // Nobody driving, and free to be driven: this viewport picks it up, and
     // will propose a grid that fills its window. A read-only credential never
-    // drives, because choosing the grid is a write.
+    // drives, because choosing the grid is a write. A dashboard credential
+    // never picks it up by connecting, whatever the query says, and neither
+    // does a `drive=0` socket. Neither inherits a controller that has left:
+    // this is the only place a socket becomes the controller without sending
+    // `take`.
     if (
       !session.geometryHeld &&
       !readOnly &&
+      !passive &&
       !this.hasGeometryController(session.id)
     ) {
       this.geometryController.set(session.id, ws);
@@ -3264,7 +3354,13 @@ export class Daemon {
           parsed !== null &&
           (parsed as { type?: string }).type === 'resize'
         ) {
-          const { cols, rows } = parsed as { cols?: number; rows?: number };
+          const { cols, rows, take } = parsed as { cols?: number; rows?: number; take?: unknown };
+          // Fit, Enlarge, Focus and Restore are a resize that says `take`.
+          // A passive socket's other resizes, including one a dashboard pane
+          // sends because the window moved, are not that act: the grid stays,
+          // nobody is handed it, and nothing is audited. Passivity is the
+          // dashboard credential, or `drive=0` on a viewer or client socket.
+          if (passive && take !== true) return;
           if (
             !readOnly &&
             typeof cols === 'number' &&
@@ -3418,8 +3514,10 @@ export class Daemon {
       this.sockets.delete(ws);
       this.sessionSockets.get(session.id)?.delete(ws);
       this.updateFeedSession(session.id);
-      // The grid stays where it is; it simply no longer belongs to anyone, so
-      // the next viewport to arrive or to act picks it up.
+      // The grid stays where it is; it simply no longer belongs to anyone.
+      // The next single-session viewport to arrive, or a `take`, picks it
+      // up. A dashboard socket, and a `drive=0` socket, that is already
+      // connected does not inherit it.
       if (this.geometryController.get(session.id) === ws) {
         this.geometryController.delete(session.id);
       }

@@ -49,6 +49,20 @@ version may change behaviour, and every such change is listed here.
   fresh proof. `GET /sessions` requires `X-ShellPuppet-CSRF`. The events
   socket requires the `sp-csrf` subprotocol. While that socket is open, a
   session start does not open a per-session viewer window.
+- A dashboard pane opens `/sessions/<id>/stream` with the `sp_dash` cookie and
+  the `sp-csrf` subprotocol, under the same Origin and Fetch Metadata rules as
+  `/dashboard/events`. The dashboard credential is always passive, whatever
+  the query says: the pane adopts the session's grid, does not take it on
+  connect, and does not inherit it when another socket leaves. A `resize`
+  without `take` is ignored. A `resize` with `take: true` (what Fit, Enlarge,
+  Focus and Restore send) sets the terminal size, clamped at 400 by 150,
+  tells every watcher, and is audited as `dashboard`. Keystrokes on that
+  socket are audited as `dashboard`. `drive=0` is the opt-out for a viewer or
+  client-token socket only, and `drive=false` is not a spelling. The echoed
+  subprotocol names the dashboard credential; a client token on the same
+  request selects none. A read-only viewer cookie does not become a dashboard
+  credential. The cookie still does not open `/events`, a start, a kill, a
+  shutdown, a screenshot, a viewer mint, or an HTTP input or key call.
 - `hideReasoning` now covers screenshots and session lists, including their CLI
   commands. Screenshots blur and dim reasoning rows in the image and replace
   their row text. Filtered lists omit waiting prompt questions. Filtered waits

@@ -518,14 +518,15 @@ Token-based, following the Jupyter / SSH-agent model, with **five credentials**:
   embeds a fresh proof in `<meta name="sp-csrf">`. The daemon keeps the eight newest.
   The file on disk has an empty content, and the daemon fills it only for an authenticated
   navigation. `GET /sessions` requires the proof in `X-ShellPuppet-CSRF`. `/dashboard/events`
-  requires it as the WebSocket subprotocol `sp-csrf.` plus the 64 hex digits. A header on
-  the upgrade is not the proof. The compare hashes both strings and then compares the
-  digests in constant time, the same way bearer tokens are compared. The cookie may open
-  `GET /dashboard`, `GET /sessions`, `GET /dashboard/profiles` and `/dashboard/events`, and
-  may call `POST /dashboard/launch` with the proof. It does not open `/events`, a free-form
-  `POST /sessions`, a shutdown, a screenshot, a viewer mint or the environment report.
-  While a `/dashboard/events` socket is open, a session start does not launch a
-  per-session viewer window and the response omits `viewerUrl`.
+  and `/sessions/<id>/stream` require it as the WebSocket subprotocol `sp-csrf.` plus the
+  64 hex digits. A header on the upgrade is not the proof. The compare hashes both strings
+  and then compares the digests in constant time, the same way bearer tokens are compared.
+  The cookie may open `GET /dashboard`, `GET /sessions`, `GET /dashboard/profiles`,
+  `/dashboard/events` and a session stream, and may call `POST /dashboard/launch` with the
+  proof. It does not open `/events`, a free-form `POST /sessions`, a kill, a shutdown, a
+  screenshot, a viewer mint, the environment report, or an HTTP input or key call. While a
+  `/dashboard/events` socket is open, a session start does not launch a per-session viewer
+  window and the response omits `viewerUrl`.
 - **Read-only is a property of the grant**, carried into the credential and enforced by
   the daemon: input and geometry changes from a watch-only credential are dropped
   server-side. The viewer's own read-only toggle is a local convenience for a
@@ -556,8 +557,10 @@ Token-based, following the Jupyter / SSH-agent model, with **five credentials**:
   gets a proof. `POST /dashboard/launch` and dashboard-authenticated `DELETE`
   send it as `X-ShellPuppet-CSRF`; both strings are hashed and compared in
   constant time. Form media types are refused. Browser WebSockets cannot set
-  that header, so `/dashboard/events` and session streams carry
-  `sp-csrf.<hex>` as the selected WebSocket subprotocol. A missing, wrong or
+  that header, so `/dashboard/events` and a dashboard session stream carry
+  `sp-csrf.<hex>` as the selected WebSocket subprotocol. The echo names the
+  dashboard credential: a client token on a session stream selects none, even
+  when the cookie and a live proof are also offered. A missing, wrong or
   expired proof refuses the upgrade before attachment. Every `sp_dash`
   cookie value is tried, so a planted cookie does not hide a valid one.
 - **Fetch Metadata for the dashboard cookie.** `Host` must be the allowed
@@ -574,9 +577,11 @@ Token-based, following the Jupyter / SSH-agent model, with **five credentials**:
   client-token upgrades may omit it, as before.
 - **WebSocket upgrades** take the client token on the query string (it is the same-user
   secret from `daemon.json` and never appears in a URL a human sees) or the viewer's
-  cookie. A grant is refused at the socket outright. `/dashboard/events` is the exception:
-  it takes the dashboard cookie and the `sp-csrf` subprotocol, and a client token on the
-  query is refused.
+  cookie. A grant is refused at the socket outright. A session stream also accepts the
+  dashboard cookie with the `sp-csrf` subprotocol, under the cookie upgrade rules, and
+  still accepts the client token and a viewer cookie for that session. `/dashboard/events`
+  takes the dashboard cookie and the subprotocol, and a client token on the query is
+  refused.
 - **`GET /health` is deliberately unauthenticated** and returns only `{ ok, version,
   pid }`. Clients must be able to poll it before the token file settles (§2.2), and it
   reveals nothing sensitive.
@@ -611,8 +616,10 @@ the user's browser visits, and this is the exact CVE class Jupyter went through:
 - Reject any request whose `Host` header is not `127.0.0.1:<port>` or
   `localhost:<port>`.
 - Reject WebSocket upgrades whose `Origin` is present and not the daemon's own origin.
-  A missing `Origin` stays allowed on `/events` and on a session stream, which non-browser
-  clients open with the client token. It is not allowed on `/dashboard/events`.
+  A missing `Origin` stays allowed on `/events` and on a session stream opened with the
+  client token or a viewer cookie. Non-browser clients open those with the client token
+  and send no Origin. It is not allowed on `/dashboard/events` or on a session stream
+  opened with the dashboard cookie.
 - No CORS headers at all (no cross-origin reads), and the bearer-token requirement stops
   blind cross-origin POSTs from doing anything. A client-token HTTP request does not
   consult `Origin`.
@@ -624,9 +631,10 @@ be absent. When it is present it must be the daemon's own origin and its host mu
 `Host`. The dashboard grant is redeemed only on that navigation. A same-origin read is
 `GET` or `HEAD`, `Sec-Fetch-Site: same-origin`, and `Sec-Fetch-Mode` of `cors`, `no-cors`
 or `same-origin`, again with `Origin` optional under the same matching rule. That is
-`GET /sessions`. Every other cookie-authenticated request, including the events upgrade,
-requires `Origin` and `Sec-Fetch-Site: same-origin`. The upgrade also requires
-`Sec-Fetch-Mode: websocket`. `Sec-Fetch-Site` of `same-site`, `cross-site` or absent is a
+`GET /sessions`. Every other cookie-authenticated request, including the events upgrade
+and a session stream opened with the dashboard cookie, requires `Origin` and
+`Sec-Fetch-Site: same-origin`. The upgrade also requires `Sec-Fetch-Mode: websocket`.
+`Sec-Fetch-Site` of `same-site`, `cross-site` or absent is a
 refusal on every cookie request, navigation included. Another port of `127.0.0.1` is
 `same-site`, and `SameSite=Strict` does not refuse it, so Fetch Metadata does. A forbidden
 `Sec-Fetch-Site` is refused even for the anonymous dashboard page. An anonymous
@@ -879,13 +887,27 @@ sessions under ADR-007, including on this path.
     That follows from the grid itself: a fixed grid cannot fill an arbitrary shape without
     changing the grid or stretching the characters. Both alternatives were rejected.
 
-  A dashboard pane is the explicit exception: it connects with `drive=0`,
-  adopts the grid and never inherits control when another socket leaves.
-  Its Fit, Enlarge and Restore actions send `resize` with `take: true` and
-  become the geometry controller. A `drive=0` resize without `take` is
-  ignored. A single-session viewer still drives when it is the first
-  read-write viewport; a read-only viewer never drives. `hold` remains a
-  client-token action.
+  A dashboard pane is the explicit exception, and the exception is the
+  credential, not the query. A socket opened with the dashboard cookie is
+  always passive, whatever the query says, including when `drive` is absent
+  or set to anything else. It adopts the session grid on connect and does not
+  inherit control when another socket leaves. Layout and window changes scale
+  the font rather than resize the PTY. Its only route to the grid is `resize`
+  with `take: true`, which Fit, Enlarge, Focus and Restore send. That resize
+  becomes the geometry controller. The requested grid is clamped at 400 by
+  150. A resize without `take` is ignored and is not audited. `drive=0` stays
+  the opt-out for a single-session viewer or a client-token socket: those
+  credentials still drive when they are the first read-write viewport and the
+  flag is absent, and `drive=0` makes that one socket adopt instead. The flag
+  cannot make a dashboard socket drive. The viewer page does not send it; it
+  remains so a read-write viewport can watch without taking the grid on
+  connect, which is the viewer's existing rule with an explicit opt-out. The
+  dashboard no longer depends on the flag, so forgetting it cannot resize the
+  PTY. `drive=false` is not a spelling. A read-only viewer never drives, and
+  a read-only viewer cookie is not a dashboard credential. `hold` remains a
+  client-token action. The 80 by 24 floor is a property of the dashboard
+  layout: a pane below it keeps the program's grid, and a layout pass does
+  not send a resize.
 - **A screenshot is the page, not the cells.** The daemon's text snapshot is what the
   agent reads; the page is what the human sees, and the two can disagree in ways no
   text-level check can see. `screenshot.ts` opens the viewer page in capture mode
@@ -972,7 +994,7 @@ gets a fresh proof, without replacing the cookie. The routes are:
 | `GET /sessions` | Cookie may read the existing list, including prompt state |
 | `DELETE /sessions/<id>` | Cookie plus document proof may kill |
 | `/dashboard/events` | Cookie plus subprotocol; outbound WebSocket; inbound ignored |
-| `/sessions/<id>/stream` | Cookie plus subprotocol; `drive=0` for a dashboard pane |
+| `/sessions/<id>/stream` | Cookie plus subprotocol. The dashboard credential is always passive; `drive=0` is not required and cannot make it drive |
 
 `shellpuppet dashboard` is the CLI verb for `POST /dashboard/open`. It prints
 whether a window opened, never the URL or grant. The route opens the isolated
@@ -1097,8 +1119,10 @@ dark viewer palette with readable chrome contrast.
   and the single-session viewer retain their existing access and geometry.
 - **Dashboard behaviour**: malformed profiles start nothing while valid
   siblings load; the eight-per-minute and live-session caps apply without
-  `policy.maxSessions`; `drive=0` never takes geometry on connect; Fit,
-  Enlarge, Restore, Focus and Pop out control the real grid as specified;
+  `policy.maxSessions`; a dashboard stream never takes geometry on connect,
+  with or without `drive=0`, and a plain resize is ignored while `take: true`
+  changes the grid; Fit, Enlarge, Restore, Focus and Pop out control the real
+  grid as specified;
   layout and multi-window assignment preserve stable session placement.
 
 **Cross-platform CI**

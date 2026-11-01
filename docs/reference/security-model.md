@@ -98,14 +98,32 @@ make a reachable terminal safe.
   document exchanges it, once, for an `HttpOnly` `SameSite=Strict` cookie named
   `sp_dash` at
   `Path=/`, with no `Max-Age`, no `Secure` and no `Domain`. That cookie may
-  open the dashboard page, `GET /sessions` and the `/dashboard/events`
-  socket. It does not open `/events`, a session stream, a start, a kill, a
-  shutdown, a screenshot or a viewer mint. Each accepted navigation puts a
-  fresh proof in the page. The daemon keeps the eight newest. `GET /sessions`
-  sends the proof as `X-ShellPuppet-CSRF`. The socket sends it as the
-  subprotocol `sp-csrf.` followed by the proof. A header on the upgrade is
-  not accepted. Both sides are hashed and then compared in constant time.
-  While a dashboard events socket is open, starting a session does not open a
+  open the dashboard page, `GET /sessions`, the `/dashboard/events` socket
+  and a session stream. It does not open `/events`, a start, a kill, a
+  shutdown, a screenshot, a viewer mint, or an HTTP input or key call. Each
+  accepted navigation puts a fresh proof in the page. The daemon keeps the
+  eight newest. `GET /sessions` sends the proof as `X-ShellPuppet-CSRF`.
+  `/dashboard/events` and a session stream send it as the subprotocol
+  `sp-csrf.` followed by the proof. A header on the upgrade is not accepted.
+  Both sides are hashed and then compared in constant time. A session stream
+  opened with the cookie also needs the upgrade's Fetch Metadata: `Origin`
+  matching `Host`, `Sec-Fetch-Site: same-origin` and `Sec-Fetch-Mode:
+  websocket`. A missing Origin stays allowed for a client token or a viewer
+  cookie on that same stream. A session stream opened with the dashboard
+  cookie is always passive, whatever the query says. It adopts the session's
+  grid. It does not take the grid on connect, and it does not inherit the
+  grid when the controlling socket leaves. A resize on that socket is ignored
+  unless it carries `take: true`, which sets the terminal size, clamped at
+  400 by 150, and is audited as `dashboard`. The query cannot widen this.
+  `drive=0` is the opt-out for a viewer or client-token socket only, and
+  `drive=false` is not a spelling. The echoed subprotocol `sp-csrf.` followed
+  by the proof is selected only when this upgrade's credential is the
+  dashboard cookie. A client token on the same request opens a client socket
+  and selects no subprotocol, even when the cookie and a live proof are also
+  present. Keystrokes on the dashboard socket are audited as `dashboard`. A
+  read-only viewer cookie stays read-only. It is not a dashboard credential,
+  and its input and resizes are still dropped. While a
+  dashboard events socket is open, starting a session does not open a
   per-session viewer window and the response carries no viewer URL. A second
   redemption replaces the cookie and drops the proofs it had. Cookies ignore
   ports, so a planted `sp_dash` is tried and skipped. The value the daemon
@@ -118,8 +136,9 @@ make a reachable terminal safe.
   returns a session. A client-token HTTP request does not consult `Origin`.
   A request that presents the dashboard cookie does. A document navigation
   and a same-origin read may omit `Origin`. Any other cookie-authenticated
-  request, including `/dashboard/events`, requires an `Origin` whose host
-  matches `Host`, and `Sec-Fetch-Site: same-origin`. `same-site`, `cross-site`
+  request, including `/dashboard/events` and a session stream opened with
+  the dashboard cookie, requires an `Origin` whose host matches `Host`, and
+  `Sec-Fetch-Site: same-origin`. `same-site`, `cross-site`
   and a missing `Sec-Fetch-Site` are refused, including on a navigation.
   Another loopback port is `same-site`. `SameSite=Strict` does not stop it.
 - **Directory hardening.** `~/.shellpuppet/` is created `0700` on POSIX; on
