@@ -36,7 +36,6 @@
   let navigation = false;
   let feed = null;
   let retry = null;
-  let visibilityFrame = null;
   let profiles = [];
   /** Sessions this page started: profile name and, where used, folder name. */
   let launches = loadLaunches();
@@ -136,7 +135,7 @@
     const roster = orderedWindows();
     if (roster[0]?.id !== windowId) return;
     const ids = sorted().map((item) => item.id).filter((id) => !popped.has(id));
-    if (roster.length === 1) { applyAssignment(ids); return; }
+    if (roster.length === 1) { assigned = null; return; }
     if (channel === null) return;
     const byWindow = ShellPuppetDashboardLayout.assign(ids, roster);
     channel.postMessage({ type: 'window-assignment', owner: windowId, byWindow, token: windowToken });
@@ -148,7 +147,7 @@
     const watch = childWatches.get(id);
     if (watch !== undefined) { clearInterval(watch); childWatches.delete(id); }
     renderScreens();
-    publishAssignment();
+    arrange();
   }
   function openDashboard(hash, name, features) {
     const child = window.open(`${location.origin}/dashboard${hash}`, name, features);
@@ -258,10 +257,6 @@
       if (enlarged === item.id) {
         enlarged = null;
         arrange();
-        // Restore has attached the covered cards again. Reconnect them in this
-        // click, even if the next animation frame or roster pass is late.
-        if (visibilityFrame !== null) window.cancelAnimationFrame(visibilityFrame);
-        syncVisibility();
         if (item.previousGrid) item.client?.takeGrid(item.previousGrid.cols, item.previousGrid.rows);
         item.previousGrid = null;
       } else {
@@ -386,15 +381,10 @@
     return box.bottom > container.top && box.top < container.bottom && box.right > container.left && box.left < container.right;
   }
   function syncVisibility() {
-    visibilityFrame = null;
     for (const item of panes.values()) {
       if (visible(item)) activate(item);
       else deactivate(item);
     }
-  }
-  function scheduleVisibility() {
-    if (visibilityFrame !== null) window.cancelAnimationFrame(visibilityFrame);
-    visibilityFrame = window.requestAnimationFrame(syncVisibility);
   }
   function arrange() {
     const items = shown();
@@ -431,7 +421,7 @@
       item.card.classList.toggle('below-floor', measuredWidth < 652 || measuredHeight < 446);
       updateCard(item);
     }
-    scheduleVisibility();
+    syncVisibility();
     publishAssignment();
   }
 
@@ -722,7 +712,7 @@
       removeWindow(data.id);
       return;
     }
-    if (data.type === 'window-assignment' && popSelf === null &&
+    if (data.type === 'window-assignment' && popSelf === null && windows.size > 1 &&
         data.owner === orderedWindows()[0]?.id && Array.isArray(data.byWindow?.[windowId])) {
       applyAssignment(data.byWindow[windowId]);
       return;
@@ -749,7 +739,7 @@
       }
     });
   }
-  strip.addEventListener('scroll', scheduleVisibility);
+  strip.addEventListener('scroll', syncVisibility);
   document.getElementById('shortcut').addEventListener('click', () => {
     choosingPrefix = true;
     document.getElementById('shortcut').textContent = 'Press Ctrl+Shift and a letter';
