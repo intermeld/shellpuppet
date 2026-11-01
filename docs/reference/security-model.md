@@ -17,9 +17,9 @@ This page describes ShellPuppet as it stands in this repository. The dashboard
 decided in [ADR-009](../decisions/ADR-009-dashboard-and-sessions-you-start-yourself.md)
 is being built ([ROADMAP.md](../../ROADMAP.md)): its access credential, the
 `shellpuppet dashboard` command that opens its window and its launch profiles,
-below, are in place and not yet released; its page content and panes are
-specified in the [design](../architecture/design.md) and are added here as
-they are built.
+below, are in place and not yet released. Its page now watches the session
+feed and opens passive panes. Start, kill, Pop out and several screens are
+specified in the [design](../architecture/design.md) for later steps.
 
 The daemon owns real terminals. Anything that can reach its API can run
 commands as you. The protections below narrow *who* can reach it. They do not
@@ -106,9 +106,11 @@ make a reachable terminal safe.
   `/dashboard/events` and a session stream send it as the subprotocol
   `sp-csrf.` followed by the proof. A header on the upgrade is not accepted.
   Both sides are hashed and then compared in constant time. A session stream
-  opened with the cookie also needs the upgrade's Fetch Metadata: `Origin`
-  matching `Host`, `Sec-Fetch-Site: same-origin` and `Sec-Fetch-Mode:
-  websocket`. A missing Origin stays allowed for a client token or a viewer
+  opened with the cookie also needs `Origin` matching `Host`. Chromium sends
+  neither Fetch Metadata header on WebSocket upgrades, so that missing pair
+  is accepted when the cookie and proof are valid. If either header is present,
+  both must say `Sec-Fetch-Site: same-origin` and `Sec-Fetch-Mode: websocket`.
+  A missing Origin stays allowed for a client token or a viewer
   cookie on that same stream. A session stream opened with the dashboard
   cookie is always passive, whatever the query says. It adopts the session's
   grid. It does not take the grid on connect, and it does not inherit the
@@ -136,10 +138,11 @@ make a reachable terminal safe.
   returns a session. A client-token HTTP request does not consult `Origin`.
   A request that presents the dashboard cookie does. A document navigation
   and a same-origin read may omit `Origin`. Any other cookie-authenticated
-  request, including `/dashboard/events` and a session stream opened with
-  the dashboard cookie, requires an `Origin` whose host matches `Host`, and
-  `Sec-Fetch-Site: same-origin`. `same-site`, `cross-site`
-  and a missing `Sec-Fetch-Site` are refused, including on a navigation.
+  HTTP request requires `Sec-Fetch-Site: same-origin` and an `Origin` whose
+  host matches `Host`. The dashboard WebSockets require that `Origin` and
+  proof, with the Fetch Metadata exception above. `same-site`, `cross-site`
+  and a missing `Sec-Fetch-Site` are refused on HTTP requests, including
+  navigations.
   Another loopback port is `same-site`. `SameSite=Strict` does not stop it.
 - **Directory hardening.** `~/.shellpuppet/` is created `0700` on POSIX; on
   Windows, ACL inheritance is stripped and only your user is granted access

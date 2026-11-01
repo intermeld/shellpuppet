@@ -3,10 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ShellPuppet</title>
+<title>ShellPuppet dashboard</title>
 <meta name="sp-csrf" content="">
+<link rel="icon" type="image/svg+xml" href="/viewer/icon.svg">
+<link rel="stylesheet" href="/vendor/xterm.css">
+<link rel="stylesheet" href="/viewer/dashboard.css">
 </head>
 <body>
-<p>ShellPuppet</p>
+<header>
+  <h1>ShellPuppet</h1><span id="connection" class="hint">Connecting</span>
+  <span class="spacer"></span>
+  <button id="auto" type="button">Auto</button><button id="grid" type="button">Grid</button><button id="focus" type="button">Focus</button>
+  <button id="shortcut" type="button" title="Choose the navigation shortcut">Shortcut: Ctrl+Shift+A</button>
+  <button id="attention-count" class="hint" type="button" aria-live="polite" aria-label="Select a waiting pane"></button>
+</header>
+<div id="error" role="status" hidden></div>
+<main id="panes" aria-label="Sessions"></main>
+<div id="empty" class="hint">No sessions yet</div>
+<div id="help" hidden><span id="shortcut-help">Ctrl+Shift+A</span>: navigation. Arrows or digits: select. Enter: terminal. J: next waiting pane. P: pin. F: fit. M: enlarge. ?: help.</div>
+<script src="/vendor/xterm.js"></script>
+<script src="/vendor/addon-fit.js"></script>
+<script src="/viewer/pane.js"></script>
+<script src="/viewer/dashboard.js"></script>
 </body>
 </html>

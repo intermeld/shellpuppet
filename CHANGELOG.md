@@ -9,6 +9,16 @@ version may change behaviour, and every such change is listed here.
 
 ### Added
 
+- The dashboard page shows passive terminal panes from the live session feed.
+  Auto uses an even grid while panes meet the 80 by 24 floor, then a large
+  pane and strip; Grid and Focus are available too. Pin, reorder, attention,
+  navigation with a configurable shortcut, text size, Fit, Enlarge and Restore
+  work in the page. Layout
+  and font changes leave the PTY grid alone; deliberate geometry acts take
+  it. Covered and scrolled-off panes disconnect until visible again. Browser
+  WebSockets that omit both Fetch Metadata headers work with the exact Origin
+  and page proof checks.
+
 - `shellpuppet dashboard` opens the dashboard in ShellPuppet's isolated browser
   profile and prints whether a window opened, never the URL or grant. The
   daemon's dashboard opener never falls back to the default browser: a window
@@ -38,8 +48,7 @@ version may change behaviour, and every such change is listed here.
   an oversized body with 413, and audits a missing or foreign `Origin` as
   `origin`. `envFromDaemon` copies only variables the daemon's environment
   holds as strings, and a variable reserved for a connected feature's
-  credential never reaches a session. The page that calls these routes is still to come:
-  `src/viewer/dashboard.html` is a stub, so this release is the API half.
+  credential never reaches a session. The page's start control comes later.
 - The dashboard has its own one-use grant, which lives for five minutes and is
   minted only by the daemon. `POST /dashboard/open` (client token) mints it and opens
   the page in the isolated browser profile, never the default browser. The grant is not returned to the

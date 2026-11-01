@@ -905,6 +905,31 @@ describe('/dashboard/events', () => {
     expect(upgrade.protocol).toBeUndefined();
   });
 
+  it('accepts Chromium WebSockets without either Fetch Metadata header only with the exact Origin and proof', async () => {
+    const daemon = await startDash();
+    const { grant } = await openDashboard(daemon);
+    const page = await redeem(daemon, grant);
+    const cookie = cookiePair(page.headers);
+    const offered = `sp-csrf.${csrfMeta(page.body) ?? ''}`;
+    const browserHeaders = {
+      host: `127.0.0.1:${String(daemon.port)}`,
+      origin: `http://127.0.0.1:${String(daemon.port)}`,
+      cookie,
+      'sec-websocket-protocol': offered,
+    };
+    const accepted = await upgradeStatus(daemon.port, '/dashboard/events', browserHeaders);
+    expect(accepted.status).toBe(101);
+    expect(accepted.protocol).toBe(offered);
+    expect((await upgradeStatus(daemon.port, '/dashboard/events', {
+      ...browserHeaders,
+      'sec-fetch-site': 'same-origin',
+    })).status).toBe(403);
+    expect((await upgradeStatus(daemon.port, '/dashboard/events', {
+      ...browserHeaders,
+      origin: `http://127.0.0.1:${String(daemon.port + 1)}`,
+    })).status).toBe(403);
+  });
+
   it('echoes no subprotocol offered on /events or a session stream', async () => {
     const daemon = await startDash();
     const id = await startQuiet(daemon, 'protocol-echo');
