@@ -200,12 +200,24 @@ window.ShellPuppetPane = (() => {
     const fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
     term.open(container);
-    const isMac = /Mac/i.test(navigator.platform);
-    // Let the browser deliver paste/copy to xterm's textarea on Windows and Linux.
+    const platform = navigator.userAgentData?.platform || navigator.userAgent;
+    const isMac = /Mac|iPhone|iPad/i.test(platform);
+    // Let the browser deliver paste to xterm's textarea on Windows and Linux.
     term.attachCustomKeyEventHandler((event) => {
       if (isMac || event.type !== 'keydown' || !event.ctrlKey || event.shiftKey || event.altKey || event.metaKey) return true;
       if (event.key.toLowerCase() === 'v') return false;
-      if (event.key.toLowerCase() === 'c' && term.hasSelection()) return false;
+      if (event.key.toLowerCase() === 'c' && term.hasSelection()) {
+        event.preventDefault();
+        if (typeof navigator.clipboard?.writeText !== 'function') {
+          showBanner('Could not copy selected text to the clipboard.');
+          return false;
+        }
+        const selection = term.getSelection();
+        void navigator.clipboard.writeText(selection).then(() => {
+          if (term.getSelection() === selection) term.clearSelection();
+        }).catch(() => showBanner('Could not copy selected text to the clipboard.'));
+        return false;
+      }
       return true;
     });
 

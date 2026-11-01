@@ -19,94 +19,100 @@ afterAll(async () => {
 }, 60_000);
 
 describe('shared pane client in a browser', () => {
-  it('pastes Ctrl+V through xterm, blocks it in read-only mode, and copies selected text with Ctrl+C', async (context) => {
+  it('handles real Ctrl+V paste and Ctrl+C copy or interrupt', async (context) => {
     if (browser === null || process.platform === 'darwin') { context.skip(); return; }
     const started = await api(td.port, td.token, '/sessions', {
       body: { command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], shell: false },
     });
     expect(started.status).toBe(200);
     const id = String(started.body['id']);
-    const capture = await captureViewer({
-      browser, viewerUrl: String(started.body['viewerUrl']), width: 900, height: 600, timeoutMs: 90_000,
-      probe: `(() => {
-        if (!window.__shellpuppetPainted || !window.ShellPuppetPane) return null;
-        if (!window.__pasteProbe) {
-          const NativeSocket = window.WebSocket;
-          const sockets = [];
-          class Socket {
-            constructor() { this.readyState = 1; this.sent = []; sockets.push(this); }
-            send(data) { this.sent.push(data); }
-            close() { this.readyState = 3; }
-          }
-          window.WebSocket = Socket;
-          const make = (name) => {
+    try {
+      const viewerUrl = String(started.body['viewerUrl']);
+      const capture = await captureViewer({ browser, viewerUrl, width: 900, height: 600, timeoutMs: 90_000,
+        probe: `(() => {
+          if (!window.__shellpuppetPainted || !window.ShellPuppetPane) return null;
+          if (!window.__realKeys) {
+            const NativeSocket = window.WebSocket;
+            let socket;
+            window.WebSocket = class {
+              constructor() { this.readyState = 1; this.sent = []; socket = this; }
+              send(data) { this.sent.push(data); }
+              close() { this.readyState = 3; }
+            };
             const wrap = document.createElement('div');
             wrap.style.cssText = 'width:400px;height:250px;position:fixed;left:0;top:0';
             const container = document.createElement('div');
             wrap.append(container); document.body.append(wrap);
-            const pane = window.ShellPuppetPane.create({ container, sessionId: name });
-            const socket = sockets.at(-1);
+            const pane = window.ShellPuppetPane.create({ container, sessionId: 'real-keys' });
+            window.WebSocket = NativeSocket;
             socket.onopen();
-            socket.onmessage({ data: JSON.stringify({ type: 'identity', session: name }) });
+            socket.onmessage({ data: JSON.stringify({ type: 'identity', session: 'real-keys' }) });
             socket.onmessage({ data: JSON.stringify({ type: 'geometry', cols: 80, rows: 24,
               control: 'held', max: { cols: 400, rows: 150 } }) });
-            return { wrap, pane, socket, area: container.querySelector('textarea') };
+            const state = window.__realKeys = { pane, socket, wrap, area: container.querySelector('textarea'), ready: false };
+            pane.getTerminal().write(String.fromCharCode(27) + '[?2004hcopy me', () => { state.ready = true; });
+          }
+          return window.__realKeys.ready ? true : null;
+        })()`,
+        interact: async (page) => {
+          await page.send('Browser.grantPermissions', { origin: new URL(viewerUrl).origin,
+            permissions: ['clipboardReadWrite', 'clipboardSanitizedWrite'] }, true);
+          await page.evaluate("navigator.clipboard.writeText('dictated text')");
+          await page.evaluate(`(() => {
+            const write = navigator.clipboard.writeText.bind(navigator.clipboard);
+            window.__copyWrites = [];
+            Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true,
+              value: (text) => { window.__copyWrites.push(text); return write(text); } });
+          })()`);
+          const press = async (key: string, code: string, keyCode: number): Promise<void> => {
+            await page.evaluate('window.__realKeys.area.focus()');
+            const details = { key, code, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode, modifiers: 2 };
+            await page.send('Input.dispatchKeyEvent', { type: 'rawKeyDown', ...details });
+            await page.send('Input.dispatchKeyEvent', { type: 'keyUp', ...details });
           };
-          const writable = make('paste-writable');
-          const readonly = make('paste-readonly');
-          window.WebSocket = NativeSocket;
-          readonly.pane.setReadOnly(true);
-          const state = window.__pasteProbe = { writable, readonly, ready: false };
-          // Wait for xterm to process the program's bracketed-paste request.
-          writable.socket.onmessage({ data: new TextEncoder().encode(String.fromCharCode(27) + '[?2004hcopy me').buffer });
-          writable.pane.getTerminal().write('', () => { state.ready = true; });
-          return null;
-        }
-        const { writable, readonly, ready } = window.__pasteProbe;
-        if (!ready) return null;
-        const press = (target, key, code, keyCode) => {
-          const event = new KeyboardEvent('keydown', { key, code, ctrlKey: true,
-            bubbles: true, cancelable: true });
-          Object.defineProperty(event, 'keyCode', { get: () => keyCode });
-          Object.defineProperty(event, 'which', { get: () => keyCode });
-          target.dispatchEvent(event);
-          return event.defaultPrevented;
-        };
-        const paste = (target, text) => {
-          const data = new DataTransfer(); data.setData('text/plain', text);
-          target.dispatchEvent(new ClipboardEvent('paste', { bubbles: true, clipboardData: data }));
-        };
-        const pastePrevented = press(writable.area, 'v', 'KeyV', 86);
-        if (!pastePrevented) paste(writable.area, 'dictated text');
-        const readonlyPrevented = press(readonly.area, 'v', 'KeyV', 86);
-        if (!readonlyPrevented) paste(readonly.area, 'blocked text');
-        const interruptPrevented = press(writable.area, 'c', 'KeyC', 67);
-        const term = writable.pane.getTerminal();
-        term.select(0, 0, 4);
-        const copyPrevented = press(writable.area, 'c', 'KeyC', 67);
-        const copied = new DataTransfer();
-        if (!copyPrevented) writable.area.dispatchEvent(new ClipboardEvent('copy', { bubbles: true, clipboardData: copied }));
-        const result = { pastePrevented, readonlyPrevented, interruptPrevented, copyPrevented,
-          copied: copied.getData('text/plain'), writableSent: writable.socket.sent,
-          readonlySent: readonly.socket.sent, hasSelection: term.hasSelection() };
-        writable.pane.destroy(); readonly.pane.destroy(); writable.wrap.remove(); readonly.wrap.remove();
-        return JSON.stringify(result);
-      })()`,
-    });
-    const result = JSON.parse(String(capture.probe)) as {
-      pastePrevented: boolean; readonlyPrevented: boolean; interruptPrevented: boolean;
-      copyPrevented: boolean; copied: string; writableSent: string[]; readonlySent: string[];
-      hasSelection: boolean;
-    };
-    expect(result.pastePrevented).toBe(false);
-    expect(result.readonlyPrevented).toBe(false);
-    expect(result.writableSent).toEqual(['\x1b[200~dictated text\x1b[201~', '\x03']);
-    expect(result.readonlySent).toEqual([]);
-    expect(result.interruptPrevented).toBe(true);
-    expect(result.hasSelection).toBe(true);
-    expect(result.copyPrevented).toBe(false);
-    expect(result.copied).toBe('copy');
-    await api(td.port, td.token, `/sessions/${id}`, { method: 'DELETE' });
+          await press('v', 'KeyV', 86);
+          const pasted = await page.evaluate('window.__realKeys.socket.sent.slice()');
+          await page.evaluate('window.__realKeys.pane.setReadOnly(true)');
+          await press('v', 'KeyV', 86);
+          const readonlySent = await page.evaluate('window.__realKeys.socket.sent.slice()');
+          await page.evaluate('window.__realKeys.pane.setReadOnly(false)');
+          await press('c', 'KeyC', 67);
+          const interrupted = await page.evaluate('window.__realKeys.socket.sent.slice()');
+          await page.evaluate('window.__realKeys.pane.getTerminal().select(0, 0, 4)');
+          await press('c', 'KeyC', 67);
+          const copied = await page.evaluate('navigator.clipboard.readText()');
+          const copyWrites = await page.evaluate('window.__copyWrites.slice()');
+          const copyState = await page.evaluate(`(() => ({ sent: window.__realKeys.socket.sent.slice(),
+            selected: window.__realKeys.pane.getTerminal().hasSelection() }))()`);
+          await page.evaluate(`(() => {
+            Object.defineProperty(navigator.clipboard, 'writeText', { configurable: true,
+              value: () => Promise.reject(new Error('clipboard refused')) });
+            window.__realKeys.pane.getTerminal().select(0, 0, 4);
+          })()`);
+          await press('c', 'KeyC', 67);
+          await page.evaluate('new Promise(resolve => setTimeout(resolve, 50))');
+          const refused = await page.evaluate(`(() => ({ sent: window.__realKeys.socket.sent.slice(),
+            selected: window.__realKeys.pane.getTerminal().hasSelection() }))()`);
+          return { pasted, readonlySent, interrupted, copied, copyWrites, copyState, refused };
+        },
+      });
+      const result = capture.probe as {
+        pasted: string[]; readonlySent: string[]; interrupted: string[]; copied: string; copyWrites: string[];
+        copyState: { sent: string[]; selected: boolean };
+        refused: { sent: string[]; selected: boolean };
+      };
+      expect(result.pasted).toEqual(['\x1b[200~dictated text\x1b[201~']);
+      expect(result.readonlySent).toEqual(result.pasted);
+      expect(result.interrupted).toEqual([...result.pasted, '\x03']);
+      expect(result.copyState.sent).toEqual(result.interrupted);
+      expect(result.copied).toBe('copy');
+      expect(result.copyWrites).toEqual(['copy']);
+      expect(result.copyState.selected).toBe(false);
+      expect(result.refused.sent).toEqual(result.interrupted);
+      expect(result.refused.selected).toBe(true);
+    } finally {
+      await api(td.port, td.token, `/sessions/${id}`, { method: 'DELETE' });
+    }
   }, 120_000);
 
   it('routes two sessions into two containers independently', async (context) => {
