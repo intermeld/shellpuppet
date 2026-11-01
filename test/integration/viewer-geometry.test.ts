@@ -122,8 +122,13 @@ describe('geometry in the browser (design §5)', () => {
             height: box.height, screenHeight: screen.height,
             hit: document.elementFromPoint(box.left + 20, box.top + 20)?.closest('#notices') !== null,
           };
-          if (index === 0) state.top = sample;
-          else state.bottom = sample;
+          // The terminal paints rows and moves the notice on separate browser
+          // turns. Observe each end only once the notice has followed the
+          // cursor; a persistent overlap still times out the probe.
+          if (!sample.overlap) {
+            if (index === 0) state.top = sample;
+            else state.bottom = sample;
+          }
           if (!state.top || !state.bottom) return null;
           return JSON.stringify({ top: state.top, bottom: state.bottom, sent: state.sent });
         })()`,

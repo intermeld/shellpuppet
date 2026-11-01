@@ -9,7 +9,8 @@ import type * as http from 'node:http';
 import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { SessionManager } from '../../src/core/manager.js';
 import { VIEWER_GRANT_TTL_MS } from '../../src/daemon/auth.js';
 import { DEFAULT_CAPTURE_TIMEOUT_MS } from '../../src/daemon/screenshot.js';
 import {
@@ -52,7 +53,7 @@ async function startNodeSession(marker: string): Promise<{ id: string; viewerUrl
       label: marker,
     },
   });
-  expect(started.status).toBe(200);
+  expect(started.status, JSON.stringify(started.body)).toBe(200);
   return started.body as unknown as { id: string; viewerUrl: string };
 }
 
@@ -97,6 +98,32 @@ describe('auth and loopback defences', () => {
 });
 
 describe('session lifecycle over HTTP', () => {
+  it('records the stack when a session start fails unexpectedly', async () => {
+    const errors: { message: string; meta?: Record<string, unknown> }[] = [];
+    const daemon = await startTestDaemon({
+      logger: {
+        debug: () => undefined,
+        info: () => undefined,
+        warn: () => undefined,
+        error: (message, meta) => { errors.push({ message, meta }); },
+      },
+    });
+    const failure = new Error('synthetic PTY start failure');
+    const create = vi.spyOn(SessionManager.prototype, 'create').mockImplementationOnce(() => { throw failure; });
+    try {
+      const result = await api(daemon.port, daemon.token, '/sessions', {
+        body: { command: process.execPath, shell: false },
+      });
+      expect(result.status).toBe(500);
+      expect(errors).toContainEqual({
+        message: 'session start failed',
+        meta: { error: failure.stack },
+      });
+    } finally {
+      create.mockRestore();
+      await daemon.stop();
+    }
+  });
   it('start returns id, ready and a viewer URL carrying a scoped token (§3.1, §4.1)', async () => {
     const session = await startNodeSession('http-start-marker');
     expect(session.id).toMatch(/^s\d+$/);
