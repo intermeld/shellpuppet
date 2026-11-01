@@ -480,7 +480,7 @@
       if (layoutKey !== lastLayout) {
         const structureKey = JSON.stringify([items.map((item) => item.id), layout, primary, enlarged]);
         empty.hidden = items.length > 0;
-        root.className = layout;
+        root.className = layout === 'focus' && items.length === 1 ? 'focus focus-only' : layout;
         root.dataset.layout = layout;
         root.style.setProperty('--columns', String(Math.max(1, columns)));
         root.style.setProperty('--rows', String(Math.max(1, rows)));
@@ -501,7 +501,9 @@
           lastStructure = structureKey;
         }
         for (const item of items) {
-          const measuredWidth = layout === 'grid' ? width / columns : item.card.parentElement === strip ? 300 : width - 300;
+          const measuredWidth = layout === 'grid' ? width / columns
+            : item.card.parentElement === strip ? 300
+              : layout === 'focus' && items.length > 1 ? width - 300 : width;
           const measuredHeight = layout === 'grid' ? height / rows : item.card.parentElement === strip ? 170 : height;
           item.card.classList.toggle('below-floor', measuredWidth < 652 || measuredHeight < 446);
           updateCard(item);

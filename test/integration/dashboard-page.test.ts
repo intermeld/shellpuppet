@@ -78,6 +78,43 @@ beforeAll(async () => {
 afterAll(async () => { await daemon.stop(); }, 120_000);
 
 describe('passive dashboard page', () => {
+  it('gives a lone focused pane the full width and restores the strip for a second pane', async (context) => {
+    if (!browser) { context.skip(); return; }
+    const shot = await captureDashboard({ browser, viewerUrl: await dashboardUrl(), width: 900, height: 720,
+      drive: true, timeoutMs: 120_000,
+      probe: `(() => {
+        const feed = window.__dashboardDiagnostics.streams.find(s => s.url.endsWith('/dashboard/events'))?.socket;
+        if (!feed || document.getElementById('connection').textContent !== 'Connected') return null;
+        document.getElementById('focus').click();
+        const first = { id: 'one', label: 'one', cols: 100, rows: 30 };
+        feed.onmessage({ data: JSON.stringify({ type: 'snapshot', sessions: [first] }) });
+        const root = document.getElementById('panes');
+        const main = document.getElementById('main-pane');
+        const strip = document.getElementById('strip');
+        const lone = { paneWidth: main.querySelector('.pane').getBoundingClientRect().width,
+          rootWidth: root.clientWidth - 12, stripWidth: strip.getBoundingClientRect().width,
+          belowFloor: main.querySelector('.pane').classList.contains('below-floor') };
+        feed.onmessage({ data: JSON.stringify({ type: 'snapshot', sessions: [first,
+          { id: 'two', label: 'two', cols: 100, rows: 30 }] }) });
+        return JSON.stringify({ lone, pair: { stripWidth: strip.getBoundingClientRect().width,
+          stripCount: strip.querySelectorAll('.pane').length,
+          mainWidth: main.querySelector('.pane').getBoundingClientRect().width,
+          uniqueIds: [...new Set([...root.querySelectorAll('.pane')].map(p => p.dataset.session))].length } });
+      })()`,
+    });
+    const result = JSON.parse(String(shot.probe)) as {
+      lone: { paneWidth: number; rootWidth: number; stripWidth: number; belowFloor: boolean };
+      pair: { stripWidth: number; stripCount: number; mainWidth: number; uniqueIds: number };
+    };
+    expect(result.lone.paneWidth).toBeCloseTo(result.lone.rootWidth, 0);
+    expect(result.lone.stripWidth).toBe(0);
+    expect(result.lone.belowFloor).toBe(false);
+    expect(result.pair.stripWidth).toBeCloseTo(300, 0);
+    expect(result.pair.stripCount).toBe(1);
+    expect(result.pair.mainWidth).toBeLessThan(result.lone.paneWidth);
+    expect(result.pair.uniqueIds).toBe(2);
+  }, 180_000);
+
   it('uses a hint colour with at least 4.5 to 1 contrast', () => {
     const css = fs.readFileSync(path.join(repoRoot, 'src', 'viewer', 'dashboard.css'), 'utf8');
     const hint = /\.hint\s*\{[^}]*color:\s*(#[0-9a-f]{6})/i.exec(css)?.[1];
