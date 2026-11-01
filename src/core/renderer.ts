@@ -21,6 +21,8 @@ import serializeAddon from '@xterm/addon-serialize';
 import type { SerializeAddon as XtermSerializeAddon } from '@xterm/addon-serialize';
 import { DEFAULT_COLS, DEFAULT_ROWS, DEFAULT_SCROLLBACK } from './types.js';
 import type { CursorPosition } from './types.js';
+import { markSelectedOption } from './selection.js';
+import { detectPrompt } from './promptDetector.js';
 
 const { Terminal } = xterm;
 const { SerializeAddon } = serializeAddon;
@@ -154,12 +156,18 @@ export class ScreenRenderer {
     while (lines.length > 0 && lines[lines.length - 1]?.trim() === '') {
       lines.pop();
     }
+    // Most screens have no menu. Avoid walking every cell for its attributes
+    // unless the text detector has found option rows that could be selected.
+    const prompt = detectPrompt(lines.join('\n'));
+    const marked = prompt?.optionRows === undefined
+      ? lines
+      : markSelectedOption(this.styledLines().lines, prompt);
     return {
       cols: this.term.cols,
       rows: this.term.rows,
       cursor: { x: buffer.cursorX, y: buffer.cursorY },
-      lines,
-      screen: lines.join('\n'),
+      lines: marked,
+      screen: marked.join('\n'),
     };
   }
 
@@ -189,7 +197,7 @@ export class ScreenRenderer {
       const line = buffer.getLine(i);
       lines.push(line ? line.translateToString(true) : '');
     }
-    return lines;
+    return markSelectedOption(this.styledLines({ last: Math.max(count, 20) }).lines).slice(-lines.length);
   }
 
   /**
@@ -199,7 +207,7 @@ export class ScreenRenderer {
    * scrollback over it as context; `firstVisible` is where the viewport
    * starts among them. With `last`, the last `last` lines of everything
    * written, scrollback included, as `lastLines` takes them. Text matches
-   * `snapshot` and `lastLines` line for line.
+   * the screen text before selection annotations are added for text readers.
    */
   styledLines(options: { above?: number; last?: number } = {}): { lines: StyledLine[]; firstVisible: number } {
     const buffer = this.term.buffer.active;

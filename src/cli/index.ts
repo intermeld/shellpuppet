@@ -397,13 +397,14 @@ async function main(): Promise<void> {
             (s.agent !== null && s.agent !== undefined ? `  agent:${s.agent}` : ''),
         );
         const waiting = (s as SessionSummary & {
-          waitingOnPrompt?: { question: string; waitingMs: number };
+          waitingOnPrompt?: { question: string; selectedOption?: number; waitingMs: number };
         }).waitingOnPrompt;
         if (waiting !== undefined) {
           console.log(
             `    WAITING ${String(Math.round(waiting.waitingMs / 1000))}s on a prompt` +
               (waiting.question === undefined ? '' : `: ${waiting.question}`),
           );
+          if (waiting.selectedOption !== undefined) console.log(`    selectedOption: ${String(waiting.selectedOption)} (zero-based)`);
         }
       }
       break;
@@ -501,7 +502,7 @@ async function main(): Promise<void> {
         // anything yet"), when it has one. It goes to stderr, with the outcome
         // line.
         if (typeof result['detail'] === 'string') console.error(result['detail']);
-        const detected = result['prompt'] as { question: string; options: string[] } | undefined;
+        const detected = result['prompt'] as { question: string; options: string[]; selectedOption?: number } | undefined;
         if (detected !== undefined) {
           // stderr, like the outcome line: stdout stays the screen alone, so
           // piping `wait` into a file or a diff keeps working unchanged.
@@ -511,6 +512,7 @@ async function main(): Promise<void> {
           // "1. 1. Allow once", and the number the human must press is the
           // program's, not ours.
           for (const option of detected.options) console.error(`  ${option}`);
+          if (detected.selectedOption !== undefined) console.error(`selectedOption: ${String(detected.selectedOption)} (zero-based)`);
         }
         console.log(String(result['screen']));
       }

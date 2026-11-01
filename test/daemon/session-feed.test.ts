@@ -21,6 +21,9 @@ describe('session feed', () => {
     expect(changedFields(before, { ...before, waitingOnPrompt: {
       ...before.waitingOnPrompt, options: ['no'], waitingMs: 300,
     } })).toEqual(['waitingOnPrompt']);
+    expect(changedFields(before, { ...before, waitingOnPrompt: {
+      ...before.waitingOnPrompt, selectedOption: 0,
+    } })).toEqual(['waitingOnPrompt']);
     expect(changedFields(base, { ...base, rows: 25, geometryHeld: true, watchers: 1,
       label: 'two', purpose: 'observe', exited: true, exitCode: 0 }))
       .toEqual(['rows', 'geometryHeld', 'watchers', 'label', 'purpose', 'exited', 'exitCode']);

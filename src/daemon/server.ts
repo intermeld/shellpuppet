@@ -30,6 +30,7 @@ import { findOnScreen } from '../core/find.js';
 import { screenShows } from '../core/echo.js';
 import { RegexBudgetError } from '../core/regexBudget.js';
 import { detectPrompt } from '../core/promptDetector.js';
+import { markFilteredSelectedOption } from '../core/selection.js';
 import type { DetectedPrompt } from '../core/promptDetector.js';
 import { WaitConditionError } from '../core/waiter.js';
 import { agentNames, hideReasoning, latestResult, programName, signatureFor } from '../core/reasoning.js';
@@ -2146,9 +2147,10 @@ export class Daemon {
         const view = await session.styledScreen(REASONING_CONTEXT_LINES);
         const screen = hideReasoning(view.lines, signature, view.firstVisible);
         let tail: ReturnType<typeof hideReasoning> | undefined;
+        let tailSource: Awaited<ReturnType<Session['styledTail']>> | undefined;
         if (count !== undefined) {
-          const lines = await session.styledTail(count, REASONING_CONTEXT_LINES);
-          tail = hideReasoning(lines.lines, signature, lines.firstVisible);
+          tailSource = await session.styledTail(count, REASONING_CONTEXT_LINES);
+          tail = hideReasoning(tailSource.lines, signature, tailSource.firstVisible);
         }
         if (screen === null || tail === null) {
           json(res, 400, { error: overBudgetMessage(signature) });
@@ -2156,9 +2158,11 @@ export class Daemon {
         }
         json(res, 200, {
           ...snapshot,
-          screen: screen.lines.join('\n'),
+          screen: markFilteredSelectedOption(screen.lines, view.lines).join('\n'),
           cursor: filteredCursor(snapshot.cursor, screen),
-          ...(tail !== undefined ? { lastLines: tail.lines } : {}),
+          ...(tail !== undefined && tailSource !== undefined
+            ? { lastLines: markFilteredSelectedOption(tail.lines, tailSource.lines) }
+            : {}),
           reasoning: {
             agent: signature.name,
             hiddenLines: screen.hiddenLines,
@@ -2342,19 +2346,21 @@ export class Daemon {
             json(res, 400, { error: overBudgetMessage(reader) });
             return;
           }
+          const marked = markFilteredSelectedOption(filtered.lines, view.lines);
           const visiblePrompt = result.prompt === undefined
             ? null
-            : detectPrompt(filtered.lines.join('\n'));
+            : detectPrompt(marked.join('\n'));
           const prompt = visiblePrompt !== null && visiblePrompt.signature === result.prompt?.signature
             ? {
                 question: visiblePrompt.question,
                 options: visiblePrompt.options,
                 signature: visiblePrompt.signature,
+                ...(visiblePrompt.selectedOption === undefined ? {} : { selectedOption: visiblePrompt.selectedOption }),
               }
             : undefined;
           json(res, 200, {
             ...result,
-            screen: filtered.lines.join('\n'),
+            screen: marked.join('\n'),
             ...(result.prompt === undefined ? {} : { prompt }),
             reasoning: { agent: reader.name, hiddenLines: filtered.hiddenLines, hiddenBlocks: filtered.hiddenBlocks },
             id: session.id,
@@ -2802,7 +2808,7 @@ export class Daemon {
    * against prompts that sit for minutes.
    */
   private listWithPrompts(hideReasoning = false): (SessionSummary & {
-    waitingOnPrompt?: { question?: string; options?: string[]; waitingMs: number; alerted: boolean };
+    waitingOnPrompt?: { question?: string; options?: string[]; selectedOption?: number; waitingMs: number; alerted: boolean };
   })[] {
     const now = Date.now();
     return this.manager.list().map((summary) => {
@@ -2821,6 +2827,7 @@ export class Daemon {
       waitingOnPrompt: {
         question: state.prompt.question,
         options: state.prompt.options,
+        ...(state.prompt.selectedOption === undefined ? {} : { selectedOption: state.prompt.selectedOption }),
         waitingMs: now - state.since,
         alerted: state.alerted,
       },
@@ -2928,6 +2935,7 @@ export class Daemon {
       // joining late.
       const promptChanged = previous === undefined ||
         previous.prompt.question !== detected.question ||
+        previous.prompt.selectedOption !== detected.selectedOption ||
         previous.prompt.options.length !== detected.options.length ||
         previous.prompt.options.some((option, index) => option !== detected.options[index]);
       if (previous !== undefined) {
@@ -2994,6 +3002,7 @@ export class Daemon {
           waitingMs,
           question: detected.question,
           options: detected.options,
+          ...(detected.selectedOption === undefined ? {} : { selectedOption: detected.selectedOption }),
         });
         // The session's own viewers get the same signal, so an open viewer
         // tab can badge itself without subscribing to the daemon stream.
@@ -3005,6 +3014,7 @@ export class Daemon {
           // can say what the choices are, not only THAT something is being
           // asked.
           options: detected.options,
+          ...(detected.selectedOption === undefined ? {} : { selectedOption: detected.selectedOption }),
         });
       }
     }
@@ -3386,6 +3396,7 @@ export class Daemon {
           waitingMs: Date.now() - held.since,
           question: held.prompt.question,
           options: held.prompt.options,
+          ...(held.prompt.selectedOption === undefined ? {} : { selectedOption: held.prompt.selectedOption }),
         }),
       );
     }

@@ -209,6 +209,13 @@ Twelve tools appear once the server is wired in: `terminal_start`,
 `terminal_find`, `terminal_result`, `terminal_list`, `terminal_resize`,
 `terminal_screenshot`, `terminal_viewer_url` and `terminal_kill`.
 
+Text snapshots (`terminal_snapshot`, `terminal_wait`, `shellpuppet snap` and
+`lastLines`) prefix a uniquely styled menu choice with `⟦SP:selected⟧ `. This
+text annotation is never sent to the terminal or viewer. A detected prompt
+keeps its option labels unchanged and reports `selectedOption` separately as
+their zero-based index, when inverse video or a background colour identifies
+one choice. Ordinary highlighting adds neither field nor marker.
+
 When the session runs another agent CLI, `terminal_result` returns the answer
 that ended its latest turn and nothing else, and `terminal_snapshot`,
 `terminal_find`, `terminal_wait` and `terminal_screenshot` take `hideReasoning`

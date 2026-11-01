@@ -41,6 +41,10 @@ export interface DetectedPrompt {
   question: string;
   /** The visible options, in screen order, markers stripped. */
   options: string[];
+  /** Index into `options` when cell styling uniquely selects one row. */
+  selectedOption?: number;
+  /** Raw screen row for each option, when options occupy separate rows. */
+  optionRows?: number[];
   /**
    * Stable identity for the prompt as currently drawn: the same prompt
    * redrawn (cursor blink, spinner elsewhere) keeps its signature, so a
@@ -260,7 +264,21 @@ function isYesNo(text: string): boolean {
  * Decide whether the screen is showing a prompt that waits on a human.
  * Returns null when the screen looks busy or shows no prompt shape.
  */
+export const SELECTED_OPTION_MARKER = '⟦SP:selected⟧ ';
+
 export function detectPrompt(screen: string): DetectedPrompt | null {
+  const original = screen.split('\n');
+  const plain = original.map((line) => line.startsWith(SELECTED_OPTION_MARKER)
+    ? line.slice(SELECTED_OPTION_MARKER.length)
+    : line);
+  const prompt = detectPlainPrompt(plain.join('\n'));
+  if (prompt?.optionRows === undefined) return prompt;
+  const selected = prompt.optionRows.flatMap((row, index) =>
+    original[row]?.startsWith(SELECTED_OPTION_MARKER) ? [index] : []);
+  return selected.length === 1 ? { ...prompt, selectedOption: selected[0] } : prompt;
+}
+
+function detectPlainPrompt(screen: string): DetectedPrompt | null {
   const raw = screen.split('\n');
   const lines = contentLines(raw);
   if (lines.length === 0) return null;
@@ -350,6 +368,7 @@ function openCodeQuestionMenu(raw: string[], lines: Line[]): DetectedPrompt | nu
   return {
     question: normalise(question.join(' ')),
     options,
+    optionRows: raw.slice(firstOption, footer.index).map((line, index) => QUESTION_MENU_OPTION.test(line) ? firstOption + index : -1).filter((index) => index >= 0),
     signature: normalise(raw.slice(first, footer.index + 1).join(' ')),
     rows: [first, footer.index],
     basis: 'footer',
@@ -397,6 +416,7 @@ function clackPrompt(tail: Line[], raw: string[]): DetectedPrompt | null {
   // message of its own is asked by the message logged just above it.
   const message = headline[1] === undefined ? loggedAbove(raw, top - 1) : [headline[1]];
   const options: string[] = [];
+  const optionRows: number[] = [];
   let radios = 0;
   let selected = 0;
   for (let index = top; index <= lastRow.index; index++) {
@@ -411,6 +431,7 @@ function clackPrompt(tail: Line[], raw: string[]): DetectedPrompt | null {
       if (glyph === '●' || glyph === '○') radios++;
       if (glyph === '●') selected++;
       options.push(normalise(choice.slice(2)));
+      optionRows.push(index);
     }
   }
   // A select has exactly one option selected, and so has a confirm.
@@ -423,6 +444,7 @@ function clackPrompt(tail: Line[], raw: string[]): DetectedPrompt | null {
   return {
     question,
     options,
+    optionRows,
     signature: [question, ...options.map(withoutHint)].join(' | '),
     // From the headline to the bar end, a validation message under it included.
     rows: [top - 1, after - 1],
@@ -703,6 +725,7 @@ function livePrompt(block: Block, tail: Line[], raw: string[]): DetectedPrompt |
   return {
     question: headline,
     options,
+    optionRows: rows.map((row) => row.line.index),
     signature: [headline, ...options].map(stable).join(' | '),
     rows: [start, blockEnd],
     basis,

@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { ScreenRenderer } from '../../src/core/renderer.js';
+import { detectPrompt } from '../../src/core/promptDetector.js';
+import { markFilteredSelectedOption } from '../../src/core/selection.js';
 
 const renderers: ScreenRenderer[] = [];
 
@@ -14,6 +16,67 @@ afterEach(() => {
 });
 
 describe('ScreenRenderer.snapshot', () => {
+  it('marks an inverse-video selected menu option in text and reports its index', async () => {
+    const r = makeRenderer(60, 6);
+    await r.write('Choose a build?\r\n  1. Debug\r\n\x1b[7m  2. Release\x1b[0m');
+    const screen = r.snapshot().screen;
+    expect(screen).toContain('⟦SP:selected⟧   2. Release');
+    expect(detectPrompt(screen)?.options).toEqual(['1. Debug', '2. Release']);
+    expect(detectPrompt(screen)?.selectedOption).toBe(1);
+    expect(r.lastLines(2)).toEqual(['  1. Debug', '⟦SP:selected⟧   2. Release']);
+    expect(await r.serialize()).not.toContain('⟦SP:selected⟧');
+  });
+
+  it('marks a background-colour selected menu option', async () => {
+    const r = makeRenderer(60, 6);
+    await r.write('Choose a build?\r\n\x1b[44m  1. Debug\x1b[0m\r\n  2. Release');
+    expect(r.snapshot().screen).toContain('⟦SP:selected⟧   1. Debug');
+  });
+
+  it('leaves ordinary highlighting and unstyled menus alone', async () => {
+    const r = makeRenderer(60, 6);
+    await r.write('Status: \x1b[7mREADY\x1b[0m\r\nChoose a build?\r\n  1. Debug\r\n  2. Release');
+    expect(r.snapshot().screen).toBe('Status: READY\nChoose a build?\n  1. Debug\n  2. Release');
+  });
+
+  it('keeps the same prompt signature as a styled selection moves', async () => {
+    const r = makeRenderer(60, 6);
+    await r.write('Choose a build?\r\n\x1b[7m  1. Debug\x1b[0m\r\n  2. Release');
+    const first = detectPrompt(r.snapshot().screen)!;
+    await r.write('\x1b[2;1H\x1b[0K  1. Debug\x1b[3;1H\x1b[7m  2. Release\x1b[0m');
+    const moved = detectPrompt(r.snapshot().screen)!;
+    expect(moved.signature).toBe(first.signature);
+    expect(first.selectedOption).toBe(0);
+    expect(moved.options).toEqual(['1. Debug', '2. Release']);
+    expect(moved.selectedOption).toBe(1);
+  });
+
+  it('does not infer a selection when two option rows are highlighted', async () => {
+    const r = makeRenderer(60, 6);
+    await r.write('Choose a build?\r\n\x1b[7m  1. Debug\x1b[0m\r\n\x1b[44m  2. Release\x1b[0m');
+    const screen = r.snapshot().screen;
+    expect(screen).toBe('Choose a build?\n  1. Debug\n  2. Release');
+    expect(detectPrompt(screen)?.selectedOption).toBeUndefined();
+  });
+
+  it('does not infer a selection from a highlighted keyword under half the row', async () => {
+    const r = makeRenderer(60, 6);
+    await r.write('Choose a build?\r\n  1. \x1b[7mAlpha\x1b[0mBeta\r\n  2. Release');
+    const screen = r.snapshot().screen;
+    expect(screen).toBe('Choose a build?\n  1. AlphaBeta\n  2. Release');
+    expect(detectPrompt(screen)?.selectedOption).toBeUndefined();
+  });
+
+  it('keeps the selection marker when preceding reasoning is filtered', async () => {
+    const r = makeRenderer(60, 6);
+    await r.write('Thinking\r\nChoose a build?\r\n  1. Debug\r\n\x1b[44m  2. Release\x1b[0m');
+    const filtered = ['[reasoning hidden: 1 line]', 'Choose a build?', '  1. Debug', '  2. Release'];
+    expect(markFilteredSelectedOption(filtered, r.styledLines().lines)).toEqual([
+      '[reasoning hidden: 1 line]', 'Choose a build?', '  1. Debug', '⟦SP:selected⟧   2. Release',
+    ]);
+    expect(detectPrompt(markFilteredSelectedOption(filtered, r.styledLines().lines).join('\n'))?.selectedOption).toBe(1);
+  });
+
   it('renders plain text with the cursor after it', async () => {
     const r = makeRenderer();
     await r.write('hello');
