@@ -2,7 +2,7 @@ import { NULL_LOGGER } from '../core/types.js';
 import type { Logger, SessionSummary } from '../core/types.js';
 
 export type FeedSummary = SessionSummary & {
-  waitingOnPrompt?: { question: string; options: string[]; waitingMs: number; alerted: boolean };
+  waitingOnPrompt?: { question: string; options: string[]; selectedOption?: number; waitingMs: number; alerted: boolean };
 };
 
 export type FeedFrame =
@@ -24,6 +24,7 @@ export function changedFields(before: FeedSummary, after: FeedSummary): string[]
     const right = after.waitingOnPrompt;
     if (left === undefined || right === undefined) return left !== right;
     return left.question !== right.question || left.alerted !== right.alerted ||
+      left.selectedOption !== right.selectedOption ||
       left.options.length !== right.options.length ||
       left.options.some((option, index) => option !== right.options[index]);
   });

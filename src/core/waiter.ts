@@ -22,7 +22,12 @@ import { RegexBudgetError, withRegexBudget } from './regexBudget.js';
 
 /** Question and options only. The filter's rows stay off anything a caller serialises. */
 function promptForCaller(prompt: DetectedPrompt): NonNullable<WaitResult['prompt']> {
-  return { question: prompt.question, options: prompt.options, signature: prompt.signature };
+  return {
+    question: prompt.question,
+    options: prompt.options,
+    signature: prompt.signature,
+    ...(prompt.selectedOption === undefined ? {} : { selectedOption: prompt.selectedOption }),
+  };
 }
 
 /**

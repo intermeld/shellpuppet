@@ -183,7 +183,7 @@ export interface ScreenSnapshot {
   cursor: CursorPosition;
   exited: boolean;
   exitCode: number | null;
-  /** Plain-text screen content, lines joined with `\n`, trailing blanks trimmed. */
+  /** Text screen, including any selection annotation, with trailing blanks trimmed. */
   screen: string;
 }
 
@@ -265,7 +265,7 @@ export interface WaitResult {
    * and why the detector called the screen live, stay off this object.
    * Absent for every other condition.
    */
-  prompt?: Omit<DetectedPrompt, 'rows' | 'basis'>;
+  prompt?: Pick<DetectedPrompt, 'question' | 'options' | 'signature' | 'selectedOption'>;
   /**
    * Why the wait did NOT match, when the waiter can say more than the reason,
    * e.g. quiet timed out because the program has not painted anything yet.

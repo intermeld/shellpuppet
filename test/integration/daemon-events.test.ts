@@ -9,6 +9,7 @@ import { WebSocket } from 'ws';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { api, eventually, redeemViewerUrl, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
+import type { FeedFrame } from '../../src/daemon/sessionFeed.js';
 
 let td: TestDaemon;
 
@@ -215,6 +216,61 @@ describe('prompt-stall alerting', () => {
  * decision-maker.
  */
 describe('prompt state reaches its consumers', () => {
+  it('reports a styled selection separately from unchanged option labels on every prompt surface', async () => {
+    const client = await connectEvents(td.port, td.token);
+    const frames: FeedFrame[] = [];
+    const unsubscribe = td.daemon.subscribeDashboardFeed((frame) => frames.push(frame));
+    let id = '';
+    try {
+      const script = [
+        "process.stdout.write('Choose a build?\\r\\n  1. Debug\\r\\n\\x1b[7m  2. Release\\x1b[0m\\r\\n');",
+        'setInterval(() => {}, 200);',
+      ].join(' ');
+      const started = await api(td.port, td.token, '/sessions', {
+        body: { command: process.execPath, args: ['-e', script], shell: false, label: 'styled-menu' },
+      });
+      expect(started.status).toBe(200);
+      id = String(started.body['id']);
+
+      await eventually(async () => {
+        const listed = await api(td.port, td.token, '/sessions');
+        const sessions = listed.body['sessions'] as { id: string; waitingOnPrompt?: { selectedOption?: number } }[];
+        return sessions.find((session) => session.id === id)?.waitingOnPrompt?.selectedOption === 1;
+      }, 10_000);
+      const listed = await api(td.port, td.token, '/sessions');
+      const sessions = listed.body['sessions'] as { id: string; waitingOnPrompt?: { options: string[]; selectedOption?: number } }[];
+      expect(sessions.find((session) => session.id === id)?.waitingOnPrompt).toMatchObject({
+        options: ['1. Debug', '2. Release'], selectedOption: 1,
+      });
+      const hidden = await api(td.port, td.token, '/sessions?hideReasoning=1');
+      const hiddenSessions = hidden.body['sessions'] as { id: string; waitingOnPrompt?: Record<string, unknown> }[];
+      expect(hiddenSessions.find((session) => session.id === id)?.waitingOnPrompt).not.toHaveProperty('selectedOption');
+
+      const snapshot = await api(td.port, td.token, `/sessions/${id}/snapshot`);
+      expect(String(snapshot.body['screen'])).toContain('⟦SP:selected⟧   2. Release');
+      const waited = await api(td.port, td.token, `/sessions/${id}/wait?prompt=true&timeout=10000`);
+      expect(waited.body['prompt']).toMatchObject({
+        options: ['1. Debug', '2. Release'], selectedOption: 1,
+      });
+      expect(String(waited.body['screen'])).toContain('⟦SP:selected⟧   2. Release');
+
+      await eventually(() => client.events.some((event) => event.type === 'prompt-stall' && event.session === id), 10_000);
+      const stall = client.events.find((event) => event.type === 'prompt-stall' && event.session === id);
+      expect(stall).toMatchObject({ options: ['1. Debug', '2. Release'], selectedOption: 1 });
+      const feed = frames.find((frame) =>
+        frame.type === 'session-updated' && frame.session.id === id &&
+        frame.session.waitingOnPrompt?.selectedOption === 1);
+      expect(feed?.type).toBe('session-updated');
+      if (feed?.type === 'session-updated') {
+        expect(feed.session.waitingOnPrompt?.options).toEqual(['1. Debug', '2. Release']);
+      }
+    } finally {
+      unsubscribe();
+      client.close();
+      if (id !== '') await api(td.port, td.token, `/sessions/${id}`, { method: 'DELETE' });
+    }
+  });
+
   it('flags the held prompt on the session list, with how long it has waited', async () => {
     const client = await connectEvents(td.port, td.token);
     const id = await startPromptingSession(0);
