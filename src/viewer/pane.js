@@ -200,6 +200,14 @@ window.ShellPuppetPane = (() => {
     const fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
     term.open(container);
+    const isMac = /Mac/i.test(navigator.platform);
+    // Let the browser deliver paste/copy to xterm's textarea on Windows and Linux.
+    term.attachCustomKeyEventHandler((event) => {
+      if (isMac || event.type !== 'keydown' || !event.ctrlKey || event.shiftKey || event.altKey || event.metaKey) return true;
+      if (event.key.toLowerCase() === 'v') return false;
+      if (event.key.toLowerCase() === 'c' && term.hasSelection()) return false;
+      return true;
+    });
 
     // The terminal can be centred within #wrap when its grid is held. Anchor
     // notices to the rendered screen, not to the outer fit box, and keep the
