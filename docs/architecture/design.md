@@ -569,10 +569,14 @@ Token-based, following the Jupyter / SSH-agent model, with **five credentials**:
   `Dest: document`), where `Origin` may be absent and `dt` may be redeemed.
   A `GET` or `HEAD` same-origin read with mode `cors`, `no-cors` or
   `same-origin` may also omit `Origin`. Every other cookie request, including
-  a mutation or WebSocket upgrade, requires `Sec-Fetch-Site: same-origin`
-  and `Origin` matching its `Host`; upgrades also require mode `websocket`.
-  A present `Origin` always has to match. `same-site`, `cross-site` and absent
-  site metadata are refused for every cookie request. The daemon sends no
+  a mutation, requires `Sec-Fetch-Site: same-origin` and `Origin` matching
+  its `Host`. A dashboard WebSocket upgrade requires that exact `Origin`
+  and its document proof. Chromium omits both Fetch Metadata headers on
+  WebSocket upgrades, so the pair may be absent there. If either is present,
+  the pair must be `Sec-Fetch-Site: same-origin` and
+  `Sec-Fetch-Mode: websocket`. A present `Origin` always has to match.
+  `same-site`, `cross-site` and absent site metadata are refused on HTTP
+  cookie requests. The daemon sends no
   CORS headers. Client-token HTTP still does not consult `Origin` and
   client-token upgrades may omit it, as before.
 - **WebSocket upgrades** take the client token on the query string (it is the same-user
@@ -632,10 +636,13 @@ be absent. When it is present it must be the daemon's own origin and its host mu
 `GET` or `HEAD`, `Sec-Fetch-Site: same-origin`, and `Sec-Fetch-Mode` of `cors`, `no-cors`
 or `same-origin`, again with `Origin` optional under the same matching rule. That is
 `GET /sessions`. Every other cookie-authenticated request, including the events upgrade
-and a session stream opened with the dashboard cookie, requires `Origin` and
-`Sec-Fetch-Site: same-origin`. The upgrade also requires `Sec-Fetch-Mode: websocket`.
-`Sec-Fetch-Site` of `same-site`, `cross-site` or absent is a
-refusal on every cookie request, navigation included. Another port of `127.0.0.1` is
+and a session stream opened with the dashboard cookie, requires an exact matching
+`Origin`. Mutations require `Sec-Fetch-Site: same-origin`. On an upgrade,
+the Fetch Metadata pair may be absent because Chromium omits it for WebSockets;
+otherwise it must be `Sec-Fetch-Site: same-origin` and
+`Sec-Fetch-Mode: websocket`. `Sec-Fetch-Site` of `same-site` or `cross-site`
+is always refused. An absent site is refused on HTTP cookie requests,
+navigation included. Another port of `127.0.0.1` is
 `same-site`, and `SameSite=Strict` does not refuse it, so Fetch Metadata does. A forbidden
 `Sec-Fetch-Site` is refused even for the anonymous dashboard page. An anonymous
 `GET /dashboard` with no cookie, no grant and no forbidden site returns the page with no

@@ -51,6 +51,8 @@ export interface CaptureOptions {
    * mode, as the whole of readiness when driving.
    */
   probe?: string;
+  /** Script installed before navigation, for browser integration probes. */
+  beforeNavigateScript?: string;
   /**
    * The folder the capture's own browser profile is made in, created when
    * absent. The daemon passes `captureProfileRoot(home)`, which it sweeps of
@@ -379,6 +381,10 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
       flatten: true,
     });
     await cdp.send('Page.enable', {}, sessionId);
+    if (options.beforeNavigateScript !== undefined) {
+      await cdp.send('Page.addScriptToEvaluateOnNewDocument',
+        { source: options.beforeNavigateScript }, sessionId);
+    }
     // The window size is an OUTER size, and Chromium enforces a minimum of
     // its own, so a window size alone gives a picture smaller than asked for
     // or, below the minimum, a different shape altogether (200×200 asked,

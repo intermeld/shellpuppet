@@ -687,6 +687,7 @@ describe('the cookie still opens nothing else', () => {
       ...authed,
       'content-type': 'application/json',
     }, JSON.stringify({ key: 'enter' }))).status).toBe(401);
+    // Launch is an existing dashboard route; this daemon has no such profile.
     expect((await raw(daemon.port, 'POST', '/dashboard/launch', {
       ...authed,
       'content-type': 'application/json',

@@ -53,6 +53,8 @@ window.ShellPuppetPane = (() => {
    * @param {number|null} [config.initialFontOverride=null] - Initial font size.
    * @param {function} [config.onTitleChange] - Called when the window title should change.
    * @param {function} [config.onFontOverrideChange] - Called when the font override changes.
+   * @param {string} [config.dashboardProof] - Document proof for a dashboard stream.
+   * @param {function} [config.onAttentionChange] - Reports prompt attention.
    * @returns {Object} A pane instance for the page to control.
    */
   function create(config) {
@@ -65,6 +67,8 @@ window.ShellPuppetPane = (() => {
       initialFontOverride = null,
       onTitleChange = () => {},
       onFontOverrideChange = () => {},
+      dashboardProof = null,
+      onAttentionChange = () => {},
     } = config;
 
     let fontOverride = initialFontOverride;
@@ -172,6 +176,7 @@ window.ShellPuppetPane = (() => {
       elements.promptAlert.hidden = false;
       positionNotices();
       promptWaiting = true;
+      onAttentionChange(true);
       refreshTitle();
     };
 
@@ -180,6 +185,7 @@ window.ShellPuppetPane = (() => {
       elements.promptAlert.hidden = true;
       elements.promptAlert.textContent = '';
       promptWaiting = false;
+      onAttentionChange(false);
       refreshTitle();
     };
 
@@ -263,6 +269,11 @@ window.ShellPuppetPane = (() => {
 
     function relayout(deliberate) {
       if (!geometryDecided) return;
+      if (dashboardProof !== null) {
+        applyFontPreference(gridCols, gridRows);
+        positionNotices();
+        return;
+      }
       if (controlMode === 'held' || captureMode || (controlMode === 'adopt' && !deliberate)) {
         applyFontPreference(gridCols, gridRows);
       } else {
@@ -361,6 +372,7 @@ window.ShellPuppetPane = (() => {
         term.resize(cols, rows);
       }
       updateZoomButtons();
+      container.dataset.fontSize = String(term.options.fontSize);
     }
 
     function applyGeometry(cols, rows, max) {
@@ -395,6 +407,11 @@ window.ShellPuppetPane = (() => {
     function setFontOverride(value) {
       fontOverride = value;
       onFontOverrideChange(value);
+      if (dashboardProof !== null) {
+        applyFontPreference(gridCols, gridRows);
+        positionNotices();
+        return;
+      }
       if (controlMode === 'held' || captureMode) {
         applyFontPreference(gridCols, gridRows);
         positionNotices();
@@ -419,7 +436,8 @@ window.ShellPuppetPane = (() => {
 
     function connect() {
       if (destroyed) return;
-      ws = new WebSocket(`ws://${location.host}/sessions/${sessionId}/stream`);
+      ws = new WebSocket(`ws://${location.host}/sessions/${encodeURIComponent(sessionId)}/stream`,
+        dashboardProof === null ? undefined : [`sp-csrf.${dashboardProof}`]);
       ws.binaryType = 'arraybuffer';
 
       ws.onopen = () => {
@@ -456,7 +474,7 @@ window.ShellPuppetPane = (() => {
             geometryDecided = true;
             controlMode = captureMode ? 'adopt' : control.control || 'adopt';
             applyGeometry(control.cols, control.rows, control.max);
-            if (controlMode === 'yours' && !captureMode) requestFit();
+            if (controlMode === 'yours' && !captureMode && dashboardProof === null) requestFit();
           } else if (control && control.type === 'identity') {
             showIdentity(control);
           } else if (control && control.type === 'exited') {
@@ -528,6 +546,20 @@ window.ShellPuppetPane = (() => {
       },
       getTerminal() {
         return term;
+      },
+      getGrid() {
+        return { cols: gridCols, rows: gridRows };
+      },
+      takeGrid(cols, rows) {
+        if (dashboardProof === null || !ws || ws.readyState !== 1 || !geometryDecided) return false;
+        const wanted = { cols: Math.max(2, Math.min(400, cols)), rows: Math.max(2, Math.min(150, rows)) };
+        ws.send(JSON.stringify({ type: 'resize', ...wanted, take: true }));
+        return true;
+      },
+      fitGrid() {
+        if (dashboardProof === null) return false;
+        const proposed = propose();
+        return proposed !== null && this.takeGrid(proposed.cols, proposed.rows);
       },
     };
   }

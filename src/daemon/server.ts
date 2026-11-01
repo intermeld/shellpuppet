@@ -189,6 +189,8 @@ const STATIC_ASSETS: Readonly<
   '/viewer/viewer.js': { file: path.join(viewerDir, 'viewer.js'), type: 'text/javascript' },
   '/viewer/pane.js': { file: path.join(viewerDir, 'pane.js'), type: 'text/javascript' },
   '/viewer/viewer.css': { file: path.join(viewerDir, 'viewer.css'), type: 'text/css' },
+  '/viewer/dashboard.js': { file: path.join(viewerDir, 'dashboard.js'), type: 'text/javascript' },
+  '/viewer/dashboard.css': { file: path.join(viewerDir, 'dashboard.css'), type: 'text/css' },
   // The mark. SVG first (crisp at any size, and what the tab uses); the PNGs
   // are for Windows, which wants a raster for the taskbar button of a Chrome
   // --app window. An SVG-only favicon leaves that button showing the generic
@@ -1599,10 +1601,13 @@ export class Daemon {
     if (!this.originMatchesRequest(req)) {
       return { code: 403, reason: 'Forbidden', audit: 'origin' };
     }
-    if (
-      headerOne(req, 'sec-fetch-site') !== 'same-origin' ||
-      headerOne(req, 'sec-fetch-mode') !== 'websocket'
-    ) {
+    // Chromium's WebSocket handshake omits both Fetch Metadata headers. The
+    // exact Origin and document proof above still bind it to this page. When
+    // either header is present, require the complete same-origin pair.
+    const site = headerOne(req, 'sec-fetch-site');
+    const mode = headerOne(req, 'sec-fetch-mode');
+    if (!((site === 'same-origin' && mode === 'websocket') ||
+      (site === undefined && mode === undefined))) {
       return { code: 403, reason: 'Forbidden', audit: 'fetch-site' };
     }
     const accepted = offeredProtocols(req).some((protocol) => {
