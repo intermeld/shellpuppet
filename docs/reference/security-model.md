@@ -139,6 +139,13 @@ make a reachable terminal safe.
   redemption replaces the cookie and drops the proofs it had. Cookies ignore
   ports, so a planted `sp_dash` is tried and skipped. The value the daemon
   issued still wins.
+  Dashboard windows opened from the page use the same browser profile and
+  `sp_dash` cookie. The URL fragment carries only a window identifier and
+  screen coordinates, or a session id for Pop out. It carries no grant or
+  cookie. `BroadcastChannel` shares the window roster and pane assignment
+  within that browser profile; each window reads session state from the
+  daemon's authenticated feed. Closing a window returns its panes to another
+  window. The channel cannot mint a grant or widen the cookie's authority.
 - **DNS-rebinding defences.** Any website you visit can make your browser send
   requests to loopback ports. The daemon rejects requests whose `Host` header
   is not its own, rejects WebSocket upgrades from foreign `Origin`s, sends no

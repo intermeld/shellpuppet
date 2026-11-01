@@ -10,6 +10,7 @@ button { font: inherit; color: #d7e3ee; background: #1c2633; border: 1px solid #
 button:hover, button:focus-visible { border-color: #79b8f5; }
 button.active { color: #9dd4ff; border-color: #4b9adc; background: #173249; }
 #attention-count:empty { display: none; }
+#screens { display: inline-flex; gap: 5px; }
 #error { background: #3d1d1f; color: #ffa198; padding: 6px 12px; }
 #panes { flex: 1; min-height: 0; display: grid; gap: 6px; padding: 6px; }
 #panes.grid { grid-template-columns: repeat(var(--columns), minmax(0, 1fr)); grid-template-rows: repeat(var(--rows), minmax(0, 1fr)); }
