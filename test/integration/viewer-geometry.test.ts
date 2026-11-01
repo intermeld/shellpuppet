@@ -81,6 +81,118 @@ if (now - st.since < ${String(stableMs)}) return null;`;
 }
 
 describe('geometry in the browser (design §5)', () => {
+  it('keeps notices off the cursor at both ends without resizing, and lets clicks through', async (context) => {
+    if (browser === null) { context.skip(); return; }
+    const started = await api(td.port, td.token, '/sessions', {
+      body: { command: process.execPath, args: ['-e',
+        "let bottom = false; const paint = () => process.stdout.write('\\x1b[2J\\x1b[H' + (bottom ? '\\x1b[30;1HBOTTOM' : 'TOP')); paint(); setInterval(() => { bottom = !bottom; paint(); }, 1500);",
+      ], shell: false, cols: 100, rows: 30, hold: true },
+    });
+    expect(started.status).toBe(200);
+    const id = String(started.body['id']);
+    try {
+      const capture = await captureViewer({
+        browser, viewerUrl: await freshViewerUrl(id), width: 920, height: 680,
+        drive: true, timeoutMs: 90_000,
+        probe: `(() => {
+          const rows = [...document.querySelectorAll('#term .xterm-rows > div')];
+          const notice = document.getElementById('notices');
+          if (rows.length < 30 || !document.getElementById('size').textContent) return null;
+          const state = (window.__cursorNotice = window.__cursorNotice || { sent: [], original: WebSocket.prototype.send });
+          if (!state.installed) {
+            WebSocket.prototype.send = function(data) {
+              if (typeof data === 'string' && data.includes('"type":"resize"')) state.sent.push(JSON.parse(data));
+              return state.original.call(this, data);
+            };
+            state.installed = true;
+            const alert = document.getElementById('prompt-alert');
+            alert.textContent = 'A long question '.repeat(400);
+            alert.hidden = false;
+            document.getElementById('banner').textContent = 'Connection notice';
+            document.getElementById('banner').hidden = false;
+          }
+          const index = rows[0].textContent.includes('TOP') ? 0 :
+            rows[rows.length - 1].textContent.includes('BOTTOM') ? rows.length - 1 : -1;
+          if (index !== 0 && index !== rows.length - 1) return null;
+          const box = notice.getBoundingClientRect();
+          const row = rows[index].getBoundingClientRect();
+          const screen = document.querySelector('#term .xterm-screen').getBoundingClientRect();
+          const sample = {
+            index, overlap: box.top < row.bottom && box.bottom > row.top,
+            height: box.height, screenHeight: screen.height,
+            hit: document.elementFromPoint(box.left + 20, box.top + 20)?.closest('#notices') !== null,
+          };
+          if (index === 0) state.top = sample;
+          else state.bottom = sample;
+          if (!state.top || !state.bottom) return null;
+          return JSON.stringify({ top: state.top, bottom: state.bottom, sent: state.sent });
+        })()`,
+      });
+      const result = JSON.parse(String(capture.probe)) as {
+        top: { overlap: boolean; height: number; screenHeight: number; hit: boolean };
+        bottom: { overlap: boolean; height: number; screenHeight: number; hit: boolean };
+        sent: unknown[];
+      };
+      expect(result.top.overlap).toBe(false);
+      expect(result.bottom.overlap).toBe(false);
+      expect(result.top.height).toBeLessThanOrEqual(result.top.screenHeight / 3 + 1);
+      expect(result.bottom.height).toBeLessThanOrEqual(result.bottom.screenHeight / 3 + 1);
+      expect(result.top.hit).toBe(false);
+      expect(result.bottom.hit).toBe(false);
+      expect(result.sent).toEqual([]);
+    } finally {
+      await api(td.port, td.token, `/sessions/${id}`, { method: 'DELETE' });
+    }
+  }, 180_000);
+
+  it('showing and hiding notices does not propose a new grid', async (context) => {
+    if (browser === null) { context.skip(); return; }
+    const id = await paintedSession(false);
+    const capture = await captureViewer({
+      browser,
+      viewerUrl: await freshViewerUrl(id),
+      width: 920,
+      height: 680,
+      drive: true,
+      timeoutMs: 90_000,
+      probe: `(() => {
+        if (!document.querySelector('.xterm-screen') || !document.getElementById('size').textContent) return null;
+        const watch = (window.__noticeWatch = window.__noticeWatch || { phase: 0, at: Date.now(), sent: [], original: WebSocket.prototype.send });
+        if (watch.phase === 0) {
+          WebSocket.prototype.send = function(data) {
+            if (typeof data === 'string' && data.includes('"type":"resize"')) watch.sent.push(JSON.parse(data));
+            return watch.original.call(this, data);
+          };
+          watch.before = document.getElementById('wrap').clientHeight;
+          watch.phase = 1; watch.at = Date.now();
+          return null;
+        }
+        if (Date.now() - watch.at < 300) return null;
+        const banner = document.getElementById('banner');
+        const alert = document.getElementById('prompt-alert');
+        if (watch.phase === 1) {
+          banner.textContent = 'Connection notice'; banner.hidden = false;
+          alert.textContent = 'Waiting for you: answer the question'; alert.hidden = false;
+          window.dispatchEvent(new Event('resize'));
+          watch.shown = document.getElementById('wrap').clientHeight;
+          watch.phase = 2; watch.at = Date.now(); return null;
+        }
+        if (watch.phase === 2) {
+          banner.hidden = true; alert.hidden = true;
+          window.dispatchEvent(new Event('resize'));
+          watch.hidden = document.getElementById('wrap').clientHeight;
+          watch.phase = 3; watch.at = Date.now(); return null;
+        }
+        return JSON.stringify({ before: watch.before, shown: watch.shown, hidden: watch.hidden, sent: watch.sent });
+      })()`,
+    });
+    const result = JSON.parse(String(capture.probe)) as { before: number; shown: number; hidden: number; sent: unknown[] };
+    expect(result.shown).toBe(result.before);
+    expect(result.hidden).toBe(result.before);
+    expect(result.sent).toEqual([]);
+    await api(td.port, td.token, `/sessions/${id}`, { method: 'DELETE' });
+  }, 180_000);
+
   it('a held grid in a window of another shape: bars on one axis, text scaled, nothing proposed', async (context) => {
     if (browser === null) {
       context.skip();

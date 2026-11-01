@@ -90,6 +90,7 @@ window.ShellPuppetPane = (() => {
       if (!elements.banner) return;
       elements.banner.textContent = message;
       elements.banner.hidden = false;
+      positionNotices();
     };
 
     const refreshTitle = () => {
@@ -145,7 +146,6 @@ window.ShellPuppetPane = (() => {
 
       identityTitle = `${identity.session} ${purpose} · ShellPuppet`;
       refreshTitle();
-      relayout(false);
     };
 
     const showPromptAlert = (question, waitingMs, options) => {
@@ -170,9 +170,9 @@ window.ShellPuppetPane = (() => {
         elements.promptAlert.append(list);
       }
       elements.promptAlert.hidden = false;
+      positionNotices();
       promptWaiting = true;
       refreshTitle();
-      relayout(false);
     };
 
     const clearPromptAlert = () => {
@@ -181,7 +181,6 @@ window.ShellPuppetPane = (() => {
       elements.promptAlert.textContent = '';
       promptWaiting = false;
       refreshTitle();
-      relayout(false);
     };
 
     const term = new Terminal({
@@ -195,6 +194,28 @@ window.ShellPuppetPane = (() => {
     const fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
     term.open(container);
+
+    // The terminal can be centred within #wrap when its grid is held. Anchor
+    // notices to the rendered screen, not to the outer fit box, and keep the
+    // cursor's half free even as a TUI moves its cursor without a grid change.
+    function positionNotices() {
+      const notices = elements.promptAlert?.parentElement || elements.banner?.parentElement;
+      const wrap = container.parentElement;
+      const screen = term.element?.querySelector('.xterm-screen');
+      if (!notices || !wrap || !screen || term.rows < 1) return;
+      const screenRect = screen.getBoundingClientRect();
+      const wrapRect = wrap.getBoundingClientRect();
+      notices.style.maxHeight = `${String(screenRect.height / 3)}px`;
+      if (term.buffer.active.cursorY < term.rows / 2) {
+        notices.style.top = 'auto';
+        notices.style.bottom = `${String(wrapRect.bottom - screenRect.bottom)}px`;
+      } else {
+        notices.style.bottom = 'auto';
+        notices.style.top = `${String(screenRect.top - wrapRect.top)}px`;
+      }
+    }
+    term.onCursorMove(positionNotices);
+    positionNotices();
 
     if (redactedCapture) {
       window.__shellpuppetCoverRows = (hiddenRows) => {
@@ -247,6 +268,7 @@ window.ShellPuppetPane = (() => {
       } else {
         requestFit();
       }
+      positionNotices();
     }
 
     function requestFit() {
@@ -359,6 +381,7 @@ window.ShellPuppetPane = (() => {
           `${cols}×${rows}` +
           (controlMode === 'held' ? ' (fixed)' : controlMode === 'adopt' ? ' (following)' : '');
       }
+      positionNotices();
     }
 
     function updateZoomButtons() {
@@ -374,9 +397,11 @@ window.ShellPuppetPane = (() => {
       onFontOverrideChange(value);
       if (controlMode === 'held' || captureMode) {
         applyFontPreference(gridCols, gridRows);
+        positionNotices();
         return;
       }
       requestFit();
+      positionNotices();
     }
 
     function nudgeFont(delta) {

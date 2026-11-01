@@ -48,6 +48,13 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- A viewer's waiting and connection notices sit in the half of the terminal
+  away from its cursor, scroll within at most one third of its height, and let
+  clicks through to the terminal. Its identity strip keeps a fixed height, so
+  badge changes do not resize the session. A repaint of the same prompt keeps
+  its waiting age and stall alert; a short redraw gap does not clear it, while
+  a prompt still missing after one second clears without waiting for the next
+  five-second scan. (#41)
 - OpenCode and MiMo Code question menus now report their wrapped question and
   numbered choices as a waiting prompt. The menu survives `hideReasoning`, and
   filtered session lists omit its question text.
