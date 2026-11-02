@@ -20,7 +20,7 @@ interface ShortcutOptions {
 }
 
 const LINK_CLSID = Buffer.from('0114020000000000c000000000000046', 'hex');
-const FLAGS = 0x02 | 0x04 | 0x10 | 0x20 | 0x40 | 0x80;
+const FLAGS = 0x01 | 0x02 | 0x04 | 0x10 | 0x20 | 0x40 | 0x80;
 const ansi = (value: string): Buffer => Buffer.from(`${value}\0`, 'latin1');
 const wide = (value: string): Buffer => Buffer.from(`${value}\0`, 'utf16le');
 function stringData(value: string): Buffer {
@@ -31,7 +31,32 @@ function stringData(value: string): Buffer {
   return Buffer.concat([size, body]);
 }
 
-/** MS-SHLLINK: header, local LinkInfo, Unicode StringData and terminal block. */
+function fileItem(name: string, directory: boolean): Buffer {
+  const label = wide(name);
+  const size = 14 + label.length + 2;
+  const item = Buffer.alloc(size);
+  item.writeUInt16LE(size, 0);
+  item[2] = directory ? 0x35 : 0x34;
+  item.writeUInt16LE(directory ? 0x10 : 0x20, 12);
+  label.copy(item, 14);
+  return item;
+}
+
+function targetIdList(target: string): Buffer {
+  const root = Buffer.from('14001f50e04fd020ea3a6910a2d808002b30309d', 'hex');
+  const volume = Buffer.alloc(0x19);
+  volume.writeUInt16LE(volume.length);
+  volume[2] = 0x2f;
+  ansi(path.win32.parse(target).root).copy(volume, 3);
+  const parts = target.slice(path.win32.parse(target).root.length).split('\\');
+  const entries = parts.map((name, index) => fileItem(name, index < parts.length - 1));
+  const body = Buffer.concat([root, volume, ...entries, Buffer.alloc(2)]);
+  const size = Buffer.alloc(2);
+  size.writeUInt16LE(body.length);
+  return Buffer.concat([size, body]);
+}
+
+/** MS-SHLLINK: header, target ID list, local LinkInfo, Unicode StringData and terminal block. */
 export function shellLink(fields: ShortcutFields): Buffer {
   if (!path.win32.isAbsolute(fields.target)) throw new Error('The shortcut target must be absolute.');
   const header = Buffer.alloc(0x4c);
@@ -41,16 +66,17 @@ export function shellLink(fields: ShortcutFields): Buffer {
   header.writeUInt32LE(0x20, 0x18);
   header.writeUInt32LE(fields.showCommand, 0x3c);
 
-  const volumeLabel = ansi('ShellPuppet');
+  const volumeLabel = ansi('');
   const volume = Buffer.alloc(0x10);
   volume.writeUInt32LE(volume.length + volumeLabel.length, 0);
   volume.writeUInt32LE(3, 4);
+  try { volume.writeUInt32LE(Number(fs.statSync(path.win32.parse(fields.target).root, { bigint: true }).dev & 0xffffffffn), 8); } catch { /* Made-up targets in byte tests have no volume. */ }
   volume.writeUInt32LE(0x10, 12);
   const volumeData = Buffer.concat([volume, volumeLabel]);
   const base = ansi(fields.target);
-  const suffix = ansi(path.win32.basename(fields.target));
+  const suffix = ansi('');
   const baseWide = wide(fields.target);
-  const suffixWide = wide(path.win32.basename(fields.target));
+  const suffixWide = wide('');
   const info = Buffer.alloc(0x24);
   info.writeUInt32LE(info.length + volumeData.length + base.length + suffix.length + baseWide.length + suffixWide.length, 0);
   info.writeUInt32LE(0x24, 4);
@@ -60,7 +86,7 @@ export function shellLink(fields: ShortcutFields): Buffer {
   info.writeUInt32LE(0x24 + volumeData.length + base.length, 24);
   info.writeUInt32LE(0x24 + volumeData.length + base.length + suffix.length, 28);
   info.writeUInt32LE(0x24 + volumeData.length + base.length + suffix.length + baseWide.length, 32);
-  return Buffer.concat([header, info, volumeData, base, suffix, baseWide, suffixWide,
+  return Buffer.concat([header, targetIdList(fields.target), info, volumeData, base, suffix, baseWide, suffixWide,
     stringData(fields.description), stringData(fields.workingDirectory),
     stringData(fields.arguments), stringData(fields.icon), Buffer.alloc(4)]);
 }
@@ -68,7 +94,7 @@ export function shellLink(fields: ShortcutFields): Buffer {
 /** Read the fields back for format regression tests. */
 export function parseShellLink(bytes: Buffer): ShortcutFields {
   if (bytes.readUInt32LE(0) !== 0x4c || !bytes.subarray(4, 20).equals(LINK_CLSID)) throw new Error('Not a Shell Link.');
-  const linkInfo = 0x4c;
+  const linkInfo = 0x4c + 2 + bytes.readUInt16LE(0x4c);
   const baseOffset = bytes.readUInt32LE(linkInfo + 28);
   const start = linkInfo + baseOffset;
   let end = start;
