@@ -19,7 +19,10 @@
 import { spawn } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
+import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readDaemonConfig } from '../daemon/config.js';
+import { resolveLaunchCommand } from '../daemon/launchProfiles.js';
 import {
   daemonStatePath,
   readDaemonState,
@@ -32,6 +35,8 @@ import { NULL_LOGGER } from '../core/types.js';
 import type { Logger } from '../core/types.js';
 
 const AUTO_START_TIMEOUT_MS = 10_000;
+/** A person may need time to unlock a configured secrets wrapper. */
+export const WRAPPED_START_TIMEOUT_MS = 120_000;
 const AUTO_START_POLL_MS = 150;
 const HEALTH_TIMEOUT_MS = 1_500;
 /**
@@ -40,6 +45,7 @@ const HEALTH_TIMEOUT_MS = 1_500;
  * caller is told it is busy.
  */
 const PATIENT_HEALTH_TIMEOUTS_MS = [3_000, 5_000];
+let warnedInvalidDirect = false;
 
 export interface DaemonConnection {
   port: number;
@@ -92,6 +98,8 @@ export interface ClientOptions {
    * because asking about or stopping a daemon must never start one.
    */
   autoStart?: boolean;
+  /** Bypass a configured start wrapper for this start only. */
+  direct?: boolean;
 }
 
 /**
@@ -224,30 +232,71 @@ export async function discoverDaemon(options: ClientOptions = {}): Promise<Daemo
 export async function ensureDaemon(options: ClientOptions = {}): Promise<DaemonConnection> {
   const logger = options.logger ?? NULL_LOGGER;
   const home = options.home ?? shellpuppetHome();
+  const directValue = process.env['SHELLPUPPET_DAEMON_DIRECT'];
+  if (directValue !== undefined && directValue !== '1' && !warnedInvalidDirect) {
+    logger.warn('ignoring invalid SHELLPUPPET_DAEMON_DIRECT; only 1 is recognised');
+    warnedInvalidDirect = true;
+  }
 
   const existing = await discoverDaemon(options);
   if (existing !== null) return existing;
 
   const entry = options.daemonEntry ?? defaultDaemonEntry();
-  logger.info('auto-starting daemon', { entry });
   const cwd = daemonWorkingDirectory();
-  const child = spawn(process.execPath, [entry], {
+  const env: NodeJS.ProcessEnv = { ...process.env, SHELLPUPPET_HOME: home };
+  const configured = readDaemonConfig(home).config.daemon;
+  const condition = configured?.startWithOnlyIfEnvContains;
+  const wrapped = options.direct !== true && directValue !== '1' &&
+    configured?.startWith !== undefined &&
+    (condition === undefined || Object.values(env).some((value) => value?.includes(condition)));
+  const wrapper = wrapped ? configured.startWith : undefined;
+  const program = wrapper?.[0];
+  const programName = program === undefined ? undefined : path.basename(program);
+  let command = process.execPath;
+  let args = [entry];
+  let batchWrapper = false;
+  if (program !== undefined) {
+    const resolved = resolveLaunchCommand(program, cwd ?? process.cwd(), env);
+    if ('error' in resolved) {
+      const raced = await discoverDaemon(options);
+      if (raced !== null) return raced;
+      throw new Error(`daemon.startWith program ${programName} could not be started: program not found.`);
+    }
+    command = resolved.file;
+    args = [...(wrapper?.slice(1) ?? []), process.execPath, entry];
+    if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(command)) {
+      batchWrapper = true;
+      // As with session starts, cmd handles batch files. Keep the configured
+      // arguments as separate tokens until this explicit Windows shell step.
+      const line = [command, ...args].map((part) => `"${part.replaceAll('"', '""')}"`).join(' ');
+      command = env['ComSpec'] ?? 'cmd.exe';
+      args = ['/d', '/s', '/c', `"${line}"`];
+    }
+  }
+  env['SHELLPUPPET_DAEMON_STARTED_WRAPPED'] = wrapped ? '1' : '0';
+  logger.info('auto-starting daemon', { wrapped });
+  let startError = false;
+  const child = spawn(command, args, {
     detached: true,
     stdio: 'ignore', // MUST be 'ignore': inherited handles hang the caller (§2.2)
     windowsHide: true,
-    env: { ...process.env, SHELLPUPPET_HOME: home },
+    ...(batchWrapper ? { windowsVerbatimArguments: true } : {}),
+    env,
     ...(cwd !== undefined ? { cwd } : {}),
   });
   // A process that cannot start reports it as an 'error' event, which with no
   // listener would end this client. The poll below reports the failure.
   child.on('error', (error) => {
-    logger.warn('the daemon process did not start', { error: String(error) });
+    startError = true;
+    logger.warn(programName === undefined ? 'the daemon process did not start' :
+      `daemon.startWith program ${programName} did not start`, { code: (error as NodeJS.ErrnoException).code });
   });
   child.unref();
 
   // A healthy /health response is success regardless of what happened to the
   // child we spawned (§2.2). Only the poll timing out is failure.
-  const deadline = Date.now() + AUTO_START_TIMEOUT_MS;
+  const timeoutMs = wrapped ? WRAPPED_START_TIMEOUT_MS : AUTO_START_TIMEOUT_MS;
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const state = readDaemonState(home);
     if (state !== null) {
@@ -264,10 +313,11 @@ export async function ensureDaemon(options: ClientOptions = {}): Promise<DaemonC
     }
     await new Promise((resolve) => setTimeout(resolve, AUTO_START_POLL_MS));
   }
-  throw new Error(
-    `The ShellPuppet daemon did not become healthy within ` +
-      `${String(AUTO_START_TIMEOUT_MS / 1_000)} s. Check ${home}/daemon.log.`,
-  );
+  if (programName !== undefined) {
+    throw new Error(`daemon.startWith program ${programName} ${startError ? 'could not be started' :
+      `did not produce a healthy daemon within ${String(timeoutMs / 1_000)} s`}. Check daemon.log.`);
+  }
+  throw new Error(`The ShellPuppet daemon did not become healthy within ${String(timeoutMs / 1_000)} s. Check ${home}/daemon.log.`);
 }
 
 export interface ApiResponse {

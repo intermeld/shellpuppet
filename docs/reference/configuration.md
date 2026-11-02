@@ -60,6 +60,13 @@ Full example, everything optional:
   // exits (fractions allowed). It never exits while a session is running.
   "idleMinutes": 30,
 
+  // Optional daemon start wrapper. The wrapper receives Node and the daemon
+  // entry after these leading arguments. See the section below.
+  "daemon": {
+    "startWith": ["op", "run", "--"],
+    "startWithOnlyIfEnvContains": "op://"
+  },
+
   // Session environment hygiene (design §4.6, ADR-008):
   //   "clean" (default): a minimal functional set (PATH, HOME/USERPROFILE,
   //                  the platform's system scaffolding, the locale on POSIX)
@@ -139,6 +146,41 @@ Full example, everything optional:
 ```
 
 `config.json` is plain JSON: take the comments out before you save it.
+
+## Daemon start wrapper
+
+Set `daemon.startWith` to a non-empty array containing a program followed by
+its leading arguments. When any CLI command, `shellpuppet dashboard`, or the
+MCP server needs to start a missing daemon, it runs those arguments followed
+by Node and the daemon entry. A running daemon is reused without running the
+wrapper. With no setting, the daemon starts directly as before. The wrapper
+is found on `PATH` (or by an explicit path); Windows `.cmd` and `.bat` wrappers
+run through the Windows command shell. The configured program runs with your
+user's permissions, so choose one you trust.
+
+For 1Password, put references in your own environment, for example set a
+variable to `op://vault/item/field`, then use:
+
+```json
+{ "daemon": { "startWith": ["op", "run", "--"], "startWithOnlyIfEnvContains": "op://" } }
+```
+
+This example needs no environment file. The optional
+`startWithOnlyIfEnvContains` string makes the wrapper run only when at least
+one value in the environment the daemon would inherit contains it. Otherwise
+the daemon starts directly. A daemon started by an agent session already
+running under the secrets tool inherits its resolved values; that session can
+use `SHELLPUPPET_DAEMON_DIRECT=1` to restart the daemon without another unlock
+prompt. `shellpuppet daemon start --direct` and `daemon restart --direct` do
+the same for one invocation. Other values of the variable are ignored and
+logged once by name. No command, tool, endpoint or environment variable can
+configure the wrapper.
+
+A direct start has the usual ten-second health bound. A wrapped start allows
+two minutes for a person to unlock the tool. A failed wrapper or health
+timeout reports the wrapper program and `daemon.startWith`, without its
+arguments or any environment values. `shellpuppet daemon status` reports
+`startedWrapped` as a boolean.
 
 ## Reading an agent's screen without its reasoning
 

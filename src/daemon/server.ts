@@ -232,6 +232,7 @@ const DASHBOARD_FONT_META = '<meta name="sp-dashboard-font-size" content="">';
 export interface DaemonOptions {
   home: string;
   logger: Logger;
+  startedWrapped?: boolean;
   policy?: PolicyConfig;
   /** Session environment hygiene (design §4.6, ADR-008). Defaults to clean. */
   sessionEnv?: SessionEnvMode;
@@ -780,6 +781,7 @@ export class Daemon {
       pid: process.pid,
       version: this.version,
       startedAt: new Date().toISOString(),
+      startedWrapped: this.options.startedWrapped ?? false,
     };
 
     // Atomic claim; on losing the race, defer to the winner (design §2.2:

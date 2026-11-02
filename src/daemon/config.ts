@@ -46,6 +46,8 @@ import type { LauncherConfig } from './launchProfiles.js';
 export const DEFAULT_VIEWER_LAUNCH_MODE: ViewerLaunchMode = 'dashboard';
 
 export interface DaemonConfig {
+  /** How clients start a missing daemon. This is read before daemon startup. */
+  daemon?: { startWith?: string[]; startWithOnlyIfEnvContains?: string };
   policy?: PolicyConfig;
   /** Idle self-shutdown threshold in minutes; fractions allowed (design §2.3). */
   idleMinutes?: number;
@@ -115,7 +117,9 @@ const TOP_LEVEL_KEYS = new Set([
   'agents',
   'envNames',
   'launcher',
+  'daemon',
 ]);
+const DAEMON_KEYS = new Set(['startWith', 'startWithOnlyIfEnvContains']);
 const VIEWER_KEYS = new Set(['launchMode', 'browserPath', 'profileDir']);
 const VIEWER_LAUNCH_MODES: readonly ViewerLaunchMode[] = [
   'dashboard',
@@ -327,6 +331,31 @@ export function parseDaemonConfig(raw: unknown): ParsedDaemonConfig {
   }
 
   if (raw['policy'] !== undefined) config.policy = parsePolicy(raw['policy'], problems);
+
+  if (raw['daemon'] !== undefined) {
+    const daemon = raw['daemon'];
+    if (!isRecord(daemon)) {
+      problems.push('daemon must be an object: starting directly');
+    } else {
+      for (const key of Object.keys(daemon)) {
+        if (!DAEMON_KEYS.has(key)) problems.push(`daemon has an unknown key "${key}": ignored (typo?)`);
+      }
+      const startWith = daemon['startWith'];
+      const condition = daemon['startWithOnlyIfEnvContains'];
+      if (startWith !== undefined && (!isStringArray(startWith) || startWith.length === 0 || startWith.some((part) => part === ''))) {
+        problems.push('daemon.startWith must be a non-empty array of non-empty strings: starting directly');
+      } else if (startWith !== undefined) {
+        config.daemon = { startWith };
+      }
+      if (condition !== undefined) {
+        if (typeof condition === 'string' && condition !== '') {
+          config.daemon = { ...config.daemon, startWithOnlyIfEnvContains: condition };
+        } else {
+          problems.push('daemon.startWithOnlyIfEnvContains must be a non-empty string: ignored');
+        }
+      }
+    }
+  }
 
   const sessionEnv = raw['sessionEnv'];
   if (sessionEnv !== undefined) {
