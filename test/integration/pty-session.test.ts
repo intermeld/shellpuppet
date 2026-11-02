@@ -147,64 +147,62 @@ describe('PTY sessions', () => {
   });
 
   it('ctrl+c interrupts a long-running child and the shell prompts again', async () => {
+    const home = makeTempHome('shellpuppet-interrupt-');
+    const signalFile = path.join(home, 'signal.pid');
     const manager = makeManager();
     const session = manager.create(interactiveShell());
-    await session.waitFor({ quiet: 700 }, { timeout: 20_000 });
-
-    // Start a spinner that would run forever, typed into the shell like a human.
-    await session.write(`node -e "console.log('SPINNING'); setInterval(() => {}, 100)"\r`);
-    const spinning = await session.waitFor({ text: 'SPINNING' }, { timeout: 20_000 });
-    expect(spinning.matched).toBe(true);
-
-    await session.write(keyToBytes('ctrl+c') ?? '\x03');
-    await session.waitFor({ quiet: 1_500 }, { timeout: 15_000 });
-
-    // Proof of interruption: the shell accepts a NEW command afterwards.
-    //
-    // Two things make this hostile under parallel load. Windows cmd may ask
-    // "Terminate batch job (Y/N)?" at any point, and a probe typed before that
-    // prompt appears is eaten as an invalid answer, so answer the prompt
-    // whenever it is on screen, and RE-probe periodically rather than trusting
-    // a single attempt. Each probe carries a unique marker and must appear
-    // twice (its echo plus its output), so echoes of two different probes can
-    // never add up to a false pass.
-    let attempt = 0;
-    let marker = '';
-    let lastProbeAt = 0;
-    let lastScreen = '';
     try {
-      await eventually(async () => {
-        const screen = (await session.snapshot()).screen;
-        lastScreen = screen;
-        if (/Terminate batch job/i.test(screen)) {
-          await session.write('y\r');
+      await session.waitFor({ quiet: 700 }, { timeout: 20_000 });
+
+      // The command echo contains SPINNING before the child has started.
+      // Wait for output emitted after its SIGINT handler is installed.
+      await session.write(`node "${fixturePath('interrupt-child.mjs')}" "${signalFile}" SPINNING\r`);
+      const ready = await session.waitFor({ text: 'INTERRUPT_CHILD_READY' }, { timeout: 20_000 });
+      expect(ready.matched).toBe(true);
+
+      await session.write(keyToBytes('ctrl+c') ?? '\x03');
+      await eventually(() => fs.existsSync(signalFile), 15_000);
+
+      // Proof of interruption: the shell accepts a NEW command afterwards.
+      // Windows cmd can ask "Terminate batch job (Y/N)?" under load, so answer
+      // that prompt and re-probe with a unique marker when necessary.
+      let attempt = 0;
+      let marker = '';
+      let lastProbeAt = 0;
+      let lastScreen = '';
+      try {
+        await eventually(async () => {
+          const screen = (await session.snapshot()).screen;
+          lastScreen = screen;
+          if (/Terminate batch job/i.test(screen)) {
+            await session.write('y\r');
+            return false;
+          }
+          if (marker !== '' && (screen.match(new RegExp(marker, 'g')) ?? []).length >= 2) {
+            return true;
+          }
+          if (Date.now() - lastProbeAt > 5_000) {
+            attempt++;
+            marker = `interrupt-ok-${String(attempt)}`;
+            await session.write(`echo ${marker}\r`);
+            lastProbeAt = Date.now();
+          }
           return false;
-        }
-        if (marker !== '' && (screen.match(new RegExp(marker, 'g')) ?? []).length >= 2) {
-          return true;
-        }
-        if (Date.now() - lastProbeAt > 5_000) {
-          attempt++;
-          marker = `interrupt-ok-${String(attempt)}`;
-          await session.write(`echo ${marker}\r`);
-          lastProbeAt = Date.now();
-        }
-        return false;
-        // Ninety seconds for the probe loop: Windows cmd's "Terminate batch
-        // job" prompt makes the number of probes it takes genuinely variable,
-        // and a heavily loaded machine slows each one down.
-      }, 90_000, 250);
-    } catch (error) {
-      // Show the screen, so a failure can be diagnosed rather than guessed at.
-      throw new Error(
-        `${String(error)}\nprobes sent: ${String(attempt)}, last marker: ${marker}\n` +
-          `exited: ${String(session.exited)}\n--- last screen ---\n${lastScreen}\n---`,
-        { cause: error },
-      );
+        }, 90_000, 250);
+      } catch (error) {
+        throw new Error(
+          `${String(error)}\nprobes sent: ${String(attempt)}, last marker: ${marker}\n` +
+            `exited: ${String(session.exited)}\n--- last screen ---\n${lastScreen}\n---`,
+          { cause: error },
+        );
+      }
+      expect(session.exited).toBe(false);
+      await session.write('exit\r');
+      await eventually(() => session.exited, 10_000);
+    } finally {
+      removeTempHome(home);
     }
-    expect(session.exited).toBe(false);
-    // The whole test gets more than the probe loop it contains, or the loop's
-    // own budget could never be reached.
+    // The whole test gets more than the probe loop it contains.
   }, 150_000);
 
   it('captures the exit code of a direct (unwrapped) process', async () => {
