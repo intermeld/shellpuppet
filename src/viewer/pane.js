@@ -210,6 +210,36 @@ window.ShellPuppetPane = (() => {
     term.loadAddon(fit);
     term.open(container);
     const outerScroll = container.parentElement;
+    const helper = term.element?.querySelector('.xterm-helper-textarea');
+    if (dashboardProof !== null && outerScroll && helper) {
+      let view = { left: 0, top: 0 };
+      let composing = false;
+      const rememberView = () => {
+        view = { left: outerScroll.scrollLeft, top: outerScroll.scrollTop };
+      };
+      const restoreView = () => {
+        if (!outerScroll.classList.contains('grid-overflow')) return;
+        outerScroll.scrollLeft = view.left;
+        outerScroll.scrollTop = view.top;
+      };
+      const restoreAfterInput = () => {
+        restoreView();
+        window.requestAnimationFrame(restoreView);
+      };
+      const nativeFocus = helper.focus.bind(helper);
+      helper.focus = (options) => {
+        rememberView();
+        nativeFocus({ ...options, preventScroll: true });
+        restoreAfterInput();
+      };
+      outerScroll.addEventListener('pointerdown', rememberView, true);
+      helper.addEventListener('focus', restoreAfterInput);
+      helper.addEventListener('beforeinput', () => { if (!composing) rememberView(); });
+      helper.addEventListener('input', restoreAfterInput);
+      helper.addEventListener('compositionstart', () => { rememberView(); composing = true; restoreAfterInput(); });
+      helper.addEventListener('compositionupdate', restoreAfterInput);
+      helper.addEventListener('compositionend', () => { restoreAfterInput(); composing = false; });
+    }
     const scrollOversizedPane = (event) => {
       if (!outerScroll?.classList.contains('grid-overflow') ||
           (!event.shiftKey && event.deltaX === 0)) return;
@@ -436,11 +466,6 @@ window.ShellPuppetPane = (() => {
       const overflowing = controlMode !== 'yours' && term.options.fontSize === MIN_FONT_PX &&
         (screen.offsetWidth > availableWidth + 1 || screen.offsetHeight > availableHeight + 1);
       wrap.classList.toggle('grid-overflow', overflowing);
-      if (overflowing) {
-        const rect = wrap.getBoundingClientRect();
-        wrap.style.setProperty('--textarea-x', `${String(rect.left + 8)}px`);
-        wrap.style.setProperty('--textarea-y', `${String(rect.top + 8)}px`);
-      }
       if (elements.overflowNote) elements.overflowNote.hidden = !overflowing;
     }
 

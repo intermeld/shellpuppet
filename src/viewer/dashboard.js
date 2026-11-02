@@ -670,6 +670,7 @@
   }
   function receive(frame) {
     if (!frame || typeof frame.type !== 'string') return;
+    if (frame.type === 'window-gone' && typeof frame.id === 'string') { removeWindow(frame.id); return; }
     if (frame.type === 'snapshot' && Array.isArray(frame.sessions)) reconcile(frame.sessions, true);
     else if (frame.type === 'session-added' && frame.session?.id) {
       if (!panes.has(frame.session.id) && !dismissed.has(frame.session.id)) {
@@ -687,7 +688,10 @@
   }
   function connect() {
     feed = new WebSocket(`ws://${location.host}/dashboard/events`, [`sp-csrf.${proof}`]);
-    feed.onopen = () => { connection.textContent = 'Connected'; error.hidden = true; };
+    feed.onopen = () => {
+      connection.textContent = 'Connected'; error.hidden = true;
+      if (popSelf === null) feed.send(JSON.stringify({ type: 'window-register', id: windowId }));
+    };
     feed.onmessage = (event) => {
       try { receive(JSON.parse(event.data)); } catch { showError('The session feed sent an unreadable update.'); }
     };

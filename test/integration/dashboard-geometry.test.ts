@@ -317,3 +317,63 @@ it('keeps a scrolled view steady during click, text entry and cell selection', a
   expect(measured.selected.selection.length).toBeGreaterThan(0);
   expect(measured.selected.selection).toMatch(new RegExp(`^${measured.selected.underPointer}+$`));
 }, 150_000);
+
+it('places IME composition at the cursor after outer and strip scrolling', async (context) => {
+  if (!browser) { context.skip(); return; }
+  const { result } = await openDashboard(1400, 900, async ({ evaluate, send }) => {
+    const held = await api(running!.port, running!.token, '/sessions', { body: {
+      command: process.execPath, args: ['-e', "process.stdout.write('\\x1b[?1049h\\x1b[30;80H'); process.stdin.setRawMode(true); process.stdin.resume()"],
+      shell: false, openViewer: false, cols: 220, rows: 115, hold: true,
+    } });
+    expect(held.status).toBe(200);
+    const point = await evaluate(`(async () => {
+      await new Promise(resolve => setTimeout(resolve, 750));
+      document.querySelector('.pane').click(); document.getElementById('focus').click();
+      await new Promise(resolve => setTimeout(resolve, 700));
+      const strip = document.getElementById('strip');
+      strip.style.height = '100px'; strip.style.flex = 'none'; strip.scrollTop = 40;
+      const wrap = strip.querySelector('.pane-wrap');
+      wrap.scrollLeft = 150; wrap.scrollTop = 200;
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      const rect = wrap.getBoundingClientRect();
+      return { x: rect.left + 50, y: rect.top + 20, left: wrap.scrollLeft,
+        top: wrap.scrollTop, stripTop: strip.scrollTop };
+    })()`) as { x: number; y: number; left: number; top: number; stripTop: number };
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 });
+    await send('Input.imeSetComposition', { text: '日本', selectionStart: 2, selectionEnd: 2 });
+    const composing = await evaluate(`(() => {
+      const card = document.querySelector('#strip .pane');
+      const wrap = card.querySelector('.pane-wrap');
+      const textarea = card.querySelector('.xterm-helper-textarea');
+      const style = getComputedStyle(textarea);
+      return { left: wrap.scrollLeft, top: wrap.scrollTop,
+        stripTop: document.getElementById('strip').scrollTop,
+        inlineLeft: textarea.style.left, inlineTop: textarea.style.top,
+        computedLeft: style.left, computedTop: style.top, position: style.position };
+    })()`);
+    await send('Input.insertText', { text: '日本' });
+    const after = await evaluate(`(() => {
+      const wrap = document.querySelector('#strip .pane-wrap');
+      return { left: wrap.scrollLeft, top: wrap.scrollTop,
+        stripTop: document.getElementById('strip').scrollTop };
+    })()`);
+    return { point, composing, after };
+  });
+  const measured = result as { point: { left: number; top: number; stripTop: number };
+    composing: { left: number; top: number; stripTop: number; inlineLeft: string; inlineTop: string;
+      computedLeft: string; computedTop: string; position: string };
+    after: { left: number; top: number; stripTop: number } };
+  expect(measured.point.left).toBeGreaterThan(0);
+  expect(measured.point.top).toBeGreaterThan(0);
+  expect(measured.point.stripTop).toBeGreaterThan(0);
+  expect(measured.composing.inlineLeft).not.toBe('');
+  expect(measured.composing.inlineTop).not.toBe('');
+  expect(measured.composing.computedLeft, JSON.stringify(measured)).toBe(measured.composing.inlineLeft);
+  expect(measured.composing.computedTop, JSON.stringify(measured)).toBe(measured.composing.inlineTop);
+  expect(measured.composing.position).toBe('absolute');
+  expect([measured.composing.left, measured.composing.top, measured.composing.stripTop]).toEqual(
+    [measured.point.left, measured.point.top, measured.point.stripTop]);
+  expect([measured.after.left, measured.after.top, measured.after.stripTop]).toEqual(
+    [measured.point.left, measured.point.top, measured.point.stripTop]);
+}, 150_000);
