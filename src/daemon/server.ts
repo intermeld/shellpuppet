@@ -37,7 +37,7 @@ import { WaitConditionError } from '../core/waiter.js';
 import { agentNames, hideReasoning, latestResult, programName, signatureFor } from '../core/reasoning.js';
 import type { CompiledSignature, FilteredLines } from '../core/reasoning.js';
 import type { Session } from '../core/session.js';
-import { ENV_NAME_PATTERN, howSessionEnded } from '../core/types.js';
+import { DEFAULT_WAIT_TIMEOUT_MS, ENV_NAME_PATTERN, MAX_WAIT_TIMEOUT_MS, WAIT_POLL_INTERVAL_MS, howSessionEnded } from '../core/types.js';
 import type {
   Logger,
   PolicyConfig,
@@ -1283,11 +1283,63 @@ export class Daemon {
 
   private writeSessionList(res: http.ServerResponse, url: URL): void {
     const hide = queryFlag(url, 'hideReasoning');
-    if (hide === null) {
-      json(res, 400, { error: BAD_HIDE_REASONING });
+    const waitingOnly = queryFlag(url, 'waitingOnly');
+    if (hide === null || waitingOnly === null) {
+      json(res, 400, { error: hide === null ? BAD_HIDE_REASONING : 'waitingOnly must be true or false.' });
       return;
     }
-    json(res, 200, { sessions: this.listWithPrompts(hide), version: this.version });
+    json(res, 200, { sessions: waitingOnly ? this.waitingSessions(hide) : this.listWithPrompts(hide), version: this.version });
+  }
+
+  private waitingSessions(hideReasoning: boolean, ids?: ReadonlySet<string>): {
+    id: string; label: string; question?: string; options?: string[]; selectedOption?: number; waitingMs: number;
+  }[] {
+    return this.listWithPrompts(hideReasoning).flatMap((session) => {
+      const waiting = session.waitingOnPrompt;
+      if (session.exited || waiting === undefined || (ids !== undefined && !ids.has(session.id))) return [];
+      return [{
+        id: session.id,
+        label: session.label,
+        ...(waiting.question === undefined ? {} : { question: waiting.question }),
+        ...(waiting.options === undefined ? {} : { options: waiting.options }),
+        ...(waiting.selectedOption === undefined ? {} : { selectedOption: waiting.selectedOption }),
+        waitingMs: waiting.waitingMs,
+      }];
+    });
+  }
+
+  private async waitAcrossSessions(res: http.ServerResponse, url: URL): Promise<void> {
+    const hide = queryFlag(url, 'hideReasoning');
+    const now = queryFlag(url, 'now');
+    const timeoutText = url.searchParams.get('timeout');
+    const timeout = timeoutText === null ? DEFAULT_WAIT_TIMEOUT_MS : Number(timeoutText);
+    if (hide === null || now === null || url.searchParams.get('prompt') !== 'true' ||
+        !Number.isFinite(timeout) || timeout < 0 || timeout > MAX_WAIT_TIMEOUT_MS ||
+        ['text', 'regex', 'quiet', 'debounce', 'matchAfterInput'].some((key) => url.searchParams.has(key))) {
+      json(res, 400, { error: 'A multi-session wait needs prompt=true, optional now, hideReasoning and a timeout from 0 to 300000 ms.' });
+      return;
+    }
+    const requested = url.searchParams.getAll('session');
+    if (requested.some((id) => id === '' || this.manager.get(id) === undefined)) {
+      json(res, 404, { error: 'No such session in session list.' });
+      return;
+    }
+    const ids = requested.length === 0 ? undefined : new Set(requested);
+    const started = Date.now();
+    this.waitsInFlight += 1;
+    try {
+      while (!res.destroyed) {
+        const sessions = this.waitingSessions(hide, ids);
+        const waitedMs = Date.now() - started;
+        if (sessions.length > 0 || now || waitedMs >= timeout) {
+          json(res, 200, { matched: sessions.length > 0, reason: sessions.length > 0 ? 'prompt' : 'timeout', waitedMs, sessions });
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, Math.min(WAIT_POLL_INTERVAL_MS, timeout - waitedMs)));
+      }
+    } finally {
+      this.waitsInFlight -= 1;
+    }
   }
 
   /** Cookie-authenticated `GET /sessions`. A missing or wrong proof is a 403. */
@@ -2028,6 +2080,11 @@ export class Daemon {
 
       if (req.method === 'POST' && segments.length === 1) {
         await this.handleStart(req, res, actor);
+        return;
+      }
+
+      if (req.method === 'GET' && segments.length === 2 && segments[1] === 'wait') {
+        await this.waitAcrossSessions(res, url);
         return;
       }
 

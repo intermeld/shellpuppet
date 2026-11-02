@@ -126,6 +126,36 @@ afterAll(async () => {
 });
 
 describe('shellpuppet CLI', () => {
+  it('waits across sessions and lists only waiting prompts', async () => {
+    const fixture = path.join(repoRoot, 'test', 'fixtures');
+    const idle = await cli('start', '--no-viewer', '--no-shell', process.execPath, '-e', 'setInterval(() => {}, 500)');
+    const dialog = await cli('start', '--no-viewer', '--no-shell', process.execPath,
+      path.join(fixture, 'dialog-sink.mjs'),
+      path.join(fixture, 'dialogs', 'opencode-permission-dialog.txt'),
+      path.join(fixture, 'dialogs', 'opencode-permission-answered.txt'));
+    expect(idle.code, whatHappened(idle)).toBe(0);
+    expect(dialog.code, whatHappened(dialog)).toBe(0);
+    const idleId = idle.stdout.split(/\s+/)[0]!;
+    const dialogId = dialog.stdout.split(/\s+/)[0]!;
+    try {
+      const many = await cli('wait', idleId, dialogId, '--prompt', '--timeout', '15000', '--json');
+      expect(many.code, whatHappened(many)).toBe(0);
+      const result = JSON.parse(many.stdout) as { sessions: { id: string }[]; screen?: string };
+      expect(result.sessions.map((s) => s.id)).toContain(dialogId);
+      expect(result.sessions.map((s) => s.id)).not.toContain(idleId);
+      expect(result).not.toHaveProperty('screen');
+      const all = await cli('wait', '--prompt', '--now', '--json');
+      expect((JSON.parse(all.stdout) as { sessions: { id: string }[] }).sessions.map((s) => s.id)).toContain(dialogId);
+      const listed = await cli('list', '--waiting', '--json');
+      expect((JSON.parse(listed.stdout) as { sessions: { id: string }[] }).sessions.map((s) => s.id)).toContain(dialogId);
+      const single = await cli('wait', dialogId, '--prompt', '--json');
+      expect(JSON.parse(single.stdout)).toHaveProperty('screen');
+    } finally {
+      await cli('kill', idleId);
+      await cli('kill', dialogId);
+    }
+  }, 120_000);
+
   it('filters waiting questions in list and refuses a filtered screenshot without a signature', async () => {
     const question = 'Reveal the turquoise accordion? (y/n)';
     const encoded = Buffer.from(question).toString('base64');

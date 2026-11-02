@@ -16,6 +16,12 @@ version may change behaviour, and every such change is listed here.
 - New sessions open in the dashboard by default. The daemon opens one isolated
   dashboard window when needed and waits for it to connect before trying another.
   If the window cannot open, the start still succeeds and returns a viewer link.
+- `terminal_wait` can watch for prompts across every live session or a chosen
+  list, returning compact waiting details without screens. `now: true` polls
+  once. `terminal_list waitingOnly: true` and `shellpuppet list --waiting`
+  expose the same view; `shellpuppet wait --prompt` accepts no id or several.
+  Filtered views omit question and options. Single-session waits retain their
+  existing response.
 
 - The dashboard can assign panes across several windows. It asks for screen
   permission only on an Allow screens click, opens at most one window per

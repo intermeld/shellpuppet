@@ -222,6 +222,19 @@ Twelve tools appear once the server is wired in: `terminal_start`,
 `terminal_find`, `terminal_result`, `terminal_list`, `terminal_resize`,
 `terminal_screenshot`, `terminal_viewer_url` and `terminal_kill`.
 
+| Tool | Prompt supervision |
+| --- | --- |
+| `terminal_wait` | `prompt: true` with no session or an array of ids waits for any prompt. `now: true` polls once. Both return compact details without a screen. |
+| `terminal_list` | `waitingOnly: true` returns only sessions waiting on a prompt. |
+
+`terminal_wait` with `prompt: true` can omit `session` to wait for a prompt in
+any live session, or take an array of session ids to watch only those. It
+returns compact waiting sessions without screens; `now: true` polls once.
+`terminal_list` with `waitingOnly: true` returns the same compact view. The
+CLI forms are `shellpuppet wait --prompt [id ...] [--now]` and
+`shellpuppet list --waiting`. A wait with one string session id keeps its
+usual screen response.
+
 Text snapshots (`terminal_snapshot`, `terminal_wait`, `shellpuppet snap` and
 `lastLines`) prefix a uniquely styled menu choice with `⟦SP:selected⟧ `. This
 text annotation is never sent to the terminal or viewer. A detected prompt
