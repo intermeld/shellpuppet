@@ -63,8 +63,10 @@ client token must remain outside the browser.
   Pin and reorder are deliberate gestures. The dashboard remembers mode,
   order and pin in its isolated browser profile.
 - **The terminal changes size only on a deliberate act.** A dashboard pane
-  adopts the session grid without driving it when it connects. Layout and
-  window changes scale the font rather than resize the PTY. Fit, Enlarge and
+  adopts the session grid without driving it when it connects. Auto fit is
+  on by default and is the person's continuing choice to fit each pane after
+  layout or window changes, subject to the readable floor and any geometry
+  hold. Turning it off makes those changes scale the font as before. Fit, Enlarge and
   Restore take geometry control and resize the real terminal; Restore sends
   the previous grid. Each pane has Enlarge and Restore. Focus gives one
   session most of the window. The browser's full-screen key can make the

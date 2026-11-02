@@ -53,6 +53,7 @@ window.ShellPuppetPane = (() => {
    * @param {number|null} [config.initialFontOverride=null] - Initial font size.
    * @param {function} [config.onTitleChange] - Called when the window title should change.
    * @param {function} [config.onFontOverrideChange] - Called when the font override changes.
+   * @param {function} [config.onGeometryReady] - Called after the first geometry frame.
    * @param {string} [config.dashboardProof] - Document proof for a dashboard stream.
    * @param {function} [config.onAttentionChange] - Reports prompt attention.
    * @returns {Object} A pane instance for the page to control.
@@ -67,6 +68,7 @@ window.ShellPuppetPane = (() => {
       initialFontOverride = null,
       onTitleChange = () => {},
       onFontOverrideChange = () => {},
+      onGeometryReady = () => {},
       dashboardProof = null,
       onAttentionChange = () => {},
     } = config;
@@ -491,9 +493,11 @@ window.ShellPuppetPane = (() => {
           if (control && control.type === 'input-source') {
             showInputSource(control.source);
           } else if (control && control.type === 'geometry') {
+            const firstGeometry = !geometryDecided;
             geometryDecided = true;
             controlMode = captureMode ? 'adopt' : control.control || 'adopt';
             applyGeometry(control.cols, control.rows, control.max);
+            if (firstGeometry) onGeometryReady();
             if (controlMode === 'yours' && !captureMode && dashboardProof === null) requestFit();
           } else if (control && control.type === 'identity') {
             showIdentity(control);
@@ -569,6 +573,23 @@ window.ShellPuppetPane = (() => {
       },
       getGrid() {
         return { cols: gridCols, rows: gridRows };
+      },
+      autoFitGrid(floorCols = 80, floorRows = 24) {
+        if (dashboardProof === null || controlMode === 'held' || !geometryDecided ||
+            !ws || ws.readyState !== 1 || sessionEnded) return false;
+        const drawn = term.options.fontSize;
+        let proposed;
+        try {
+          term.options.fontSize = fixedFontPx();
+          proposed = propose();
+        } finally {
+          term.options.fontSize = drawn;
+        }
+        if (proposed === null) return false;
+        const cols = Math.min(gridMax.cols, Math.max(floorCols, proposed.cols));
+        const rows = Math.min(gridMax.rows, Math.max(floorRows, proposed.rows));
+        if (cols === gridCols && rows === gridRows) return false;
+        return this.takeGrid(cols, rows);
       },
       takeGrid(cols, rows) {
         if (dashboardProof === null || !ws || ws.readyState !== 1 || !geometryDecided) return false;
