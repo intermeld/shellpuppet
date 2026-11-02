@@ -15,6 +15,10 @@ version may change behaviour, and every such change is listed here.
   cancelled on timeout or daemon shutdown. A mapped drive letter may still
   name a network drive.
 - Dashboard panes fill their tile at the 400 by 150 grid cap.
+- Dashboard panes fill their tile at the 400 by 150 grid cap. Auto fit refits
+  after a settled outside resize, but follows a client that resizes again
+  within ten seconds. Followed and held grids scale to stay fully visible;
+  Fit restores the chosen text size.
 - Renamed `viewer.launchMode: "none"` to `"no-window"`; `"none"` remains an alias for existing configurations.
 
 ### Added

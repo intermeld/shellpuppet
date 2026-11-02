@@ -54,6 +54,7 @@ window.ShellPuppetPane = (() => {
    * @param {function} [config.onTitleChange] - Called when the window title should change.
    * @param {function} [config.onFontOverrideChange] - Called when the font override changes.
    * @param {function} [config.onGeometryReady] - Called after the first geometry frame.
+   * @param {function} [config.onOutsideGeometry] - Called when another client changes an unheld grid.
    * @param {string} [config.dashboardProof] - Document proof for a dashboard stream.
    * @param {function} [config.onAttentionChange] - Reports prompt attention.
    * @returns {Object} A pane instance for the page to control.
@@ -69,6 +70,7 @@ window.ShellPuppetPane = (() => {
       onTitleChange = () => {},
       onFontOverrideChange = () => {},
       onGeometryReady = () => {},
+      onOutsideGeometry = () => {},
       dashboardProof = null,
       onAttentionChange = () => {},
     } = config;
@@ -91,6 +93,10 @@ window.ShellPuppetPane = (() => {
     let identityTitle = `${sessionId} · ShellPuppet`;
     let destroyed = false;
     let reconnectTimer = null;
+    let pendingTakeGrid = false;
+    let outsideResizePending = false;
+    let lastOutsideFitAt = 0;
+    let followingExternal = false;
 
     const showBanner = (message) => {
       if (!elements.banner) return;
@@ -376,7 +382,7 @@ window.ShellPuppetPane = (() => {
       return font;
     }
 
-    function fitGridByFont(cols, rows) {
+    function fitGridByFont(cols, rows, grow = true) {
       const wrap = container.parentElement;
       if (!wrap) return;
 
@@ -398,11 +404,17 @@ window.ShellPuppetPane = (() => {
           availableWidth / renderedWidth,
           availableHeight / renderedHeight,
         );
-        if (Math.abs(scale - 1) < 0.01) return;
+        if (Math.abs(scale - 1) < 0.01 || (scale > 1 && !grow)) return;
 
         const current = term.options.fontSize || DEFAULT_FONT_PX;
-        const next = clampFont(Math.floor(current * scale));
-        if (next === current) return;
+        const minimum = dashboardProof !== null && controlMode !== 'yours' ? 2 : MIN_FONT_PX;
+        const next = Math.min(MAX_FONT_PX, Math.max(minimum, Math.floor(current * scale)));
+        if (next === current) {
+          if (scale < 1 && dashboardProof !== null && controlMode !== 'yours') {
+            term.element.style.transform = `scale(${String(scale)})`;
+          }
+          return;
+        }
 
         term.options.fontSize = next;
         term.resize(cols, rows);
@@ -410,6 +422,7 @@ window.ShellPuppetPane = (() => {
     }
 
     function applyFontPreference(cols, rows) {
+      if (term.element) term.element.style.transform = '';
       if (fontOverride === null) {
         fitGridByFont(cols, rows);
       } else {
@@ -417,8 +430,10 @@ window.ShellPuppetPane = (() => {
           term.options.fontSize = fontOverride;
           term.resize(cols, rows);
         }
-        if (dashboardProof !== null && controlMode === 'yours' &&
-            (cols >= gridMax.cols || rows >= gridMax.rows)) fitGridByFont(cols, rows);
+        if (dashboardProof !== null) {
+          const capped = cols >= gridMax.cols || rows >= gridMax.rows;
+          if (controlMode !== 'yours' || capped) fitGridByFont(cols, rows, capped && controlMode === 'yours');
+        }
       }
       updateZoomButtons();
       container.dataset.fontSize = String(term.options.fontSize);
@@ -523,6 +538,20 @@ window.ShellPuppetPane = (() => {
             const firstGeometry = !geometryDecided;
             geometryDecided = true;
             controlMode = captureMode ? 'adopt' : control.control || 'adopt';
+            if (dashboardProof !== null && !firstGeometry) {
+              if (controlMode === 'yours' && pendingTakeGrid) {
+                pendingTakeGrid = false;
+              } else if (controlMode === 'adopt' && !followingExternal) {
+                pendingTakeGrid = false;
+                if (Date.now() - lastOutsideFitAt < 10_000) {
+                  followingExternal = true;
+                  outsideResizePending = false;
+                } else {
+                  outsideResizePending = true;
+                  onOutsideGeometry();
+                }
+              }
+            }
             applyGeometry(control.cols, control.rows, control.max);
             if (firstGeometry) onGeometryReady();
             if (controlMode === 'yours' && !captureMode && dashboardProof === null) requestFit();
@@ -602,7 +631,7 @@ window.ShellPuppetPane = (() => {
         return { cols: gridCols, rows: gridRows };
       },
       autoFitGrid(floorCols = 80, floorRows = 24, force = false) {
-        if (dashboardProof === null || controlMode === 'held' || !geometryDecided ||
+        if (dashboardProof === null || controlMode === 'held' || followingExternal || !geometryDecided ||
             !ws || ws.readyState !== 1 || sessionEnded) return false;
         let proposed = proposeDashboardGrid();
         if (proposed === null) {
@@ -612,16 +641,25 @@ window.ShellPuppetPane = (() => {
         const cols = Math.min(gridMax.cols, Math.max(floorCols, proposed.cols));
         const rows = Math.min(gridMax.rows, Math.max(floorRows, proposed.rows));
         if (cols === gridCols && rows === gridRows && !force) return false;
+        if (outsideResizePending) lastOutsideFitAt = Date.now();
+        outsideResizePending = false;
         return this.takeGrid(cols, rows);
       },
       takeGrid(cols, rows) {
         if (dashboardProof === null || !ws || ws.readyState !== 1 || !geometryDecided) return false;
         const wanted = { cols: Math.max(2, Math.min(400, cols)), rows: Math.max(2, Math.min(150, rows)) };
+        pendingTakeGrid = true;
         ws.send(JSON.stringify({ type: 'resize', ...wanted, take: true }));
         return true;
       },
       fitGrid(floorCols = 0, floorRows = 0) {
         if (dashboardProof === null) return false;
+        followingExternal = false;
+        outsideResizePending = false;
+        if (term.options.fontSize !== fixedFontPx()) {
+          term.options.fontSize = fixedFontPx();
+          term.resize(term.cols, term.rows);
+        }
         const proposed = proposeDashboardGrid();
         return proposed !== null && this.takeGrid(
           Math.max(floorCols, proposed.cols), Math.max(floorRows, proposed.rows));

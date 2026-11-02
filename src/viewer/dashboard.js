@@ -464,6 +464,7 @@
       elements: { banner: item.banner, promptAlert: item.prompt, size: item.size },
       onAttentionChange: () => updateAttention(),
       onGeometryReady: () => scheduleAutoFit(),
+      onOutsideGeometry: () => scheduleAutoFit(),
     });
   }
   function deactivate(item) {
