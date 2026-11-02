@@ -400,6 +400,33 @@ returns the same compact rows. The CLI spells these forms `shellpuppet wait
 Both paths read the daemon's prompt state and omit ended sessions. With
 `hideReasoning`, they leave out questions and options, as a filtered full
 session list does. A single string `session` keeps the existing screen wait.
+The HTTP response from `GET /sessions/wait?prompt=true` has this wire shape:
+
+```json
+{
+  "matched": true,
+  "reason": "prompt",
+  "waitedMs": 80,
+  "sessions": [
+    {
+      "id": "s2",
+      "label": "build delegate",
+      "question": "Allow this command to run?",
+      "options": ["Allow once", "Deny"],
+      "selectedOption": 0,
+      "waitingMs": 4200
+    }
+  ]
+}
+```
+
+`reason` is `prompt` or `timeout`; a timeout has `matched: false` and no
+session rows. Each row always has `id`, `label` and `waitingMs` in milliseconds.
+`question`, `options` and `selectedOption` are optional. With
+`hideReasoning=true`, `question` and `options` are omitted. `GET
+/sessions?waitingOnly=true` returns the same rows under `sessions` and adds
+the list's `version` field. The MCP adapter frames prompt content from both
+compact paths and the full session list as untrusted terminal data.
 The daemon keeps the first-seen time and the single stall alert when a repaint
 shows the same question and options, even if the rendered dialog signature
 changes with its width or nearby text. An incomplete screen gets a one-second

@@ -187,6 +187,9 @@ version may change behaviour, and every such change is listed here.
   Windows needs ConPTY for every session now: Windows 10 version 1809
   (build 18309) or later, as node-pty requires; on an older build a start is
   refused with the minimum named, where node-pty 1.1.0 fell back to winpty.
+- MCP results frame prompt details from the multi-session wait, the compact
+  waiting list and the full session list as untrusted terminal data.
+
 - On Windows, the console hosts queued in one batch are ended by one
   asynchronous PowerShell, off the daemon's thread, so the daemon keeps
   answering `/health` and its other sessions while that call runs. The

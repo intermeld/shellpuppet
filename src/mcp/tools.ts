@@ -480,7 +480,8 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
             (s.question === undefined ? '' : `: ${JSON.stringify(s.question)}`) +
             (s.options ?? []).map((option, index) => `\n    ${index === s.selectedOption ? '* ' : '  '}${JSON.stringify(option)}`).join('')
           );
-          return text(withWarnings(warnings, `${payload['matched'] === true ? 'Matched' : 'No waiting prompts'} after ${String(payload['waitedMs'])} ms.\n${lines.join('\n')}`));
+          const details = lines.length === 0 ? '' : `\n${frame(lines.join('\n'))}`;
+          return text(withWarnings(warnings, `${payload['matched'] === true ? 'Matched' : 'No waiting prompts'} after ${String(payload['waitedMs'])} ms.${details}`));
         }
         const params = new URLSearchParams();
         for (const [name, value] of Object.entries(rest)) {
@@ -596,11 +597,12 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
         if (waitingOnly === true) {
           const waiting = payload['sessions'] as { id: string; label: string; question?: string; options?: string[]; selectedOption?: number; waitingMs: number }[];
           if (waiting.length === 0) return text(withWarnings(warnings, 'No waiting prompts.'));
-          return text(withWarnings(warnings, waiting.map((s) =>
+          const lines = waiting.map((s) =>
             `${s.id}  ${s.label}  WAITING ${String(Math.round(s.waitingMs / 1000))}s` +
             (s.question === undefined ? '' : `: ${JSON.stringify(s.question)}`) +
             (s.options ?? []).map((option, index) => `\n    ${index === s.selectedOption ? '* ' : '  '}${JSON.stringify(option)}`).join('')
-          ).join('\n')));
+          ).join('\n');
+          return text(withWarnings(warnings, frame(lines)));
         }
         const sessions = payload['sessions'] as {
           id: string;
@@ -635,7 +637,7 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
             );
           })
           .join('\n');
-        return text(withWarnings(warnings, lines));
+        return text(withWarnings(warnings, frame(lines)));
       }),
   );
 

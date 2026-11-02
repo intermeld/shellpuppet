@@ -235,6 +235,35 @@ CLI forms are `shellpuppet wait --prompt [id ...] [--now]` and
 `shellpuppet list --waiting`. A wait with one string session id keeps its
 usual screen response.
 
+The HTTP `GET /sessions/wait?prompt=true` response is compact, including on a
+timeout or an immediate `now=true` poll:
+
+```json
+{
+  "matched": true,
+  "reason": "prompt",
+  "waitedMs": 80,
+  "sessions": [
+    {
+      "id": "s2",
+      "label": "build delegate",
+      "question": "Allow this command to run?",
+      "options": ["Allow once", "Deny"],
+      "selectedOption": 0,
+      "waitingMs": 4200
+    }
+  ]
+}
+```
+
+`reason` is `prompt` or `timeout`. A timeout has `matched: false` and an empty
+`sessions` array. Each row always has `id`, `label` and `waitingMs` in
+milliseconds; `question`, `options` and `selectedOption` are optional.
+`hideReasoning=true` removes `question` and `options`. `GET
+/sessions?waitingOnly=true` returns the same rows in its `sessions` array,
+alongside the usual `version` field. MCP tool results frame prompt text as
+untrusted terminal data, including the full `terminal_list` result.
+
 Text snapshots (`terminal_snapshot`, `terminal_wait`, `shellpuppet snap` and
 `lastLines`) prefix a uniquely styled menu choice with `⟦SP:selected⟧ `. This
 text annotation is never sent to the terminal or viewer. A detected prompt
