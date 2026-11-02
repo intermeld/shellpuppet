@@ -573,6 +573,33 @@ describe('policy sees the real command, and both caps bite', () => {
 });
 
 describe('envFromDaemon copies names from the daemon, never from the body', () => {
+  it('filters verified parent markers and passes agent settings in a dashboard session', async () => {
+    const excluded = [
+      'CODEX_TOOL_CALL_ID', 'CODEX_VERSION', 'CODEX_PERMISSION_PROFILE',
+      'CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED',
+      'OPENCODE_TERMINAL', 'GROK_AGENT',
+    ];
+    const passing = [
+      'CLAUDE_CODE_MAX_OUTPUT_TOKENS', 'CLAUDE_CODE_USE_BEDROCK',
+      'CLAUDE_CODE_GIT_BASH_PATH', 'QODER_SESSION_ID', 'QODER_SESSION_NAME',
+      'ANTIGRAVITY_SESSION_ID', 'GOOSE_SESSION_ID',
+    ];
+    const daemonEnv: NodeJS.ProcessEnv = {};
+    for (const name of excluded) daemonEnv[name] = 'made-up-parent';
+    for (const name of passing) daemonEnv[name] = 'made-up-setting';
+    const args = ['-e', `for (const name of ${JSON.stringify([...excluded, ...passing])}) console.log(name + '=' + (process.env[name] ?? 'missing')); console.log('END=1')`];
+    const daemon = await startLaunchDaemon({ daemonEnv, launcher: profilesOf([
+      { name: 'checked', command: process.execPath, args, shell: false, envFromDaemon: 'all' },
+    ]) });
+    const started = await launch(daemon, { profile: 'checked' });
+    expect(started.status).toBe(200);
+    const id = String((JSON.parse(started.body) as Record<string, unknown>)['id']);
+    await waitForScreen(daemon, id, 'END=1');
+    const screen = await screenOf(daemon, id);
+    for (const name of excluded) expect(screen).toContain(`${name}=missing`);
+    for (const name of passing) expect(screen).toContain(`${name}=made-up-setting`);
+  });
+
   it('keeps the starting agent session out of all while honouring an explicit array', async () => {
     const source = {
       CLAUDECODE: 'made-up-parent-marker',

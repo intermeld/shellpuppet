@@ -27,25 +27,34 @@ import type { CompiledPolicy } from '../core/policy.js';
 
 export { RESERVED_FEATURE_CREDENTIALS };
 const ALL_PROFILE_ENV_EXCLUSIONS: ReadonlySet<string> = new Set([
-  'NODE_OPTIONS',
-  'CLAUDECODE',
-  'CLAUDE_PID',
-  'CODEX_THREAD_ID',
-  'CODEX_SESSION_ID',
-  'CODEX_SHELL',
-  'GEMINI_CLI',
+  'NODE_OPTIONS', // Node.js runtime
+  'CLAUDECODE', // Claude Code
+  'CLAUDE_CODE_ENTRYPOINT', // Claude Code
+  'CLAUDE_CODE_SESSION_ID', // Claude Code
+  'CLAUDE_CODE_CHILD_SESSION', // Claude Code
+  'CLAUDE_CODE_MESSAGING_SOCKET', // Claude Code
+  'CLAUDE_CODE_MESSAGING_TOKEN', // Claude Code
+  'CLAUDE_CODE_SESSION_ATTENDED', // Claude Code
+  'CLAUDE_CODE_SSE_PORT', // Claude Code IDE session
+  'CLAUDE_CODE_EXECPATH', // Claude Code
+  'CLAUDE_CODE_BRIDGE_SESSION_ID', // Claude Code
+  'CLAUDE_CODE_REMOTE_SESSION_ID', // Claude Code
+  'CLAUDE_CODE_REMOTE', // Claude Code
+  'CLAUDE_JOB_DIR', // Claude Code background session
+  'CLAUDE_PID', // Claude Code
+  'CODEX_THREAD_ID', // Codex
+  'CODEX_SESSION_ID', // Codex
+  'CODEX_TOOL_CALL_ID', // Codex
+  'CODEX_VERSION', // Codex
+  'CODEX_PERMISSION_PROFILE', // Codex
+  'CODEX_SANDBOX', // Codex
+  'CODEX_SANDBOX_NETWORK_DISABLED', // Codex
+  'OPENCODE_TERMINAL', // OpenCode
+  'OPENCODE_CLIENT', // OpenCode desktop
+  'GROK_AGENT', // Grok
+  'GROK_SESSION_ID', // Grok hooks
+  'GEMINI_CLI', // Gemini CLI
 ]);
-const ALL_PROFILE_ENV_EXCLUSION_PREFIXES = [
-  'CLAUDE_CODE_',
-  'CODEX_INTERNAL_',
-  'QODER_SESSION_',
-  'GROK_SESSION_',
-  'OPENCODE_SESSION_',
-  'GEMINI_CLI_SESSION_',
-  'GEMINI_SESSION_',
-  'ANTIGRAVITY_SESSION_',
-  'GOOSE_SESSION_',
-] as const;
 
 /** The name pattern a profile and each of its folders must match. */
 export const PROFILE_NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
@@ -516,9 +525,7 @@ export function copyDaemonEnv(
   for (const name of names === 'all' ? Object.keys(source) : names) {
     const upperName = name.toUpperCase();
     if (names === 'all'
-      && (!ENV_NAME_PATTERN.test(name)
-        || ALL_PROFILE_ENV_EXCLUSIONS.has(upperName)
-        || ALL_PROFILE_ENV_EXCLUSION_PREFIXES.some((prefix) => upperName.startsWith(prefix)))) continue;
+      && (!ENV_NAME_PATTERN.test(name) || ALL_PROFILE_ENV_EXCLUSIONS.has(upperName))) continue;
     if ((upperName.startsWith('SHELLPUPPET_') && upperName !== 'SHELLPUPPET_HOME')
       || name === '__proto__') continue;
     if (process.platform === 'win32'

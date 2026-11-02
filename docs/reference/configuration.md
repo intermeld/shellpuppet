@@ -440,13 +440,24 @@ started it. A listed name that is unset is skipped and does not refuse the
 start. Connected feature credentials reserved under ADR-007 and ShellPuppet's
 per-session variables, including `SHELLPUPPET_SESSION`, are excluded.
 `SHELLPUPPET_HOME` passes through so a launched process can find the same daemon.
-The `"all"` form also excludes `NODE_OPTIONS` and the session markers and
-internal child-process variables of Claude Code, Codex, Qoder, Grok, OpenCode,
-Gemini CLI, Antigravity and Goose. User configuration such as API keys, model
-choices and `CLAUDE_CONFIG_DIR` still passes. Names that do not match
+The `"all"` form excludes these known agent session markers:
+
+| Agent CLI | Excluded names |
+|---|---|
+| Claude Code | `CLAUDECODE`, `CLAUDE_PID`, `CLAUDE_JOB_DIR`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN`, `CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_CODE_SSE_PORT`, `CLAUDE_CODE_EXECPATH`, `CLAUDE_CODE_BRIDGE_SESSION_ID`, `CLAUDE_CODE_REMOTE_SESSION_ID`, `CLAUDE_CODE_REMOTE` |
+| Codex | `CODEX_THREAD_ID`, `CODEX_SESSION_ID`, `CODEX_TOOL_CALL_ID`, `CODEX_VERSION`, `CODEX_PERMISSION_PROFILE`, `CODEX_SANDBOX`, `CODEX_SANDBOX_NETWORK_DISABLED` |
+| OpenCode | `OPENCODE_TERMINAL`, `OPENCODE_CLIENT` |
+| Grok | `GROK_AGENT`, `GROK_SESSION_ID` |
+| Gemini CLI | `GEMINI_CLI` |
+
+This list covers markers known for the supported CLIs; it does not promise
+that every future marker is covered. No session marker is excluded for Qoder,
+Antigravity or Goose. Other valid names, including agent CLI settings, API
+keys, model choices and `CLAUDE_CONFIG_DIR`, pass through. Use an explicit
+array to pass one of the listed markers when needed. The `"all"` form also
+excludes `NODE_OPTIONS` and names that do not match
 `^[A-Za-z_][A-Za-z0-9_]*$`, including Windows drive pseudo-variables such as
-`=C:`, are excluded. The unsafe `__proto__` name is excluded as well. An
-explicit array can still name an agent session variable when that is intended.
+`=C:`. The unsafe `__proto__` name is excluded as well.
 `TERM` and `COLORTERM` receive ShellPuppet's terminal values. With an array,
 the response and audit carry copied names; with `"all"`, they record only the
 setting `"all"`. They never carry values. `agents.passEnv` and `envNames` are
