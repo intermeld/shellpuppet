@@ -10,5 +10,11 @@
     const rank = new Map(before.map((value, index) => [value, index]));
     return [...offered].sort((a, b) => (rank.get(a.value) ?? 100) - (rank.get(b.value) ?? 100));
   }
-  globalThis.ShellPuppetDashboardFolders = { remember, order };
+  function anyOptions(recent, profile, roots) {
+    const seen = new Set();
+    const values = [...(Array.isArray(recent[profile]) ? recent[profile] : []),
+      ...(Array.isArray(roots) ? roots.map((item) => item.path) : [])];
+    return values.filter((value) => typeof value === 'string' && value !== '' && !seen.has(value) && seen.add(value));
+  }
+  globalThis.ShellPuppetDashboardFolders = { remember, order, anyOptions };
 })();

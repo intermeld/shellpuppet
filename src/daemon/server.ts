@@ -92,9 +92,11 @@ import {
   describeProfileText,
   expandProfileText,
   resolveLaunchCommand,
+  resolveAnyFolder,
 } from './launchProfiles.js';
 import type { LaunchFolder, LaunchProfile, LauncherConfig } from './launchProfiles.js';
 import { listRootFolders, resolveRootFolder } from './launchProfiles.js';
+import { chooseFolder, FOLDER_PICKER_TIMEOUT_MS, FolderPickerUnavailableError, FolderPickerTimeoutError } from './folderPicker.js';
 
 const DEFAULT_IDLE_MS = 30 * 60_000;
 /** Stop waits this long for an automatic dashboard launch before continuing. */
@@ -278,6 +280,10 @@ export interface DaemonOptions {
   launchProfiles?: LauncherConfig;
   /** Test seam for dashboard profile environment copies. */
   daemonEnv?: NodeJS.ProcessEnv;
+  /** Injected in tests so no desktop dialog appears. */
+  folderPicker?: () => Promise<string | null>;
+  /** Test hook for a picker that does not settle. */
+  folderPickerTimeoutMs?: number;
 }
 
 /** Thrown by `start()` when a healthy daemon already owns this home. */
@@ -632,6 +638,7 @@ export class Daemon {
   private readonly compiledPolicy: CompiledPolicy;
   /** Accepted launch times, for the sliding sixty-second cap. */
   private readonly launchTimes: number[] = [];
+  private folderPickerBusy = false;
   /**
    * Sessions created whose program does not exist yet (`programStarted`):
    * not listed and not in the feed until the start contract is met.
@@ -1411,8 +1418,12 @@ export class Daemon {
       command: profile.command,
       args: [...profile.args],
       folderRequired: profile.askCwd,
+      anyFolder: profile.anyFolder,
       folders: profile.folders.map((folder) => ({ name: folder.name, path: folder.path })),
-      rootFolders: listRootFolders(profile.folderRoots.map((root) => path.resolve(os.homedir(), root))),
+      rootFolders: listRootFolders(profile.folderRoots.map((root) => path.resolve(os.homedir(), root)))
+        .map((choice) => profile.anyFolder
+          ? { ...choice, path: path.join(path.resolve(os.homedir(), profile.folderRoots[choice.rootIndex] ?? ''), choice.name) }
+          : choice),
       envFromDaemon: profile.envFromDaemon === 'all' ? 'all' : [...profile.envFromDaemon],
     };
   }
@@ -1441,6 +1452,60 @@ export class Daemon {
       profiles: this.launchProfiles.profiles.map((profile) => this.profileDescription(profile)),
       problems: [...this.launchProfiles.problems],
     });
+  }
+
+  /** The desktop picker is available only to an authenticated any-folder profile. */
+  private async handleDashboardFolderPicker(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    const presented = this.dashboardCookiePresented(req.headers.cookie);
+    if (this.dashboardCookieToken(req.headers.cookie) === null) {
+      if (presented) this.auditDashboardRefusal(req, 'unauthenticated');
+      json(res, 401, { error: 'Unauthorised: a valid client token is required.' });
+      return;
+    }
+    if (!this.isSameOriginMutation(req)) {
+      this.auditDashboardRefusal(req, this.mutationRefusalReason(req));
+      json(res, 403, { error: 'Forbidden.' });
+      return;
+    }
+    if (!this.tokens.acceptsDashboardProof(headerOne(req, 'x-shellpuppet-csrf'))) {
+      this.auditDashboardRefusal(req, 'proof');
+      json(res, 403, { error: 'Forbidden.' });
+      return;
+    }
+    if ((headerOne(req, 'content-type') ?? '').split(';', 1)[0]?.trim().toLowerCase() !== 'application/json') {
+      json(res, 415, { error: 'The picker body must be JSON (application/json).' });
+      return;
+    }
+    let body: JsonBody;
+    try { body = await readBody(req); }
+    catch { json(res, 400, { error: 'Invalid picker body.' }); return; }
+    if (Object.keys(body).length !== 1 || typeof body['profile'] !== 'string' ||
+        !this.launchProfiles.profiles.some((profile) => profile.name === body['profile'] && profile.anyFolder)) {
+      json(res, 400, { error: 'This profile does not allow a folder picker.' });
+      return;
+    }
+    if (this.folderPickerBusy) {
+      json(res, 409, { error: 'A folder picker is already open.' });
+      return;
+    }
+    this.folderPickerBusy = true;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      const timeout = new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new FolderPickerTimeoutError('The folder picker timed out.')),
+          this.options.folderPickerTimeoutMs ?? FOLDER_PICKER_TIMEOUT_MS);
+      });
+      const selected = await Promise.race([(this.options.folderPicker ?? chooseFolder)(), timeout]);
+      if (selected === null || selected === '') { res.writeHead(204); res.end(); return; }
+      json(res, 200, { path: selected });
+    } catch (error) {
+      if (error instanceof FolderPickerTimeoutError) json(res, 504, { error: error.message });
+      else if (error instanceof FolderPickerUnavailableError) json(res, 503, { error: error.message });
+      else json(res, 500, { error: 'The folder picker failed.' });
+    } finally {
+      if (timer !== undefined) clearTimeout(timer);
+      this.folderPickerBusy = false;
+    }
   }
 
   /**
@@ -1472,8 +1537,9 @@ export class Daemon {
 
   /**
    * `POST /dashboard/launch`: one configured profile, and nothing else. The
-   * body names a profile and, when that profile asks, one of its folders. It
-   * cannot supply a command, arguments, a path or an environment value.
+   * body names a profile and, when that profile asks, a folder. Only profiles
+   * configured for any folder may receive a path. The page cannot supply a
+   * command, arguments or an environment value.
    */
   private async handleDashboardLaunch(
     req: http.IncomingMessage,
@@ -1528,12 +1594,12 @@ export class Daemon {
       return;
     }
     for (const key of Object.keys(body)) {
-      if (key !== 'profile' && key !== 'folder' && key !== 'rootIndex') {
+      if (key !== 'profile' && key !== 'folder' && key !== 'rootIndex' && key !== 'folderPath') {
         this.auditDashboardRefusal(req, 'body');
         json(res, 400, {
           error:
-            `The launch body may name only profile, folder and rootIndex: "${key}" is not accepted. ` +
-            'A command, arguments, a path and an environment value come from the profile.',
+            `The launch body may name only profile, folder, rootIndex and folderPath: "${key}" is not accepted. ` +
+            'A command, arguments and environment value come from the profile.',
         });
         return;
       }
@@ -1546,34 +1612,51 @@ export class Daemon {
 
     const folderName = body['folder'];
     const rootIndex = body['rootIndex'];
+    const freePath = body['folderPath'];
     let folder: LaunchFolder | undefined;
     let rootCwd: string | undefined;
+    let freeCwd: string | undefined;
     if (profile.askCwd) {
-      if (folderName === undefined) {
-        json(res, 400, { error: `folder (string) is required for profile "${profileName}".` });
-        return;
-      }
-      if (typeof folderName !== 'string') {
-        json(res, 400, { error: 'folder must be a string.' });
-        return;
-      }
-      if (rootIndex !== undefined) {
-        const choice = resolveRootFolder(profile.folderRoots.map((root) => path.resolve(os.homedir(), root)), rootIndex, folderName);
+      if (freePath !== undefined) {
+        if (!profile.anyFolder || folderName !== undefined || rootIndex !== undefined) {
+          this.auditDashboardRefusal(req, 'body');
+          json(res, 400, { error: 'This profile does not accept that folder path.' });
+          return;
+        }
+        const choice = resolveAnyFolder(freePath);
         if ('error' in choice) {
           this.auditDashboardRefusal(req, 'body');
           json(res, 400, { error: choice.error });
           return;
         }
-        rootCwd = choice.cwd;
+        freeCwd = choice.cwd;
       } else {
-        folder = profile.folders.find((entry) => entry.name === folderName);
-        if (folder === undefined) {
-          this.auditDashboardRefusal(req, 'body');
-          json(res, 400, { error: `No such folder for profile "${profileName}": ${folderName}` });
+        if (folderName === undefined) {
+          json(res, 400, { error: `folder (string) is required for profile "${profileName}".` });
           return;
         }
+        if (typeof folderName !== 'string') {
+          json(res, 400, { error: 'folder must be a string.' });
+          return;
+        }
+        if (rootIndex !== undefined) {
+          const choice = resolveRootFolder(profile.folderRoots.map((root) => path.resolve(os.homedir(), root)), rootIndex, folderName);
+          if ('error' in choice) {
+            this.auditDashboardRefusal(req, 'body');
+            json(res, 400, { error: choice.error });
+            return;
+          }
+          rootCwd = choice.cwd;
+        } else {
+          folder = profile.folders.find((entry) => entry.name === folderName);
+          if (folder === undefined) {
+            this.auditDashboardRefusal(req, 'body');
+            json(res, 400, { error: `No such folder for profile "${profileName}": ${folderName}` });
+            return;
+          }
+        }
       }
-    } else if (folderName !== undefined || rootIndex !== undefined) {
+    } else if (folderName !== undefined || rootIndex !== undefined || freePath !== undefined) {
       this.auditDashboardRefusal(req, 'body');
       json(res, 400, {
         error: `Profile "${profileName}" uses a fixed working directory and does not accept a folder.`,
@@ -1581,7 +1664,7 @@ export class Daemon {
       return;
     }
 
-    const resolved = rootCwd === undefined ? this.resolveLaunchCwd(profile, folder) : { cwd: rootCwd };
+    const resolved = freeCwd !== undefined ? { cwd: freeCwd } : rootCwd === undefined ? this.resolveLaunchCwd(profile, folder) : { cwd: rootCwd };
     if ('error' in resolved) {
       this.auditDashboardRefusal(req, 'body');
       json(res, 400, { error: resolved.error });
@@ -1653,7 +1736,7 @@ export class Daemon {
 
     const { env, copied } = copyDaemonEnv(profile.envFromDaemon, this.daemonEnv);
     const envNames = Object.keys(env);
-    const folderLabel = folder?.name ?? (rootCwd !== undefined ? folderName : undefined);
+    const folderLabel = freeCwd !== undefined ? freeCwd : folder?.name ?? (rootCwd !== undefined ? folderName : undefined);
     const options = {
       command: resolvedCommand.file,
       args: [...profile.args],
@@ -1675,6 +1758,25 @@ export class Daemon {
       // has no client environment and no other way to name itself.
       startedBy: 'dashboard',
     };
+
+    // Keep the path check adjacent to spawn. A local writer can still replace
+    // a directory after this check, as the security model records.
+    if (rootCwd !== undefined) {
+      const latest = resolveRootFolder(profile.folderRoots.map((root) => path.resolve(os.homedir(), root)), rootIndex, folderName);
+      if ('error' in latest || latest.cwd !== rootCwd) {
+        this.auditDashboardRefusal(req, 'body');
+        json(res, 400, { error: 'Folder is no longer available from this root.' });
+        return;
+      }
+    }
+    if (freeCwd !== undefined) {
+      const latest = resolveAnyFolder(freePath);
+      if ('error' in latest || latest.cwd !== freeCwd) {
+        this.auditDashboardRefusal(req, 'body');
+        json(res, 400, { error: 'The chosen folder is no longer available.' });
+        return;
+      }
+    }
 
     let session: Session;
     try {
@@ -1734,6 +1836,7 @@ export class Daemon {
         : copied.length > 0 ? { envFromDaemon: copied } : {}),
       ...(folderLabel !== undefined ? { folder: folderLabel } : {}),
       ...(rootCwd !== undefined ? { rootIndex } : {}),
+      ...(freeCwd !== undefined ? { folderPath: freeCwd } : {}),
       ...(session.label !== '' ? { label: session.label } : {}),
     });
 
@@ -2026,6 +2129,10 @@ export class Daemon {
     }
     if (req.method === 'POST' && url.pathname === '/dashboard/launch') {
       await this.handleDashboardLaunch(req, res);
+      return;
+    }
+    if (req.method === 'POST' && url.pathname === '/dashboard/folder-picker') {
+      await this.handleDashboardFolderPicker(req, res);
       return;
     }
 

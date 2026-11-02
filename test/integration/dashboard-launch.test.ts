@@ -138,6 +138,8 @@ async function startLaunchDaemon(options: {
   launcher?: LauncherConfig;
   policy?: PolicyConfig;
   daemonEnv?: NodeJS.ProcessEnv;
+  folderPicker?: () => Promise<string | null>;
+  folderPickerTimeoutMs?: number;
 } = {}): Promise<LaunchDaemon> {
   const home = makeTempHome('dash-launch-');
   const logPath = path.join(home, 'daemon.log');
@@ -149,6 +151,8 @@ async function startLaunchDaemon(options: {
     ...(options.policy !== undefined ? { policy: options.policy } : {}),
     ...(options.daemonEnv !== undefined ? { daemonEnv: options.daemonEnv } : {}),
     launchProfiles: options.launcher ?? { profiles: [], problems: [] },
+    ...(options.folderPicker === undefined ? {} : { folderPicker: options.folderPicker }),
+    ...(options.folderPickerTimeoutMs === undefined ? {} : { folderPickerTimeoutMs: options.folderPickerTimeoutMs }),
     viewer: { launchMode: 'no-window' },
     promptScanIntervalMs: 600_000,
     idleCheckIntervalMs: 600_000,
@@ -207,6 +211,10 @@ function launch(
   extra: Record<string, string> = {},
 ): Promise<RawResult> {
   return launchRaw(daemon, JSON.stringify(body), extra);
+}
+
+function pickFolder(daemon: LaunchDaemon, profile = 'open', extra: Record<string, string> = {}): Promise<RawResult> {
+  return raw(daemon.port, 'POST', '/dashboard/folder-picker', launchHeaders(daemon, extra), JSON.stringify({ profile }));
 }
 
 function readProfiles(
@@ -730,6 +738,65 @@ describe('the page chooses a folder by name', () => {
       cwd: folderDir,
     });
     expect(withCwd.status).toBe(400);
+  });
+});
+
+describe('a profile that allows any local folder', () => {
+  it('starts in a free path, records it and keeps other profiles bounded', async () => {
+    const dir = makeDir('dash-any-');
+    fs.mkdirSync(path.join(dir, 'root-child'));
+    const daemon = await startLaunchDaemon({ launcher: profilesOf([
+      { name: 'open', command: process.execPath, args: ['-e', 'console.log("CWD=" + process.cwd())'], shell: false, cwd: 'ask', folders: 'any', folderRoots: [dir], label: 'In {folder}' },
+      { name: 'bounded', command: process.execPath, args: ['-e', '0'], shell: false, cwd: 'ask', folders: [{ name: 'allowed', path: dir }] },
+    ]) });
+    const offered = JSON.parse((await readProfiles(daemon)).body) as { profiles: { name: string; rootFolders: { path: string }[] }[] };
+    expect(offered.profiles.find((profile) => profile.name === 'open')?.rootFolders[0]?.path).toBe(path.join(dir, 'root-child'));
+    expect((await launch(daemon, { profile: 'bounded', folderPath: dir })).status).toBe(400);
+    const started = await launch(daemon, { profile: 'open', folderPath: dir });
+    expect(started.status).toBe(200);
+    const audit = fs.readFileSync(path.join(daemon.home, 'audit.log'), 'utf8');
+    expect(audit).toContain(JSON.stringify(fs.realpathSync(dir)));
+    expect(audit).toContain('In ');
+  });
+
+  it('refuses UNC, device, relative, file and missing paths', async () => {
+    const dir = makeDir('dash-any-bad-');
+    const file = path.join(dir, 'file.txt');
+    fs.writeFileSync(file, 'x');
+    const daemon = await startLaunchDaemon({ launcher: profilesOf([
+      { name: 'open', command: process.execPath, args: ['-e', '0'], shell: false, cwd: 'ask', folders: 'any' },
+    ]) });
+    expect((await launch(daemon, { profile: 'open', folderPath: dir })).status).toBe(200);
+    for (const folderPath of ['\\\\server\\share', '\\\\?\\C:\\work', '\\\\.\\C:\\work', 'relative', file, path.join(dir, 'missing')]) {
+      expect((await launch(daemon, { profile: 'open', folderPath })).status).toBe(400);
+    }
+  });
+
+  it('returns an injected chosen folder and nothing on cancellation', async () => {
+    const dir = makeDir('dash-picker-');
+    let chosen: string | null = dir;
+    const daemon = await startLaunchDaemon({ launcher: profilesOf([
+      { name: 'open', command: process.execPath, cwd: 'ask', folders: 'any' },
+    ]), folderPicker: () => Promise.resolve(chosen) });
+    expect(JSON.parse((await pickFolder(daemon)).body)).toEqual({ path: dir });
+    chosen = null;
+    expect((await pickFolder(daemon)).status).toBe(204);
+    expect((await pickFolder(daemon, 'bounded')).status).toBe(400);
+    expect((await pickFolder(daemon, 'open', { cookie: '' })).status).toBe(401);
+    expect((await pickFolder(daemon, 'open', { 'x-shellpuppet-csrf': '' })).status).toBe(403);
+  });
+
+  it('times out an injected picker and permits only one at a time', async () => {
+    let release: ((value: string | null) => void) | undefined;
+    const pending = new Promise<string | null>((resolve) => { release = resolve; });
+    const daemon = await startLaunchDaemon({ launcher: profilesOf([
+      { name: 'open', command: process.execPath, cwd: 'ask', folders: 'any' },
+    ]), folderPicker: () => pending, folderPickerTimeoutMs: 1000 });
+    const first = pickFolder(daemon);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect((await pickFolder(daemon)).status).toBe(409);
+    expect((await first).status).toBe(504);
+    release?.(null);
   });
 });
 

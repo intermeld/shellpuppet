@@ -43,8 +43,10 @@ client token must remain outside the browser.
   HTTP and WebSocket rules remain. The security model records the wider
   same-origin risk.
 - **Profiles, policy and environment.** A launch names a configured profile
-  and, when offered, one named folder. The page cannot supply a command,
-  arguments, raw path or environment value. Global and profile policy check
+  and, when offered, one named folder. A profile with `cwd: "ask"` may set
+  `"folders": "any"` to allow a typed or picked local folder path. Other
+  profiles continue to accept offered names only. The page cannot supply a
+  command, arguments or environment value. Global and profile policy check
   the real command before any Windows shell wrap. The launch route accepts
   at most eight starts per sixty seconds and at most thirty-two live sessions
   when `policy.maxSessions` is unset; a configured cap takes its place.
@@ -55,6 +57,13 @@ client token must remain outside the browser.
   to pass the daemon's whole environment to its dashboard-started sessions.
   A connected feature's reserved credential stays out of sessions under
   ADR-007, including on this path.
+- **Any folder by owner choice (2 November 2026).** The dashboard remembers
+  five recent paths per profile in its browser profile and offers root folders
+  in the same path box. Browse asks the daemon to show the operating system's
+  folder picker through an authenticated, proof-protected route. The daemon
+  resolves a free path and requires an existing directory on a local drive.
+  Anything able to use the dashboard credential can start an `any` profile
+  in any local folder. Profile authors must grant this authority deliberately.
 - **Fill, then focus.** Auto arranges panes in an even grid while each can
   hold at least 80 by 24 cells, then uses a large pane and a strip. That
   floor is confirmed before release by reading and typing in the shipped
