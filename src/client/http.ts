@@ -235,11 +235,13 @@ function startLockEndpoint(home: string): string {
     if (uid === undefined) throw new Error('user id unavailable');
     const parent = os.tmpdir();
     // The folder below is checked once and then used by name, so nobody else may
-    // be able to rename or replace it afterwards: its parent must be ours, or must
-    // carry the sticky bit if others can write to it (as /tmp does).
+    // be able to rename or replace it afterwards. Renaming an entry needs write
+    // access to its parent, whoever owns the parent, so a parent that group or
+    // others can write to must carry the sticky bit (as /tmp does). Ancestors
+    // above the parent are not checked; that limit is documented.
     const parentStat = fs.lstatSync(parent);
     const othersMayWrite = (parentStat.mode & 0o022) !== 0;
-    if (!parentStat.isDirectory() || (parentStat.uid !== uid && othersMayWrite && (parentStat.mode & 0o1000) === 0)) {
+    if (!parentStat.isDirectory() || (othersMayWrite && (parentStat.mode & 0o1000) === 0)) {
       throw new Error('unsafe temporary folder');
     }
     const folder = path.join(parent, `shellpuppet-${String(uid)}`);
