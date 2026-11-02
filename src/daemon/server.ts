@@ -41,6 +41,7 @@ import { DEFAULT_WAIT_TIMEOUT_MS, ENV_NAME_PATTERN, MAX_WAIT_TIMEOUT_MS, WAIT_PO
 import type {
   Logger,
   PolicyConfig,
+  SessionOptions,
   SessionEnvMode,
   SessionSummary,
   WaitCondition,
@@ -286,6 +287,8 @@ export interface DaemonOptions {
   folderPicker?: (signal: AbortSignal) => Promise<string | null>;
   /** Test hook for a picker that does not settle. */
   folderPickerTimeoutMs?: number;
+  /** Test seam for dashboard starts without native terminal startup. */
+  dashboardSessionFactory?: (options: SessionOptions) => Session;
 }
 
 /** Thrown by `start()` when a healthy daemon already owns this home. */
@@ -643,6 +646,8 @@ export class Daemon {
   private folderPickerBusy = false;
   private folderPickerAbort: AbortController | null = null;
   private folderPickerDone: Promise<void> | null = null;
+  /** Includes requests still reading their body when shutdown begins. */
+  private readonly folderPickerHandlers = new Set<Promise<void>>();
   /**
    * Sessions created whose program does not exist yet (`programStarted`):
    * not listed and not in the feed until the start contract is met.
@@ -1031,6 +1036,14 @@ export class Daemon {
         new Promise<void>((resolve) => { pickerWaitTimer = setTimeout(resolve, FOLDER_PICKER_SHUTDOWN_WAIT_MS); }),
       ]);
       if (pickerWaitTimer !== undefined) clearTimeout(pickerWaitTimer);
+    }
+    if (this.folderPickerHandlers.size > 0) {
+      let handlerWaitTimer: NodeJS.Timeout | undefined;
+      await Promise.race([
+        Promise.allSettled([...this.folderPickerHandlers]),
+        new Promise<void>((resolve) => { handlerWaitTimer = setTimeout(resolve, FOLDER_PICKER_SHUTDOWN_WAIT_MS); }),
+      ]);
+      if (handlerWaitTimer !== undefined) clearTimeout(handlerWaitTimer);
     }
     // Revoke grants even if browser detection or spawn never settles. A late
     // launcher result also takes the stopping path in openDashboardWindow.
@@ -1492,11 +1505,15 @@ export class Daemon {
     let body: JsonBody;
     try { body = await readBody(req); }
     catch { json(res, 400, { error: 'Invalid picker body.' }); return; }
+    if (this.stopping) { json(res, 503, { error: 'The daemon is stopping.' }); return; }
     if (Object.keys(body).length !== 1 || typeof body['profile'] !== 'string' ||
         !this.launchProfiles.profiles.some((profile) => profile.name === body['profile'] && profile.anyFolder)) {
       json(res, 400, { error: 'This profile does not allow a folder picker.' });
       return;
     }
+    // Stop sets `stopping` synchronously. There is no await between this
+    // check, installing the controller and creating the runner.
+    if (this.stopping) { json(res, 503, { error: 'The daemon is stopping.' }); return; }
     if (this.folderPickerBusy) {
       json(res, 409, { error: 'A folder picker is already open.' });
       return;
@@ -1506,11 +1523,29 @@ export class Daemon {
     this.folderPickerAbort = controller;
     let finishPicker: (() => void) | undefined;
     this.folderPickerDone = new Promise<void>((resolve) => { finishPicker = resolve; });
-    let timer: NodeJS.Timeout | undefined;
+    let rejectAbort: ((reason: unknown) => void) | undefined;
+    const aborted = new Promise<never>((_resolve, reject) => { rejectAbort = reject; });
+    const onAbort = (): void => {
+      rejectAbort?.(controller.signal.reason instanceof Error
+        ? controller.signal.reason : new FolderPickerFailureError('The folder picker was cancelled.'));
+    };
+    controller.signal.addEventListener('abort', onAbort, { once: true });
+    const timer = setTimeout(() => controller.abort(new FolderPickerTimeoutError('The folder picker timed out.')),
+      this.options.folderPickerTimeoutMs ?? FOLDER_PICKER_TIMEOUT_MS);
+    let run: Promise<string | null>;
+    try { run = (this.options.folderPicker ?? chooseFolder)(controller.signal); }
+    catch (error) { run = Promise.reject(error instanceof Error ? error : new FolderPickerFailureError('The folder picker failed.')); }
+    const finish = (): void => {
+      if (this.folderPickerAbort === controller) {
+        this.folderPickerBusy = false;
+        this.folderPickerAbort = null;
+        this.folderPickerDone = null;
+      }
+      finishPicker?.();
+    };
+    void run.then(finish, finish);
     try {
-      timer = setTimeout(() => controller.abort(new FolderPickerTimeoutError('The folder picker timed out.')),
-        this.options.folderPickerTimeoutMs ?? FOLDER_PICKER_TIMEOUT_MS);
-      const selected = await (this.options.folderPicker ?? chooseFolder)(controller.signal);
+      const selected = await Promise.race([run, aborted]);
       if (controller.signal.aborted) throw controller.signal.reason;
       if (selected === null || selected === '') { res.writeHead(204); res.end(); return; }
       json(res, 200, { path: selected });
@@ -1521,11 +1556,8 @@ export class Daemon {
       else if (failure instanceof FolderPickerFailureError) json(res, 502, { error: failure.message });
       else json(res, 502, { error: 'The folder picker failed.' });
     } finally {
-      if (timer !== undefined) clearTimeout(timer);
-      this.folderPickerBusy = false;
-      this.folderPickerAbort = null;
-      finishPicker?.();
-      this.folderPickerDone = null;
+      clearTimeout(timer);
+      controller.signal.removeEventListener('abort', onAbort);
     }
   }
 
@@ -1801,7 +1833,7 @@ export class Daemon {
 
     let session: Session;
     try {
-      session = this.manager.create(options);
+      session = (this.options.dashboardSessionFactory ?? ((value) => this.manager.create(value)))(options);
     } catch (error) {
       if (error instanceof PolicyViolationError) {
         this.auditDashboardRefusal(req, 'policy');
@@ -2153,7 +2185,10 @@ export class Daemon {
       return;
     }
     if (req.method === 'POST' && url.pathname === '/dashboard/folder-picker') {
-      await this.handleDashboardFolderPicker(req, res);
+      const handler = this.handleDashboardFolderPicker(req, res);
+      this.folderPickerHandlers.add(handler);
+      try { await handler; }
+      finally { this.folderPickerHandlers.delete(handler); }
       return;
     }
 

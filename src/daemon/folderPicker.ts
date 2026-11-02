@@ -4,6 +4,8 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 
 export const FOLDER_PICKER_TIMEOUT_MS = 10 * 60_000;
+/** A reluctant desktop helper gets this long to exit after termination. */
+export const FOLDER_PICKER_FORCE_KILL_MS = 2_000;
 
 export class FolderPickerUnavailableError extends Error {}
 export class FolderPickerTimeoutError extends Error {}
@@ -20,6 +22,8 @@ export type PickerProcessRunner = (file: string, args: string[], options: Picker
 
 export interface PickerDependencies {
   runner?: PickerProcessRunner;
+  /** Test seam for the native child, without opening a desktop dialog. */
+  execFileImpl?: typeof execFile;
   platform?: NodeJS.Platform;
   systemRoot?: string;
   executableExists?: (file: string) => boolean;
@@ -30,13 +34,29 @@ function executableExists(file: string): boolean {
   catch { return false; }
 }
 
-/** execFile calls back after the child closes, including when aborted. */
-const nativeRunner: PickerProcessRunner = (file, args, options) => new Promise((resolve, reject) => {
-  execFile(file, args, { ...options, encoding: 'buffer', maxBuffer: 64 * 1024 }, (error, stdout) => {
-    if (error !== null) { reject(error instanceof Error ? error : new FolderPickerFailureError('The folder picker failed.')); return; }
-    resolve(Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout));
+/** The picker helper starts no children of its own, so ending this pid is enough. */
+function nativeRunner(execFileImpl: typeof execFile): PickerProcessRunner {
+  return (file, args, options) => new Promise((resolve, reject) => {
+    let forceTimer: NodeJS.Timeout | undefined;
+    const child = execFileImpl(file, args, {
+      cwd: options.cwd, shell: false, windowsHide: true, encoding: 'buffer', maxBuffer: 64 * 1024,
+    }, (error, stdout) => {
+      options.signal.removeEventListener('abort', terminate);
+      if (forceTimer !== undefined) clearTimeout(forceTimer);
+      if (error !== null) { reject(error instanceof Error ? error : new FolderPickerFailureError('The folder picker failed.')); return; }
+      resolve(Buffer.isBuffer(stdout) ? stdout : Buffer.from(stdout));
+    });
+    const terminate = (): void => {
+      if (child.exitCode !== null || child.signalCode !== null) return;
+      child.kill();
+      forceTimer = setTimeout(() => {
+        if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      }, FOLDER_PICKER_FORCE_KILL_MS);
+    };
+    if (options.signal.aborted) terminate();
+    else options.signal.addEventListener('abort', terminate, { once: true });
   });
-});
+}
 
 function abortReason(signal: AbortSignal): Error {
   return signal.reason instanceof Error ? signal.reason : new FolderPickerFailureError('The folder picker was cancelled.');
@@ -73,7 +93,7 @@ function fixedLinuxHelper(name: 'zenity' | 'kdialog', exists: (file: string) => 
 export async function chooseFolder(signal: AbortSignal, deps: PickerDependencies = {}): Promise<string | null> {
   const platform = deps.platform ?? process.platform;
   const exists = deps.executableExists ?? executableExists;
-  const runner = deps.runner ?? nativeRunner;
+  const runner = deps.runner ?? nativeRunner(deps.execFileImpl ?? execFile);
   if (platform === 'win32') {
     const file = path.win32.join(deps.systemRoot ?? process.env['SystemRoot'] ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
     if (!exists(file)) throw new FolderPickerUnavailableError('No folder picker is available.');
