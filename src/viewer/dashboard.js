@@ -34,6 +34,7 @@
     ? saved.fontSize : saved.fontSize === null ? null
       : Number.isInteger(configuredFont) && configuredFont >= 8 && configuredFont <= 32 ? configuredFont : null;
   let autoFitTimer = null;
+  const focusOpenFits = new Set();
   let prefix = typeof saved.prefix === 'string' && /^[a-z]$/.test(saved.prefix) ? saved.prefix : 'a';
   let choosingPrefix = false;
   let selected = null;
@@ -124,6 +125,15 @@
   });
   const closeError = () => { error.hidden = true; document.getElementById('error-message').textContent = ''; };
   const showError = (message) => { document.getElementById('error-message').textContent = message; error.hidden = false; };
+  function closeVisibleError() {
+    if (!error.hidden) { closeError(); return true; }
+    const focusedCard = document.activeElement?.closest('.pane');
+    const focused = focusedCard ? panes.get(focusedCard.dataset.session) : null;
+    const item = [focused, panes.get(selected), ...shown()].find((pane) => pane && visible(pane) && !pane.banner.hidden);
+    if (!item) return false;
+    item.banner.hidden = true;
+    return true;
+  }
   function renderPreferences() {
     document.getElementById('auto-fit').setAttribute('aria-pressed', String(autoFit));
     document.getElementById('auto-fit').classList.toggle('active', autoFit);
@@ -132,10 +142,13 @@
   }
   function scheduleAutoFit() {
     clearTimeout(autoFitTimer);
-    if (!autoFit) return;
+    if (!autoFit) { focusOpenFits.clear(); return; }
     autoFitTimer = setTimeout(() => {
       autoFitTimer = null;
-      for (const item of shown()) if (visible(item)) item.client?.autoFitGrid();
+      for (const item of shown()) {
+        if (!visible(item)) continue;
+        if (item.client?.autoFitGrid(80, 24, focusOpenFits.has(item.id))) focusOpenFits.delete(item.id);
+      }
     }, 250);
   }
   function broadcastPreferences() {
@@ -344,6 +357,9 @@
     const banner = document.createElement('div');
     banner.className = 'pane-banner';
     banner.hidden = true;
+    const bannerMessage = document.createElement('span');
+    bannerMessage.className = 'pane-banner-message';
+    banner.append(bannerMessage, makeButton('Close pane error', () => { banner.hidden = true; }));
     const prompt = document.createElement('div');
     prompt.className = 'pane-prompt';
     prompt.hidden = true;
@@ -676,7 +692,7 @@
 
   function fitWhenReady(id, left = 30) {
     const client = panes.get(id)?.client;
-    if (client?.fitGrid()) return;
+    if (client?.fitGrid(80, 24)) return;
     if (left <= 0) return;
     window.requestAnimationFrame(() => fitWhenReady(id, left - 1));
   }
@@ -698,7 +714,8 @@
       enlarged = null;
       persist();
       arrange('focus open');
-      fitWhenReady(id);
+      if (autoFit) { focusOpenFits.add(id); scheduleAutoFit(); }
+      else fitWhenReady(id);
     }
   }
 
@@ -922,7 +939,7 @@
         persist();
         closeError();
       } else if (event.key === 'Escape') {
-        closeError();
+        closeVisibleError();
       } else {
         showError('Choose Ctrl+Shift and a letter.');
       }
@@ -933,8 +950,8 @@
       event.preventDefault(); event.stopPropagation(); navigation = true; return;
     }
     const terminalFocused = document.activeElement?.closest('.pane-term') !== null;
-    if (event.key === 'Escape' && !terminalFocused && !error.hidden) {
-      event.preventDefault(); event.stopPropagation(); closeError(); return;
+    if (event.key === 'Escape' && !terminalFocused && closeVisibleError()) {
+      event.preventDefault(); event.stopPropagation(); return;
     }
     if (event.key === 'Escape' && enlarged && (navigation || !terminalFocused)) {
       event.preventDefault(); event.stopPropagation(); navigation = false;
