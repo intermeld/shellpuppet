@@ -11,6 +11,8 @@ const execFileAsync = promisify(execFile);
 const values = [
   'with space', 'x=with space', 'say "hello"', '"quoted space"', 'trailing\\', 'with space\\',
   '%PATH%', '^', '&', '|', '<', '>', "single'quote", '', 'café 漢字',
+  // The long value must still fit on one 300-column screen row with its JSON.
+  'with\ttab', 'back\\\\"quote', 'x'.repeat(200) + ' end',
 ];
 
 describe.skipIf(process.platform !== 'win32')('Windows start arguments', () => {
