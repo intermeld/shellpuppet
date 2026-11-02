@@ -205,7 +205,7 @@ fits the platform limit. For a longer home path it is a socket named from a
 hash of the resolved home in a private `shellpuppet-<uid>` folder under the
 system temporary directory. ShellPuppet uses it only if it is a real folder
 owned by you with no access for others (mode 0700), in a temporary directory
-that is yours or has the sticky bit. If it cannot use the endpoint, it warns and
+that no one else can write to, or that has the sticky bit as `/tmp` does. If it cannot use the endpoint, it warns and
 starts without coordination; the daemon's single-owner state claim still
 decides which start succeeds.
 
