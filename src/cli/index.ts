@@ -45,7 +45,7 @@ Usage:
       program that is not an agent CLI: only names listed in envNames in
       config.json pass, and any other name refuses the start. Values are
       never printed or logged.
-      --agent names the agent CLI the session runs (claude, codex, qoder...)
+      --agent names the agent CLI the session runs (claude, codex, muse, qoder...)
       when it is reached through a shell or a launcher script, so that
       --hide-reasoning and result can read its screen.
       --cols/--rows say where to START; the human's viewer reshapes the grid to

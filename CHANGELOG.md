@@ -7,6 +7,13 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+### Added
+
+- Muse Code 1.4.14 has a built-in agent signature for filtered reasoning,
+  latest-turn answers and its approval and workspace trust menus. Versioned
+  `muse-bin` executables are recognised, as are sessions started with
+  `agent: "muse"` through a launcher script.
+
 ### Fixed
 
 - Direct Windows starts (`--no-shell` or `shell: false`) now preserve literal

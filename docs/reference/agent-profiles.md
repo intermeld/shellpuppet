@@ -30,11 +30,14 @@ for it in `agents.passEnv`, and timed from asking for the session: two runs or
 more each, shown as a range. In the table, ready is when the text in the
 readiness table below appears; where a first-use question came first, its
 time is given instead, and the CLI is ready once you answer it.
+Muse Code 1.4.14 was observed on 2026-11-02; its first output time was not
+recorded.
 
 | CLI | First output | Ready, or first question | Notes |
 |---|---|---|---|
 | Claude Code 2.1.312 | **1.8 to 3.3 s** | ready at **2.1 to 2.8 s** | Loads the MCP servers configured for it as it starts. Its footer reads `? for shortcuts` in the default mode and names the mode otherwise. |
 | Codex 0.165.0 | **0.5 to 0.6 s** | ready at **0.5 to 0.6 s** | The fastest to a usable composer. |
+| Muse Code 1.4.14 | not measured | ready in about **5 to 25 s** | Wait for its composer below `Voice input (Alt+V to start)`. The first Enter after startup can leave typed text in the composer; inspect it and submit again if needed. |
 | Antigravity 1.4.10 | **1.4 s** | trust question at **1.4 to 3.6 s** | Asks for trust on first use in a folder. |
 | Qoder CLI 1.1.81 | **22 to 23 s** | ready at **24 s** | Paints nothing for over 20 seconds while it loads the MCP servers configured for it, and input typed while it settles is **silently discarded**. In-TUI suggestion panels can steal focus after tasks; `escape` resets. |
 | OpenCode 2.0.26 | **0.6 to 5.7 s** | ready at **7 to 12 s** | Showed an update notice beside its composer on both runs. |
@@ -149,6 +152,7 @@ described rather than quoted has not been captured.
 |---|---|---|---|
 | Claude Code | `? for shortcuts`, or `shift+tab` when a mode other than the default is on | `Is this a project you created or one you trust?` | not yet captured |
 | Codex | `Ask Codex` | not seen | `Would you like to run the following command?` |
+| Muse Code | `Voice input (Alt+V to start)` above the `❯` composer | `Do you trust this workspace?` | `Would you like to run the following command?` with `Stage 1/1` or another stage count |
 | Antigravity | `? for shortcuts` | a trust question | `Run this command?`, `Accept this file edit?`, `Allow creation of this file?` |
 | Qoder CLI | `Type your message` | `Do you trust the files in this folder?` | `Allow this command to run?`, under `Permission Required` |
 | OpenCode | `ctrl+p` | not seen | `△ Permission required` |
@@ -215,6 +219,7 @@ their returned text; a filtered list omits waiting prompt questions.
 |---|---|---|---|
 | Claude Code | 2.1.312 | None: a spinner while it thinks | Nothing |
 | Codex | 0.165.0 | None; its commentary before tool calls is a message, kept | Nothing |
+| Muse Code | 1.4.14 | A live reasoning summary line | The summary; answers, tool status and questions stay visible |
 | Qoder | 1.1.80 | A Thinking block behind a `│` bar, in italics, kept after the answer | Every Thinking block |
 | OpenCode | 2.0.26 | None: `Thinking` while it thinks, then a collapsed `+ Thought · Ns` | Nothing |
 | MiMo Code | 0.1.16 | None: a collapsed `+ Thought: Ns` before each tool group and the answer | Nothing |
@@ -259,6 +264,13 @@ shellpuppet type <id> "your prompt" --verify      # retry after `key <id> escape
 - **Qoder:** answer the folder-trust prompt on first use in a directory;
   `--verify` every prompt you type, and treat a failed verify as "press
   `escape`, wait, retry".
+- **Muse Code:** it can think for minutes before its first tool call. Wait for
+  the busy line to clear before reading `terminal_result`; a `◆ Worked for`
+  line is optional. After startup, check whether the first Enter submitted
+  the prompt, and press Enter again only if the text remains in the composer.
+  Answer shell approvals one stage at a time with `Allow this stage once`.
+  Wait past `Approval request · keys active in a moment` for the next menu,
+  and never choose `Always allow in this workspace`.
 - **Expect the human's window to set the grid.** The viewport watching a
   session drives its size, so `cols`/`rows` at `start` say where to *begin*
   and a browser window of a different shape will reshape it (design §5). This

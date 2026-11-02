@@ -362,6 +362,32 @@ export const BUILT_IN_SIGNATURES: readonly AgentSignature[] = [
       continues: { text: '^ {3}[^\\s└│]' },
     },
   },
+  {
+    // Muse Code 1.4.14. A completed answer is a bold ◆ block. Tool calls
+    // use a green ◆, and the live reasoning summary uses a grey ◆. The
+    // composer is the bare ❯ below the voice input rule; sent turns use ❯
+    // with text. The Muse Code banner sits above the transcript, and the
+    // status line ending in Launch overrides sits below the composer. A
+    // finished turn may have no Worked for line.
+    name: 'muse',
+    programs: ['muse', 'muse-bin-*'],
+    measured: 'Muse Code 1.4.14',
+    composer: { text: '^❯\\s*$' },
+    chrome: [{ text: '^── Voice input \\(Alt\\+V to start\\)' }, { text: RULE }],
+    frame: { text: RULE },
+    busy: [
+      { text: '^[◇◈◆] .*esc to interrupt\\)' },
+      { text: '^└ (?:Hooks running|last event|Meta Model )' },
+    ],
+    turn: { text: '^❯ \\S' },
+    reasoning: [{ start: { text: '^◆ (?!Worked for )', lead: { fg: ['#676c74'] } } }],
+    answer: {
+      start: { text: '^◆ (?!Worked for |(?:Wrote|Ran command|Write)\\b|[A-Za-z]:\\\\)', lead: { bold: true, fg: ['#ccd3db'] } },
+      continues: { text: '^ {2}\\S', lead: { fg: ['#ccd3db'] } },
+      upward: true,
+    },
+    trailer: { text: '^◆ Worked for ' },
+  },
 ];
 
 // ---------------------------------------------------------------- compiling
@@ -602,6 +628,12 @@ export function programName(command: string): string {
   return base.replace(/\.(exe|cmd|bat|ps1|com)$/i, '').toLowerCase();
 }
 
+/** A versioned Muse executable has a changing suffix after muse-bin-. */
+function claimsProgram(signature: CompiledSignature, program: string): boolean {
+  return signature.programs.includes(program) ||
+    (signature.programs.includes('muse-bin-*') && /^muse-bin-\d[\w.-]*$/.test(program));
+}
+
 /**
  * The agent a session runs as, by name: the one it was started as, or the one
  * whose programs include its start command. The signatures are compiled and
@@ -620,7 +652,7 @@ export function agentNameFor(agent: string | undefined, command: string, extra: 
     ...configured,
   ];
   const program = programName(command);
-  return ordered.find((signature) => signature.programs.includes(program))?.name ?? null;
+  return ordered.find((signature) => claimsProgram(signature, program))?.name ?? null;
 }
 
 /**
@@ -630,7 +662,7 @@ export function agentNameFor(agent: string | undefined, command: string, extra: 
 export function signatureFor(agent: string | undefined, command: string): CompiledSignature | null {
   if (agent !== undefined) return active.find((s) => s.name === agent && !setAside(s)) ?? null;
   const program = programName(command);
-  return active.find((s) => !setAside(s) && s.programs.includes(program)) ?? null;
+  return active.find((s) => !setAside(s) && claimsProgram(s, program)) ?? null;
 }
 
 // ---------------------------------------------------------------- matching

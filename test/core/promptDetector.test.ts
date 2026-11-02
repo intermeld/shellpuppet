@@ -4,8 +4,49 @@
  * including some that must NOT alert.
  */
 
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { ScreenRenderer } from '../../src/core/renderer.js';
 import { detectPrompt } from '../../src/core/promptDetector.js';
+
+async function museCapture(name: string): Promise<string> {
+  const root = path.join(__dirname, '..', 'fixtures', 'reasoning', name);
+  const meta = JSON.parse(fs.readFileSync(`${root}.json`, 'utf8')) as { cols: number; rows: number };
+  const renderer = new ScreenRenderer({ cols: meta.cols, rows: meta.rows });
+  await renderer.write(fs.readFileSync(`${root}.ansi`, 'utf8'));
+  const screen = renderer.styledLines({ last: 2000 }).lines.map((line) => line.text).join('\n');
+  renderer.dispose();
+  return screen;
+}
+
+describe('detectPrompt: Muse Code', () => {
+  it('detects a one-stage shell approval', async () => {
+    const prompt = detectPrompt(await museCapture('muse-approval'));
+    expect(prompt?.question).toContain('run the following command?');
+    expect(prompt?.options).toHaveLength(3);
+    expect(prompt?.options[0]).toContain('Allow this stage once');
+  });
+
+  it('detects stage two as a fresh approval', async () => {
+    const prompt = detectPrompt(await museCapture('muse-stage2'));
+    expect(prompt?.question).toContain('run the following command?');
+    expect(prompt?.options).toHaveLength(3);
+  });
+
+  it('detects the workspace trust menu', async () => {
+    const prompt = detectPrompt(await museCapture('muse-trust'));
+    expect(prompt?.question).toBe('Do you trust this workspace?');
+    expect(prompt?.options).toEqual(['1 Trust and continue', '2 Quit']);
+  });
+
+  it('does not answer the transient header between approval stages', async () => {
+    const previous = await museCapture('muse-stage2');
+    expect(detectPrompt(previous)?.options).toHaveLength(3);
+    const transient = previous.replace(/Would xxx like to run the following command\?/, 'Approval request · keys active in a moment');
+    expect(detectPrompt(transient)).toBeNull();
+  });
+});
 
 /** The Qoder Bash permission prompt, as captured live. The file name is neutral. */
 const QODER_BASH_PROMPT = `
