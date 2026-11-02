@@ -558,6 +558,41 @@ describe('policy sees the real command, and both caps bite', () => {
 });
 
 describe('envFromDaemon copies names from the daemon, never from the body', () => {
+  it('passes unlisted daemon variables only to an all dashboard profile without exposing values', async () => {
+    const variable = 'SP_LAUNCH_UNLISTED';
+    const value = 'made-up-dashboard-value';
+    const own = 'SHELLPUPPET_TEST_ONLY';
+    process.env[variable] = value;
+    process.env[own] = 'made-up-internal-value';
+    try {
+      const args = ['-e', `console.log("GOT=" + (process.env.${variable} ?? "missing") + ";OWN=" + (process.env.${own} ?? "missing"))`];
+      const daemon = await startLaunchDaemon({ launcher: profilesOf([
+        { name: 'all-env', command: process.execPath, args, shell: false, envFromDaemon: 'all' },
+      ]) });
+      const started = await launch(daemon, { profile: 'all-env' });
+      expect(started.status).toBe(200);
+      expect((JSON.parse(started.body) as Record<string, unknown>)['envFromDaemon']).toBe('all');
+      const id = String((JSON.parse(started.body) as Record<string, unknown>)['id']);
+      await waitForScreen(daemon, id, `GOT=${value};OWN=missing`);
+      const client = await api(daemon.port, daemon.token, '/sessions', {
+        method: 'POST', body: { command: process.execPath, args, shell: false },
+      });
+      expect(client.status).toBe(200);
+      await waitForScreen(daemon, String(client.body['id']), 'GOT=missing;OWN=missing');
+      const audit = fs.readFileSync(path.join(daemon.home, 'audit.log'), 'utf8');
+      const log = fs.readFileSync(daemon.logPath, 'utf8');
+      for (const output of [started.body, audit, log]) {
+        expect(output).not.toContain(value);
+        expect(output).not.toContain('made-up-internal-value');
+      }
+      const entry = auditEntries(daemon.home).find((line) => line['actor'] === 'dashboard' && line['action'] === 'start');
+      expect((entry?.['meta'] as Record<string, unknown> | undefined)?.['envFromDaemon']).toBe('all');
+    } finally {
+      delete process.env[variable];
+      delete process.env[own];
+    }
+  });
+
   it('copies a configured name and keeps its value out of the response and audit line', async () => {
     const variable = 'SP_LAUNCH_TEST_TOKEN';
     const value = 's3cret-launch-value';

@@ -1394,7 +1394,8 @@ export class Daemon {
   /**
    * What the page needs to show a profile, and nothing secret: the command
    * and arguments are the profile's own, and `envFromDaemon` contributes
-   * names. `{folder}` stays unexpanded here because it depends on the click.
+   * configured names or "all". `{folder}` stays unexpanded here because it
+   * depends on the click.
    */
   private profileDescription(profile: LaunchProfile): Record<string, unknown> {
     return {
@@ -1405,7 +1406,7 @@ export class Daemon {
       args: [...profile.args],
       folderRequired: profile.askCwd,
       folders: profile.folders.map((folder) => ({ name: folder.name, path: folder.path })),
-      envFromDaemon: [...profile.envFromDaemon],
+      envFromDaemon: profile.envFromDaemon === 'all' ? 'all' : [...profile.envFromDaemon],
     };
   }
 
@@ -1701,14 +1702,16 @@ export class Daemon {
     session.onReady(() => this.updateFeedSession(session.id));
 
     // The profile name and the written command line, the file that was
-    // actually resolved and started, and the names of the variables actually
-    // copied from the daemon. Never a value.
+    // actually resolved and started, and copied variable names or "all".
+    // Never a value.
     this.audit.record('dashboard', 'start', session.id, {
       profile: profile.name,
       command: profile.command,
       args: profile.args,
       resolvedCommand: resolvedCommand.file,
-      ...(copied.length > 0 ? { envFromDaemon: copied } : {}),
+      ...(profile.envFromDaemon === 'all'
+        ? { envFromDaemon: 'all' }
+        : copied.length > 0 ? { envFromDaemon: copied } : {}),
       ...(folder !== undefined ? { folder: folder.name } : {}),
       ...(session.label !== '' ? { label: session.label } : {}),
     });
@@ -1719,7 +1722,9 @@ export class Daemon {
       id: session.id,
       open: profile.open,
       profile: profile.name,
-      ...(copied.length > 0 ? { envFromDaemon: [...copied] } : {}),
+      ...(profile.envFromDaemon === 'all'
+        ? { envFromDaemon: 'all' }
+        : copied.length > 0 ? { envFromDaemon: [...copied] } : {}),
     });
   }
 

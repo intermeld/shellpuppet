@@ -379,7 +379,7 @@ Each entry has these keys. Unknown keys refuse that entry.
 | `cwd` | no | A fixed directory, or `"ask"`. A relative path is from your home directory. |
 | `folders` | when `cwd` is `"ask"` | Non-empty array of `{ "name", "path" }`. The page chooses one by name. |
 | `agent` | no | A built-in signature name, or one from `agents.signatures`. |
-| `envFromDaemon` | no | Variable names copied from the daemon's environment. Names only. |
+| `envFromDaemon` | no | An array of variable names copied from the daemon's environment, or `"all"` for its whole environment. |
 | `readyText` | no | A literal substring that marks the session ready. |
 | `readyQuiet` | no | Milliseconds of quiet that mark the session ready. Not with `readyText`. |
 | `label`, `purpose` | no | Non-empty text for the page. Placeholders: `{name}` and `{folder}`. |
@@ -414,15 +414,25 @@ arguments the program expects, and set `"shell": false` for a program that
 does not need the wrap.
 
 **Environment.** A dashboard start uses the same clean `sessionEnv` baseline
-as any other session. `envFromDaemon` adds only the names listed on that
-profile, read from the daemon's own environment, which is the environment of
-whichever client started the daemon. A listed name that is unset is skipped
-and does not refuse the start. The response and the audit line carry the
-names, never the values. `agents.passEnv` and `envNames` are not read on this
-path: there is no client environment to copy from, so a name you want a
-dashboard-started agent to see belongs in that profile's `envFromDaemon`. A
-variable reserved for a connected feature's own credential is never copied
-([ADR-007](../decisions/ADR-007-connected-features.md)).
+as any other session. An array in `envFromDaemon` adds only the names listed
+on that profile. Set `"envFromDaemon": "all"` to give sessions started from
+that profile through the dashboard the daemon's whole environment without
+listing variables. The daemon's environment comes from whichever client
+started it. A listed name that is unset is skipped and does not refuse the
+start. Connected feature credentials reserved under ADR-007 and ShellPuppet's
+own `SHELLPUPPET_` variables, including `SHELLPUPPET_HOME`, are excluded.
+`TERM` and `COLORTERM` receive ShellPuppet's terminal values. With an array,
+the response and audit carry copied names; with `"all"`, they record only the
+setting `"all"`. They never carry values. `agents.passEnv` and `envNames` are
+not read on this path: there is no client environment to copy from, so a name you want a
+dashboard-started agent to see belongs in that profile's `envFromDaemon`.
+Client-token starts, including `terminal_start` and `shellpuppet start`, do
+not use profiles and keep their configured `sessionEnv` mode.
+
+To supply secrets at run time, start the daemon itself under a secrets tool,
+for example `op run --env-file <file> -- shellpuppet daemon start`. A daemon
+that is already running keeps the environment it started with: running
+`shellpuppet dashboard` under `op run` then changes nothing for that daemon.
 
 A fixed directory, with no folder choice:
 

@@ -54,8 +54,8 @@ export interface LaunchProfile {
   askCwd: boolean;
   folders: LaunchFolder[];
   agent?: string;
-  /** Names only: the values are read from the daemon at launch. */
-  envFromDaemon: string[];
+  /** Names or "all": the values are read from the daemon at launch. */
+  envFromDaemon: string[] | 'all';
   readyText?: string;
   readyQuiet?: number;
   label?: string;
@@ -244,13 +244,16 @@ export function parseLaunchProfile(
     }
   }
 
-  let envFromDaemon: string[] = [];
+  let envFromDaemon: string[] | 'all' = [];
   const envNames = raw['envFromDaemon'];
   if (envNames !== undefined) {
-    if (!isStringArray(envNames)) {
-      return { problem: 'envFromDaemon must be an array of variable names' };
+    if (envNames === 'all') {
+      envFromDaemon = 'all';
+    } else if (isStringArray(envNames)) {
+      envFromDaemon = envNames.filter((entry) => ENV_NAME_PATTERN.test(entry));
+    } else {
+      return { problem: 'envFromDaemon must be "all" or an array of variable names' };
     }
-    envFromDaemon = envNames.filter((entry) => ENV_NAME_PATTERN.test(entry));
   }
 
   const readyText = raw['readyText'];
@@ -384,23 +387,24 @@ export function parseLauncher(
 }
 
 /**
- * The values a profile's `envFromDaemon` names take from the daemon's own
- * environment. Unset names are skipped: they do not refuse the start. A name
- * reserved for a connected feature's credential is skipped too, whatever
- * `sessionEnv` says. Only a name the source object owns, with a string value,
- * is copied: `constructor` and `toString` are inherited from
- * `Object.prototype` and are functions, not variables. The caller gets the
- * values to set and the names it copied; neither is logged by this function.
+ * The daemon values selected by a profile's `envFromDaemon`: listed names or
+ * every name for "all". Unset names, reserved credentials and ShellPuppet's
+ * own variables are skipped. Only owned string values are copied:
+ * `constructor` and `toString` are inherited functions, not variables.
+ * The caller gets values to set and the names copied; neither is logged here.
  */
 export function copyDaemonEnv(
-  names: readonly string[],
+  names: readonly string[] | 'all',
   source: NodeJS.ProcessEnv,
   reserved: ReadonlySet<string> = RESERVED_FEATURE_CREDENTIALS,
 ): { env: Record<string, string>; copied: string[] } {
   const env: Record<string, string> = {};
   const copied: string[] = [];
-  for (const name of names) {
-    if (reserved.has(name)) continue;
+  for (const name of names === 'all' ? Object.keys(source) : names) {
+    if (name.toUpperCase().startsWith('SHELLPUPPET_') || name === '__proto__') continue;
+    if (process.platform === 'win32'
+      ? [...reserved].some((entry) => entry.toUpperCase() === name.toUpperCase())
+      : reserved.has(name)) continue;
     if (!Object.hasOwn(source, name)) continue;
     const value = source[name];
     if (typeof value !== 'string') continue;
