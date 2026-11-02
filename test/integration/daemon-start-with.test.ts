@@ -139,8 +139,10 @@ describe('configured daemon start wrapper', () => {
 
   it.runIf(process.platform !== 'win32').each(['permissive', 'readable', 'link', 'shared-parent'] as const)('starts without coordination when the short folder is %s', async (kind) => {
     const { home, marker, root } = longPosixHome();
-    const temp = path.join(root, 'short-temp');
-    fs.mkdirSync(temp);
+    // A deliberately short parent, so the socket path fits the platform limit and
+    // only the guard under test can refuse it.
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'sp-'));
+    homes.push({ home: temp });
     const shortFolder = path.join(temp, `shellpuppet-${String(process.getuid?.())}`);
     if (kind === 'link') fs.symlinkSync(root, shortFolder, 'dir');
     else if (kind !== 'shared-parent') fs.mkdirSync(shortFolder, { mode: 0o777 });
@@ -153,7 +155,8 @@ describe('configured daemon start wrapper', () => {
     recordPid(home);
     expect(result.code).toBe(0);
     expect(fs.existsSync(marker)).toBe(true);
-    expect(result.stderr).toContain('warning: daemon start coordination unavailable');
+    const reason = kind === 'shared-parent' ? 'unsafe temporary folder' : 'unsafe short folder';
+    expect(result.stderr).toContain(`warning: daemon start coordination unavailable (${reason})`);
     expect(result.stderr.match(/daemon start coordination unavailable/g)).toHaveLength(1);
     expect(result.stderr).not.toContain(home);
     expect(result.stderr).not.toContain(temp);
