@@ -380,9 +380,12 @@ export const BUILT_IN_SIGNATURES: readonly AgentSignature[] = [
       { text: '^└ (?:Hooks running|last event|Meta Model )' },
     ],
     turn: { text: '^❯ \\S' },
-    reasoning: [{ start: { text: '^◆ (?!Worked for )', lead: { fg: ['#676c74'] } } }],
+    reasoning: [{
+      start: { text: '^◆ (?!Worked for )', lead: { fg: ['#676c74'] } },
+      continues: { text: '^ {2}(?![◆◇◈❯])\\S', lead: { fg: ['#676c74', '#8a9098'] } },
+    }],
     answer: {
-      start: { text: '^◆ (?!Worked for |(?:Wrote|Ran command|Write)\\b|[A-Za-z]:\\\\)', lead: { bold: true, fg: ['#ccd3db'] } },
+      start: { text: '^◆ (?!Worked for |(?:Wrote|Ran command|Write)\\b)', lead: { bold: true, fg: ['#ccd3db'] } },
       continues: { text: '^ {2}\\S', lead: { fg: ['#ccd3db'] } },
       upward: true,
     },
@@ -631,7 +634,7 @@ export function programName(command: string): string {
 /** A versioned Muse executable has a changing suffix after muse-bin-. */
 function claimsProgram(signature: CompiledSignature, program: string): boolean {
   return signature.programs.includes(program) ||
-    (signature.programs.includes('muse-bin-*') && /^muse-bin-\d[\w.-]*$/.test(program));
+    (signature.programs.includes('muse-bin-*') && /^muse-bin-\d+(?:\.\d+)*(?:[-+][a-z0-9]+(?:[.-][a-z0-9]+)*)?$/.test(program));
 }
 
 /**
