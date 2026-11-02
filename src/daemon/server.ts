@@ -96,11 +96,13 @@ import {
 } from './launchProfiles.js';
 import type { LaunchFolder, LaunchProfile, LauncherConfig } from './launchProfiles.js';
 import { listRootFolders, resolveRootFolder } from './launchProfiles.js';
-import { chooseFolder, FOLDER_PICKER_TIMEOUT_MS, FolderPickerUnavailableError, FolderPickerTimeoutError } from './folderPicker.js';
+import { chooseFolder, FOLDER_PICKER_TIMEOUT_MS, FolderPickerFailureError, FolderPickerUnavailableError, FolderPickerTimeoutError } from './folderPicker.js';
 
 const DEFAULT_IDLE_MS = 30 * 60_000;
 /** Stop waits this long for an automatic dashboard launch before continuing. */
 const DASHBOARD_LAUNCH_SHUTDOWN_WAIT_MS = 3_000;
+/** Stop waits this long for a cancelled desktop picker to exit. */
+const FOLDER_PICKER_SHUTDOWN_WAIT_MS = 3_000;
 const IDLE_CHECK_INTERVAL_MS = 60_000;
 /**
  * How often a running daemon checks that daemon.json still names it, and
@@ -281,7 +283,7 @@ export interface DaemonOptions {
   /** Test seam for dashboard profile environment copies. */
   daemonEnv?: NodeJS.ProcessEnv;
   /** Injected in tests so no desktop dialog appears. */
-  folderPicker?: () => Promise<string | null>;
+  folderPicker?: (signal: AbortSignal) => Promise<string | null>;
   /** Test hook for a picker that does not settle. */
   folderPickerTimeoutMs?: number;
 }
@@ -639,6 +641,8 @@ export class Daemon {
   /** Accepted launch times, for the sliding sixty-second cap. */
   private readonly launchTimes: number[] = [];
   private folderPickerBusy = false;
+  private folderPickerAbort: AbortController | null = null;
+  private folderPickerDone: Promise<void> | null = null;
   /**
    * Sessions created whose program does not exist yet (`programStarted`):
    * not listed and not in the feed until the start contract is met.
@@ -1000,6 +1004,7 @@ export class Daemon {
     if (this.promptScanTimer !== null) clearInterval(this.promptScanTimer);
     for (const timer of this.promptGraceTimers.values()) clearTimeout(timer);
     this.promptGraceTimers.clear();
+    this.folderPickerAbort?.abort(new FolderPickerFailureError('The folder picker was stopped.'));
 
     // Stop LISTENING first, before tearing down session trees. Killing process
     // trees is not fast (`taskkill /T` on a loaded machine can take seconds
@@ -1019,6 +1024,14 @@ export class Daemon {
     }
 
     await this.manager.killAll();
+    if (this.folderPickerDone !== null) {
+      let pickerWaitTimer: NodeJS.Timeout | undefined;
+      await Promise.race([
+        this.folderPickerDone,
+        new Promise<void>((resolve) => { pickerWaitTimer = setTimeout(resolve, FOLDER_PICKER_SHUTDOWN_WAIT_MS); }),
+      ]);
+      if (pickerWaitTimer !== undefined) clearTimeout(pickerWaitTimer);
+    }
     // Revoke grants even if browser detection or spawn never settles. A late
     // launcher result also takes the stopping path in openDashboardWindow.
     for (const grant of this.pendingDashboardGrants) this.tokens.revokeDashboardGrant(grant);
@@ -1410,7 +1423,7 @@ export class Daemon {
    * configured names or "all". `{folder}` stays unexpanded here because it
    * depends on the click.
    */
-  private profileDescription(profile: LaunchProfile): Record<string, unknown> {
+  private async profileDescription(profile: LaunchProfile): Promise<Record<string, unknown>> {
     return {
       name: profile.name,
       label: describeProfileText(profile.label ?? '', profile.name),
@@ -1420,7 +1433,7 @@ export class Daemon {
       folderRequired: profile.askCwd,
       anyFolder: profile.anyFolder,
       folders: profile.folders.map((folder) => ({ name: folder.name, path: folder.path })),
-      rootFolders: listRootFolders(profile.folderRoots.map((root) => path.resolve(os.homedir(), root)))
+      rootFolders: (await listRootFolders(profile.folderRoots.map((root) => path.resolve(os.homedir(), root))))
         .map((choice) => profile.anyFolder
           ? { ...choice, path: path.join(path.resolve(os.homedir(), profile.folderRoots[choice.rootIndex] ?? ''), choice.name) }
           : choice),
@@ -1429,7 +1442,7 @@ export class Daemon {
   }
 
   /** Cookie-authenticated `GET /dashboard/profiles`. A missing proof is a 403. */
-  private serveDashboardProfiles(req: http.IncomingMessage, res: http.ServerResponse): void {
+  private async serveDashboardProfiles(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     const presented = this.dashboardCookiePresented(req.headers.cookie);
     const cookie = this.dashboardCookieToken(req.headers.cookie);
     if (cookie === null) {
@@ -1449,7 +1462,7 @@ export class Daemon {
     }
     this.lastActivity = Date.now();
     json(res, 200, {
-      profiles: this.launchProfiles.profiles.map((profile) => this.profileDescription(profile)),
+      profiles: await Promise.all(this.launchProfiles.profiles.map((profile) => this.profileDescription(profile))),
       problems: [...this.launchProfiles.problems],
     });
   }
@@ -1489,22 +1502,30 @@ export class Daemon {
       return;
     }
     this.folderPickerBusy = true;
+    const controller = new AbortController();
+    this.folderPickerAbort = controller;
+    let finishPicker: (() => void) | undefined;
+    this.folderPickerDone = new Promise<void>((resolve) => { finishPicker = resolve; });
     let timer: NodeJS.Timeout | undefined;
     try {
-      const timeout = new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new FolderPickerTimeoutError('The folder picker timed out.')),
-          this.options.folderPickerTimeoutMs ?? FOLDER_PICKER_TIMEOUT_MS);
-      });
-      const selected = await Promise.race([(this.options.folderPicker ?? chooseFolder)(), timeout]);
+      timer = setTimeout(() => controller.abort(new FolderPickerTimeoutError('The folder picker timed out.')),
+        this.options.folderPickerTimeoutMs ?? FOLDER_PICKER_TIMEOUT_MS);
+      const selected = await (this.options.folderPicker ?? chooseFolder)(controller.signal);
+      if (controller.signal.aborted) throw controller.signal.reason;
       if (selected === null || selected === '') { res.writeHead(204); res.end(); return; }
       json(res, 200, { path: selected });
     } catch (error) {
-      if (error instanceof FolderPickerTimeoutError) json(res, 504, { error: error.message });
-      else if (error instanceof FolderPickerUnavailableError) json(res, 503, { error: error.message });
-      else json(res, 500, { error: 'The folder picker failed.' });
+      const failure: unknown = controller.signal.aborted && controller.signal.reason instanceof Error ? controller.signal.reason : error;
+      if (failure instanceof FolderPickerTimeoutError) json(res, 504, { error: failure.message });
+      else if (failure instanceof FolderPickerUnavailableError) json(res, 503, { error: failure.message });
+      else if (failure instanceof FolderPickerFailureError) json(res, 502, { error: failure.message });
+      else json(res, 502, { error: 'The folder picker failed.' });
     } finally {
       if (timer !== undefined) clearTimeout(timer);
       this.folderPickerBusy = false;
+      this.folderPickerAbort = null;
+      finishPicker?.();
+      this.folderPickerDone = null;
     }
   }
 
@@ -1640,7 +1661,7 @@ export class Daemon {
           return;
         }
         if (rootIndex !== undefined) {
-          const choice = resolveRootFolder(profile.folderRoots.map((root) => path.resolve(os.homedir(), root)), rootIndex, folderName);
+          const choice = await resolveRootFolder(profile.folderRoots.map((root) => path.resolve(os.homedir(), root)), rootIndex, folderName);
           if ('error' in choice) {
             this.auditDashboardRefusal(req, 'body');
             json(res, 400, { error: choice.error });
@@ -1762,7 +1783,7 @@ export class Daemon {
     // Keep the path check adjacent to spawn. A local writer can still replace
     // a directory after this check, as the security model records.
     if (rootCwd !== undefined) {
-      const latest = resolveRootFolder(profile.folderRoots.map((root) => path.resolve(os.homedir(), root)), rootIndex, folderName);
+      const latest = await resolveRootFolder(profile.folderRoots.map((root) => path.resolve(os.homedir(), root)), rootIndex, folderName);
       if ('error' in latest || latest.cwd !== rootCwd) {
         this.auditDashboardRefusal(req, 'body');
         json(res, 400, { error: 'Folder is no longer available from this root.' });
@@ -2124,7 +2145,7 @@ export class Daemon {
     // before the client token so a bearer token cannot take the profile list
     // or the launch path as an ordinary API call.
     if (req.method === 'GET' && url.pathname === '/dashboard/profiles') {
-      this.serveDashboardProfiles(req, res);
+      await this.serveDashboardProfiles(req, res);
       return;
     }
     if (req.method === 'POST' && url.pathname === '/dashboard/launch') {

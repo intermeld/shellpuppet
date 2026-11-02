@@ -754,8 +754,13 @@ and `{folder}` placeholders. `readyText` is a literal substring and
 entry. `cwd` is a fixed path or `ask`, which requires named `{ name, path }`
 folders, `folderRoots`, or `"folders": "any"`. The latter accepts a typed or
 pasted absolute path on a local drive for that profile. Each root offers up to
-500 immediate directories in name order. Hidden folders and links are omitted. The browser
-remembers five recent choices per profile. For `any` profiles, one path box
+500 immediate directories in name order. Listing is asynchronous. Dot-prefixed
+folders, links and the Windows system names `$RECYCLE.BIN`,
+`System Volume Information`, `$WinREAgent`, `Recovery` and `Config.Msi` are
+omitted, without regard to case. The Windows Hidden attribute is not read, so
+a folder hidden only by that attribute is offered. A drive letter may name a
+mapped network drive, which cannot be distinguished without native code. The
+browser remembers five recent choices per profile. For `any` profiles, one path box
 offers recent paths and root folders, accepts a typed path, and has Browse
 to ask the daemon for the desktop folder picker. Other profiles filter the
 offered list as a person types; Enter starts the selected folder.

@@ -17,6 +17,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createAuditor } from '../../src/daemon/audit.js';
 import { parseDaemonConfig } from '../../src/daemon/config.js';
 import { createFileLogger } from '../../src/daemon/logger.js';
+import { chooseFolder } from '../../src/daemon/folderPicker.js';
 import { readDaemonState } from '../../src/daemon/paths.js';
 import type { LauncherConfig } from '../../src/daemon/launchProfiles.js';
 import type { PolicyConfig } from '../../src/core/types.js';
@@ -138,7 +139,7 @@ async function startLaunchDaemon(options: {
   launcher?: LauncherConfig;
   policy?: PolicyConfig;
   daemonEnv?: NodeJS.ProcessEnv;
-  folderPicker?: () => Promise<string | null>;
+  folderPicker?: (signal: AbortSignal) => Promise<string | null>;
   folderPickerTimeoutMs?: number;
 } = {}): Promise<LaunchDaemon> {
   const home = makeTempHome('dash-launch-');
@@ -787,16 +788,47 @@ describe('a profile that allows any local folder', () => {
   });
 
   it('times out an injected picker and permits only one at a time', async () => {
-    let release: ((value: string | null) => void) | undefined;
-    const pending = new Promise<string | null>((resolve) => { release = resolve; });
+    let aborted = false;
+    let release: (() => void) | undefined;
     const daemon = await startLaunchDaemon({ launcher: profilesOf([
       { name: 'open', command: process.execPath, cwd: 'ask', folders: 'any' },
-    ]), folderPicker: () => pending, folderPickerTimeoutMs: 1000 });
+    ]), folderPicker: (signal) => new Promise((resolve) => {
+      signal.addEventListener('abort', () => { aborted = true; release = () => resolve(null); }, { once: true });
+    }), folderPickerTimeoutMs: 100 });
     const first = pickFolder(daemon);
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect((await pickFolder(daemon)).status).toBe(409);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(aborted).toBe(true);
+    expect((await pickFolder(daemon)).status).toBe(409);
+    release?.();
     expect((await first).status).toBe(504);
-    release?.(null);
+  });
+
+  it('aborts an unsettled picker when the daemon stops', async () => {
+    let aborted = false;
+    const daemon = await startLaunchDaemon({ launcher: profilesOf([
+      { name: 'open', command: process.execPath, cwd: 'ask', folders: 'any' },
+    ]), folderPicker: (signal) => new Promise((resolve) => {
+      signal.addEventListener('abort', () => { aborted = true; resolve(null); }, { once: true });
+    }) });
+    const request = pickFolder(daemon);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    await daemon.stop();
+    expect(aborted).toBe(true);
+    await request.catch(() => undefined);
+  });
+
+  it('returns 502 when a native picker helper fails', async () => {
+    const daemon = await startLaunchDaemon({ launcher: profilesOf([
+      { name: 'open', command: process.execPath, cwd: 'ask', folders: 'any' },
+    ]), folderPicker: (signal) => chooseFolder(signal, {
+      platform: 'win32', executableExists: () => true,
+      runner: () => Promise.reject(Object.assign(new Error('helper failed'), { code: 2 })),
+    }) });
+    const result = await pickFolder(daemon);
+    expect(result.status, result.body).toBe(502);
+    expect(result.body).toContain('could not open');
   });
 });
 
@@ -919,7 +951,7 @@ describe('the launch body cannot confuse the request', () => {
   it('refuses __proto__, constructor, duplicate keys and arrays, and starts nothing', async () => {
     const daemon = await startLaunchDaemon({
       launcher: profilesOf([
-        { name: 'quick', command: process.execPath, args: ['-e', 'process.exit(0)'], shell: false },
+        { name: 'quick', command: process.execPath, args: ['-e', 'setInterval(() => {}, 200)'], shell: false },
       ]),
     });
     const before = await sessionIds(daemon);
@@ -982,7 +1014,7 @@ describe('the launch body cannot confuse the request', () => {
   it('answers malformed JSON with 400 and starts nothing', async () => {
     const daemon = await startLaunchDaemon({
       launcher: profilesOf([
-        { name: 'quick', command: process.execPath, args: ['-e', 'process.exit(0)'], shell: false },
+        { name: 'quick', command: process.execPath, args: ['-e', 'setInterval(() => {}, 200)'], shell: false },
       ]),
     });
     const before = await sessionIds(daemon);
@@ -1085,8 +1117,8 @@ describe('concurrent launches respect both caps', () => {
       Array.from({ length: 12 }, () => launch(daemon, { profile: 'quick' })),
     );
     const statuses = results.map((result) => result.status);
-    expect(statuses.filter((status) => status === 200)).toHaveLength(8);
-    expect(statuses.filter((status) => status === 429)).toHaveLength(4);
+    expect(statuses.filter((status) => status === 200), JSON.stringify(results.filter((result) => result.status !== 200))).toHaveLength(8);
+    expect(statuses.filter((status) => status === 429), JSON.stringify(results.filter((result) => result.status !== 200))).toHaveLength(4);
     expect(await sessionIds(daemon)).toHaveLength(8);
   });
 
@@ -1101,10 +1133,9 @@ describe('concurrent launches respect both caps', () => {
     );
     expect(refused.every((result) => result.status === 400)).toBe(true);
 
-    const started = await Promise.all(
-      Array.from({ length: 8 }, () => launch(daemon, { profile: 'quick' })),
-    );
-    expect(started.map((result) => result.status)).toEqual(Array.from({ length: 8 }, () => 200));
+    const started: RawResult[] = [];
+    for (let index = 0; index < 8; index++) started.push(await launch(daemon, { profile: 'quick' }));
+    expect(started.map((result) => result.status), JSON.stringify(started.filter((result) => result.status !== 200))).toEqual(Array.from({ length: 8 }, () => 200));
   });
 
   it('starts exactly maxSessions of ten simultaneous launches', async () => {

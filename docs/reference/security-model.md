@@ -197,7 +197,16 @@ and missing paths. Anything able to use the dashboard credential can start
 that profile in any local folder. Browse uses an authenticated, same-origin,
 proof-protected route, with one desktop picker at a time and a ten-minute
 timeout.
-The daemon lists immediate directories, omits hidden folders and links, and
+The picker helper is started from a fixed system path, runs outside the
+daemon's working directory and is stopped on timeout or daemon shutdown.
+On Windows, drive-letter paths may be mapped network drives. Without native
+code the daemon cannot distinguish them from local drives, so they may be
+accepted even though UNC and device paths are refused.
+The daemon lists immediate directories asynchronously. It omits dot-prefixed
+folders, links and the Windows system names `$RECYCLE.BIN`,
+`System Volume Information`, `$WinREAgent`, `Recovery` and `Config.Msi`,
+without regard to case. It does not read the Windows Hidden attribute, so a
+folder hidden only by that attribute is offered. The listing
 caps each root at 500. It checks the choice again at launch, resolves the
 real paths of the root and child, and refuses a deleted folder or a child
 outside the root, including a junction or symbolic link that leads out. A
