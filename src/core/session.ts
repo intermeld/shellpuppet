@@ -1385,9 +1385,11 @@ export class Session implements WaitTarget {
    * pid at the spawn, so nothing is waited for there.
    */
   private async programPid(): Promise<number> {
-    // One full wait per session: once a wait has run out with no program,
-    // node-pty's own connection bound has passed too, and a later caller (a
-    // kill after shutdown's pre-wait) must not spend its budget waiting again.
+    // One full wait per session: once a wait has run out with no program, a
+    // later caller (a kill after shutdown's pre-wait) must not spend its budget
+    // waiting again. It still reads the pid, so a program created since is
+    // walked; with none, the kill skips the tree and node-pty's own pending
+    // connection is cancelled by the kill.
     if (this.programWaitExpired) return this.pty.pid;
     const deadline = Date.now() + this.pidWaitMs;
     while (this.pty.pid <= 0 && !this.exitedFlag && Date.now() < deadline) {

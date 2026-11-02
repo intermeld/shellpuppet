@@ -2825,20 +2825,6 @@ export class Daemon {
 
   // ---------------------------------------------------- prompt-stall alerts
   /**
-   * Session list decorated with whatever prompt each session is holding. The
-   * stall alert also goes to `daemon.log` and the `/events` socket, but an
-   * agent reaches the daemon through request-and-answer tool calls or one-shot
-   * CLI runs, so it can never hold that socket: `terminal_list` is how a
-   * manager agent learns that its delegate is blocked, which is the whole
-   * point of detecting it.
-   *
-   * Read from the scanner's own state rather than re-detecting here: one
-   * source of truth means what the list reports and what the log announces
-   * cannot disagree, and a list call stays cheap (no render per session).
-   * The cost is staleness bounded by the scan interval: 5 s, immaterial
-   * against prompts that sit for minutes.
-   */
-  /**
    * Wait, for a session just created, until its program exists (the start
    * contract; bounded by node-pty's five-second connection bound plus a
    * margin). Until then the session is starting: it holds a capacity slot but
@@ -2869,6 +2855,20 @@ export class Daemon {
     return this.manager.list().filter((summary) => !this.startingIds.has(summary.id));
   }
 
+  /**
+   * Session list decorated with whatever prompt each session is holding. The
+   * stall alert also goes to `daemon.log` and the `/events` socket, but an
+   * agent reaches the daemon through request-and-answer tool calls or one-shot
+   * CLI runs, so it can never hold that socket: `terminal_list` is how a
+   * manager agent learns that its delegate is blocked, which is the whole
+   * point of detecting it.
+   *
+   * Read from the scanner's own state rather than re-detecting here: one
+   * source of truth means what the list reports and what the log announces
+   * cannot disagree, and a list call stays cheap (no render per session).
+   * The cost is staleness bounded by the scan interval: 5 s, immaterial
+   * against prompts that sit for minutes.
+   */
   private listWithPrompts(hideReasoning = false): (SessionSummary & {
     waitingOnPrompt?: { question?: string; options?: string[]; selectedOption?: number; waitingMs: number; alerted: boolean };
   })[] {
