@@ -35,6 +35,10 @@ button.active { color: #9dd4ff; border-color: #4b9adc; background: #173249; }
 .badge { color: #f0c674; font-weight: bold; }
 .pane-wrap { flex: 1; min-height: 0; position: relative; padding: 6px; overflow: hidden; }
 .pane-term { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+.pane-wrap.grid-overflow { overflow: auto; }
+.pane-wrap.grid-overflow .pane-term { align-items: flex-start; justify-content: flex-start; }
+.pane-overflow-note { padding: 2px 7px; color: #e8b85f; font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pane-overflow-note[hidden] { display: none; }
 .pane-notices { position: absolute; z-index: 2; left: 6px; right: 6px; pointer-events: none; max-height: 33%; overflow-y: auto; background: #3d2f14; color: #f0c674; }
 .pane-banner { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; padding: 5px; background: #3d1d1f; color: #ffa198; pointer-events: auto; }
 .pane-banner[hidden] { display: none; }

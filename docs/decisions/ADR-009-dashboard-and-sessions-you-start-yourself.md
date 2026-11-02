@@ -79,9 +79,9 @@ client token must remain outside the browser.
   layout, window, text size or outside grid changes, subject to the readable
   floor and any geometry hold. A second outside resize soon after a refit
   leaves the pane following until Fit is pressed. Turning Auto fit off makes
-  layout and window changes scale the font as before.
-  Fit, Enlarge and
-  Restore take geometry control and resize the real terminal; Restore sends
+  layout and window changes scale the font as before, within the 6 to 40 px
+  range. A grid still larger than its pane at 6 px can be scrolled.
+  Fit, Enlarge and Restore take geometry control and resize the real terminal; Restore sends
   the previous grid. Each pane has Enlarge and Restore. Focus gives one
   session most of the window. The browser's full-screen key can make the
   dashboard full screen. An enlarged or focused pane also resizes the real

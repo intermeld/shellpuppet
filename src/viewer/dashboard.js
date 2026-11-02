@@ -327,7 +327,11 @@
     space.className = 'spacer';
     const size = document.createElement('span');
     size.className = 'pane-size';
-    const item = { id: summary.id, summary, card, label, purpose, badge, state, size, client: null, previousGrid: null };
+    const overflowNote = document.createElement('div');
+    overflowNote.className = 'pane-overflow-note';
+    overflowNote.textContent = 'Grid larger than pane; Enlarge or Fit shows it whole.';
+    overflowNote.hidden = true;
+    const item = { id: summary.id, summary, card, label, purpose, badge, state, size, overflowNote, client: null, previousGrid: null };
     item.fit = makeButton('Fit', () => { select(item.id); item.client?.fitGrid(); });
     item.enlarge = makeButton('Enlarge', () => {
       select(item.id);
@@ -392,7 +396,7 @@
     prompt.hidden = true;
     notices.append(banner, prompt);
     wrap.append(term, notices);
-    card.append(head, menu, wrap);
+    card.append(head, menu, overflowNote, wrap);
     Object.assign(item, { term, banner, prompt });
     card.addEventListener('click', () => select(item.id, true));
     card.addEventListener('focus', () => select(item.id));
@@ -461,7 +465,7 @@
     item.client = ShellPuppetPane.create({
       container: item.term, sessionId: item.id, dashboardProof: proof,
       initialFontOverride: fontSize,
-      elements: { banner: item.banner, promptAlert: item.prompt, size: item.size },
+      elements: { banner: item.banner, promptAlert: item.prompt, size: item.size, overflowNote: item.overflowNote },
       onAttentionChange: () => updateAttention(),
       onGeometryReady: () => scheduleAutoFit(),
       onOutsideGeometry: () => scheduleAutoFit(),
