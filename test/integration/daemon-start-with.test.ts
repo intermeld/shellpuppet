@@ -1,5 +1,8 @@
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import * as fs from 'node:fs';
+import * as net from 'node:net';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -16,6 +19,8 @@ const failureWrapper = path.join(repoRoot, 'test', 'fixtures', 'daemon-start-fai
 const recordWrapper = path.join(repoRoot, 'test', 'fixtures', 'daemon-start-record.mjs');
 const parentWrapper = path.join(repoRoot, 'test', 'fixtures', 'daemon-start-parent.mjs');
 const boundRunner = path.join(repoRoot, 'test', 'integration', 'fixtures', 'ensure-daemon-bound.mjs');
+const markerEntry = path.join(repoRoot, 'test', 'integration', 'fixtures', 'daemon-entry-marker.mjs');
+const socketHolder = path.join(repoRoot, 'test', 'integration', 'fixtures', 'start-socket-holder.mjs');
 const homes: { home: string; pid?: number }[] = [];
 
 function homeWithWrapper(delay = 0): { home: string; marker: string } {
@@ -72,6 +77,19 @@ function recordPid(home: string): void {
   if (entry !== undefined) entry.pid = readDaemonState(home)?.pid;
 }
 
+function startEndpoint(home: string): string {
+  if (process.platform !== 'win32') return path.join(home, 'daemon-start.sock');
+  const hash = createHash('sha256').update(path.resolve(home)).update('\0').update(os.userInfo().username).digest('hex').slice(0, 32);
+  return `\\\\.\\pipe\\shellpuppet-start-${hash}`;
+}
+
+async function listen(server: net.Server, endpoint: string): Promise<void> {
+  await new Promise<void>((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(endpoint, () => { server.off('error', reject); resolve(); });
+  });
+}
+
 afterEach(async () => {
   for (const { home, pid } of homes.splice(0)) {
     const state = readDaemonState(home);
@@ -110,24 +128,69 @@ describe('configured daemon start wrapper', () => {
     expect(readDaemonState(home)?.startedWrapped).toBe(true);
   }, 140_000);
 
-  it('takes over a stale start lock left by a dead client', async () => {
+  it('takes over within two polls when the starting client dies', async () => {
+    const { home, marker } = homeWithFailure('hang');
+    const spawned = path.join(home, 'takeover-spawned');
+    const waiterAbort = new AbortController();
+    const holder = spawn(process.execPath, [cli, 'daemon', 'start'], { env: { ...process.env, SHELLPUPPET_HOME: home }, stdio: 'ignore', windowsHide: true });
+    try {
+      await eventually(() => fs.existsSync(marker), 6_000);
+      const waiter = execFileAsync(process.execPath, [boundRunner, '120000', markerEntry], {
+        env: { ...process.env, SHELLPUPPET_HOME: home, SP_TEST_SPAWN_MARKER: spawned }, timeout: 45_000, signal: waiterAbort.signal,
+      }).then(() => 0, () => 1);
+      await new Promise((resolve) => setTimeout(resolve, 450));
+      const killedAt = Date.now();
+      holder.kill('SIGKILL');
+      await eventually(() => fs.existsSync(spawned), 3_000, 50);
+      expect(Date.now() - killedAt).toBeLessThan(3_000);
+      expect(await waiter).toBe(0);
+      recordPid(home);
+      expect(readDaemonState(home)).not.toBeNull();
+    } finally {
+      waiterAbort.abort();
+      recordPid(home);
+      holder.kill('SIGKILL');
+      if (fs.existsSync(marker)) {
+        const pid = Number(fs.readFileSync(marker, 'utf8'));
+        if (processAlive(pid)) process.kill(pid, 'SIGKILL');
+      }
+    }
+  }, 20_000);
+
+  it.runIf(process.platform !== 'win32')('reclaims a socket left by a crashed holder', async () => {
     const { home, marker } = homeWithWrapper();
-    fs.writeFileSync(path.join(home, 'daemon-start.lock'), JSON.stringify({ pid: 2147483647, createdAt: Date.now(), nonce: 'fictional-stale' }));
-    const result = await runCli(home, ['daemon', 'start', '--json']);
-    recordPid(home);
-    expect(result.code).toBe(0);
-    expect(fs.existsSync(marker)).toBe(true);
-    expect(fs.existsSync(path.join(home, 'daemon-start.lock'))).toBe(false);
+    const ready = path.join(home, 'socket-ready');
+    const holder = spawn(process.execPath, [socketHolder, startEndpoint(home), ready], { stdio: 'ignore' });
+    try {
+      await eventually(() => fs.existsSync(ready), 6_000);
+      holder.kill('SIGKILL');
+      await new Promise<void>((resolve) => holder.once('exit', () => resolve()));
+      expect(fs.lstatSync(startEndpoint(home)).isSocket()).toBe(true);
+      const result = await runCli(home, ['daemon', 'start', '--json']);
+      recordPid(home);
+      expect(result.code).toBe(0);
+      expect(fs.existsSync(marker)).toBe(true);
+      expect(fs.existsSync(startEndpoint(home))).toBe(false);
+    } finally { holder.kill('SIGKILL'); }
   });
 
-  it('takes over a start lock older than the wrapped bound and grace', async () => {
+  it('does not spawn while another client holds the endpoint', async () => {
     const { home, marker } = homeWithWrapper();
-    fs.writeFileSync(path.join(home, 'daemon-start.lock'), JSON.stringify({ pid: process.pid, createdAt: Date.now() - 136_000, nonce: 'fictional-old' }));
-    const result = await runCli(home, ['daemon', 'start', '--json']);
-    recordPid(home);
-    expect(result.code).toBe(0);
-    expect(fs.existsSync(marker)).toBe(true);
-    expect(fs.existsSync(path.join(home, 'daemon-start.lock'))).toBe(false);
+    const server = net.createServer((socket) => socket.destroy());
+    await listen(server, startEndpoint(home));
+    try {
+      const starting = runCli(home, ['daemon', 'start', '--json']);
+      await new Promise((resolve) => setTimeout(resolve, 1_800));
+      expect(fs.existsSync(marker)).toBe(false);
+      expect(readDaemonState(home)).toBeNull();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      const result = await starting;
+      recordPid(home);
+      expect(result.code).toBe(0);
+    } finally {
+      recordPid(home);
+      if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
   });
 
   it('stops a daemon whose wrapper is still starting', async () => {
