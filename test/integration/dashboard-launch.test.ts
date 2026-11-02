@@ -682,7 +682,9 @@ describe('the page chooses a folder by name', () => {
     expect(audit).toContain('"rootIndex":0');
     expect(audit).toContain('Root alpha');
     const id = String((JSON.parse(accepted.body) as Record<string, unknown>)['id']);
-    await waitForScreen(daemon, id, `CWD=${fs.realpathSync(path.join(root, 'alpha'))}`);
+    // The daemon resolves a root folder with the native realpath, which expands
+    // Windows short names (a temp folder under RUNNER~1 on CI), so compare with it.
+    await waitForScreen(daemon, id, `CWD=${fs.realpathSync.native(path.join(root, 'alpha'))}`);
     fs.rmdirSync(path.join(root, 'gone'));
     expect((await launch(daemon, { profile: 'rooted', rootIndex: 0, folder: 'gone' })).status).toBe(400);
     expect(auditEntries(daemon.home).filter((line) => line['actor'] === 'dashboard' && line['action'] === 'refuse').length).toBeGreaterThanOrEqual(6);
