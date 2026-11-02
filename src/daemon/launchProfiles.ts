@@ -26,6 +26,12 @@ import { compilePolicy } from '../core/policy.js';
 import type { CompiledPolicy } from '../core/policy.js';
 
 export { RESERVED_FEATURE_CREDENTIALS };
+// Variables an agent CLI sets for its own child processes to describe the running
+// session. Sources: Claude Code https://code.claude.com/docs/en/env-vars;
+// Codex codex-rs/protocol/src/shell_environment.rs, codex-rs/core/src/exec_env.rs and
+// codex-rs/core/src/spawn.rs; OpenCode packages/opencode/src/index.ts and
+// packages/core/src/shell.ts; Grok crates/codegen/xai-grok-tools/src/util/env.rs;
+// Gemini CLI docs/reference/commands.md. Matched without regard to case on Windows only.
 const ALL_PROFILE_ENV_EXCLUSIONS: ReadonlySet<string> = new Set([
   'NODE_OPTIONS', // Node.js runtime
   'CLAUDECODE', // Claude Code
@@ -50,7 +56,8 @@ const ALL_PROFILE_ENV_EXCLUSIONS: ReadonlySet<string> = new Set([
   'CODEX_SANDBOX', // Codex
   'CODEX_SANDBOX_NETWORK_DISABLED', // Codex
   'OPENCODE_TERMINAL', // OpenCode
-  'OPENCODE_CLIENT', // OpenCode desktop
+  'OPENCODE', // OpenCode
+  'OPENCODE_PID', // OpenCode
   'GROK_AGENT', // Grok
   'GROK_SESSION_ID', // Grok hooks
   'GEMINI_CLI', // Gemini CLI
@@ -525,7 +532,7 @@ export function copyDaemonEnv(
   for (const name of names === 'all' ? Object.keys(source) : names) {
     const upperName = name.toUpperCase();
     if (names === 'all'
-      && (!ENV_NAME_PATTERN.test(name) || ALL_PROFILE_ENV_EXCLUSIONS.has(upperName))) continue;
+      && (!ENV_NAME_PATTERN.test(name) || ALL_PROFILE_ENV_EXCLUSIONS.has(process.platform === 'win32' ? upperName : name))) continue;
     if ((upperName.startsWith('SHELLPUPPET_') && upperName !== 'SHELLPUPPET_HOME')
       || name === '__proto__') continue;
     if (process.platform === 'win32'

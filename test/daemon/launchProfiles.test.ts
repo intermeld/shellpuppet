@@ -351,7 +351,7 @@ describe('the daemon environment copy', () => {
       'CLAUDE_CODE_EXECPATH', 'CLAUDE_CODE_BRIDGE_SESSION_ID', 'CLAUDE_CODE_REMOTE_SESSION_ID',
       'CODEX_TOOL_CALL_ID', 'CODEX_VERSION', 'CODEX_PERMISSION_PROFILE',
       'CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED', 'GROK_AGENT',
-      'OPENCODE_TERMINAL', 'OPENCODE_CLIENT',
+      'OPENCODE_TERMINAL', 'OPENCODE', 'OPENCODE_PID',
     ];
     const source: NodeJS.ProcessEnv = { ORDINARY_NAME: 'made-up-ordinary' };
     for (const name of names) source[name] = `made-up-${name}`;
@@ -371,6 +371,7 @@ describe('the daemon environment copy', () => {
       GOOSE_SESSION_ID: 'made-up-goose-setting',
       GEMINI_CLI_SESSION_ID: 'made-up-gemini-setting',
       OPENCODE_SESSION_ID: 'made-up-opencode-setting',
+      OPENCODE_CLIENT: 'made-up-opencode-client',
       CODEX_SHELL: 'made-up-codex-setting',
     };
     expect(copyDaemonEnv('all', source)).toEqual({
@@ -392,6 +393,13 @@ describe('the daemon environment copy', () => {
         qOdEr_SeSsIoN_nAmE: 'made-up-session-name',
       },
       copied: ['cLaUdE_cOdE_mAx_OuTpUt_ToKeNs', 'qOdEr_SeSsIoN_nAmE'],
+    });
+  });
+  it.runIf(process.platform !== 'win32')('matches the markers exactly elsewhere', () => {
+    const source = { codex_thread_id: 'made-up-lower-case', CODEX_THREAD_ID: 'made-up-marker' };
+    expect(copyDaemonEnv('all', source)).toEqual({
+      env: { codex_thread_id: 'made-up-lower-case' },
+      copied: ['codex_thread_id'],
     });
   });
   it('copies all owned string values except reserved credentials and ShellPuppet session variables', () => {

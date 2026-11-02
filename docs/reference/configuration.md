@@ -446,12 +446,13 @@ The `"all"` form excludes these known agent session markers:
 |---|---|
 | Claude Code | `CLAUDECODE`, `CLAUDE_PID`, `CLAUDE_JOB_DIR`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SESSION_ID`, `CLAUDE_CODE_CHILD_SESSION`, `CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN`, `CLAUDE_CODE_SESSION_ATTENDED`, `CLAUDE_CODE_SSE_PORT`, `CLAUDE_CODE_EXECPATH`, `CLAUDE_CODE_BRIDGE_SESSION_ID`, `CLAUDE_CODE_REMOTE_SESSION_ID`, `CLAUDE_CODE_REMOTE` |
 | Codex | `CODEX_THREAD_ID`, `CODEX_SESSION_ID`, `CODEX_TOOL_CALL_ID`, `CODEX_VERSION`, `CODEX_PERMISSION_PROFILE`, `CODEX_SANDBOX`, `CODEX_SANDBOX_NETWORK_DISABLED` |
-| OpenCode | `OPENCODE_TERMINAL`, `OPENCODE_CLIENT` |
+| OpenCode | `OPENCODE`, `OPENCODE_PID`, `OPENCODE_TERMINAL` |
 | Grok | `GROK_AGENT`, `GROK_SESSION_ID` |
 | Gemini CLI | `GEMINI_CLI` |
 
 This list covers markers known for the supported CLIs; it does not promise
-that every future marker is covered. No session marker is excluded for Qoder,
+that every future marker is covered. Names match without regard to case on
+Windows and exactly elsewhere. No session marker is excluded for Qoder,
 Antigravity or Goose. Other valid names, including agent CLI settings, API
 keys, model choices and `CLAUDE_CONFIG_DIR`, pass through. Use an explicit
 array to pass one of the listed markers when needed. The `"all"` form also
