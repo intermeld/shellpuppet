@@ -702,7 +702,8 @@ export class Session implements WaitTarget {
   private readyFlag: boolean;
   private readyReasonValue: SessionSummary['readyReason'] = 'not-tracked';
   private geometryHeldFlag: boolean;
-  private killed = false;
+  private killPromise: Promise<void> | null = null;
+  private consoleHostSettlement: Promise<boolean> | null = null;
   /**
    * Times taken immediately before and after the spawn, on Windows. ConPTY
    * creates the console host during that call. Null on any other platform.
@@ -1311,9 +1312,17 @@ export class Session implements WaitTarget {
    * every kill has while `taskkill` enumerates the processes. Once the code
    * is recorded the pid is not walked.
    */
-  async kill(): Promise<void> {
-    if (this.killed) return;
-    this.killed = true;
+  kill(): Promise<void> {
+    this.killPromise ??= this.killOnce();
+    return this.killPromise;
+  }
+
+  /** True from the moment a kill begins, including while it waits for a pid. */
+  get isKilled(): boolean {
+    return this.killPromise !== null;
+  }
+
+  private async killOnce(): Promise<void> {
     // node-pty creates a Windows terminal's program only once its output
     // worker has connected, a few tens of milliseconds after the spawn
     // returns, and reports pid 0 until then; a start whose connection fails
@@ -1375,13 +1384,21 @@ export class Session implements WaitTarget {
     const window = this.consoleHostWindow;
     if (window === null || this.consoleHostQueued) return;
     this.consoleHostQueued = true;
+    let settle: (ended: boolean) => void = () => undefined;
+    this.consoleHostSettlement = new Promise<boolean>((resolve) => { settle = resolve; });
     this.endConsoleHost({
       id: this.id,
       window,
       log: (level, message, meta) => {
         this.logger[level](message, meta);
       },
+      onSettled: settle,
     });
+  }
+
+  /** The failed attempt's own console-host result, after it has been queued. */
+  whenConsoleHostSettled(): Promise<boolean> {
+    return this.consoleHostSettlement ?? Promise.resolve(false);
   }
 
   /**

@@ -28,7 +28,9 @@ export class SessionStartError extends Error {
   }
 }
 
-/** A short pause gives Windows time to release the failed worker's handles. */
+/** node-pty 1.2.0-beta.18's lib/windowsConoutConnection.js waits this long in dispose before terminating its worker. */
+export const CONPTY_WORKER_DISPOSAL_MS = 1_000;
+/** Margin for the scheduled termination and a short pause before another start. */
 export const CONPTY_START_RETRY_DELAY_MS = 100;
 
 export class SessionManager {
@@ -38,6 +40,7 @@ export class SessionManager {
   private policy: CompiledPolicy;
   private seq = 0;
   private readonly starting = new Set<string>();
+  private readonly cancelledStarts = new Set<string>();
 
   constructor(
     policy: CompiledPolicy,
@@ -86,29 +89,47 @@ export class SessionManager {
   async finishStart(session: Session, options: SessionOptions): Promise<Session> {
     this.starting.add(session.id);
     let current = session;
+    const registered = (allowOwnKill = false): boolean =>
+      this.sessions.get(session.id) === current &&
+      !this.cancelledStarts.has(session.id) &&
+      (allowOwnKill || !current.isKilled);
+    const discard = (): void => {
+      if (this.sessions.get(session.id) !== current) return;
+      this.sessions.delete(session.id);
+      this.onRemoved(session.id);
+    };
     try {
       for (let attempt = 0; attempt < 2; attempt++) {
-        if (await current.startedProgramPid() !== null) return current;
+        const pid = await current.startedProgramPid();
+        if (!registered()) {
+          await current.kill();
+          discard();
+          throw new SessionStartError('Session start was cancelled.');
+        }
+        if (pid !== null) return current;
         const retry = attempt === 0 && current.conptyConnectionTimedOut;
         const failure = current.startFailure();
         await current.kill();
         if (!retry) {
-          this.sessions.delete(session.id);
-          this.onRemoved(session.id);
+          discard();
           throw new SessionStartError(failure);
         }
-        // The first attempt's console host must be settled before this id is
-        // registered again; the host queue attributes windows by session id.
+        // The first attempt's host must be ended before the id is reused.
+        // The queue can settle after exhausting its attempts without ending it.
+        const hostEnded = await current.whenConsoleHostSettled();
         await whenConsoleHostBatchSettled();
-        if (this.sessions.get(session.id) !== current) throw new SessionStartError('Session start was cancelled.');
+        if (!hostEnded) {
+          discard();
+          throw new SessionStartError(failure);
+        }
+        if (!registered(true)) throw new SessionStartError('Session start was cancelled.');
+        await new Promise<void>((resolve) => setTimeout(resolve, CONPTY_WORKER_DISPOSAL_MS + CONPTY_START_RETRY_DELAY_MS));
+        if (!registered(true)) throw new SessionStartError('Session start was cancelled.');
         this.logger.warn('session ConPTY start retry', { id: session.id, delayMs: CONPTY_START_RETRY_DELAY_MS });
-        await new Promise<void>((resolve) => setTimeout(resolve, CONPTY_START_RETRY_DELAY_MS));
-        if (this.sessions.get(session.id) !== current) throw new SessionStartError('Session start was cancelled.');
         try {
           current = new Session(session.id, options, { ...this.sessionDeps, retryAttempt: true });
         } catch (error) {
-          this.sessions.delete(session.id);
-          this.onRemoved(session.id);
+          discard();
           throw error;
         }
         this.sessions.set(session.id, current);
@@ -116,6 +137,7 @@ export class SessionManager {
       throw new Error('unreachable start attempt');
     } finally {
       this.starting.delete(session.id);
+      this.cancelledStarts.delete(session.id);
     }
   }
 
@@ -173,6 +195,7 @@ export class SessionManager {
   async kill(id: string): Promise<boolean> {
     const session = this.sessions.get(id);
     if (session === undefined) return false;
+    if (this.starting.has(id)) this.cancelledStarts.add(id);
     await session.kill();
     this.sessions.delete(id);
     this.onRemoved(id);
@@ -210,6 +233,7 @@ export class SessionManager {
   async killAll(timeoutMs = 10_000): Promise<void> {
     const all = [...this.sessions.values()];
     for (const session of all) {
+      if (this.starting.has(session.id)) this.cancelledStarts.add(session.id);
       this.sessions.delete(session.id);
       this.onRemoved(session.id);
     }

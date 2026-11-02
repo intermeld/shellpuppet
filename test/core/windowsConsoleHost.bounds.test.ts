@@ -20,9 +20,12 @@ describe('bounded console host attribution', () => {
       endProcess: () => { throw new Error('no host to end'); },
       resolved: (id) => { resolved.push(id); },
     });
-    queue.push(item('gone', 1000, (level, message, meta) => {
+    const gone = item('gone', 1000, (level, message, meta) => {
       entries.push({ level, message, reason: meta['reason'] });
-    }));
+    });
+    const outcomes: boolean[] = [];
+    gone.onSettled = (ended) => { outcomes.push(ended); };
+    queue.push(gone);
     await queue.whenSettled();
     expect(entries).toEqual([{
       level: 'info', message: 'console host not ended',
@@ -30,6 +33,7 @@ describe('bounded console host attribution', () => {
     }]);
     expect(lists).toBe(1);
     expect(resolved).toEqual(['gone']);
+    expect(outcomes).toEqual([true]);
   });
 
   it('leaves and logs candidates beyond the work cap', async () => {
@@ -81,10 +85,14 @@ describe('bounded console host attribution', () => {
       endProcess: () => { throw new Error('unexpected end'); },
       resolved: (id) => { resolved.push(id); },
     });
-    queue.push(item('a', 1000, () => undefined));
+    const ambiguous = item('a', 1000, () => undefined);
+    const outcomes: boolean[] = [];
+    ambiguous.onSettled = (ended) => { outcomes.push(ended); };
+    queue.push(ambiguous);
     await queue.whenSettled();
     expect(calls).toBeGreaterThan(1);
     expect(calls).toBeLessThan(10);
     expect(resolved).toEqual(['a']);
+    expect(outcomes).toEqual([false]);
   });
 });

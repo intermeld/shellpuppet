@@ -898,10 +898,15 @@ describe('a profile that allows any local folder', () => {
     }, folderPickerTimeoutMs: 50 });
     const pending = pickFolder(daemon);
     await pickerEntered;
-    // The route's 50 ms timer, response and shutdown must all finish even
-    // though the injected picker itself never settles. The test timeout also
-    // covers a request delayed before it reaches the handler under load.
-    const result = await pending;
+    // Start the response bound at handler entry, excluding request scheduling
+    // delay. A slow configured picker timeout must make this test fail.
+    let responseTimer: ReturnType<typeof setTimeout> | undefined;
+    const result = await Promise.race([
+      pending,
+      new Promise<never>((_resolve, reject) => {
+        responseTimer = setTimeout(() => reject(new Error('picker response exceeded one second')), 1_000);
+      }),
+    ]).finally(() => { if (responseTimer !== undefined) clearTimeout(responseTimer); });
     expect(result.status).toBe(504);
     expect(aborts).toBe(1);
     expect((await pickFolder(daemon)).status).toBe(409);
@@ -1254,10 +1259,12 @@ describe('concurrent launches respect both caps', () => {
   });
 
   it('does not spend rate slots on refused launches', async () => {
+    let created = 0;
     const daemon = await startLaunchDaemon({
       launcher: profilesOf([
         { name: 'quick', command: process.execPath, args: ['-e', 'process.exit(0)'], shell: false },
       ]),
+      dashboardSessionFactory: (options) => standInStart(options, `refused-${String(++created)}`),
     });
     const refused = await Promise.all(
       Array.from({ length: 12 }, () => launch(daemon, { profile: 'nope' })),
@@ -1267,6 +1274,7 @@ describe('concurrent launches respect both caps', () => {
     const started: RawResult[] = [];
     for (let index = 0; index < 8; index++) started.push(await launch(daemon, { profile: 'quick' }));
     expect(started.map((result) => result.status), JSON.stringify(started.filter((result) => result.status !== 200))).toEqual(Array.from({ length: 8 }, () => 200));
+    expect(created).toBe(8);
   });
 
   it('leaves eight parallel rate slots after a burst of refused launches with a stand-in start', async () => {
