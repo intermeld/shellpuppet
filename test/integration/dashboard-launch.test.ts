@@ -137,6 +137,7 @@ function navigationHeaders(): Record<string, string> {
 async function startLaunchDaemon(options: {
   launcher?: LauncherConfig;
   policy?: PolicyConfig;
+  daemonEnv?: NodeJS.ProcessEnv;
 } = {}): Promise<LaunchDaemon> {
   const home = makeTempHome('dash-launch-');
   const logPath = path.join(home, 'daemon.log');
@@ -146,6 +147,7 @@ async function startLaunchDaemon(options: {
     logger: createFileLogger(logPath),
     audit: createAuditor(home),
     ...(options.policy !== undefined ? { policy: options.policy } : {}),
+    ...(options.daemonEnv !== undefined ? { daemonEnv: options.daemonEnv } : {}),
     launchProfiles: options.launcher ?? { profiles: [], problems: [] },
     viewer: { launchMode: 'no-window' },
     promptScanIntervalMs: 600_000,
@@ -562,43 +564,36 @@ describe('envFromDaemon copies names from the daemon, never from the body', () =
     const variable = 'SP_LAUNCH_UNLISTED';
     const value = 'made-up-dashboard-value';
     const own = 'SHELLPUPPET_TEST_ONLY';
-    process.env[variable] = value;
-    process.env[own] = 'made-up-internal-value';
-    try {
-      const args = ['-e', `console.log("GOT=" + (process.env.${variable} ?? "missing") + ";OWN=" + (process.env.${own} ?? "missing"))`];
-      const daemon = await startLaunchDaemon({ launcher: profilesOf([
+    const daemonEnv = { [variable]: value, [own]: 'made-up-internal-value', NODE_OPTIONS: '--no-warnings' };
+    const args = ['-e', `console.log("GOT=" + (process.env.${variable} ?? "missing") + ";OWN=" + (process.env.${own} ?? "missing") + ";NODE=" + (process.env.NODE_OPTIONS ?? "missing"))`];
+    const daemon = await startLaunchDaemon({ daemonEnv, launcher: profilesOf([
         { name: 'all-env', command: process.execPath, args, shell: false, envFromDaemon: 'all' },
-      ]) });
-      const started = await launch(daemon, { profile: 'all-env' });
-      expect(started.status).toBe(200);
-      expect((JSON.parse(started.body) as Record<string, unknown>)['envFromDaemon']).toBe('all');
-      const id = String((JSON.parse(started.body) as Record<string, unknown>)['id']);
-      await waitForScreen(daemon, id, `GOT=${value};OWN=missing`);
-      const client = await api(daemon.port, daemon.token, '/sessions', {
-        method: 'POST', body: { command: process.execPath, args, shell: false },
-      });
-      expect(client.status).toBe(200);
-      await waitForScreen(daemon, String(client.body['id']), 'GOT=missing;OWN=missing');
-      const audit = fs.readFileSync(path.join(daemon.home, 'audit.log'), 'utf8');
-      const log = fs.readFileSync(daemon.logPath, 'utf8');
-      for (const output of [started.body, audit, log]) {
-        expect(output).not.toContain(value);
-        expect(output).not.toContain('made-up-internal-value');
-      }
-      const entry = auditEntries(daemon.home).find((line) => line['actor'] === 'dashboard' && line['action'] === 'start');
-      expect((entry?.['meta'] as Record<string, unknown> | undefined)?.['envFromDaemon']).toBe('all');
-    } finally {
-      delete process.env[variable];
-      delete process.env[own];
+    ]) });
+    const started = await launch(daemon, { profile: 'all-env' });
+    expect(started.status).toBe(200);
+    expect((JSON.parse(started.body) as Record<string, unknown>)['envFromDaemon'] === 'all').toBe(true);
+    const id = String((JSON.parse(started.body) as Record<string, unknown>)['id']);
+    await waitForScreen(daemon, id, `GOT=${value};OWN=missing;NODE=missing`);
+    const client = await api(daemon.port, daemon.token, '/sessions', {
+      method: 'POST', body: { command: process.execPath, args, shell: false },
+    });
+    expect(client.status).toBe(200);
+    await waitForScreen(daemon, String(client.body['id']), 'GOT=missing;OWN=missing;NODE=missing');
+    const audit = fs.readFileSync(path.join(daemon.home, 'audit.log'), 'utf8');
+    const log = fs.readFileSync(daemon.logPath, 'utf8');
+    for (const output of [started.body, audit, log]) {
+      expect(output.includes(value)).toBe(false);
+      expect(output.includes('made-up-internal-value')).toBe(false);
     }
+    const entry = auditEntries(daemon.home).find((line) => line['actor'] === 'dashboard' && line['action'] === 'start');
+    expect((entry?.['meta'] as Record<string, unknown> | undefined)?.['envFromDaemon'] === 'all').toBe(true);
   });
 
   it('copies a configured name and keeps its value out of the response and audit line', async () => {
     const variable = 'SP_LAUNCH_TEST_TOKEN';
-    const value = 's3cret-launch-value';
-    process.env[variable] = value;
-    try {
+    const value = 'made-up-listed-value';
       const daemon = await startLaunchDaemon({
+        daemonEnv: { [variable]: value },
         launcher: profilesOf([
           {
             name: 'envtest',
@@ -625,16 +620,16 @@ describe('envFromDaemon copies names from the daemon, never from the body', () =
 
       const started = await launch(daemon, { profile: 'envtest' });
       expect(started.status).toBe(200);
-      expect(started.body).toContain(variable);
-      expect(started.body).not.toContain(value);
+      expect(started.body.includes(variable)).toBe(true);
+      expect(started.body.includes(value)).toBe(false);
       const id = String((JSON.parse(started.body) as Record<string, unknown>)['id']);
       await waitForScreen(daemon, id, `GOT=${value}`);
 
       const entry = auditEntries(daemon.home).find(
         (line) => line['actor'] === 'dashboard' && line['action'] === 'start',
       );
-      expect(JSON.stringify(entry)).toContain(variable);
-      expect(JSON.stringify(entry)).not.toContain(value);
+      expect(JSON.stringify(entry).includes(variable)).toBe(true);
+      expect(JSON.stringify(entry).includes(value)).toBe(false);
 
       const before = await sessionIds(daemon);
       const bodyEnv = await launch(daemon, {
@@ -649,9 +644,6 @@ describe('envFromDaemon copies names from the daemon, never from the body', () =
       expect(noEnv.status).toBe(200);
       const noEnvId = String((JSON.parse(noEnv.body) as Record<string, unknown>)['id']);
       await waitForScreen(daemon, noEnvId, 'GOT=missing');
-    } finally {
-      delete process.env[variable];
-    }
   });
 });
 
@@ -1047,9 +1039,8 @@ describe('the environment names are the ones actually copied', () => {
   it('names only the variables it copied, in the response and the audit', async () => {
     const copied = 'SP_LAUNCH_COPIED';
     const unset = 'SP_LAUNCH_UNSET';
-    process.env[copied] = 'value';
-    try {
       const daemon = await startLaunchDaemon({
+        daemonEnv: { [copied]: 'made-up-copied-value' },
         launcher: profilesOf([
           {
             name: 'envnames',
@@ -1071,8 +1062,5 @@ describe('the environment names are the ones actually copied', () => {
       expect((entry?.['meta'] as Record<string, unknown> | undefined)?.['envFromDaemon']).toEqual([
         copied,
       ]);
-    } finally {
-      delete process.env[copied];
-    }
   });
 });

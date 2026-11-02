@@ -274,6 +274,8 @@ export interface DaemonOptions {
    * profile list and logged by the entry point at start.
    */
   launchProfiles?: LauncherConfig;
+  /** Test seam for dashboard profile environment copies. */
+  daemonEnv?: NodeJS.ProcessEnv;
 }
 
 /** Thrown by `start()` when a healthy daemon already owns this home. */
@@ -623,6 +625,7 @@ export class Daemon {
   private readonly sessionEnv: SessionEnvMode;
   /** The profiles the dashboard may name, and the entries that did not load. */
   private readonly launchProfiles: LauncherConfig;
+  private readonly daemonEnv: NodeJS.ProcessEnv;
   /** The global policy, kept here so a launch can report it before creating. */
   private readonly compiledPolicy: CompiledPolicy;
   /** Accepted launch times, for the sliding sixty-second cap. */
@@ -639,6 +642,7 @@ export class Daemon {
     this.audit = options.audit ?? NULL_AUDITOR;
     this.sessionEnv = options.sessionEnv ?? DEFAULT_SESSION_ENV;
     this.launchProfiles = options.launchProfiles ?? { profiles: [], problems: [] };
+    this.daemonEnv = options.daemonEnv ?? process.env;
     this.compiledPolicy = compilePolicy(options.policy);
     this.manager = new SessionManager(compilePolicy(options.policy), this.logger, {
       sessionEnv: this.sessionEnv,
@@ -1631,7 +1635,7 @@ export class Daemon {
       }
     }
 
-    const { env, copied } = copyDaemonEnv(profile.envFromDaemon, process.env);
+    const { env, copied } = copyDaemonEnv(profile.envFromDaemon, this.daemonEnv);
     const envNames = Object.keys(env);
     const folderLabel = folder?.name;
     const options = {
