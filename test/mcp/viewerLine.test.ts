@@ -15,6 +15,12 @@ describe('viewerLine', () => {
     expect(line).toContain('opened in the dashboard');
     expect(line).not.toContain('vt=');
   });
+  it('describes a pending launch without promising connection and offers a link command', () => {
+    const line = viewerLine({ viewer: { opened: false, mode: 'dashboard', reason: 'a dashboard window is opening' } });
+    expect(line).toContain('dashboard window launch is in progress');
+    expect(line).toContain('terminal_viewer_url');
+    expect(line).not.toContain('will appear');
+  });
   it('names the window and carries no link when one opened', () => {
     const line = viewerLine({ viewer: { opened: true, mode: 'isolated-app' } });
     expect(line).toContain('a window has opened on this machine');

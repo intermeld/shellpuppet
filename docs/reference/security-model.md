@@ -546,11 +546,13 @@ Leave it off unless actively debugging, and delete the log afterwards.
   them: the daemon's Host, Origin and credential checks are what hold the
   loopback surface.
 
-  Where no Chromium-family browser is found it falls back to the default
-  browser and says so in `daemon.log`. There, and on `default-browser` or
-  `none`, none of this isolation applies: the viewer grant lands in the
-  history of whichever browser opens the link, and the viewer shares a
-  browsing context with the other pages that browser has open.
+  In `isolated-app` mode, a missing Chromium-family browser falls back to the
+  default browser and says so in `daemon.log`. The dashboard never falls back:
+  a failed launch revokes its grant and returns a single-session viewer link.
+  In `default-browser` mode, or after the `isolated-app` fallback, the viewer
+  grant lands in the browser's history and shares its browsing context.
+  `no-window` (also accepted as `none`) opens no browser and returns a viewer
+  link for the caller to use.
 - **The browsers ShellPuppet starts are asked not to call out.** The isolated
   viewer window and the screenshot browser are started with switches
   documented in Chromium's source that ask the browser to make no network

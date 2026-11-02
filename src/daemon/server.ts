@@ -574,6 +574,7 @@ export class Daemon {
   /** A launched dashboard has 30 seconds to connect before a start may retry. */
   private dashboardWindowStartedAt = 0;
   private dashboardOpenPromise: Promise<boolean> | null = null;
+  private stopping = false;
   /**
    * Per-session prompt tracking for stall alerts: the signature of the prompt
    * currently on screen, when it was first seen and whether it has alerted.
@@ -966,7 +967,10 @@ export class Daemon {
   stop(opts: { removeState?: boolean } = {}): Promise<void> {
     // Idle-stop, signal handlers and explicit stops can overlap, so everyone
     // awaits the one real shutdown.
-    this.stopPromise ??= this.doStop(opts);
+    if (this.stopPromise === null) {
+      this.stopping = true;
+      this.stopPromise = this.doStop(opts);
+    }
     return this.stopPromise;
   }
 
@@ -996,6 +1000,9 @@ export class Daemon {
     }
 
     await this.manager.killAll();
+    // An in-flight automatic launch must settle before shutdown completes.
+    // Its grant is revoked below if it succeeds after stopping began.
+    await this.dashboardOpenPromise;
     if (opts.removeState !== false) {
       // Remove this daemon's record, or a file that holds none. A file that
       // cannot be read says nothing about what it holds, so it stays.
@@ -1192,6 +1199,7 @@ export class Daemon {
   }
 
   private async openDashboardWindow(req: http.IncomingMessage, actor: string): Promise<boolean> {
+    if (this.stopping) return false;
     const grant = this.tokens.mintDashboardGrant({ now: this.now() });
     const pageUrl = `http://127.0.0.1:${String(this.port)}/dashboard?dt=${grant}`;
     // The dashboard opens only in the isolated profile. The viewer launcher
@@ -1205,7 +1213,7 @@ export class Daemon {
       // The thrown text can carry the URL. It is not logged and not returned.
       opened = { launched: false, mode: 'no-window' };
     }
-    if (!opened.launched || opened.mode === 'default-browser') {
+    if (this.stopping || !opened.launched || opened.mode === 'default-browser') {
       this.tokens.revokeDashboardGrant(grant);
       this.auditDashboardRefusal(req, 'launch-failed');
       return false;
@@ -1223,7 +1231,7 @@ export class Daemon {
     // is not left holding it, and then ignored.
     await readBody(req);
     if (await this.openDashboardWindow(req, actor)) {
-      this.dashboardWindowStartedAt = Date.now();
+      this.dashboardWindowStartedAt = this.now();
       json(res, 200, { opened: true });
     } else {
       json(res, 502, {
@@ -1239,7 +1247,7 @@ export class Daemon {
     if (this.dashboardEventSockets.size > 0) {
       return { launched: false, mode: 'dashboard', reason: 'a dashboard is connected' };
     }
-    if (this.dashboardWindowStartedAt > 0 && Date.now() - this.dashboardWindowStartedAt < 30_000) {
+    if (this.dashboardWindowStartedAt > 0 && this.now() - this.dashboardWindowStartedAt < 30_000) {
       return { launched: false, mode: 'dashboard', reason: 'a dashboard window is opening' };
     }
     if (this.dashboardOpenPromise !== null) {
@@ -1249,7 +1257,7 @@ export class Daemon {
         : { launched: false, mode: 'dashboard', reason: 'the dashboard window did not open' };
     }
     this.dashboardOpenPromise = this.openDashboardWindow(req, actor).then((opened) => {
-      if (opened) this.dashboardWindowStartedAt = Date.now();
+      if (opened) this.dashboardWindowStartedAt = this.now();
       return opened;
     }).finally(() => { this.dashboardOpenPromise = null; });
     const opened = await this.dashboardOpenPromise;

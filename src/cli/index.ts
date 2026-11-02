@@ -368,7 +368,7 @@ async function main(): Promise<void> {
         } else if (viewer?.mode === 'dashboard' && viewer.reason === 'a dashboard is connected') {
           console.log('viewer: session is in the connected dashboard');
         } else if (viewer?.mode === 'dashboard' && viewer.reason === 'a dashboard window is opening') {
-          console.log('viewer: session will appear in the dashboard window that is opening');
+          console.log(`viewer: dashboard window launch is in progress (if it does not show the session, run shellpuppet viewer-url ${String(result['id'])} for a link)`);
         } else if (viewer?.opened === true) {
           const how = viewer.reason !== undefined ? `, ${viewer.reason}` : '';
           console.log(`viewer: window opened${how} (viewer-url ${String(result['id'])} mints a link)`);

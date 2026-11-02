@@ -137,7 +137,7 @@ export function viewerLine(payload: Body): string {
     return 'Viewer: the session is in the connected dashboard. They need no link.';
   }
   if (viewer?.mode === 'dashboard' && viewer.reason === 'a dashboard window is opening') {
-    return 'Viewer: the session will appear in the dashboard window that is opening. They need no link.';
+    return 'Viewer: dashboard window launch is in progress. If it does not show the session, call terminal_viewer_url for a link.';
   }
   if (viewer?.opened === true) {
     const how = viewer.reason !== undefined ? `; ${viewer.reason}` : '';
