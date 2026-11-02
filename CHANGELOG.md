@@ -37,6 +37,9 @@ version may change behaviour, and every such change is listed here.
   already running under a secrets tool. Daemon status reports whether its
   start was wrapped. Windows wrappers must be executable programs rather than
   batch files, and failed wrapped starts clean up the spawned process tree.
+  Daemon starts are now serialised per ShellPuppet home through a local
+  endpoint that the operating system releases if the starting client dies;
+  other clients, `daemon stop` and `daemon restart` wait for a pending start.
 
 - Dashboard launch profiles accept `"envFromDaemon": "all"` to pass the
   daemon's environment to sessions a person starts from that profile.

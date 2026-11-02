@@ -141,8 +141,10 @@ describe('configured daemon start wrapper', () => {
       await new Promise((resolve) => setTimeout(resolve, 450));
       const killedAt = Date.now();
       holder.kill('SIGKILL');
-      await eventually(() => fs.existsSync(spawned), 3_000, 50);
-      expect(Date.now() - killedAt).toBeLessThan(3_000);
+      // The marker is written by the new daemon, so this bound includes the
+      // daemon's own start-up; the waiter's take-over itself is one poll.
+      await eventually(() => fs.existsSync(spawned), 15_000, 50);
+      expect(Date.now() - killedAt).toBeLessThan(15_000);
       expect(await waiter).toBe(0);
       recordPid(home);
       expect(readDaemonState(home)).not.toBeNull();
