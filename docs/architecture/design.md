@@ -1099,14 +1099,18 @@ window and a strip. New panes append. Attention adds a badge and a title
 count after twenty seconds without moving or focusing a pane; the jump key
 selects a waiting pane where it stands. Pin does not reorder a grid; the
 earliest pinned pane takes the large slot in Focus. Only an explicit reorder
-changes order. Mode, order and pin live in `localStorage` in the isolated
+changes order. Mode, order, pin and Auto fit live in `localStorage` in the isolated
 profile; gone session ids are dropped.
 
 **Geometry.** Each pane uses the session's grid and measures whole character
 cells to scale its font between 6 px and 40 px, without stretching glyphs.
-A pane below the floor is marked; it keeps the program's grid. Layout,
-window size, mode, new sessions, attention and the jump key send no PTY
-resize. Fit takes control and fits the pane. Enlarge covers the pane's
+A pane below the floor is marked and keeps at least 80 by 24 cells. Auto fit
+is on by default and fits each visible pane's real terminal after a layout
+or window change settles for 250 ms. It sends at most one resize per pane
+for the settled change and leaves a grid held by another client alone. A
+popped out pane follows its own window. Turning Auto fit off restores font
+scaling without a resize on layout and window changes. Fit takes control
+and fits the pane. Enlarge covers the pane's
 current screen and fits the real terminal to it; Restore sends its previous
 grid. A focused or enlarged pane also fits the real terminal when the
 person takes control. The dashboard window can use the browser's full-screen

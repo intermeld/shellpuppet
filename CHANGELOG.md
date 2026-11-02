@@ -22,6 +22,9 @@ version may change behaviour, and every such change is listed here.
   expose the same view; `shellpuppet wait --prompt` accepts no id or several.
   Filtered views omit question and options. Single-session waits retain their
   existing response.
+- Auto fit is on by default in the dashboard. It remembers the toggle and
+  refits visible panes after layout or window changes settle, respecting the
+  80 by 24 floor and geometry held by another client.
 
 - The dashboard can assign panes across several windows. It asks for screen
   permission only on an Allow screens click, opens at most one window per

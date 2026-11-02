@@ -28,6 +28,8 @@
   let order = Array.isArray(saved.order) ? saved.order.filter((id) => typeof id === 'string') : [];
   let pins = Array.isArray(saved.pins) ? saved.pins.filter((id) => typeof id === 'string') : [];
   let mode = ['auto', 'grid', 'focus'].includes(saved.mode) ? saved.mode : 'auto';
+  let autoFit = saved.autoFit !== false;
+  let autoFitTimer = null;
   let prefix = typeof saved.prefix === 'string' && /^[a-z]$/.test(saved.prefix) ? saved.prefix : 'a';
   let choosingPrefix = false;
   let selected = null;
@@ -101,7 +103,7 @@
   }
 
   const persist = () => {
-    try { window.localStorage.setItem(PREF, JSON.stringify({ mode, order, pins, prefix })); } catch { /* Layout still works. */ }
+    try { window.localStorage.setItem(PREF, JSON.stringify({ mode, order, pins, prefix, autoFit })); } catch { /* Layout still works. */ }
   };
   const persistLaunches = () => {
     try { window.localStorage.setItem(LAUNCH_PREF, JSON.stringify(launches)); } catch { /* Restart still works in this document. */ }
@@ -117,6 +119,18 @@
     return !popped.has(item.id) && (windows.size === 1 || assigned === null || assigned.has(item.id));
   });
   const showError = (message) => { error.textContent = message; error.hidden = false; };
+  function renderAutoFit() {
+    document.getElementById('auto-fit').setAttribute('aria-pressed', String(autoFit));
+    document.getElementById('auto-fit').classList.toggle('active', autoFit);
+  }
+  function scheduleAutoFit() {
+    clearTimeout(autoFitTimer);
+    if (!autoFit) return;
+    autoFitTimer = setTimeout(() => {
+      autoFitTimer = null;
+      for (const item of shown()) if (visible(item)) item.client?.autoFitGrid();
+    }, 250);
+  }
   const makeButton = (label, action) => {
     const button = document.createElement('button');
     button.type = 'button';
@@ -272,13 +286,13 @@
       if (enlarged === item.id) {
         enlarged = null;
         arrange('restore');
-        if (item.previousGrid) item.client?.takeGrid(item.previousGrid.cols, item.previousGrid.rows);
+        if (!autoFit && item.previousGrid) item.client?.takeGrid(item.previousGrid.cols, item.previousGrid.rows);
         item.previousGrid = null;
       } else {
         item.previousGrid = item.client?.getGrid() || null;
         enlarged = item.id;
         arrange('enlarge');
-        window.requestAnimationFrame(() => item.client?.fitGrid());
+        if (!autoFit) window.requestAnimationFrame(() => item.client?.fitGrid());
       }
     });
     item.pin = makeButton('Pin', () => {
@@ -392,6 +406,7 @@
       container: item.term, sessionId: item.id, dashboardProof: proof,
       elements: { banner: item.banner, promptAlert: item.prompt, size: item.size },
       onAttentionChange: () => updateAttention(),
+      onGeometryReady: () => scheduleAutoFit(),
     });
   }
   function deactivate(item) {
@@ -514,6 +529,7 @@
         }
         lastLayout = layoutKey;
         syncVisibility();
+        scheduleAutoFit();
       }
       publishAssignment();
     } finally {
@@ -793,6 +809,11 @@
   function onWindowMessage(event) {
     const data = event.data;
     if (typeof data !== 'object' || data === null || data.token === windowToken) return;
+    if (data.type === 'auto-fit-preference' && typeof data.autoFit === 'boolean') {
+      autoFit = data.autoFit;
+      renderAutoFit(); persist(); scheduleAutoFit();
+      return;
+    }
     if (data.type === 'window-roster' && popSelf === null && data.window &&
         typeof data.window.id === 'string' && Number.isFinite(data.window.rank) &&
         Number.isFinite(data.window.width) && Number.isFinite(data.window.height)) {
@@ -829,7 +850,7 @@
     document.getElementById(name).addEventListener('click', () => {
       if (name === 'focus') focusId = selected;
       mode = name; enlarged = null; persist(); arrange('mode');
-      if (name === 'focus') {
+      if (name === 'focus' && !autoFit) {
         const items = shown();
         const primary = pins.find((id) => items.some((item) => item.id === id)) || focusId;
         window.requestAnimationFrame(() => panes.get(primary)?.client?.fitGrid());
@@ -837,6 +858,11 @@
     });
   }
   strip.addEventListener('scroll', syncVisibility);
+  document.getElementById('auto-fit').addEventListener('click', () => {
+    autoFit = !autoFit;
+    renderAutoFit(); persist(); scheduleAutoFit();
+    channel?.postMessage({ type: 'auto-fit-preference', autoFit, token: windowToken });
+  });
   document.getElementById('shortcut').addEventListener('click', () => {
     choosingPrefix = true;
     document.getElementById('shortcut').textContent = 'Press Ctrl+Shift and a letter';
@@ -857,6 +883,7 @@
   window.addEventListener('resize', () => { advertise(); arrange('window resize'); });
   window.addEventListener('beforeunload', () => {
     clearTimeout(retry);
+    clearTimeout(autoFitTimer);
     feed?.close();
     for (const item of panes.values()) deactivate(item);
     for (const watch of popWatches.values()) clearInterval(watch);
@@ -911,6 +938,7 @@
     else if (key === '?') document.getElementById('help').hidden = !document.getElementById('help').hidden;
   }, true);
   showPrefix();
+  renderAutoFit();
   if (popSelf === null) {
     advertise();
     rosterTimer = setInterval(() => {
