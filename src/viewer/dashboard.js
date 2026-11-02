@@ -292,7 +292,7 @@
     card.tabIndex = 0;
     const head = document.createElement('div');
     head.className = 'pane-head';
-    head.title = 'Double-click the title bar to Enlarge or Restore; Escape restores outside the terminal';
+    head.title = 'Double-click the title bar to Enlarge or Restore; outside the terminal, Escape closes an error first, then restores';
     const label = document.createElement('span');
     label.className = 'pane-label';
     const purpose = document.createElement('span');
@@ -359,7 +359,12 @@
     banner.hidden = true;
     const bannerMessage = document.createElement('span');
     bannerMessage.className = 'pane-banner-message';
-    banner.append(bannerMessage, makeButton('Close pane error', () => { banner.hidden = true; }));
+    banner.append(bannerMessage, makeButton('Close pane error', () => {
+      const hadFocus = banner.contains(document.activeElement);
+      banner.hidden = true;
+      // A hidden button cannot hold visible focus: give it to the pane.
+      if (hadFocus) card.focus();
+    }));
     const prompt = document.createElement('div');
     prompt.className = 'pane-prompt';
     prompt.hidden = true;

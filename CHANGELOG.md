@@ -29,7 +29,6 @@ version may change behaviour, and every such change is listed here.
   `dashboard.fontSize` sets its initial size when the browser has no saved choice.
 - Dashboard error banners have a Close button and close on Escape outside a
   terminal. A valid shortcut clears a previous shortcut error.
-
 - The dashboard can assign panes across several windows. It asks for screen
   permission only on an Allow screens click, opens at most one window per
   click, places granted windows in each screen's available rectangle and

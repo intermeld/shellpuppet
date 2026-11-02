@@ -168,8 +168,11 @@ describe('dashboard preferences and errors', () => {
       for (let i = 0; i < 9; i++) socket.onclose();
       const close = banner.querySelector('button[aria-label="Close pane error"]');
       const shown = !banner.hidden;
+      close?.focus();
       close?.click();
       const byButton = banner.hidden;
+      // Focus leaves the hidden button for the pane, where a keyboard user can see it.
+      const focusOnPane = document.activeElement === card;
       socket.onclose();
       const reopened = !banner.hidden;
       const shortcut = document.getElementById('shortcut');
@@ -179,9 +182,9 @@ describe('dashboard preferences and errors', () => {
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
       const topClosedFirst = top.hidden && !banner.hidden;
       document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
-      return { shown, closeNamed: Boolean(close), byButton, reopened, topClosedFirst, paneClosedByEscape: banner.hidden };
+      return { shown, closeNamed: Boolean(close), byButton, focusOnPane, reopened, topClosedFirst, paneClosedByEscape: banner.hidden };
     };`;
     expect((await page(url, script)).probe).toEqual({ shown: true, closeNamed: true, byButton: true,
-      reopened: true, topClosedFirst: true, paneClosedByEscape: true });
+      focusOnPane: true, reopened: true, topClosedFirst: true, paneClosedByEscape: true });
   });
 });
