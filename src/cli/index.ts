@@ -14,7 +14,7 @@
 import { writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import process from 'node:process';
-import { DaemonGoneError, discoverDaemon, ensureDaemon, request } from '../client/http.js';
+import { DaemonGoneError, discoverDaemon, ensureDaemon, request, waitForPendingDaemon } from '../client/http.js';
 import type { DaemonConnection } from '../client/http.js';
 import { assertNodeVersion, packageVersion } from '../daemon/meta.js';
 import { NO_MATCHES } from '../core/find.js';
@@ -791,7 +791,7 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
       return;
     }
     case 'stop': {
-      const connection = await discoverDaemon({ logger: stderrLogger });
+      const connection = await waitForPendingDaemon({ logger: stderrLogger });
       // A daemon that went before it could be told to stop was not running.
       if (connection === null || !(await stopRunning(connection))) {
         // Nothing to stop IS the outcome asked for, so it reads the same to a
@@ -806,7 +806,7 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
     }
     case 'restart': {
       // Only the start half may start a daemon.
-      const existing = await discoverDaemon({ logger: stderrLogger });
+      const existing = await waitForPendingDaemon({ logger: stderrLogger });
       if (existing !== null) await stopRunning(existing);
       const connection = await ensureDaemon({ logger: stderrLogger, direct });
       surfaceWarnings(connection);

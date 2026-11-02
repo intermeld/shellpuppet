@@ -6,7 +6,6 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { afterEach, describe, expect, it } from 'vitest';
 import { readDaemonState } from '../../src/daemon/paths.js';
-import * as clientHttp from '../../src/client/http.js';
 import { api, distDaemonEntry, eventually, makeTempHome, processAlive, removeTempHome, repoRoot } from './helpers.js';
 
 const execFileAsync = promisify(execFile);
@@ -15,6 +14,7 @@ const mcp = path.join(repoRoot, 'dist', 'mcp', 'index.js');
 const wrapper = path.join(repoRoot, 'test', 'fixtures', 'daemon-start-wrapper.mjs');
 const failureWrapper = path.join(repoRoot, 'test', 'fixtures', 'daemon-start-failure.mjs');
 const recordWrapper = path.join(repoRoot, 'test', 'fixtures', 'daemon-start-record.mjs');
+const parentWrapper = path.join(repoRoot, 'test', 'fixtures', 'daemon-start-parent.mjs');
 const boundRunner = path.join(repoRoot, 'test', 'integration', 'fixtures', 'ensure-daemon-bound.mjs');
 const homes: { home: string; pid?: number }[] = [];
 
@@ -83,23 +83,106 @@ afterEach(async () => {
 });
 
 describe('configured daemon start wrapper', () => {
+  it('runs one wrapper for two simultaneous wrapped starters', async () => {
+    const { home, marker } = homeWithWrapper(1_200);
+    const first = runCli(home, ['daemon', 'start', '--json']);
+    await eventually(() => fs.existsSync(marker), 6_000);
+    const second = runCli(home, ['daemon', 'start', '--json']);
+    const [a, b] = await Promise.all([first, second]);
+    recordPid(home);
+    expect(a.code).toBe(0);
+    expect(b.code).toBe(0);
+    expect(fs.readFileSync(marker, 'utf8').trim().split('\n')).toHaveLength(1);
+    expect((JSON.parse(a.stdout) as { port: number }).port).toBe((JSON.parse(b.stdout) as { port: number }).port);
+    expect(readDaemonState(home)?.startedWrapped).toBe(true);
+  });
+
+  it('makes a direct starter wait for a pending wrapped start', async () => {
+    const { home, marker } = homeWithWrapper(11_000);
+    const wrapped = runCli(home, ['daemon', 'start', '--json']);
+    await eventually(() => fs.existsSync(marker), 6_000);
+    const direct = runCli(home, ['daemon', 'start', '--direct', '--json']);
+    const [a, b] = await Promise.all([wrapped, direct]);
+    recordPid(home);
+    expect(a.code).toBe(0);
+    expect(b.code).toBe(0);
+    expect((JSON.parse(a.stdout) as { port: number }).port).toBe((JSON.parse(b.stdout) as { port: number }).port);
+    expect(readDaemonState(home)?.startedWrapped).toBe(true);
+  }, 140_000);
+
+  it('takes over a stale start lock left by a dead client', async () => {
+    const { home, marker } = homeWithWrapper();
+    fs.writeFileSync(path.join(home, 'daemon-start.lock'), JSON.stringify({ pid: 2147483647, createdAt: Date.now(), nonce: 'fictional-stale' }));
+    const result = await runCli(home, ['daemon', 'start', '--json']);
+    recordPid(home);
+    expect(result.code).toBe(0);
+    expect(fs.existsSync(marker)).toBe(true);
+    expect(fs.existsSync(path.join(home, 'daemon-start.lock'))).toBe(false);
+  });
+
+  it('takes over a start lock older than the wrapped bound and grace', async () => {
+    const { home, marker } = homeWithWrapper();
+    fs.writeFileSync(path.join(home, 'daemon-start.lock'), JSON.stringify({ pid: process.pid, createdAt: Date.now() - 136_000, nonce: 'fictional-old' }));
+    const result = await runCli(home, ['daemon', 'start', '--json']);
+    recordPid(home);
+    expect(result.code).toBe(0);
+    expect(fs.existsSync(marker)).toBe(true);
+    expect(fs.existsSync(path.join(home, 'daemon-start.lock'))).toBe(false);
+  });
+
+  it('stops a daemon whose wrapper is still starting', async () => {
+    const { home, marker } = homeWithWrapper(1_200);
+    const starting = runCli(home, ['daemon', 'start']);
+    await eventually(() => fs.existsSync(marker), 6_000);
+    const stopping = runCli(home, ['daemon', 'stop']);
+    const [started, stopped] = await Promise.all([starting, stopping]);
+    recordPid(home);
+    expect(started.code).toBe(0);
+    expect(stopped.code).toBe(0);
+    expect(stopped.stdout).toContain('stopped');
+    await eventually(() => readDaemonState(home) === null, 6_000);
+  });
+
+  it('restarts only after the pending wrapper has started its daemon', async () => {
+    const { home, marker } = homeWithWrapper(1_200);
+    const starting = runCli(home, ['daemon', 'start', '--json']);
+    await eventually(() => fs.existsSync(marker), 6_000);
+    const restarting = runCli(home, ['daemon', 'restart', '--direct', '--json']);
+    const [started, restarted] = await Promise.all([starting, restarting]);
+    recordPid(home);
+    expect(started.code).toBe(0);
+    expect(restarted.code).toBe(0);
+    expect((JSON.parse(started.stdout) as { port: number }).port).toBeGreaterThan(0);
+    expect((JSON.parse(started.stdout) as { startedWrapped: boolean }).startedWrapped).toBe(true);
+    expect(readDaemonState(home)?.startedWrapped).toBe(false);
+    expect(fs.readFileSync(marker, 'utf8').trim().split('\n')).toHaveLength(1);
+  });
+
+  it('keeps a healthy daemon when its wrapper omits the status marker', async () => {
+    const { home } = homeWithWrapper();
+    fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ viewer: { launchMode: 'no-window' }, daemon: { startWith: [process.execPath, parentWrapper] } }));
+    const result = await runCli(home, ['daemon', 'start', '--json']);
+    recordPid(home);
+    expect(result.code).toBe(0);
+    const state = readDaemonState(home);
+    expect(state?.startedWrapped).toBe(false);
+    expect((await (await fetch(`http://127.0.0.1:${String(state?.port)}/health`)).json() as { ok: boolean }).ok).toBe(true);
+  });
+
   it('refuses a Windows batch wrapper before any process starts', async () => {
     if (process.platform !== 'win32') return;
     const home = makeTempHome('shellpuppet-batch-wrapper-');
     homes.push({ home });
     const batch = path.join(home, 'wrapper.cmd');
     const marker = path.join(home, 'batch-ran');
-    fs.writeFileSync(batch, '@echo off\r\n');
+    fs.writeFileSync(batch, `@echo off\r\n> "${marker}" echo ran\r\nexit /b 1\r\n`);
     fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({
-      viewer: { launchMode: 'no-window' }, daemon: { startWith: [batch] },
+      viewer: { launchMode: 'no-window' }, daemon: { startWith: [batch, 'made-up-%^&"quoted"'] },
     }));
-    const planner = (clientHttp as { planDaemonStart?: (wrapper: string[], entry: string, cwd: string, env: NodeJS.ProcessEnv) => unknown }).planDaemonStart;
-    expect(planner).toBeTypeOf('function');
-    expect(() => planner?.([batch], 'entry', home, process.env)).toThrow(/daemon\.startWith.*program itself/);
-    const result = await runCli(home, ['daemon', 'start']);
+    const result = await runBound(home, 700);
+    expect(fs.existsSync(marker)).toBe(false);
     expect(result.code).toBe(1);
     expect(result.stderr).toMatch(/daemon\.startWith.*program itself/);
-    expect(fs.existsSync(marker)).toBe(false);
     expect(readDaemonState(home)).toBeNull();
   });
 
@@ -114,9 +197,6 @@ describe('configured daemon start wrapper', () => {
       viewer: { launchMode: 'no-window' },
       daemon: { startWith: [process.execPath, spacedWrapper, marker, literal] },
     }));
-    const planner = (clientHttp as { planDaemonStart?: (wrapper: string[], entry: string, cwd: string, env: NodeJS.ProcessEnv) => { args: string[] } }).planDaemonStart;
-    expect(planner).toBeTypeOf('function');
-    expect(planner?.([process.execPath, spacedWrapper, marker, literal], 'entry', home, process.env).args[2]).toBe(literal);
     const result = await runCli(home, ['daemon', 'start']);
     recordPid(home);
     expect(result.code).toBe(0);
@@ -125,14 +205,13 @@ describe('configured daemon start wrapper', () => {
   });
 
   it('ends a hung wrapper tree after the injected bound', async () => {
-    expect(clientHttp.WRAPPED_START_TIMEOUT_MS).toBe(120_000);
     const { home, marker } = homeWithFailure('hang');
     try {
       const result = await runBound(home, 700);
-      expect(result.code).toBe(1);
-      expect(result.stderr).toContain('daemon.startWith');
       const pid = Number(fs.readFileSync(marker, 'utf8'));
       await eventually(() => !processAlive(pid), 15_000);
+      expect(result.code).toBe(1);
+      expect(result.stderr).toContain('daemon.startWith');
       expect(readDaemonState(home)).toBeNull();
     } finally {
       if (fs.existsSync(marker)) {
@@ -150,30 +229,6 @@ describe('configured daemon start wrapper', () => {
     expect(result.elapsedMs).toBeLessThan(18_000);
     expect(result.stderr).toContain('daemon.startWith');
     expect(readDaemonState(home)).toBeNull();
-  }, 90_000);
-
-  it('lets a direct starter win a race with one wrapped starter', async () => {
-    const { home, marker } = homeWithFailure('hang');
-    try {
-      const wrapped = clientHttp.ensureDaemon({ home, daemonEntry: distDaemonEntry });
-      await eventually(() => fs.existsSync(marker), 6_000);
-      const direct = clientHttp.ensureDaemon({ home, daemonEntry: distDaemonEntry, direct: true });
-      const [wrappedConnection, directConnection] = await Promise.all([wrapped, direct]);
-      recordPid(home);
-      expect(wrappedConnection.pid).toBe(directConnection.pid);
-      const state = readDaemonState(home);
-      expect(state?.pid).toBe(directConnection.pid);
-      expect(state?.startedWrapped).toBe(false);
-      expect((await (await fetch(`http://127.0.0.1:${String(state?.port)}/health`)).json() as { ok: boolean }).ok).toBe(true);
-      const wrapperPid = Number(fs.readFileSync(marker, 'utf8'));
-      await eventually(() => !processAlive(wrapperPid), 10_000);
-    } finally {
-      recordPid(home);
-      if (fs.existsSync(marker)) {
-        const pid = Number(fs.readFileSync(marker, 'utf8'));
-        if (processAlive(pid)) process.kill(pid, 'SIGKILL');
-      }
-    }
   }, 90_000);
 
   it('starts directly and warns once for an oversized wrapper setting', async () => {

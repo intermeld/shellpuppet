@@ -183,10 +183,15 @@ logged once by name. No command, tool, endpoint or environment variable can
 configure the wrapper.
 
 A direct start has the usual ten-second health bound. A wrapped start allows
-two minutes for a person to unlock the tool. A failed wrapper or health
-timeout ends the spawned wrapper's process tree and reports the wrapper
-program and `daemon.startWith`, without its arguments or any environment
-values. An early wrapper exit is reported after a short health grace.
+two minutes for a person to unlock the tool. Starts are serialised per
+ShellPuppet home: another client waits for the pending start, including when
+it requested `--direct`. `daemon stop` and `daemon restart` also wait for a
+pending start before acting. A failed start ends the wrapper's process tree
+only while the wrapper is still running. If a wrapper launches a detached
+process and exits before the daemon is healthy, that wrapper is responsible
+for the process it launched. Failure reports the wrapper program and
+`daemon.startWith`, without its arguments or any environment values. An
+early wrapper exit is reported after a short health grace.
 `shellpuppet daemon status` reports `startedWrapped` as a boolean, reported
 by the client that started the daemon. It does not reveal the command.
 
