@@ -184,11 +184,14 @@ configure the wrapper.
 
 A direct start has the usual ten-second health bound. A wrapped start allows
 two minutes for a person to unlock the tool. Starts are serialised per
-ShellPuppet home: another client waits for the pending start, including when
-it requested `--direct`. `daemon stop` and `daemon restart` also wait for a
+ShellPuppet home by a local listening endpoint. Another client waits for the
+pending start, including when it requested `--direct`. `daemon stop` and
+`daemon restart` also wait for a
 pending start before acting. A failed start ends the wrapper's process tree
-only while the wrapper is still running. If a wrapper launches a detached
-process and exits before the daemon is healthy, that wrapper is responsible
+only while the wrapper is still running. If Windows tree cleanup times out,
+ShellPuppet ends the wrapper itself and warns that programs it started may
+remain. If a wrapper launches a detached process and exits before the daemon
+is healthy, that wrapper is responsible
 for the process it launched. Failure reports the wrapper program and
 `daemon.startWith`, without its arguments or any environment values. An
 early wrapper exit is reported after a short health grace.

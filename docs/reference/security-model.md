@@ -395,9 +395,15 @@ The status is reported by the client that started the daemon. The internal
 start marker is removed from the daemon's environment before any session can
 inherit it.
 
-Clients serialise starts with a lock in the ShellPuppet home, so a competing
-start waits rather than running a second wrapper. Stop and restart wait for a
-pending start. On failed startup, ShellPuppet ends a live wrapper process tree.
+Clients serialise starts with a local listening endpoint, so a competing
+start waits rather than running a second wrapper. The OS releases the listener
+when its client dies. On POSIX, a stale socket pathname is removed only after
+a refused connection and a socket type check. On Windows, Node cannot verify
+the owner of an already occupied named pipe, so another local user could
+occupy its name and deny daemon start; this does not grant daemon access.
+Stop and restart wait for a pending start. On failed startup, ShellPuppet ends
+a live wrapper process tree. If Windows tree cleanup times out, it ends the
+wrapper itself and warns that programs it started may remain.
 If a wrapper launches a detached process and exits before the daemon is
 healthy, the wrapper is responsible for that process; ShellPuppet cannot
 recover it from the exited wrapper's process id.

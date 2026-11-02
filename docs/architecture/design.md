@@ -99,8 +99,10 @@ a person to unlock the secrets tool. `daemon.startWithOnlyIfEnvContains` limits 
 wrapper to clients whose inherited environment has a value containing that string.
 `--direct` on daemon start or restart, or `SHELLPUPPET_DAEMON_DIRECT=1` on any client,
 skips the wrapper for that start. The wrapper is spawned without a shell; on Windows
-it must resolve to an `.exe` or `.com`. A per-home start lock serialises clients
-before any spawn. Other starters wait for the pending start, including direct
+it must resolve to an `.exe` or `.com`. A per-home listening endpoint serialises clients
+before any spawn. The OS releases the listener when its client dies, allowing a
+waiting client to take over; a stale POSIX socket pathname is removed after a
+refused connection. Other starters wait for the pending start, including direct
 starters, while stop and restart wait before acting. A failed start ends the
 wrapper's tree only while its child is live; once a daemon is healthy, nothing
 is killed.
