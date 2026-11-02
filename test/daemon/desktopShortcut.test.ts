@@ -1,6 +1,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { afterEach, describe, expect, it } from 'vitest';
 import { desktopEntry, installDesktopShortcut, parseShellLink, shellLink, uninstallDesktopShortcut } from '../../src/cli/desktopShortcut.js';
 
@@ -51,4 +52,24 @@ describe('desktop shortcut', () => {
     expect(entry).toContain('Comment=First\\\\second\\nthird\\tfourth\\rfifth\n');
     expect(entry).toContain('Name=ShellPuppet\n');
   });
+
+  it.runIf(process.platform === 'win32')('resolves Windows targets through both Shell Link readers', () => {
+    const root = folder();
+    for (const name of ['Plain', 'Müller', '雪']) {
+      const dir = path.join(root, name);
+      fs.mkdirSync(dir);
+      const target = path.join(dir, 'Made Up.exe');
+      fs.writeFileSync(target, 'test target');
+      const link = path.join(dir, 'ShellPuppet.lnk');
+      const fields = { target, arguments: 'desktop', workingDirectory: dir,
+        icon: target, description: 'Start ShellPuppet', showCommand: 7 };
+      installDesktopShortcut({ platform: 'win32', applicationsDir: dir, fields });
+      const encoded = Buffer.from(link, 'utf16le').toString('base64');
+      const script = `$p=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${encoded}')); $item=(New-Object -ComObject Shell.Application).NameSpace([IO.Path]::GetDirectoryName($p)).ParseName([IO.Path]::GetFileName($p)); $shell=$item.GetLink.Path; $wscript=(New-Object -ComObject WScript.Shell).CreateShortcut($p).TargetPath; [pscustomobject]@{shell=$shell;wscript=$wscript}|ConvertTo-Json -Compress`;
+      const result = JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script],
+        { encoding: 'utf8' })) as { shell: string; wscript: string };
+      expect(result.shell).toBe(target);
+      if (name !== '雪') expect(result.wscript).toBe(target);
+    }
+  }, 30_000);
 });
