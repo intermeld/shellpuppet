@@ -655,8 +655,13 @@ window.ShellPuppetPane = (() => {
         return { cols: gridCols, rows: gridRows };
       },
       autoFitGrid(floorCols = 80, floorRows = 24, force = false) {
-        if (dashboardProof === null || controlMode === 'held' || followingExternal || !geometryDecided ||
+        if (dashboardProof === null || controlMode === 'held' || (followingExternal && !force) || !geometryDecided ||
             !ws || ws.readyState !== 1 || sessionEnded) return false;
+        if (force) {
+          followingExternal = false;
+          outsideResizePending = false;
+          lastOutsideFitAt = 0;
+        }
         let proposed = proposeDashboardGrid();
         if (proposed === null) {
           if (container.clientWidth <= 0 || container.clientHeight <= 0) return false;

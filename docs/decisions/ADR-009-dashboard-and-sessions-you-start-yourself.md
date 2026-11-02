@@ -96,7 +96,12 @@ client token must remain outside the browser.
   unavailable screen-placement API falls back to a window the person moves.
   A profile's `open` setting is `grid` by default, or `focus` or `window`.
   It can therefore open a supervising session focused or popped out while
-  sessions it starts appear in the grid.
+  sessions it starts appear in the grid. Dashboard windows fill their readable
+  capacities in stable creation order, including windows opened separately.
+  Once all are full, further sessions are spread in proportion to capacity.
+  A window that closes releases its sessions promptly; slowed browser timers
+  alone do not remove it from the roster. Auto fit runs in a window that
+  receives a session.
 - **Handoff and attention.** An agent joins a person-started session through
   the existing list and session tools; Copy session id helps the handoff.
   Prompt attention uses a badge and title count, with no sound, operating

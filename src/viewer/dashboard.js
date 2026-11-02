@@ -9,6 +9,7 @@
   const error = document.getElementById('error');
   const connection = document.getElementById('connection');
   const attentionCount = document.getElementById('attention-count');
+  const shareCount = document.getElementById('share-count');
   const profileSelect = document.getElementById('profile');
   const folderField = document.getElementById('folder-field');
   const folderSelect = document.getElementById('folder');
@@ -43,6 +44,7 @@
       : Number.isInteger(configuredFont) && configuredFont >= 8 && configuredFont <= 32 ? configuredFont : null;
   let autoFitTimer = null;
   const focusOpenFits = new Set();
+  const incomingFits = new Set();
   let prefix = typeof saved.prefix === 'string' && /^[a-z]$/.test(saved.prefix) ? saved.prefix : 'a';
   let choosingPrefix = false;
   let selected = null;
@@ -64,6 +66,7 @@
   const pendingOpen = new Map();
   const popWatches = new Map();
   const windowToken = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  const openedAt = window.performance.timeOrigin + window.performance.now();
   const screenParams = new URLSearchParams(location.hash.slice(1));
   const windowId = screenParams.get('screen') || windowToken;
   const windowRank = screenParams.has('screen') ? Number(screenParams.get('rank')) || 1000 : 0;
@@ -73,8 +76,10 @@
   const lastSeen = new Map();
   const childWatches = new Map();
   let rosterTimer = null;
+  let windowLeft = false;
   let assigned = screenParams.has('screen') ? new Set() : null;
   let screens = [];
+  let watchedScreens = null;
   let screenState = 'unavailable';
   let nextFallback = 0;
   let arranging = false;
@@ -91,7 +96,7 @@
   let lastLayout = null;
   let lastStructure = null;
   let lastVisibilityGeometry = null;
-  if (popSelf === null) windows.set(windowId, { id: windowId, rank: windowRank, key: screenKey,
+  if (popSelf === null) windows.set(windowId, { id: windowId, rank: windowRank, openedAt, key: screenKey,
     width: window.innerWidth - 12, height: window.innerHeight - 54 });
   let channel = null;
   try { channel = new BroadcastChannel('shellpuppet.dashboard'); } catch { /* This window still tracks a pop-out it opened. */ }
@@ -133,8 +138,15 @@
   /** Panes this window holds after the roster's assignment. */
   const shown = () => sorted().filter((item) => {
     if (popSelf !== null) return item.id === popSelf;
-    return !popped.has(item.id) && (windows.size === 1 || assigned === null || assigned.has(item.id));
+    return !popped.has(item.id) && (orderedWindows().length === 1 || assigned?.has(item.id));
   });
+  function renderShareCount() {
+    if (popSelf !== null) { shareCount.hidden = true; return; }
+    const total = sorted().filter((item) => !popped.has(item.id)).length;
+    const here = shown().length;
+    const count = orderedWindows().length;
+    shareCount.textContent = `${here} of ${total} here, ${count} ${count === 1 ? 'window' : 'windows'}`;
+  }
   const closeError = () => { error.hidden = true; document.getElementById('error-message').textContent = ''; };
   const showError = (message) => { document.getElementById('error-message').textContent = message; error.hidden = false; };
   function closeVisibleError() {
@@ -159,7 +171,10 @@
       autoFitTimer = null;
       for (const item of shown()) {
         if (!visible(item)) continue;
-        if (item.client?.autoFitGrid(80, 24, focusOpenFits.has(item.id))) focusOpenFits.delete(item.id);
+        if (item.client?.autoFitGrid(80, 24, focusOpenFits.has(item.id) || incomingFits.has(item.id))) {
+          focusOpenFits.delete(item.id);
+          incomingFits.delete(item.id);
+        }
       }
     }, 250);
   }
@@ -183,8 +198,9 @@
 
   const screenIdentity = (screen) => [screen.availLeft, screen.availTop,
     screen.availWidth, screen.availHeight].join(',');
-  const orderedWindows = () => [...windows.values()].sort((a, b) => a.rank - b.rank || a.id.localeCompare(b.id));
-  const ownWindow = () => ({ id: windowId, rank: windowRank, key: currentScreenKey,
+  const orderedWindows = () => [...windows.values()].filter((entry) => entry.ready !== false)
+    .sort((a, b) => a.rank - b.rank || a.openedAt - b.openedAt || a.id.localeCompare(b.id));
+  const ownWindow = () => ({ id: windowId, rank: windowRank, openedAt, key: currentScreenKey,
     width: Math.max(1, root.clientWidth - 12), height: Math.max(1, root.clientHeight - 12) });
   function advertise() {
     if (popSelf !== null || channel === null) return;
@@ -195,7 +211,10 @@
   function applyAssignment(ids) {
     const next = new Set(ids);
     if (assigned !== null && next.size === assigned.size && [...next].every((id) => assigned.has(id))) return;
+    const previous = assigned === null ? new Set() : assigned;
     assigned = next;
+    for (const id of next) if (!previous.has(id)) incomingFits.add(id);
+    for (const id of previous) if (!next.has(id)) incomingFits.delete(id);
     arrange('assignment');
   }
   function publishAssignment() {
@@ -204,7 +223,7 @@
     const roster = orderedWindows();
     if (roster[0]?.id !== windowId) return;
     const ids = sorted().map((item) => item.id).filter((id) => !popped.has(id));
-    if (roster.length === 1) { assigned = null; return; }
+    if (roster.length === 1) { assigned = null; renderShareCount(); return; }
     if (channel === null) return;
     const byWindow = ShellPuppetDashboardLayout.assign(ids, roster);
     channel.postMessage({ type: 'window-assignment', owner: windowId, byWindow, token: windowToken });
@@ -217,6 +236,7 @@
     if (watch !== undefined) { clearInterval(watch); childWatches.delete(id); }
     renderScreens();
     arrange('window removed');
+    renderShareCount();
   }
   function openDashboard(hash, name, features) {
     const child = window.open(`${location.origin}/dashboard${hash}`, name, features);
@@ -234,8 +254,7 @@
       `popup,left=${screen.availLeft},top=${screen.availTop},width=${screen.availWidth},height=${screen.availHeight}`;
     const child = openDashboard(`#${hash}`, `shellpuppet-screen-${id}`, features);
     if (child === null) return;
-    windows.set(id, { id, rank, key, width: screen?.availWidth || window.innerWidth,
-      height: (screen?.availHeight || window.innerHeight) - 54 });
+    windows.set(id, { id, rank, openedAt: Date.now(), key, ready: false });
     lastSeen.set(id, Date.now());
     renderScreens();
     publishAssignment();
@@ -251,7 +270,7 @@
         try {
           const details = await window.getScreenDetails();
           screenState = 'granted';
-          setScreens(details);
+          watchScreens(details);
         } catch { screenState = 'denied'; renderScreens(); }
       }));
     } else if (screenState === 'granted') {
@@ -269,6 +288,19 @@
     advertise();
     renderScreens();
   }
+  function refreshScreens() {
+    if (watchedScreens !== null) setScreens(watchedScreens);
+  }
+  function watchScreens(details) {
+    if (watchedScreens !== details) {
+      watchedScreens?.removeEventListener?.('currentscreenchange', refreshScreens);
+      watchedScreens?.removeEventListener?.('screenschange', refreshScreens);
+      watchedScreens = details;
+      details.addEventListener?.('currentscreenchange', refreshScreens);
+      details.addEventListener?.('screenschange', refreshScreens);
+    }
+    setScreens(details);
+  }
   async function discoverScreens() {
     if (popSelf !== null || !navigator.permissions?.query) {
       renderScreens(); return;
@@ -277,7 +309,7 @@
       const permission = await navigator.permissions.query({ name: 'window-management' });
       if (!window.getScreenDetails) { renderScreens(); return; }
       screenState = permission.state;
-      if (screenState === 'granted') setScreens(await window.getScreenDetails());
+      if (screenState === 'granted') watchScreens(await window.getScreenDetails());
       else renderScreens();
     } catch { screenState = 'unavailable'; renderScreens(); }
   }
@@ -548,6 +580,7 @@
     }
     try {
       const items = shown();
+      renderShareCount();
       const width = root.clientWidth - 12;
       const height = root.clientHeight - 12;
       const columns = Math.ceil(Math.sqrt(items.length));
@@ -947,6 +980,7 @@
     }
     if (data.type === 'window-roster' && popSelf === null && data.window &&
         typeof data.window.id === 'string' && Number.isFinite(data.window.rank) &&
+        Number.isFinite(data.window.openedAt) &&
         Number.isFinite(data.window.width) && Number.isFinite(data.window.height)) {
       const fresh = !windows.has(data.window.id);
       const previous = windows.get(data.window.id);
@@ -955,6 +989,7 @@
       if (fresh) advertise();
       if (fresh || previous.key !== data.window.key) renderScreens();
       publishAssignment();
+      renderShareCount();
       return;
     }
     if (data.type === 'window-leave' && typeof data.id === 'string') {
@@ -1020,6 +1055,7 @@
   if (channel !== null) channel.onmessage = onWindowMessage;
   window.addEventListener('resize', () => { advertise(); arrange('window resize'); });
   window.addEventListener('beforeunload', () => {
+    leaveWindow();
     clearTimeout(retry);
     clearTimeout(autoFitTimer);
     feed?.close();
@@ -1027,12 +1063,17 @@
     for (const watch of popWatches.values()) clearInterval(watch);
     for (const watch of childWatches.values()) clearInterval(watch);
     clearInterval(rosterTimer);
-    if (popSelf === null) channel?.postMessage({ type: 'window-leave', id: windowId, token: windowToken });
   });
   window.addEventListener('pagehide', () => {
+    leaveWindow();
     if (popSelf === null || channel === null) return;
     channel.postMessage({ type: 'pop-release', id: popSelf, token: windowToken });
   });
+  function leaveWindow() {
+    if (popSelf !== null || windowLeft) return;
+    windowLeft = true;
+    channel?.postMessage({ type: 'window-leave', id: windowId, token: windowToken });
+  }
   document.addEventListener('keydown', (event) => {
     if (choosingPrefix) {
       event.preventDefault(); event.stopPropagation();
@@ -1088,11 +1129,12 @@
     rosterTimer = setInterval(() => {
       advertise();
       for (const [id, seen] of lastSeen) {
-        if (id !== windowId && Date.now() - seen > 4000) removeWindow(id);
+        if (id !== windowId && Date.now() - seen > 180_000) removeWindow(id);
       }
     }, 1000);
     renderScreens();
     void discoverScreens();
+    renderShareCount();
   }
   if (popSelf !== null) {
     document.getElementById('fullscreen').hidden = false;
