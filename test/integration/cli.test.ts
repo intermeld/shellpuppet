@@ -563,7 +563,8 @@ describe('shellpuppet CLI', () => {
       expect(first.stdout).not.toContain('dt=');
       const second = await cliFromHome(windowHome, 'start', '--no-shell', process.execPath, '-e', 'setInterval(() => {}, 200)');
       expect(second.code, whatHappened(second, windowHome)).toBe(0);
-      expect(second.stdout).toContain('dashboard window that is opening');
+      expect(second.stdout).toContain('dashboard window launch is in progress');
+      expect(second.stdout).toContain('shellpuppet viewer-url');
       expect(second.stdout).not.toContain('dt=');
     } finally {
       await cliFromHome(windowHome, 'daemon', 'stop', '--force');
