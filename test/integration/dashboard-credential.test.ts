@@ -902,6 +902,23 @@ describe('the cookie does not open the routes outside the dashboard', () => {
 });
 
 describe('/dashboard/events', () => {
+  it('desktop reuses a connected dashboard without launching or minting a grant', async () => {
+    const daemon = await startDash();
+    const { grant } = await openDashboard(daemon);
+    const page = await redeem(daemon, grant);
+    const feed = await connectFeed(daemon.port, cookiePair(page.headers), csrfMeta(page.body) ?? '');
+    try {
+      const before = daemon.urls.length;
+      const auditPath = path.join(daemon.home, 'audit.log');
+      const auditBefore = fs.readFileSync(auditPath, 'utf8').split('"grant-mint"').length;
+      const response = await api(daemon.port, daemon.token, '/desktop/open', { method: 'POST', body: {} });
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({ opened: false, alreadyOpen: true });
+      expect(daemon.urls).toHaveLength(before);
+      expect(fs.readFileSync(auditPath, 'utf8').split('"grant-mint"').length).toBe(auditBefore);
+    } finally { feed.close(); }
+  });
+
   it('refuses an otherwise valid upgrade whose Sec-Fetch-Mode is cors', async () => {
     const daemon = await startDash();
     const { grant } = await openDashboard(daemon);

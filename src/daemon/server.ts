@@ -1312,6 +1312,26 @@ export class Daemon {
     }
   }
 
+  private async handleDesktopOpen(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    actor: string,
+  ): Promise<void> {
+    await readBody(req);
+    if (this.dashboardEventSockets.size > 0) {
+      json(res, 200, { opened: false, alreadyOpen: true });
+      return;
+    }
+    const result = await this.openDashboardForStart(req, actor);
+    if (result.launched) {
+      json(res, 200, { opened: true, alreadyOpen: false });
+    } else if (result.reason === 'a dashboard window is opening' || result.reason === 'a dashboard is connected') {
+      json(res, 200, { opened: false, alreadyOpen: true });
+    } else {
+      json(res, 502, { error: 'The dashboard window did not open. Set viewer.browserPath in config.json to a Chromium-family browser.' });
+    }
+  }
+
   private async openDashboardForStart(req: http.IncomingMessage, actor: string): Promise<ViewerLaunchResult> {
     if (this.dashboardEventSockets.size > 0) {
       return { launched: false, mode: 'dashboard', reason: 'a dashboard is connected' };
@@ -2271,6 +2291,11 @@ export class Daemon {
 
       if (req.method === 'POST' && segments[0] === 'dashboard' && segments[1] === 'open' && segments.length === 2) {
         await this.handleDashboardOpen(req, res, actor);
+        return;
+      }
+
+      if (req.method === 'POST' && segments[0] === 'desktop' && segments[1] === 'open' && segments.length === 2) {
+        await this.handleDesktopOpen(req, res, actor);
         return;
       }
 

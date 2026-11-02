@@ -150,7 +150,8 @@ Full example, everything optional:
 ## Daemon start wrapper
 
 Set `daemon.startWith` to a non-empty array containing a program followed by
-its leading arguments. When any CLI command, `shellpuppet dashboard`, or the
+its leading arguments. When any CLI command, `shellpuppet dashboard`,
+`shellpuppet desktop`, or the
 MCP server needs to start a missing daemon, it runs those arguments followed
 by Node and the daemon entry. A running daemon is reused without running the
 wrapper. With no setting, the daemon starts directly as before. The wrapper

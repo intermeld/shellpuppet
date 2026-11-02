@@ -329,6 +329,9 @@ shellpuppet list | snap | type | key | wait | find | resize | kill
 shellpuppet screenshot <id> [--out <file>]        # the viewer, as a browser draws it
 shellpuppet viewer-url <id> [--read-only]         # a fresh single-use viewer link
 shellpuppet dashboard                             # the dashboard, in its own isolated window
+shellpuppet desktop                               # start or reuse ShellPuppet's dashboard
+shellpuppet desktop --install                     # add or update your application shortcut
+shellpuppet desktop --uninstall                   # remove that shortcut
 shellpuppet daemon status|start|stop|restart     # status and stop never start one
 shellpuppet mcp
 ```
@@ -367,6 +370,25 @@ window's capacity. The toolbar shows the number of sessions in this window
 and the number of sharing windows. The screen buttons follow windows moved
 between screens. Closing a window returns its sessions to the others. Auto fit
 refits a session in the window that receives it.
+
+### Start ShellPuppet from the Start menu
+
+On Windows, run `shellpuppet desktop --install` once. The per-user ShellPuppet
+shortcut starts the daemon using your configured [`daemon.startWith`](docs/reference/configuration.md#daemon-start-wrapper)
+when needed, then opens the dashboard. Pin the shortcut to Start or the taskbar
+to start ShellPuppet with one click. You can pin the dashboard window to keep
+its place, but use the shortcut to start ShellPuppet. A second click while a
+dashboard page is connected reports that ShellPuppet is already open. The
+shortcut starts minimised, so the console should only blink. Its target is
+Node and the installed package's `dist/cli/index.js` at the package's stable
+global location, which an npm update replaces in place. If you move the
+package to a different prefix, run `--install` again. `--uninstall` removes
+only ShellPuppet's shortcut.
+
+On Linux, `--install` writes a per-user `shellpuppet.desktop` application
+launcher. On macOS, shortcut installation is not available yet. You can run
+`shellpuppet desktop` from a terminal on any platform. `shellpuppet dashboard`
+still opens a new isolated window on every call.
 
 Double-click a pane's title bar to Enlarge or Restore it. Escape restores an
 enlarged pane in navigation mode or when focus is outside the terminal;

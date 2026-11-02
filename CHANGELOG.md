@@ -34,6 +34,12 @@ version may change behaviour, and every such change is listed here.
 
 ### Added
 
+- `shellpuppet desktop` starts or reuses the daemon and opens the dashboard only
+  when no dashboard page is connected. `desktop --install` adds or updates a
+  per-user Start menu shortcut on Windows or an application launcher on Linux;
+  `--uninstall` removes it. A redeemed dashboard grant leaves the address bar
+  and history, and a page without a valid cookie explains how to start again.
+
 - `daemon.startWith` runs a configured wrapper when a missing daemon starts.
   An optional environment condition and direct overrides support clients
   already running under a secrets tool. Daemon status reports whether its

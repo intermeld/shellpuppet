@@ -79,6 +79,21 @@ beforeAll(async () => {
 afterAll(async () => { await daemon.stop(); }, 120_000);
 
 describe('passive dashboard page', () => {
+  it('clears a redeemed grant from the address and guides an unauthorised visit', async (context) => {
+    if (!browser) { context.skip(); return; }
+    const granted = await captureDashboard({ browser, viewerUrl: await dashboardUrl(), width: 800, height: 600,
+      drive: true, timeoutMs: 60_000,
+      probe: `(() => document.getElementById('connection')?.textContent === 'Connected' &&
+        JSON.stringify({ path: location.pathname, search: location.search, hash: location.hash }))()`,
+    });
+    expect(JSON.parse(String(granted.probe))).toEqual({ path: '/dashboard', search: '', hash: '' });
+    const anonymous = await captureDashboard({ browser, viewerUrl: `http://127.0.0.1:${String(daemon.port)}/dashboard`, width: 800, height: 600,
+      drive: true, timeoutMs: 60_000,
+      probe: `(() => document.getElementById('error-message')?.textContent?.includes('Start ShellPuppet from its shortcut or with shellpuppet desktop') || null)()`,
+    });
+    expect(anonymous.probe).toBe(true);
+  }, 120_000);
+
   it('gives a lone focused pane the full width and restores the strip for a second pane', async (context) => {
     if (!browser) { context.skip(); return; }
     const shot = await captureDashboard({ browser, viewerUrl: await dashboardUrl(), width: 900, height: 720,
