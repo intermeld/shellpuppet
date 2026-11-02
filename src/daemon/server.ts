@@ -292,6 +292,9 @@ export interface DaemonOptions {
 }
 
 /** Thrown by `start()` when a healthy daemon already owns this home. */
+/** The largest dashboard window registration frame the daemon will parse. */
+const MAX_WINDOW_REGISTRATION_BYTES = 256;
+
 export class AlreadyRunningError extends Error {
   constructor(readonly state: DaemonState) {
     super(
@@ -3554,7 +3557,8 @@ export class Daemon {
 
   /**
    * Attach a subscriber to the dashboard session feed. Frames are the feed's
-   * own: hello, a snapshot, then session deltas. Inbound frames are ignored.
+   * own: hello, a snapshot, then session deltas. The only inbound frame read is
+   * one small window registration; every other inbound frame is ignored.
    * The socket counts as connected so idle shutdown waits while the dashboard
    * is open.
    */
@@ -3572,6 +3576,8 @@ export class Daemon {
       let frame: unknown;
       try {
         const bytes = Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw as ArrayBuffer);
+        // A registration is a few dozen bytes: never parse anything larger.
+        if (bytes.length > MAX_WINDOW_REGISTRATION_BYTES) return;
         frame = JSON.parse(bytes.toString('utf8'));
       } catch { return; }
       if (typeof frame !== 'object' || frame === null) return;
