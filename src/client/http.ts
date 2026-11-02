@@ -233,11 +233,20 @@ function startLockEndpoint(home: string): string {
     if (Buffer.byteLength(inHome) + 1 <= limit) return inHome;
     const uid = process.getuid?.();
     if (uid === undefined) throw new Error('user id unavailable');
-    const folder = path.join(os.tmpdir(), `shellpuppet-${String(uid)}`);
+    const parent = os.tmpdir();
+    // The folder below is checked once and then used by name, so nobody else may
+    // be able to rename or replace it afterwards: its parent must be ours, or must
+    // carry the sticky bit if others can write to it (as /tmp does).
+    const parentStat = fs.lstatSync(parent);
+    const othersMayWrite = (parentStat.mode & 0o022) !== 0;
+    if (!parentStat.isDirectory() || (parentStat.uid !== uid && othersMayWrite && (parentStat.mode & 0o1000) === 0)) {
+      throw new Error('unsafe temporary folder');
+    }
+    const folder = path.join(parent, `shellpuppet-${String(uid)}`);
     try { fs.mkdirSync(folder, { mode: 0o700 }); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
     const stat = fs.lstatSync(folder);
-    if (!stat.isDirectory() || stat.uid !== uid || (stat.mode & 0o022) !== 0) {
+    if (!stat.isDirectory() || stat.uid !== uid || (stat.mode & 0o077) !== 0) {
       throw new Error('unsafe short folder');
     }
     const hash = createHash('sha256').update(path.resolve(home)).digest('hex').slice(0, 16);
