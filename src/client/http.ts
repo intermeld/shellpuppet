@@ -18,6 +18,7 @@
 
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -26,6 +27,7 @@ import { readDaemonConfig } from '../daemon/config.js';
 import { resolveLaunchCommand } from '../daemon/launchProfiles.js';
 import {
   daemonStatePath,
+  ensureHome,
   readDaemonState,
   removeDaemonStateIf,
   shellpuppetHome,
@@ -48,6 +50,9 @@ const HEALTH_TIMEOUT_MS = 1_500;
  */
 const PATIENT_HEALTH_TIMEOUTS_MS = [3_000, 5_000];
 const EARLY_WRAPPER_EXIT_GRACE_MS = 10_000;
+/** A crashed start is reclaimable after the longest start bound and this grace. */
+export const START_LOCK_STALE_GRACE_MS = 15_000;
+const START_LOCK_FILE = 'daemon-start.lock';
 let warnedInvalidDirect = false;
 const reportedStartConfigProblems = new Set<string>();
 
@@ -158,9 +163,9 @@ async function health(port: number, timeoutMs = HEALTH_TIMEOUT_MS): Promise<Heal
  * starts it. A process holds its working directory open, so on Windows a
  * daemon started in the first client's folder would keep that folder from
  * being deleted or renamed for as long as it ran. Not the ShellPuppet home:
- * the daemon creates and hardens that itself (design §4.1), and a client that
- * created it first would leave it unhardened. Undefined, and so inherited,
- * only where the home directory is not there to run in.
+ * the daemon or its starting client creates and hardens that separately
+ * (design §4.1). Undefined, and so inherited, only where the home directory
+ * is not there to run in.
  */
 export function daemonWorkingDirectory(): string | undefined {
   const home = os.homedir();
@@ -199,16 +204,127 @@ export function planDaemonStart(
 async function endSpawnedWrapper(child: ChildProcess, logger: Logger): Promise<void> {
   const pid = child.pid;
   if (pid === undefined || pid <= 0) return;
+  // Until Node observes the exit it holds the Windows process handle, so the
+  // pid cannot be reused. On POSIX it has not reaped the child, so neither
+  // its pid nor the process group id can be reused.
+  if (child.exitCode !== null || child.signalCode !== null) return;
   if (process.platform === 'win32') {
-    if (child.exitCode !== null || child.signalCode !== null) return;
-    try { process.kill(pid, 0); } catch { return; }
     const failure = await taskkillTrees([pid]);
-    if (failure !== null) logger.warn('daemon.startWith process tree cleanup did not complete', { pid, timedOut: failure.timedOut });
+    if (failure !== null) {
+      // If the tree walk timed out, end the still-live root through its held
+      // child handle. The warning says descendants may need attention.
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+      logger.warn('daemon.startWith process tree cleanup did not complete', { pid, timedOut: failure.timedOut });
+    }
   } else {
     try { process.kill(-pid, 'SIGKILL'); } catch {
       // The process group has already gone.
     }
   }
+}
+
+interface StartLockRecord { pid: number; createdAt: number; nonce: string }
+
+function startLockPath(home: string): string { return path.join(home, START_LOCK_FILE); }
+
+function readLockFile(target: string): { exists: boolean; stale: boolean; nonce?: string } {
+  let stat: fs.Stats;
+  try { stat = fs.statSync(target); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { exists: false, stale: false };
+    return { exists: true, stale: false };
+  }
+  let record: StartLockRecord | undefined;
+  try {
+    const value: unknown = JSON.parse(fs.readFileSync(target, 'utf8'));
+    if (typeof value === 'object' && value !== null &&
+        typeof (value as StartLockRecord).pid === 'number' &&
+        typeof (value as StartLockRecord).createdAt === 'number' &&
+        typeof (value as StartLockRecord).nonce === 'string') record = value as StartLockRecord;
+  } catch { /* A newly created lock may not have been written yet. */ }
+  const age = Date.now() - (record?.createdAt ?? stat.mtimeMs);
+  if (age > WRAPPED_START_TIMEOUT_MS + START_LOCK_STALE_GRACE_MS) return { exists: true, stale: true, nonce: record?.nonce };
+  if (record !== undefined && record.pid > 0) {
+    try { process.kill(record.pid, 0); } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ESRCH') return { exists: true, stale: true, nonce: record.nonce };
+    }
+  }
+  return { exists: true, stale: false, nonce: record?.nonce };
+}
+
+function readStartLock(home: string): { exists: boolean; stale: boolean; nonce?: string } {
+  return readLockFile(startLockPath(home));
+}
+
+function createLockFile(target: string, record: StartLockRecord): boolean {
+  let fd: number;
+  try { fd = fs.openSync(target, 'wx', 0o600); } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'EEXIST') return false;
+    throw error;
+  }
+  try { fs.writeFileSync(fd, JSON.stringify(record)); } finally { fs.closeSync(fd); }
+  return true;
+}
+
+function removeLockIfOwned(target: string, nonce: string): void {
+  try {
+    const value = JSON.parse(fs.readFileSync(target, 'utf8')) as { nonce?: string };
+    if (value.nonce === nonce) fs.unlinkSync(target);
+  } catch { /* Another client has already removed or replaced it. */ }
+}
+
+/** Claim a stale lock under an exclusive take-over gate, then try to own it. */
+function takeOverStaleLock(home: string, record: StartLockRecord): boolean {
+  const target = startLockPath(home);
+  const gate = `${target}.takeover`;
+  if (!createLockFile(gate, record)) return false;
+  try {
+    const current = readStartLock(home);
+    if (current.exists && current.stale) fs.unlinkSync(target);
+    return createLockFile(target, record);
+  } finally {
+    removeLockIfOwned(gate, record.nonce);
+  }
+}
+
+function claimStartLock(home: string): string | null {
+  const record = { pid: process.pid, createdAt: Date.now(), nonce: randomUUID() };
+  const gate = `${startLockPath(home)}.takeover`;
+  if (fs.existsSync(gate)) {
+    if (!readLockFile(gate).stale) return null;
+    try { fs.unlinkSync(gate); } catch { return null; }
+  }
+  if (createLockFile(startLockPath(home), record)) return record.nonce;
+  if (readStartLock(home).stale && takeOverStaleLock(home, record)) return record.nonce;
+  return null;
+}
+
+function startWaitBound(home: string): number {
+  return readDaemonConfig(home).config.daemon?.startWith === undefined ? AUTO_START_TIMEOUT_MS : WRAPPED_START_TIMEOUT_MS;
+}
+
+/** Let daemon stop and restart wait for a pending start without starting one. */
+export async function waitForPendingDaemon(options: ClientOptions = {}): Promise<DaemonConnection | null> {
+  const home = options.home ?? shellpuppetHome();
+  const deadline = Date.now() + startWaitBound(home);
+  while (Date.now() < deadline) {
+    const gate = `${startLockPath(home)}.takeover`;
+    if (readLockFile(gate).exists && !readLockFile(gate).stale) {
+      await new Promise((resolve) => setTimeout(resolve, AUTO_START_POLL_MS));
+      continue;
+    }
+    const lock = readStartLock(home);
+    if (!lock.exists) return discoverDaemon(options);
+    if (lock.stale) {
+      const record = { pid: process.pid, createdAt: Date.now(), nonce: randomUUID() };
+      if (createLockFile(gate, record)) {
+        try { if (readStartLock(home).stale) fs.unlinkSync(startLockPath(home)); }
+        finally { removeLockIfOwned(gate, record.nonce); }
+      }
+      continue;
+    }
+    await new Promise((resolve) => setTimeout(resolve, AUTO_START_POLL_MS));
+  }
+  throw new Error('A pending daemon start did not settle within its health bound.');
 }
 
 function versionWarnings(daemonVersion: string): string[] {
@@ -282,6 +398,18 @@ export async function ensureDaemon(options: ClientOptions = {}): Promise<DaemonC
   const existing = await discoverDaemon(options);
   if (existing !== null) return existing;
 
+  const homeResult = await ensureHome(home);
+  if (homeResult.warning !== undefined) logger.warn(homeResult.warning);
+  const lockNonce = claimStartLock(home);
+  if (lockNonce === null) {
+    const settled = await waitForPendingDaemon(options);
+    if (settled !== null) return settled;
+    throw new Error('A pending daemon start ended without a healthy daemon.');
+  }
+  try {
+    const wonWhileClaiming = await discoverDaemon(options);
+    if (wonWhileClaiming !== null) return wonWhileClaiming;
+
   const entry = options.daemonEntry ?? defaultDaemonEntry();
   const cwd = daemonWorkingDirectory();
   const env: NodeJS.ProcessEnv = { ...process.env, SHELLPUPPET_HOME: home };
@@ -352,12 +480,6 @@ export async function ensureDaemon(options: ClientOptions = {}): Promise<DaemonC
     if (state !== null) {
       const alive = await health(state.port);
       if (alive !== null) {
-        // A direct starter may win while this wrapper is still waiting for
-        // an unlock. The healthy daemon is success, but the losing wrapper
-        // must not remain to launch another daemon later.
-        if (programName !== undefined && state.startedWrapped !== true) {
-          await endSpawnedWrapper(child, logger);
-        }
         return {
           port: state.port,
           token: state.token,
@@ -377,6 +499,9 @@ export async function ensureDaemon(options: ClientOptions = {}): Promise<DaemonC
       `did not produce a healthy daemon within ${String(timeoutMs / 1_000)} s`}. Check daemon.log.`);
   }
   throw new Error(`The ShellPuppet daemon did not become healthy within ${String(timeoutMs / 1_000)} s. Check ${home}/daemon.log.`);
+  } finally {
+    removeLockIfOwned(startLockPath(home), lockNonce);
+  }
 }
 
 export interface ApiResponse {

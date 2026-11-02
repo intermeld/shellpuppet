@@ -395,6 +395,13 @@ The status is reported by the client that started the daemon. The internal
 start marker is removed from the daemon's environment before any session can
 inherit it.
 
+Clients serialise starts with a lock in the ShellPuppet home, so a competing
+start waits rather than running a second wrapper. Stop and restart wait for a
+pending start. On failed startup, ShellPuppet ends a live wrapper process tree.
+If a wrapper launches a detached process and exits before the daemon is
+healthy, the wrapper is responsible for that process; ShellPuppet cannot
+recover it from the exited wrapper's process id.
+
 The daemon's environment is inherited from whichever client auto-started it.
 If that client runs under a secrets manager's wrapper, or is an agent CLI
 holding its own API keys, those resolved secrets sit in the daemon's

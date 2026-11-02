@@ -99,14 +99,17 @@ a person to unlock the secrets tool. `daemon.startWithOnlyIfEnvContains` limits 
 wrapper to clients whose inherited environment has a value containing that string.
 `--direct` on daemon start or restart, or `SHELLPUPPET_DAEMON_DIRECT=1` on any client,
 skips the wrapper for that start. The wrapper is spawned without a shell; on Windows
-it must resolve to an `.exe` or `.com`. A failed wrapped start ends the spawned
-wrapper's process tree before reporting failure.
+it must resolve to an `.exe` or `.com`. A per-home start lock serialises clients
+before any spawn. Other starters wait for the pending start, including direct
+starters, while stop and restart wait before acting. A failed start ends the
+wrapper's tree only while its child is live; once a daemon is healthy, nothing
+is killed.
 
 **The auto-start race is normal, not exceptional.** Claude Code launches its MCP servers
-in parallel; two clients will routinely both find no daemon and both spawn one. The loser
-must not conclude "daemon failed" just because its own child died. The rule:
+in parallel; two clients may both find no daemon. Only the lock holder spawns.
+The other waits for a healthy daemon rather than starting another wrapper. The rule:
 
-> After spawning, poll `GET /health` (cap ~10 s). **A healthy `/health` response is
+> After spawning, poll `GET /health` (cap ~10 s direct, two minutes wrapped). **A healthy `/health` response is
 > success regardless of what happened to the process you spawned.** Only report failure
 > when the poll times out.
 
