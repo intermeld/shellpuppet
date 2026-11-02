@@ -4,6 +4,9 @@
   'use strict';
 
   const proof = document.querySelector('meta[name="sp-csrf"]')?.content || '';
+  if (proof && new URLSearchParams(location.search).has('dt')) {
+    history.replaceState(history.state, '', `/dashboard${location.hash}`);
+  }
   const root = document.getElementById('panes');
   const empty = document.getElementById('empty');
   const error = document.getElementById('error');
@@ -1145,5 +1148,5 @@
     if (channel !== null) channel.postMessage({ type: 'pop-claim', id: popSelf, token: windowToken });
   }
   if (proof) { void loadProfiles(); connect(); }
-  else showError('The dashboard page has no access proof. Open it with shellpuppet dashboard.');
+  else showError('Start ShellPuppet from its shortcut or with shellpuppet desktop');
 })();

@@ -25,6 +25,7 @@ import { isEnvNamesProblem, readDaemonConfig } from '../daemon/config.js';
 import { agentNameFor } from '../core/reasoning.js';
 import { knownKeys } from '../core/keys.js';
 import { listedState } from '../core/types.js';
+import { installDesktopShortcut, uninstallDesktopShortcut, userShortcutOptions } from './desktopShortcut.js';
 import type { Logger, SessionSummary } from '../core/types.js';
 
 const USAGE = `ShellPuppet: drive a real terminal session; humans watch and type via the viewer.
@@ -108,6 +109,9 @@ Usage:
   shellpuppet dashboard                             Open the dashboard in its own window
       One window for every session, in ShellPuppet's isolated browser profile.
       Prints whether a window opened, never the link.
+  shellpuppet desktop [--install|--uninstall]       Start ShellPuppet and open its dashboard
+      Reuses a connected dashboard. --install adds or updates a per-user shortcut;
+      --uninstall removes that shortcut. Neither option starts the daemon.
   shellpuppet resize <id> <cols> <rows> [--hold]    Set screen geometry
       Without --hold the human's window reshapes it again the moment they
       move it, which is what lets the viewer fill.
@@ -290,6 +294,13 @@ async function main(): Promise<void> {
 
   if (verb === 'daemon') {
     await daemonVerb(parsed, wantJson);
+    process.exit(0);
+  }
+  if (verb === 'desktop' && (parsed.flags.has('install') || parsed.flags.has('uninstall'))) {
+    if (parsed.flags.has('install') && parsed.flags.has('uninstall')) fail(2, 'Choose --install or --uninstall.');
+    if (parsed.positionals.length > 0) fail(2, 'desktop takes no positional arguments.');
+    const options = userShortcutOptions();
+    console.log(parsed.flags.has('install') ? installDesktopShortcut(options) : uninstallDesktopShortcut(options));
     process.exit(0);
   }
 
@@ -618,6 +629,13 @@ async function main(): Promise<void> {
       const result = await call(connection, 'POST', '/dashboard/open', {});
       if (wantJson) printJson(result);
       else console.log('dashboard: window opened');
+      break;
+    }
+    case 'desktop': {
+      if (parsed.positionals.length > 0) fail(2, 'desktop takes no positional arguments.');
+      const result = await call(connection, 'POST', '/desktop/open', {});
+      if (wantJson) printJson(result);
+      else console.log(result['alreadyOpen'] === true ? 'ShellPuppet is already open' : 'ShellPuppet desktop: window opened');
       break;
     }
 
