@@ -247,7 +247,7 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
         'on Windows automatically; pass the real command (e.g. "goose"), never "cmd.exe /c goose".',
       inputSchema: params({
         command: z.string().describe('The program to run: the real command, not a shell wrapper.'),
-        args: z.array(z.string()).optional().describe('Arguments. Under the default shell wrap these are shell text, so quote as the shell requires.'),
+        args: z.array(z.string()).optional().describe('Arguments. On Windows the default joins these as cmd.exe shell text. Include double quotes inside a value with spaces, for example mcp_servers.x.command="C:/Program Files/nodejs/node.exe"; cmd.exe also expands %NAME% and interprets ^ & | < >. Set shell false for literal argv.'),
         cwd: z.string().optional().describe('Working directory. Defaults to this MCP server\'s working directory, normally the folder the agent was started in; a relative path is taken from there.'),
         cols: z.number().int().min(2).max(1000).optional().describe('Screen columns to START at (default 120). Not a freeze: a human watching in a browser reshapes the grid to their window. Pass hold to keep it.'),
         rows: z.number().int().min(2).max(500).optional().describe('Screen rows to START at (default 34).'),

@@ -333,6 +333,26 @@ shellpuppet daemon status|start|stop|restart     # status and stop never start o
 shellpuppet mcp
 ```
 
+On Windows, `start` uses `cmd.exe /d /s /c` by default. ShellPuppet joins the
+command and arguments with spaces; `cmd.exe` then parses that line. A value
+containing spaces needs quotes *inside the argument sent to ShellPuppet*. For
+example, from Git Bash:
+
+```sh
+shellpuppet start --agent codex node.exe codex-seat.js personal -c 'mcp_servers.x.command="C:/Program Files/nodejs/node.exe"'
+```
+
+Git Bash removes the single quotes. ShellPuppet receives one argument with
+double quotes around the path; `cmd.exe` and the program's argument parser
+use those quotes to retain the space. Quoting only the whole value for Git
+Bash, as in `'mcp_servers.x.command=C:/Program Files/nodejs/node.exe'`, does
+not protect the space from `cmd.exe`. The shell also interprets `^`, `&`,
+`|`, `<`, `>` and expands `%NAME%`, even inside double quotes. For literal
+arguments to an `.exe` or `.com`, use `--no-shell`; the same choice is
+`shell: false` in `terminal_start` and launch profiles. On other platforms,
+starts run directly by default; an explicit `shell: true` uses `/bin/sh -c`
+and its shell syntax.
+
 `shellpuppet dashboard` opens a window with a pane for every session in ShellPuppet's
 isolated browser profile and prints only whether a window opened. It never
 prints the link, and it never uses your default browser: if the isolated

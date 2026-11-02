@@ -69,6 +69,24 @@ import type {
  */
 export const TREE_KILL_TIMEOUT_MS = 30_000;
 
+/** Quote one literal argument for the Windows C runtime's argv parser. */
+export function windowsArgument(arg: string): string {
+  let result = '"';
+  let backslashes = 0;
+  for (const character of arg) {
+    if (character === '\\') {
+      backslashes++;
+    } else if (character === '"') {
+      result += '\\'.repeat(backslashes * 2 + 1) + '"';
+      backslashes = 0;
+    } else {
+      result += '\\'.repeat(backslashes) + character;
+      backslashes = 0;
+    }
+  }
+  return result + '\\'.repeat(backslashes * 2) + '"';
+}
+
 /**
  * How long a kill waits for node-pty's deferred program creation (Windows):
  * the pid is 0 from the spawn until the output worker has connected and the
@@ -936,7 +954,13 @@ export class Session implements WaitTarget {
           this.platform,
           path.resolve(options.cwd ?? process.cwd()),
         ),
-        fileArgs: options.args ?? [],
+        // node-pty's array serialiser skips outer quoting for an argument
+        // which itself begins and ends with quotes. A quoted value containing
+        // a space then splits in the child. Its string form is passed through
+        // verbatim, so serialise literal argv ourselves on Windows.
+        fileArgs: this.platform === 'win32'
+          ? (options.args ?? []).map(windowsArgument).join(' ')
+          : options.args ?? [],
       };
     }
     // Quote the command token if it has whitespace and the caller has not
