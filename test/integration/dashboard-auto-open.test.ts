@@ -176,7 +176,12 @@ describe('automatic dashboard launch', () => {
     });
     running.push(daemon);
     const request = start(daemon).catch(() => undefined);
-    await new Promise((resolve) => setTimeout(resolve, 100));
+    // The launch follows the start contract's wait for the program to exist,
+    // which on a busy runner can take longer than any fixed pause.
+    const deadline = Date.now() + 15_000;
+    while (urls.length === 0 && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
     expect(urls).toHaveLength(1);
     const stopped = daemon.daemon.stop();
     finishLaunch?.();
