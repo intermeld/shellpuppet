@@ -88,4 +88,75 @@ describe('prompt supervision across sessions', () => {
     expect(result.body).toHaveProperty('screen');
     expect(result.body).toHaveProperty('prompt');
   });
+
+  it('releases a timed-out wait and an abandoned wait', async () => {
+    const id = await start(false, 'wait lifecycle');
+    const timed = await api(td.port, td.token, `/sessions/wait?prompt=true&session=${id}&timeout=300`);
+    expect(timed.body).toMatchObject({ matched: false, reason: 'timeout', sessions: [] });
+    await eventually(() => td.daemon.waitsPolling === 0, 5_000);
+
+    const caller = new AbortController();
+    const abandoned = fetch(`http://127.0.0.1:${String(td.port)}/sessions/wait?prompt=true&session=${id}&timeout=120000`, {
+      headers: { authorization: `Bearer ${td.token}` }, signal: caller.signal,
+    }).catch(() => undefined);
+    await eventually(() => td.daemon.waitsPolling === 1, 10_000);
+    caller.abort();
+    await abandoned;
+    await eventually(() => td.daemon.waitsPolling === 0, 5_000);
+  });
+
+  it('ignores a naturally exited session retained during its grace period', async () => {
+    const exited = await startTestDaemon({
+      home: makeTempHome('shellpuppet-ended-prompt-'),
+      promptScanIntervalMs: 300_000,
+      exitedGraceMs: 60_000,
+    });
+    try {
+      const started = await api(exited.port, exited.token, '/sessions', {
+        body: { command: process.execPath, args: [sink, dialog, answered, '0', '8000'], shell: false, cols: 80, rows: 40 },
+      });
+      const id = String(started.body['id']);
+      const scanner = exited.daemon as unknown as {
+        scanForPromptStalls: () => Promise<void>;
+        promptStates: Map<string, unknown>;
+      };
+      await eventually(async () => {
+        await scanner.scanForPromptStalls();
+        const listed = await api(exited.port, exited.token, '/sessions');
+        return (listed.body['sessions'] as { id: string; waitingOnPrompt?: object }[])
+          .find((session) => session.id === id)?.waitingOnPrompt !== undefined;
+      }, 15_000);
+      const held = scanner.promptStates.get(id);
+      expect(held).toBeDefined();
+      await eventually(async () => {
+        const listed = await api(exited.port, exited.token, '/sessions');
+        return (listed.body['sessions'] as { id: string; exited: boolean }[])
+          .find((session) => session.id === id)?.exited === true;
+      }, 20_000);
+      // Exit normally clears the scanner entry. Restore its captured state to
+      // exercise the compact view's own ended-session guard independently.
+      scanner.promptStates.set(id, held);
+      const compact = await api(exited.port, exited.token, '/sessions?waitingOnly=true');
+      const polled = await api(exited.port, exited.token, '/sessions/wait?prompt=true&now=true');
+      expect((compact.body['sessions'] as { id: string }[]).some((session) => session.id === id)).toBe(false);
+      expect((polled.body['sessions'] as { id: string }[]).some((session) => session.id === id)).toBe(false);
+    } finally {
+      await exited.stop();
+    }
+  }, 120_000);
+
+  it('releases a wait when its daemon shuts down', async () => {
+    const dying = await startTestDaemon({ home: makeTempHome('shellpuppet-shutdown-wait-') });
+    try {
+      const pending = fetch(`http://127.0.0.1:${String(dying.port)}/sessions/wait?prompt=true&timeout=120000`, {
+        headers: { authorization: `Bearer ${dying.token}` },
+      }).catch(() => undefined);
+      await eventually(() => dying.daemon.waitsPolling === 1, 10_000);
+      await dying.daemon.stop();
+      await pending;
+      await eventually(() => dying.daemon.waitsPolling === 0, 5_000);
+    } finally {
+      await dying.stop();
+    }
+  }, 120_000);
 });
