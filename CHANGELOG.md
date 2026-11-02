@@ -160,6 +160,9 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- A Windows console host that is already gone when cleanup lists it is now
+  logged at info level. A session kill can leave no host for the later list;
+  ambiguous matches and failed cleanup still warn.
 - A daemon on Windows no longer crashes when two sessions end at the same
   moment. `node-pty` is pinned to 1.2.0-beta.18 (the beta VS Code pins,
   `^1.2.0-beta.18` in its `package.json`, checked 30/10/2026): its exit

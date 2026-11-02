@@ -303,13 +303,20 @@ describe('shellpuppet CLI', () => {
 
   it('type --verify confirms text landed in an echoing session', async () => {
     const started = await cli('start', '--no-shell', '--label', 'repl', process.execPath);
+    expect(started.code, whatHappened(started)).toBe(0);
     const id = /^(s\d+)/m.exec(started.stdout)?.[1] ?? '';
-    await cli('wait', id, '--quiet', '700', '--timeout', '15000');
+    try {
+      // The first paint can be the REPL banner. Wait for its input prompt,
+      // then verify input against a process that is ready to echo it.
+      const ready = await cli('wait', id, '--text', '>', '--timeout', '15000');
+      expect(ready.code, whatHappened(ready)).toBe(0);
 
-    const typed = await cli('type', id, '1 + 1', '--verify');
-    expect(typed.code, whatHappened(typed)).toBe(0);
-    expect(typed.stdout).toContain('typed');
-    await cli('kill', id);
+      const typed = await cli('type', id, '1 + 1', '--verify');
+      expect(typed.code, whatHappened(typed)).toBe(0);
+      expect(typed.stdout).toContain('typed');
+    } finally {
+      if (id !== '') await cli('kill', id);
+    }
   });
 
   it('type --verify reports swallowed input against a raw-mode app that discards it (§3.1)', async () => {
