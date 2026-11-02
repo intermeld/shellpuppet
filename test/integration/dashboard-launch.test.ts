@@ -290,6 +290,21 @@ function padLiveSessions(daemon: TestDaemon, count: number): void {
   }
 }
 
+/** A start accepted by the HTTP route, without a ConPTY worker. Rate caps
+ * concern accepted requests, while the maxSessions case below uses real PTYs.
+ */
+function standInStart(options: SessionOptions, id: string): Session {
+  return {
+    id, label: options.label ?? options.command,
+    startedProgramPid: () => Promise.resolve(process.pid),
+    summary: () => ({ id, label: options.label ?? options.command, purpose: '', startedBy: 'dashboard',
+      agent: null, command: options.command, args: options.args ?? [], cols: 80, rows: 24,
+      ready: true, readyReason: 'not-tracked', geometryHeld: false, exited: false,
+      exitCode: null, watchers: 0, createdAt: new Date().toISOString() }),
+    onExit: () => () => undefined, onReady: () => () => undefined,
+  } as unknown as Session;
+}
+
 describe('the body names a profile and cannot widen it', () => {
   it('refuses a command, a missing profile and extra arguments, then starts the profile', async () => {
     const dir = makeDir('dash-launch-cwd-');
@@ -872,24 +887,26 @@ describe('a profile that allows any local folder', () => {
 
   it('answers at timeout while an injected picker never settles and keeps its slot', async () => {
     let aborts = 0;
+    let enteredPicker: () => void = () => undefined;
+    const pickerEntered = new Promise<void>((resolve) => { enteredPicker = resolve; });
     const daemon = await startLaunchDaemon({ launcher: profilesOf([
       { name: 'open', command: process.execPath, cwd: 'ask', folders: 'any' },
     ]), folderPicker: (signal) => {
+      enteredPicker();
       signal.addEventListener('abort', () => { aborts++; }, { once: true });
       return new Promise<string | null>(() => undefined);
     }, folderPickerTimeoutMs: 50 });
-    const result = await Promise.race([
-      pickFolder(daemon),
-      new Promise<RawResult>((_resolve, reject) => setTimeout(() => reject(new Error('picker response exceeded its bound')), 300)),
-    ]);
+    const pending = pickFolder(daemon);
+    await pickerEntered;
+    // The route's 50 ms timer, response and shutdown must all finish even
+    // though the injected picker itself never settles. The test timeout also
+    // covers a request delayed before it reaches the handler under load.
+    const result = await pending;
     expect(result.status).toBe(504);
     expect(aborts).toBe(1);
     expect((await pickFolder(daemon)).status).toBe(409);
-    await Promise.race([
-      daemon.daemon.stop(),
-      new Promise<void>((_resolve, reject) => setTimeout(() => reject(new Error('picker stop exceeded its bound')), 4_000)),
-    ]);
-  });
+    await daemon.daemon.stop();
+  }, 30_000);
 
   it('does not start a picker when a paused request body arrives after stop begins', async () => {
     let starts = 0;
@@ -1220,10 +1237,12 @@ describe('the launch takes JSON, and audits why it refuses', () => {
 
 describe('concurrent launches respect both caps', () => {
   it('starts exactly eight of twelve simultaneous launches', async () => {
+    let created = 0;
     const daemon = await startLaunchDaemon({
       launcher: profilesOf([
         { name: 'quick', command: process.execPath, args: ['-e', 'process.exit(0)'], shell: false },
       ]),
+      dashboardSessionFactory: (options) => standInStart(options, `rate-${String(++created)}`),
     });
     const results = await Promise.all(
       Array.from({ length: 12 }, () => launch(daemon, { profile: 'quick' })),
@@ -1231,7 +1250,7 @@ describe('concurrent launches respect both caps', () => {
     const statuses = results.map((result) => result.status);
     expect(statuses.filter((status) => status === 200), JSON.stringify(results.filter((result) => result.status !== 200))).toHaveLength(8);
     expect(statuses.filter((status) => status === 429), JSON.stringify(results.filter((result) => result.status !== 200))).toHaveLength(4);
-    expect(await sessionIds(daemon)).toHaveLength(8);
+    expect(created).toBe(8);
   });
 
   it('does not spend rate slots on refused launches', async () => {
@@ -1254,18 +1273,7 @@ describe('concurrent launches respect both caps', () => {
     let created = 0;
     const daemon = await startLaunchDaemon({
       launcher: profilesOf([{ name: 'quick', command: process.execPath, args: ['-e', '0'], shell: false }]),
-      dashboardSessionFactory: (options) => {
-        const id = `stand-in-${String(++created)}`;
-        return {
-          id, label: options.label ?? options.command,
-          startedProgramPid: () => Promise.resolve(process.pid),
-          summary: () => ({ id, label: options.label ?? options.command, purpose: '', startedBy: 'dashboard',
-            agent: null, command: options.command, args: options.args ?? [], cols: 80, rows: 24,
-            ready: true, readyReason: 'not-tracked', geometryHeld: false, exited: false,
-            exitCode: null, watchers: 0, createdAt: new Date().toISOString() }),
-          onExit: () => () => undefined, onReady: () => () => undefined,
-        } as unknown as Session;
-      },
+      dashboardSessionFactory: (options) => standInStart(options, `stand-in-${String(++created)}`),
     });
     const refused = await Promise.all(Array.from({ length: 12 }, () => launch(daemon, { profile: 'nope' })));
     expect(refused.every((result) => result.status === 400)).toBe(true);

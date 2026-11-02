@@ -163,6 +163,9 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Windows starts now retry once when node-pty 1.2.0-beta.18's ConPTY output
+  worker misses its connection bound, after the failed terminal is released.
+  Other start failures are still returned without retry.
 - Dashboard profiles using `envFromDaemon: "all"` no longer inherit agent CLI
   session markers from the process that started the daemon; `SHELLPUPPET_HOME`
   remains available to the launched session.

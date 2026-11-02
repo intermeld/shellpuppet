@@ -14,7 +14,7 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import type { WebSocket } from 'ws';
-import { SessionManager, PolicyViolationError } from '../core/manager.js';
+import { SessionManager, PolicyViolationError, SessionStartError } from '../core/manager.js';
 import {
   CommandNotFoundError,
   DEFAULT_SESSION_ENV,
@@ -1872,7 +1872,9 @@ export class Daemon {
     // The same start contract as `POST /sessions`: the dashboard's pane is a
     // session only once its program exists, and a start that ends before any
     // program did fails as 1.1.0's spawn did, leaving nothing in the grid.
-    if (!(await this.programStarted(session, res, 'dashboard session start failed'))) return;
+    const startedSession = await this.programStarted(session, options, res, 'dashboard session start failed');
+    if (startedSession === null) return;
+    session = startedSession;
     // A launch is an API call: the idle timer counts from it, so a session
     // that has just started is not reaped sooner than `idleMinutes` allows.
     this.lastActivity = Date.now();
@@ -2925,7 +2927,9 @@ export class Daemon {
     // its output worker has connected, a few hundred milliseconds after the
     // spawn returns, and reports pid 0 until then. The start contract is what
     // it always was: a started session has a program, and its pid is real.
-    if (!(await this.programStarted(session, res, 'session start failed'))) return;
+    const startedSession = await this.programStarted(session, options, res, 'session start failed');
+    if (startedSession === null) return;
+    session = startedSession;
 
     // Registration is synchronous with creation, before any asynchronous
     // viewer launch or readiness work can publish a change for this id.
@@ -3150,23 +3154,25 @@ export class Daemon {
    * is not listed and not in the dashboard feed, so nobody sees a session
    * that may never exist. A session that ends before any program did fails
    * the start with the status and shape 1.1.0's thrown spawn had (500,
-   * "Failed to start session: Error: ..."), is ended and discarded, and false
-   * is returned with the response already sent.
+   * "Failed to start session: Error: ..."), is ended and discarded, and null
+   * is returned with the response already sent. Only the proven ConPTY worker
+   * timeout gets one replacement attempt under the same id.
    */
-  private async programStarted(session: Session, res: http.ServerResponse, logMessage: string): Promise<boolean> {
+  private async programStarted(session: Session, options: SessionOptions, res: http.ServerResponse, logMessage: string): Promise<Session | null> {
     this.startingIds.add(session.id);
-    let started: boolean;
     try {
-      started = (await session.startedProgramPid()) !== null;
+      if (this.manager.get(session.id) === session) return await this.manager.finishStart(session, options);
+      // Test-only dashboard factories may supply a session outside the manager.
+      if (await session.startedProgramPid() !== null) return session;
+      throw new SessionStartError(session.startFailure());
+    } catch (error) {
+      const failure = `Failed to start session: Error: ${error instanceof Error ? error.message : String(error)}`;
+      this.logger.error(logMessage, { id: session.id, error: failure });
+      json(res, 500, { error: failure });
+      return null;
     } finally {
       this.startingIds.delete(session.id);
     }
-    if (started) return true;
-    const failure = `Failed to start session: Error: ${session.startFailure()}`;
-    this.logger.error(logMessage, { id: session.id, error: failure });
-    await this.manager.kill(session.id);
-    json(res, 500, { error: failure });
-    return false;
   }
 
   /** The sessions a client or the dashboard may see: every one but those still starting. */

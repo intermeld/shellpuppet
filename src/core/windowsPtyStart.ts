@@ -267,6 +267,15 @@ export function recordedExitCode(pty: unknown): number | undefined {
   return canReadExitCode(pty) ? (pty as ExitRecordingTerminal)._agent?.exitCode : undefined;
 }
 
+/** node-pty exposes no error code for this bound in beta.18. Its agent's
+ * error event is the only way to distinguish it from other pid-zero exits.
+ * The exact text is pinned to the installed release, not a public API.
+ */
+export function observeConptyStartError(pty: unknown, listener: (error: Error) => void): void {
+  const agent = (pty as { _agent?: { onError?: (listener: (error: Error) => void) => unknown } })._agent;
+  agent?.onError?.(listener);
+}
+
 /**
  * Wrap the agent module only for the node-pty version whose private fields
  * `release` reads. Another version is left alone and its module not loaded:

@@ -30,6 +30,7 @@ import type { WaitTarget } from './waiter.js';
 import {
   canReadExitCode,
   listenForTerminalErrors,
+  observeConptyStartError,
   recordedExitCode,
   releaseFailedStarts,
 } from './windowsPtyStart.js';
@@ -425,6 +426,8 @@ export interface SessionDeps {
   queueConsoleHostEnd?: (item: QueuedConsoleHost) => void;
   /** Window registration override, for tests only. */
   registerConsoleHostWindow?: (id: string, window: SpawnWindow, platform: NodeJS.Platform) => void;
+  /** Internal second attempt: the retry log already names this session. */
+  retryAttempt?: boolean;
   /** PTY spawn, for tests only. Defaults to node-pty. No process is started. */
   spawn?: (
     file: string,
@@ -693,6 +696,7 @@ export class Session implements WaitTarget {
   private exitedFlag = false;
   private exitedAtValue: number | null = null;
   private exitCodeValue: number | null = null;
+  private conptyStartError: Error | null = null;
   /** The tree kill under way for a program whose session ended with no exit code. */
   private endingProgram: Promise<void> | null = null;
   private readyFlag: boolean;
@@ -750,7 +754,7 @@ export class Session implements WaitTarget {
     this.geometryHeldFlag = options.hold === true;
 
     const { file, fileArgs } = this.wrapCommand(options);
-    this.logger.info('session spawn', {
+    if (!deps.retryAttempt) this.logger.info('session spawn', {
       id,
       command: this.command,
       args: this.args,
@@ -804,6 +808,9 @@ export class Session implements WaitTarget {
     if (trackConsoleHost) {
       this.consoleHostWindow = { t0: consoleHostT0, t1: Date.now() };
       this.registerConsoleHost(this.id, this.consoleHostWindow, this.platform);
+    }
+    if (this.platform === 'win32') {
+      observeConptyStartError(this.pty, (error) => { this.conptyStartError = error; });
     }
     // An error on a Windows terminal's pipes must not take the daemon down
     // (`windowsPtyStart.ts`). Logged once a stream: for the known cause, the
@@ -1411,6 +1418,12 @@ export class Session implements WaitTarget {
     return pid > 0 ? pid : null;
   }
 
+  /** Only the pinned node-pty timeout, before a program exists, can be retried. */
+  get conptyConnectionTimedOut(): boolean {
+    return this.platform === 'win32' && this.exitedFlag && this.pty.pid <= 0 &&
+      this.conptyStartError?.message === 'Timed out waiting for ConPTY output worker';
+  }
+
   /**
    * What went wrong, for a start that ended before any program existed
    * (`startedProgramPid` returned null): node-pty 1.1.0's own words for a
@@ -1420,6 +1433,7 @@ export class Session implements WaitTarget {
   startFailure(): string {
     const code = this.exitCodeValue;
     if (code !== null && code > 0) return `Cannot create process, error code: ${String(code)}`;
+    if (this.conptyStartError !== null && !this.conptyConnectionTimedOut) return this.conptyStartError.message;
     return 'the ConPTY output worker never connected, so node-pty never created the program';
   }
 
