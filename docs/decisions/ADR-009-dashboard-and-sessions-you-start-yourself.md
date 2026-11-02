@@ -80,7 +80,9 @@ client token must remain outside the browser.
   floor and any geometry hold. A second outside resize soon after a refit
   leaves the pane following until Fit is pressed. Turning Auto fit off makes
   layout and window changes scale the font as before, within the 6 to 40 px
-  range. A grid still larger than its pane at 6 px can be scrolled.
+  range. A grid still larger than its pane at 6 px can be scrolled with
+  Shift+wheel, horizontal wheel movement or its scrollbars, without moving
+  the view when the terminal gains focus.
   Fit, Enlarge and Restore take geometry control and resize the real terminal; Restore sends
   the previous grid. Each pane has Enlarge and Restore. Focus gives one
   session most of the window. The browser's full-screen key can make the

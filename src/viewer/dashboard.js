@@ -329,7 +329,7 @@
     size.className = 'pane-size';
     const overflowNote = document.createElement('div');
     overflowNote.className = 'pane-overflow-note';
-    overflowNote.textContent = 'Grid larger than pane; Enlarge or Fit shows it whole.';
+    overflowNote.textContent = 'Shift+wheel or drag the scrollbars to see the rest. Enlarge or Fit to show it whole.';
     overflowNote.hidden = true;
     const item = { id: summary.id, summary, card, label, purpose, badge, state, size, overflowNote, client: null, previousGrid: null };
     item.fit = makeButton('Fit', () => { select(item.id); item.client?.fitGrid(); });
