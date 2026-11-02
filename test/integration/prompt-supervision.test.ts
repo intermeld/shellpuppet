@@ -1,3 +1,4 @@
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { api, eventually, makeTempHome, repoRoot, startTestDaemon } from './helpers.js';
@@ -105,15 +106,16 @@ describe('prompt supervision across sessions', () => {
     await eventually(() => td.daemon.waitsPolling === 0, 5_000);
   });
 
-  it('ignores a naturally exited session retained during its grace period', async () => {
+  it('clears prompt state after a natural exit and omits the session from compact views', async () => {
     const exited = await startTestDaemon({
       home: makeTempHome('shellpuppet-ended-prompt-'),
       promptScanIntervalMs: 300_000,
       exitedGraceMs: 60_000,
     });
     try {
+      const exitSignal = path.join(exited.home, 'exit-signal');
       const started = await api(exited.port, exited.token, '/sessions', {
-        body: { command: process.execPath, args: [sink, dialog, answered, '0', '8000'], shell: false, cols: 80, rows: 40 },
+        body: { command: process.execPath, args: [sink, dialog, answered, '0', `file:${exitSignal}`], shell: false, cols: 80, rows: 40 },
       });
       const id = String(started.body['id']);
       const scanner = exited.daemon as unknown as {
@@ -128,13 +130,49 @@ describe('prompt supervision across sessions', () => {
       }, 15_000);
       const held = scanner.promptStates.get(id);
       expect(held).toBeDefined();
+      fs.writeFileSync(exitSignal, 'exit');
       await eventually(async () => {
         const listed = await api(exited.port, exited.token, '/sessions');
         return (listed.body['sessions'] as { id: string; exited: boolean }[])
           .find((session) => session.id === id)?.exited === true;
       }, 20_000);
-      // Exit normally clears the scanner entry. Restore its captured state to
-      // exercise the compact view's own ended-session guard independently.
+      expect(scanner.promptStates.has(id)).toBe(false);
+      const compact = await api(exited.port, exited.token, '/sessions?waitingOnly=true');
+      const polled = await api(exited.port, exited.token, '/sessions/wait?prompt=true&now=true');
+      expect((compact.body['sessions'] as { id: string }[]).some((session) => session.id === id)).toBe(false);
+      expect((polled.body['sessions'] as { id: string }[]).some((session) => session.id === id)).toBe(false);
+    } finally {
+      await exited.stop();
+    }
+  }, 120_000);
+
+  it('ignores an exited session even if stale prompt state remains', async () => {
+    const exited = await startTestDaemon({
+      home: makeTempHome('shellpuppet-stale-prompt-'),
+      promptScanIntervalMs: 300_000,
+      exitedGraceMs: 60_000,
+    });
+    try {
+      const exitSignal = path.join(exited.home, 'exit-signal');
+      const started = await api(exited.port, exited.token, '/sessions', {
+        body: { command: process.execPath, args: [sink, dialog, answered, '0', `file:${exitSignal}`], shell: false, cols: 80, rows: 40 },
+      });
+      const id = String(started.body['id']);
+      const scanner = exited.daemon as unknown as {
+        scanForPromptStalls: () => Promise<void>;
+        promptStates: Map<string, unknown>;
+      };
+      await eventually(async () => {
+        await scanner.scanForPromptStalls();
+        return scanner.promptStates.has(id);
+      }, 15_000);
+      const held = scanner.promptStates.get(id);
+      fs.writeFileSync(exitSignal, 'exit');
+      await eventually(async () => {
+        const listed = await api(exited.port, exited.token, '/sessions');
+        return (listed.body['sessions'] as { id: string; exited: boolean }[])
+          .find((session) => session.id === id)?.exited === true;
+      }, 20_000);
       scanner.promptStates.set(id, held);
       const compact = await api(exited.port, exited.token, '/sessions?waitingOnly=true');
       const polled = await api(exited.port, exited.token, '/sessions/wait?prompt=true&now=true');

@@ -262,7 +262,9 @@ milliseconds; `question`, `options` and `selectedOption` are optional.
 `hideReasoning=true` removes `question` and `options`. `GET
 /sessions?waitingOnly=true` returns the same rows in its `sessions` array,
 alongside the usual `version` field. MCP tool results frame prompt text as
-untrusted terminal data, including the full `terminal_list` result.
+untrusted terminal data, including the full `terminal_list` result. Each result
+uses one matching pair of delimiter lines with a fresh random nonce. Terminal
+output cannot predict the closing delimiter or end its own frame.
 
 Text snapshots (`terminal_snapshot`, `terminal_wait`, `shellpuppet snap` and
 `lastLines`) prefix a uniquely styled menu choice with `⟦SP:selected⟧ `. This
