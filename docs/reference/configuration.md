@@ -187,7 +187,9 @@ two minutes for a person to unlock the tool. Starts are serialised per
 ShellPuppet home by a local listening endpoint. Another client waits for the
 pending start, including when it requested `--direct`. `daemon stop` and
 `daemon restart` also wait for a
-pending start before acting. A failed start ends the wrapper's process tree
+pending start before acting, for up to the same bound (ten seconds, or two
+minutes with a wrapper); if it has not settled by then they stop with an
+error, and you can run them again once the wrapper or its cleanup has finished. A failed start ends the wrapper's process tree
 only while the wrapper is still running. If Windows tree cleanup times out,
 ShellPuppet ends the wrapper itself and warns that programs it started may
 remain. If a wrapper launches a detached process and exits before the daemon
