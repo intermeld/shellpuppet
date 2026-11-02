@@ -7,6 +7,12 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Dashboard windows retain their session share through slowed browser timers,
+  hand sessions back on close, spread overflow by readable capacity and refit
+  panes in the window that receives them.
+
 ### Changed
 
 - Root folder listing uses asynchronous reads and omits dot-prefixed folders,

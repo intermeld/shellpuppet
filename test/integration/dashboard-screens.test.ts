@@ -32,8 +32,11 @@ async function browserProbe(beforeNavigateScript: string, probe: string): Promis
 
 async function multiWindowProbe(url: string): Promise<{
   before: { primary: string[]; other: string[]; childConnected: string };
-  three: { primary: string[]; second: string[]; third: string[] };
   after: string[];
+  paused: { primary: string[]; other: string[]; toolbar: string[] };
+  closeMs: number;
+  movedFit: { before: string; after: string; resizes: { cols: number; rows: number; take: boolean }[];
+    donorStreams: string[] };
 }> {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-screen-cdp-'));
   const child = spawn(browser!, captureBrowserArgs(profile, 1280, 720), { stdio: 'ignore', windowsHide: true });
@@ -76,16 +79,31 @@ async function multiWindowProbe(url: string): Promise<{
       if (result.error) throw new Error(JSON.stringify(result.error));
       return result;
     };
-    const makePage = async (pageUrl: string): Promise<{ targetId: string; sessionId: string }> => {
+    const makePage = async (pageUrl: string, width = 1280): Promise<{ targetId: string; sessionId: string }> => {
       const target = await send('Target.createTarget', { url: 'about:blank' });
       const targetId = String(target.targetId);
       const attached = await send('Target.attachToTarget', { targetId, flatten: true });
       const sessionId = String(attached.sessionId);
       await send('Page.enable', {}, sessionId);
       await send('Page.addScriptToEvaluateOnNewDocument', { source: dashboardDiagnosticsScript }, sessionId);
+      await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
+        window.__resizeFrames = [];
+        const nativeSend = WebSocket.prototype.send;
+        WebSocket.prototype.send = function(data) {
+          if (typeof data === 'string' && data.includes('"type":"resize"'))
+            window.__resizeFrames.push({ url: this.url, ...JSON.parse(data) });
+          return nativeSend.call(this, data);
+        };
+      })()` }, sessionId);
+      await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
+        const nativeInterval = window.setInterval.bind(window);
+        window.setInterval = (callback, delay, ...args) => nativeInterval(() => {
+          if (delay !== 1000 || !window.__pauseRoster) callback(...args);
+        }, delay);
+      })()` }, sessionId);
       const rate = Number(process.env['SP_DASHBOARD_CPU_RATE'] || '1');
       if (rate > 1) await send('Emulation.setCPUThrottlingRate', { rate }, sessionId);
-      await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 720,
+      await send('Emulation.setDeviceMetricsOverride', { width, height: 720,
         deviceScaleFactor: 1, mobile: false }, sessionId);
       await send('Page.navigate', { url: pageUrl }, sessionId);
       return { targetId, sessionId };
@@ -117,7 +135,11 @@ async function multiWindowProbe(url: string): Promise<{
     const primary = await makePage(url);
     pages.push(primary.sessionId);
     await waitFor(async () => (await ids(primary.sessionId) as string[] | undefined)?.length === 3);
-    const second = await makePage(`${new URL(url).origin}/dashboard#screen=second&rank=1001`);
+    await waitFor(async () => String(await evaluate(primary.sessionId,
+      "document.querySelector('.pane[data-session=s3] .pane-size')?.textContent")).includes('×'));
+    const initialSize = String(await evaluate(primary.sessionId,
+      "document.querySelector('.pane[data-session=s3] .pane-size')?.textContent"));
+    const second = await makePage(`${new URL(url).origin}/dashboard`, 1600);
     pages.push(second.sessionId);
     await waitFor(async () => {
       const a = await ids(primary.sessionId) as string[] | undefined;
@@ -131,21 +153,29 @@ async function multiWindowProbe(url: string): Promise<{
     const before = { primary: await ids(primary.sessionId) as string[],
       other: await ids(second.sessionId) as string[],
       childConnected: String(await evaluate(second.sessionId, "document.getElementById('connection')?.textContent")) };
-    const third = await makePage(`${new URL(url).origin}/dashboard#screen=third&rank=1002`);
-    pages.push(third.sessionId);
-    await waitFor(async () => {
-      const a = await ids(primary.sessionId) as string[] | undefined;
-      const b = await ids(second.sessionId) as string[] | undefined;
-      const c = await ids(third.sessionId) as string[] | undefined;
-      return a?.length === 1 && b?.length === 1 && c?.length === 1;
-    });
-    const three = { primary: await ids(primary.sessionId) as string[],
-      second: await ids(second.sessionId) as string[], third: await ids(third.sessionId) as string[] };
-    await send('Target.closeTarget', { targetId: third.targetId });
-    await waitFor(async () => (await ids(second.sessionId) as string[] | undefined)?.length === 2);
+    await waitFor(async () => String(await evaluate(second.sessionId,
+      "document.querySelector('.pane[data-session=s3] .pane-size')?.textContent")).includes('×'));
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    const movedFit = { before: initialSize,
+      after: String(await evaluate(second.sessionId,
+        "document.querySelector('.pane[data-session=s3] .pane-size')?.textContent")),
+      resizes: await evaluate(second.sessionId,
+        "window.__resizeFrames.filter(frame => frame.url.includes('/sessions/s3/stream'))") as
+          { cols: number; rows: number; take: boolean }[],
+      donorStreams: await evaluate(primary.sessionId,
+        "window.__dashboardDiagnostics.streams.filter(entry => entry.socket.readyState === 1 && entry.url.includes('/sessions/s3/stream')).map(entry => entry.url)") as string[] };
+    await evaluate(second.sessionId, 'window.__pauseRoster = true');
+    await new Promise((resolve) => setTimeout(resolve, 5400));
+    const paused = { primary: await ids(primary.sessionId) as string[], other: await ids(second.sessionId) as string[],
+      toolbar: await Promise.all(pages.map((page) => evaluate(page,
+        "document.getElementById('share-count')?.textContent"))) as string[] };
+    await evaluate(second.sessionId, 'window.__pauseRoster = false');
+    await waitFor(async () => (await ids(primary.sessionId) as string[] | undefined)?.length === 1);
+    const closedAt = Date.now();
     await send('Target.closeTarget', { targetId: second.targetId });
     await waitFor(async () => (await ids(primary.sessionId) as string[] | undefined)?.length === 3);
-    return { before, three, after: await ids(primary.sessionId) as string[] };
+    const closeMs = Date.now() - closedAt;
+    return { before, after: await ids(primary.sessionId) as string[], paused, closeMs, movedFit };
   } finally {
     if (socket?.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ id: ++serial, method: 'Browser.close', params: {} }));
@@ -197,6 +227,42 @@ describe('dashboard screen controls in Chromium', () => {
     window.moveTo = (...args) => window.__moves.push(args);
     window.resizeTo = (...args) => window.__moves.push(args);
   })()`;
+
+  it('updates screen registration after a separately opened window moves', async (context) => {
+    if (!browser) { context.skip(); return; }
+    const script = `(() => {
+      const screens = ${JSON.stringify([screenA, screenB, screenC])};
+      const details = new EventTarget();
+      details.screens = screens; details.currentScreen = screens[0];
+      window.__screenDetails = details;
+      window.__rosters = [];
+      const NativeChannel = window.BroadcastChannel;
+      window.BroadcastChannel = class extends NativeChannel {
+        postMessage(data) {
+          if (data.type === 'window-roster') window.__rosters.push(data.window);
+          return super.postMessage(data);
+        }
+      };
+      Object.defineProperty(navigator, 'permissions', { configurable: true,
+        value: { query: async () => ({ state: 'granted' }) } });
+      window.getScreenDetails = async () => details;
+    })()`;
+    const result = await browserProbe(script, `(() => {
+      const state = window.__moveProbe ||= { phase: 0, start: Date.now() };
+      if (state.phase === 0 && document.querySelectorAll('#screens button').length === 2) {
+        window.__screenDetails.currentScreen = window.__screenDetails.screens[1];
+        window.__screenDetails.dispatchEvent(new Event('currentscreenchange'));
+        state.phase = 1;
+      }
+      const key = window.__rosters.at(-1)?.key;
+      if (state.phase === 1 && key === '1280,20,1900,1000')
+        return JSON.stringify({ labels: [...document.querySelectorAll('#screens button')].map(button => button.textContent), key });
+      if (Date.now() - state.start > 3000)
+        return JSON.stringify({ timeout: true, labels: [...document.querySelectorAll('#screens button')].map(button => button.textContent), key });
+      return null;
+    })()`);
+    expect(result).toEqual({ labels: ['Open on screen 1', 'Open on screen 3'], key: '1280,20,1900,1000' });
+  }, 120_000);
 
   it('asks on one Allow screens click and opens no window when the grant resolves', async (context) => {
     if (!browser) { context.skip(); return; }
@@ -273,11 +339,17 @@ describe('dashboard screen controls in Chromium', () => {
     }
     const result = await multiWindowProbe(await freshUrl());
     const before = result.before;
-    expect(before.primary).toHaveLength(1);
-    expect(before.other).toHaveLength(2);
+    expect(before.primary).toEqual([sessions[0]]);
+    expect(before.other).toEqual(sessions.slice(1));
     expect(before.childConnected).toBe('Connected');
     expect(new Set([...before.primary, ...before.other])).toEqual(new Set(sessions));
-    expect(result.three).toEqual({ primary: [sessions[0]], second: [sessions[1]], third: [sessions[2]] });
+    expect(result.paused.primary).toEqual([sessions[0]]);
+    expect(result.paused.other).toEqual(sessions.slice(1));
+    expect(result.paused.toolbar).toEqual(['1 of 3 here, 2 windows', '2 of 3 here, 2 windows']);
+    expect(result.movedFit.after, JSON.stringify(result.movedFit)).not.toBe(result.movedFit.before);
+    expect(result.movedFit.resizes.some((frame) => frame.take === true), JSON.stringify(result.movedFit)).toBe(true);
+    expect(result.movedFit.donorStreams).toEqual([]);
+    expect(result.closeMs).toBeLessThan(2000);
     expect(result.after).toEqual(sessions);
   }, 180_000);
 });

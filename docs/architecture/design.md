@@ -1182,6 +1182,10 @@ window roster and pane assignment, while the daemon remains the source of
 session truth. Each session appears in one window. Closing a window
 returns its panes to the others. Windows share the cookie and never mint a
 new grant.
+When every window is at its readable capacity, additional panes are spread
+in proportion to capacity. A page's own CSS viewport size determines its
+capacity, including on screens with different scaling. A page leaving sends
+a roster departure; a delayed heartbeat alone does not imply that it closed.
 
 Pop out uses this window support to put one pane in its own movable window,
 which may be made full screen. It leaves the grid until the window closes,

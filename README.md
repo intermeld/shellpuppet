@@ -339,6 +339,15 @@ prints the link, and it never uses your default browser: if the isolated
 window cannot open, the command fails rather than hand the grant to a profile
 with extensions.
 
+To share sessions across screens, use **Open on screen** in the dashboard
+toolbar, or open another dashboard window and move it yourself. Each session
+appears in one window. Windows fill their readable grid capacity in order;
+when every window is full, extra sessions are shared according to each
+window's capacity. The toolbar shows the number of sessions in this window
+and the number of sharing windows. The screen buttons follow windows moved
+between screens. Closing a window returns its sessions to the others. Auto fit
+refits a session in the window that receives it.
+
 Double-click a pane's title bar to Enlarge or Restore it. Escape restores an
 enlarged pane in navigation mode or when focus is outside the terminal;
 inside the terminal, Escape goes to the program. Double-clicking inside the

@@ -13,11 +13,28 @@
   };
   const assign = (ids, windows) => {
     const result = {};
+    if (windows.length === 0) return result;
+    const capacities = windows.map((window) => capacity(window.width, window.height));
+    const counts = capacities.map(() => 0);
     let next = 0;
+    for (let index = 0; index < windows.length; index++) {
+      counts[index] = Math.min(capacities[index], ids.length - next);
+      next += counts[index];
+    }
+    while (next < ids.length) {
+      let target = 0;
+      for (let index = 1; index < windows.length; index++) {
+        const left = counts[index] / Math.max(1, capacities[index]);
+        const right = counts[target] / Math.max(1, capacities[target]);
+        if (left < right) target = index;
+      }
+      counts[target]++;
+      next++;
+    }
+    next = 0;
     for (const [index, window] of windows.entries()) {
-      const count = index === windows.length - 1 ? Math.max(0, ids.length - next) : capacity(window.width, window.height);
-      result[window.id] = ids.slice(next, next + count);
-      next += count;
+      result[window.id] = ids.slice(next, next + counts[index]);
+      next += counts[index];
     }
     return result;
   };
