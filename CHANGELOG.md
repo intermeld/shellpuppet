@@ -187,8 +187,12 @@ version may change behaviour, and every such change is listed here.
   Windows needs ConPTY for every session now: Windows 10 version 1809
   (build 18309) or later, as node-pty requires; on an older build a start is
   refused with the minimum named, where node-pty 1.1.0 fell back to winpty.
-- MCP results frame prompt details from the multi-session wait, the compact
-  waiting list and the full session list as untrusted terminal data.
+- Every MCP result frames all text read from a terminal (screens, prompt
+  questions and options, results) as untrusted data, between boundary lines
+  that carry a random value drawn fresh for each result, so a program cannot
+  print the closing line. A line on screen that imitates a boundary is shown
+  with a leading backslash. This covers the single-session and multi-session
+  waits, both list forms and `terminal_result`.
 
 - On Windows, the console hosts queued in one batch are ended by one
   asynchronous PowerShell, off the daemon's thread, so the daemon keeps
