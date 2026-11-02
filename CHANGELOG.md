@@ -149,6 +149,9 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Dashboard profiles using `envFromDaemon: "all"` no longer inherit agent CLI
+  session markers from the process that started the daemon; `SHELLPUPPET_HOME`
+  remains available to the launched session.
 - Root folder lists omit dot-prefixed directories and common Windows system
   folder names. Rooted launches fill `{folder}` and record the selected folder
   in the start audit.

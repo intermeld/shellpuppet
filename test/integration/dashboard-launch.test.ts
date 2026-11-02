@@ -573,6 +573,38 @@ describe('policy sees the real command, and both caps bite', () => {
 });
 
 describe('envFromDaemon copies names from the daemon, never from the body', () => {
+  it('keeps the starting agent session out of all while honouring an explicit array', async () => {
+    const source = {
+      CLAUDECODE: 'made-up-parent-marker',
+      CLAUDE_CODE_SESSION_ID: 'made-up-parent-session',
+      CLAUDE_CODE_MESSAGING_TOKEN: 'made-up-parent-token',
+      CLAUDE_PID: 'made-up-parent-pid',
+      SHELLPUPPET_SESSION: 'made-up-shellpuppet-session',
+      SHELLPUPPET_HOME: 'made-up-shellpuppet-home',
+      ANTHROPIC_API_KEY: 'made-up-user-key',
+      ORDINARY_NAME: 'made-up-ordinary',
+    };
+    const args = ['-e', 'for (const name of ["CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_PID", "SHELLPUPPET_SESSION", "SHELLPUPPET_HOME", "ANTHROPIC_API_KEY", "ORDINARY_NAME"]) console.log(name + "=" + (process.env[name] ?? "missing"))'];
+    const daemon = await startLaunchDaemon({ daemonEnv: source, launcher: profilesOf([
+      { name: 'filtered', command: process.execPath, args, shell: false, envFromDaemon: 'all' },
+      { name: 'explicit', command: process.execPath, args, shell: false, envFromDaemon: ['CLAUDE_CODE_SESSION_ID'] },
+    ]) });
+    const filtered = await launch(daemon, { profile: 'filtered' });
+    expect(filtered.status).toBe(200);
+    const filteredScreen = await screenOf(daemon, String((JSON.parse(filtered.body) as Record<string, unknown>)['id']));
+    await eventually(async () => (await screenOf(daemon, String((JSON.parse(filtered.body) as Record<string, unknown>)['id']))).includes('ORDINARY_NAME=made-up-ordinary'), 15_000);
+    const screen = filteredScreen + await screenOf(daemon, String((JSON.parse(filtered.body) as Record<string, unknown>)['id']));
+    for (const name of ['CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_PID', 'SHELLPUPPET_SESSION']) {
+      expect(screen).toContain(`${name}=missing`);
+    }
+    for (const [name, value] of [['SHELLPUPPET_HOME', source.SHELLPUPPET_HOME], ['ANTHROPIC_API_KEY', source.ANTHROPIC_API_KEY], ['ORDINARY_NAME', source.ORDINARY_NAME]]) {
+      expect(screen).toContain(`${name}=${value}`);
+    }
+    const explicit = await launch(daemon, { profile: 'explicit' });
+    expect(explicit.status).toBe(200);
+    await waitForScreen(daemon, String((JSON.parse(explicit.body) as Record<string, unknown>)['id']), 'CLAUDE_CODE_SESSION_ID=made-up-parent-session');
+  });
+
   it('passes unlisted daemon variables only to an all dashboard profile without exposing values', async () => {
     const variable = 'SP_LAUNCH_UNLISTED';
     const value = 'made-up-dashboard-value';
