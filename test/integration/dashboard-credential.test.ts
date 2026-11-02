@@ -39,7 +39,7 @@ afterEach(async () => {
   for (const daemon of pending) await daemon.stop();
 });
 
-async function startDash(extra: { clock?: boolean; maxSessions?: number; viewerMode?: 'dashboard' } = {}): Promise<DashDaemon> {
+async function startDash(extra: { clock?: boolean; maxSessions?: number; viewerMode?: 'dashboard'; dashboardFontSize?: number } = {}): Promise<DashDaemon> {
   const home = makeTempHome('dash-cred-');
   const logPath = path.join(home, 'daemon.log');
   const urls: string[] = [];
@@ -52,6 +52,7 @@ async function startDash(extra: { clock?: boolean; maxSessions?: number; viewerM
     promptScanIntervalMs: 600_000,
     ...(extra.viewerMode !== undefined ? { viewer: { launchMode: extra.viewerMode } } : {}),
     idleCheckIntervalMs: 600_000,
+    ...(extra.dashboardFontSize === undefined ? {} : { dashboardFontSize: extra.dashboardFontSize }),
     ...(extra.clock === true ? { now: () => clock.now } : {}),
     launcher: (url) => {
       urls.push(url);
@@ -294,18 +295,26 @@ async function redeem(
 
 describe('an unauthenticated caller learns nothing and starts nothing', () => {
   it('serves an empty dashboard page and refuses the new calls', async () => {
-    const daemon = await startDash();
+    const daemon = await startDash({ dashboardFontSize: 17 });
     const id = await startQuiet(daemon, 'hidden-from-the-page');
     const page = await raw(daemon.port, 'GET', '/dashboard');
     expect(page.status).toBe(200);
     expect(page.body).not.toContain(id);
     expect(page.body).not.toContain('dt=');
     expect(page.body).not.toContain('sp-csrf');
+    expect(page.body).not.toContain('sp-dashboard-font-size');
     expect(page.body).not.toContain(process.execPath);
     expect(page.headers['content-security-policy']).toBe(PAGE_CSP);
     expect(page.headers['cache-control']).toBe('no-store');
     expect(page.headers['access-control-allow-origin']).toBeUndefined();
     expect(setCookie(page.headers)).toBe('');
+
+    const { grant } = await openDashboard(daemon);
+    const plainRead = await raw(daemon.port, 'GET', `/dashboard?dt=${grant}`, readHeaders());
+    expect(plainRead.status).toBe(200);
+    expect(plainRead.body).not.toContain('sp-dashboard-font-size');
+    const authenticated = await redeem(daemon, grant);
+    expect(authenticated.body).toContain('<meta name="sp-dashboard-font-size" content="17">');
 
     const health = await api(daemon.port, null, '/health');
     expect(health.status).toBe(200);

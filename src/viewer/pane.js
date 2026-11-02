@@ -94,7 +94,8 @@ window.ShellPuppetPane = (() => {
 
     const showBanner = (message) => {
       if (!elements.banner) return;
-      elements.banner.textContent = message;
+      const text = elements.banner.querySelector('.pane-banner-message') || elements.banner;
+      text.textContent = message;
       elements.banner.hidden = false;
       positionNotices();
     };
@@ -574,7 +575,7 @@ window.ShellPuppetPane = (() => {
       getGrid() {
         return { cols: gridCols, rows: gridRows };
       },
-      autoFitGrid(floorCols = 80, floorRows = 24) {
+      autoFitGrid(floorCols = 80, floorRows = 24, force = false) {
         if (dashboardProof === null || controlMode === 'held' || !geometryDecided ||
             !ws || ws.readyState !== 1 || sessionEnded) return false;
         const drawn = term.options.fontSize;
@@ -585,10 +586,13 @@ window.ShellPuppetPane = (() => {
         } finally {
           term.options.fontSize = drawn;
         }
-        if (proposed === null) return false;
+        if (proposed === null) {
+          if (container.clientWidth <= 0 || container.clientHeight <= 0) return false;
+          proposed = { cols: floorCols, rows: floorRows };
+        }
         const cols = Math.min(gridMax.cols, Math.max(floorCols, proposed.cols));
         const rows = Math.min(gridMax.rows, Math.max(floorRows, proposed.rows));
-        if (cols === gridCols && rows === gridRows) return false;
+        if (cols === gridCols && rows === gridRows && !force) return false;
         return this.takeGrid(cols, rows);
       },
       takeGrid(cols, rows) {
@@ -597,10 +601,11 @@ window.ShellPuppetPane = (() => {
         ws.send(JSON.stringify({ type: 'resize', ...wanted, take: true }));
         return true;
       },
-      fitGrid() {
+      fitGrid(floorCols = 0, floorRows = 0) {
         if (dashboardProof === null) return false;
         const proposed = propose();
-        return proposed !== null && this.takeGrid(proposed.cols, proposed.rows);
+        return proposed !== null && this.takeGrid(
+          Math.max(floorCols, proposed.cols), Math.max(floorRows, proposed.rows));
       },
     };
   }

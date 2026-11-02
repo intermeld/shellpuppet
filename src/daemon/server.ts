@@ -1153,7 +1153,7 @@ export class Daemon {
     const html = fs.readFileSync(dashboardHtmlPath, 'utf8');
     const withProof = proof === null ? html.replace(DASHBOARD_PROOF_META, '')
       : html.replace(DASHBOARD_PROOF_META, `<meta name="sp-csrf" content="${proof}">`);
-    const size = this.options.dashboardFontSize;
+    const size = proof === null ? undefined : this.options.dashboardFontSize;
     return withProof.replace(DASHBOARD_FONT_META,
       size === undefined ? '' : `<meta name="sp-dashboard-font-size" content="${String(size)}">`);
   }

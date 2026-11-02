@@ -147,4 +147,41 @@ describe('dashboard preferences and errors', () => {
     };`;
     expect((await page(url, script)).probe).toEqual({ shown: true, byButton: true, byEscape: true, validCleared: true });
   });
+
+  it('closes a pane error, reopens it for a new error, and lets Escape close the top then focused banner', async (context) => {
+    if (!browser) { context.skip(); return; }
+    const { url } = await setup();
+    const script = `${sentScript}; (() => {
+      window.__paneSockets = [];
+      const Native = window.WebSocket;
+      window.WebSocket = new Proxy(Native, { construct(Target, args) {
+        const socket = new Target(...args);
+        window.__paneSockets.push({ socket, url: String(args[0]) });
+        return socket;
+      } });
+    })(); window.__dashboardTest = async () => {
+      const card = document.querySelector('.pane');
+      card.focus();
+      const banner = card.querySelector('.pane-banner');
+      const socket = window.__paneSockets.find(x => x.url.includes('/stream'))?.socket;
+      if (!socket) return { error: 'no pane socket' };
+      for (let i = 0; i < 9; i++) socket.onclose();
+      const close = banner.querySelector('button[aria-label="Close pane error"]');
+      const shown = !banner.hidden;
+      close?.click();
+      const byButton = banner.hidden;
+      socket.onclose();
+      const reopened = !banner.hidden;
+      const shortcut = document.getElementById('shortcut');
+      shortcut.click();
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'x', bubbles: true, cancelable: true }));
+      const top = document.getElementById('error');
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      const topClosedFirst = top.hidden && !banner.hidden;
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+      return { shown, closeNamed: Boolean(close), byButton, reopened, topClosedFirst, paneClosedByEscape: banner.hidden };
+    };`;
+    expect((await page(url, script)).probe).toEqual({ shown: true, closeNamed: true, byButton: true,
+      reopened: true, topClosedFirst: true, paneClosedByEscape: true });
+  });
 });
