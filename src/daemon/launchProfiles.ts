@@ -21,7 +21,6 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { execFileSync } from 'node:child_process';
 import { ENV_NAME_PATTERN, RESERVED_FEATURE_CREDENTIALS } from '../core/types.js';
 import { compilePolicy } from '../core/policy.js';
 import type { CompiledPolicy } from '../core/policy.js';
@@ -48,21 +47,9 @@ export interface RootFolderChoice {
 
 const DEVICE_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
 
-/** Read Windows attribute letters once for a root, using the system attrib command. */
-function windowsHiddenOrSystem(root: string): Set<string> | null {
-  if (process.platform !== 'win32') return new Set();
-  try {
-    const absolute = path.resolve(root);
-    const prefix = absolute.endsWith(path.sep) ? absolute : `${absolute}${path.sep}`;
-    const output = execFileSync('attrib.exe', ['/D', `${prefix}*`], { encoding: 'utf8', timeout: 30_000, windowsHide: true });
-    const hidden = new Set<string>();
-    for (const line of output.split(/\r?\n/)) {
-      const pathAt = line.toLowerCase().indexOf(prefix.toLowerCase());
-      if (pathAt >= 0 && /[HS]/i.test(line.slice(0, pathAt))) hidden.add(line.slice(pathAt + prefix.length));
-    }
-    return hidden;
-  } catch { return null; }
-}
+const WINDOWS_SYSTEM_FOLDER_NAMES = new Set([
+  '$recycle.bin', 'system volume information', '$winreagent', 'recovery', 'config.msi',
+]);
 
 /** A single path segment, safe on Windows as well as POSIX. */
 export function validRootFolderName(name: unknown): name is string {
@@ -78,37 +65,35 @@ export function isRootFolderContained(realRoot: string, realFolder: string): boo
 }
 
 /** Offer at most 500 immediate directories per root in stable name order. */
-export function listRootFolders(roots: readonly string[]): RootFolderChoice[] {
-  const folders: RootFolderChoice[] = [];
-  roots.forEach((root, rootIndex) => {
+export async function listRootFolders(roots: readonly string[]): Promise<RootFolderChoice[]> {
+  const byRoot = await Promise.all(roots.map(async (root, rootIndex) => {
     try {
-      const hidden = windowsHiddenOrSystem(root);
-      if (hidden === null) return;
-      const names = fs.readdirSync(path.resolve(root), { withFileTypes: true })
-        .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && validRootFolderName(entry.name) && !hidden.has(entry.name))
+      const names = (await fs.promises.readdir(path.resolve(root), { withFileTypes: true }))
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') &&
+          !WINDOWS_SYSTEM_FOLDER_NAMES.has(entry.name.toLowerCase()) && validRootFolderName(entry.name))
         .map((entry) => entry.name)
         .sort((a, b) => a.localeCompare(b));
-      for (const name of names.slice(0, 500)) folders.push({ rootIndex, name });
-    } catch { /* An unavailable root offers no folders. */ }
-  });
-  return folders;
+      return names.slice(0, 500).map((name) => ({ rootIndex, name }));
+    } catch { return []; /* An unavailable root offers no folders. */ }
+  }));
+  return byRoot.flat();
 }
 
 /** Recheck a choice at launch and resolve both sides before containment. */
-export function resolveRootFolder(
+export async function resolveRootFolder(
   roots: readonly string[], rootIndex: unknown, name: unknown,
-): { cwd: string } | { error: string } {
+): Promise<{ cwd: string } | { error: string }> {
   if (!Number.isInteger(rootIndex) || typeof rootIndex !== 'number' || rootIndex < 0 || rootIndex >= roots.length || !validRootFolderName(name)) {
     return { error: 'Invalid root folder choice.' };
   }
   const root = roots[rootIndex];
-  if (root === undefined || !listRootFolders([root]).some((entry) => entry.name === name)) {
+  if (root === undefined || !(await listRootFolders([root])).some((entry) => entry.name === name)) {
     return { error: 'Folder is no longer offered by this root.' };
   }
   try {
-    const realRoot = fs.realpathSync(path.resolve(root));
-    const realFolder = fs.realpathSync(path.join(root, name));
-    if (!isRootFolderContained(realRoot, realFolder) || !fs.statSync(realFolder).isDirectory()) {
+    const realRoot = await fs.promises.realpath(path.resolve(root));
+    const realFolder = await fs.promises.realpath(path.join(root, name));
+    if (!isRootFolderContained(realRoot, realFolder) || !(await fs.promises.stat(realFolder)).isDirectory()) {
       return { error: 'Folder is outside its root or is not a directory.' };
     }
     return { cwd: realFolder };

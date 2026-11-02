@@ -403,6 +403,12 @@ resolves a free path to an existing directory on a local drive and refuses
 relative, UNC, device, file and missing paths. The picker allows one dialog
 at a time and times out after ten minutes. Anything able to use the
 dashboard credential can start an `any` profile in any local folder.
+On Windows, a drive letter can name a mapped network drive; the daemon cannot
+distinguish it from a local drive without native code, so mapped drives may
+be accepted. Root lists omit dot-prefixed folders, links and the names
+`$RECYCLE.BIN`, `System Volume Information`, `$WinREAgent`, `Recovery` and
+`Config.Msi`, without regard to case. The Windows Hidden attribute is not
+read, so a folder hidden only by that attribute is offered.
 
 **Policy and limits.** Global policy runs first, then the profile's own
 `deny` and `allow` lists, both against the real command line before any

@@ -5,7 +5,6 @@
  */
 
 import * as fs from 'node:fs';
-import { execFileSync } from 'node:child_process';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -122,21 +121,31 @@ describe('folders offered under a root', () => {
   afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
   function root(): string { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'launch-root-')); dirs.push(dir); return dir; }
 
-  it('lists one level, sorted, without hidden folders or files', () => {
+  it('lists one level, sorted, without hidden folders or files', async () => {
     const dir = root();
     for (const name of ['zeta', 'alpha', '.hidden']) fs.mkdirSync(path.join(dir, name));
     fs.mkdirSync(path.join(dir, 'alpha', 'nested'));
     fs.writeFileSync(path.join(dir, 'file'), 'x');
-    expect(listRootFolders([dir])).toEqual([{ rootIndex: 0, name: 'alpha' }, { rootIndex: 0, name: 'zeta' }]);
+    expect(await listRootFolders([dir])).toEqual([{ rootIndex: 0, name: 'alpha' }, { rootIndex: 0, name: 'zeta' }]);
   });
 
-  it('omits Windows Hidden and System directories', () => {
-    if (process.platform !== 'win32') return;
+  it('omits dot names and named Windows system directories, including Unicode roots', async () => {
+    const dir = path.join(root(), 'Répertoire');
+    fs.mkdirSync(dir);
+    for (const name of ['visible', '.hidden', '$RECYCLE.BIN', 'System Volume Information', '$WinREAgent', 'rEcOvErY', 'Config.Msi']) fs.mkdirSync(path.join(dir, name));
+    expect(await listRootFolders([dir])).toEqual([{ rootIndex: 0, name: 'visible' }]);
+  });
+
+  it('keeps the event loop available while listing a 400-folder root', async () => {
     const dir = root();
-    for (const name of ['visible', 'hidden', 'system']) fs.mkdirSync(path.join(dir, name));
-    execFileSync('attrib.exe', ['+H', path.join(dir, 'hidden')]);
-    execFileSync('attrib.exe', ['+S', path.join(dir, 'system')]);
-    expect(listRootFolders([dir])).toEqual([{ rootIndex: 0, name: 'visible' }]);
+    for (let index = 0; index < 400; index++) fs.mkdirSync(path.join(dir, `folder-${String(index).padStart(3, '0')}`));
+    let ticks = 0;
+    const timer = setInterval(() => { ticks++; }, 1);
+    try {
+      const listed = await Promise.all(Array.from({ length: 5 }, () => listRootFolders([dir])));
+      expect(listed[0]).toHaveLength(400);
+      expect(ticks).toBeGreaterThan(0);
+    } finally { clearInterval(timer); }
   }, 30_000);
 
   it.each(['a/b', 'a\\b'])('rejects a separator as its own name guard: %s', (name) => {
@@ -148,50 +157,50 @@ describe('folders offered under a root', () => {
   it.each(['CON', 'NUL.txt'])('rejects a device name as its own name guard: %s', (name) => {
     expect(validRootFolderName(name)).toBe(false);
   });
-  it('rejects a resolved child outside its root even when it was initially offered', () => {
+  it('rejects a resolved child outside its root even when it was initially offered', async () => {
     const dir = root();
     const outside = root();
     fs.mkdirSync(path.join(dir, 'pick'));
-    expect(listRootFolders([dir])).toContainEqual({ rootIndex: 0, name: 'pick' });
+    expect(await listRootFolders([dir])).toContainEqual({ rootIndex: 0, name: 'pick' });
     fs.rmdirSync(path.join(dir, 'pick'));
     fs.symlinkSync(outside, path.join(dir, 'pick'), 'junction');
     expect(isRootFolderContained(fs.realpathSync(dir), fs.realpathSync(path.join(dir, 'pick')))).toBe(false);
   });
-  it('requires a still-offered child even while its real directory exists', () => {
-    if (process.platform !== 'win32') return;
+  it('requires a still-offered child even while its real directory exists', async () => {
     const dir = root();
     const child = path.join(dir, 'pick');
     fs.mkdirSync(child);
-    expect(listRootFolders([dir])).toContainEqual({ rootIndex: 0, name: 'pick' });
-    execFileSync('attrib.exe', ['+H', child]);
+    expect(await listRootFolders([dir])).toContainEqual({ rootIndex: 0, name: 'pick' });
+    fs.renameSync(child, path.join(dir, '.pick'));
+    fs.symlinkSync(path.join(dir, '.pick'), child, 'junction');
     expect(fs.realpathSync(child)).toBeTruthy();
-    expect(resolveRootFolder([dir], 0, 'pick')).toEqual({ error: 'Folder is no longer offered by this root.' });
-  }, 30_000);
-  it.each([-1, 0.5, '0', 1])('rejects invalid root index %s', (index) => {
+    expect(await resolveRootFolder([dir], 0, 'pick')).toEqual({ error: 'Folder is no longer offered by this root.' });
+  });
+  it.each([-1, 0.5, '0', 1])('rejects invalid root index %s', async (index) => {
     const dir = root();
     fs.mkdirSync(path.join(dir, 'pick'));
-    expect(resolveRootFolder([dir], index, 'pick')).toEqual({ error: 'Invalid root folder choice.' });
+    expect(await resolveRootFolder([dir], index, 'pick')).toEqual({ error: 'Invalid root folder choice.' });
   });
 
   for (const name of ['a/b', 'a\\b', '..', 'C:/work', 'CON', 'NUL.txt']) {
-    it(`refuses unsafe folder name ${name}`, () => {
-      expect('error' in resolveRootFolder([root()], 0, name)).toBe(true);
+    it(`refuses unsafe folder name ${name}`, async () => {
+      expect('error' in await resolveRootFolder([root()], 0, name)).toBe(true);
     });
   }
 
-  it('refuses a junction that leaves the root', () => {
+  it('refuses a junction that leaves the root', async () => {
     const dir = root();
     const outside = root();
     fs.symlinkSync(outside, path.join(dir, 'escape'), 'junction');
-    expect('error' in resolveRootFolder([dir], 0, 'escape')).toBe(true);
+    expect('error' in await resolveRootFolder([dir], 0, 'escape')).toBe(true);
   });
 
-  it('refuses a folder deleted after it was offered', () => {
+  it('refuses a folder deleted after it was offered', async () => {
     const dir = root();
     fs.mkdirSync(path.join(dir, 'gone'));
-    expect(listRootFolders([dir])).toContainEqual({ rootIndex: 0, name: 'gone' });
+    expect(await listRootFolders([dir])).toContainEqual({ rootIndex: 0, name: 'gone' });
     fs.rmdirSync(path.join(dir, 'gone'));
-    expect('error' in resolveRootFolder([dir], 0, 'gone')).toBe(true);
+    expect('error' in await resolveRootFolder([dir], 0, 'gone')).toBe(true);
   });
 });
 

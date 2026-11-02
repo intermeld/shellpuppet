@@ -9,6 +9,11 @@ version may change behaviour, and every such change is listed here.
 
 ### Changed
 
+- Root folder listing uses asynchronous reads and omits dot-prefixed folders,
+  links and common Windows system folder names. The Windows Hidden attribute
+  is not read. Folder picker helpers run from fixed system paths and are
+  cancelled on timeout or daemon shutdown. A mapped drive letter may still
+  name a network drive.
 - Renamed `viewer.launchMode: "none"` to `"no-window"`; `"none"` remains an alias for existing configurations.
 
 ### Added
@@ -144,8 +149,9 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
-- Root folder lists omit Windows Hidden and System directories. Rooted
-  launches fill `{folder}` and record the selected folder in the start audit.
+- Root folder lists omit dot-prefixed directories and common Windows system
+  folder names. Rooted launches fill `{folder}` and record the selected folder
+  in the start audit.
 
 ### Changed
 
