@@ -391,6 +391,9 @@ resolve secrets into the daemon's environment. Only the local configuration
 file can set the wrapper; client tools and daemon endpoints cannot. The
 direct override skips it but cannot name a replacement program. Status
 reports only whether the daemon started wrapped, never its command or values.
+The status is reported by the client that started the daemon. The internal
+start marker is removed from the daemon's environment before any session can
+inherit it.
 
 The daemon's environment is inherited from whichever client auto-started it.
 If that client runs under a secrets manager's wrapper, or is an agent CLI

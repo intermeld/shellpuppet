@@ -98,7 +98,9 @@ daemon wins even if the spawned wrapper exits. Wrapped starts allow two minutes 
 a person to unlock the secrets tool. `daemon.startWithOnlyIfEnvContains` limits the
 wrapper to clients whose inherited environment has a value containing that string.
 `--direct` on daemon start or restart, or `SHELLPUPPET_DAEMON_DIRECT=1` on any client,
-skips the wrapper for that start.
+skips the wrapper for that start. The wrapper is spawned without a shell; on Windows
+it must resolve to an `.exe` or `.com`. A failed wrapped start ends the spawned
+wrapper's process tree before reporting failure.
 
 **The auto-start race is normal, not exceptional.** Claude Code launches its MCP servers
 in parallel; two clients will routinely both find no daemon and both spawn one. The loser

@@ -661,7 +661,9 @@ export class Daemon {
   private readonly startingIds = new Set<string>();
 
   constructor(options: DaemonOptions) {
-    this.options = options;
+    const startedWrapped = process.env['SHELLPUPPET_DAEMON_STARTED_WRAPPED'] === '1';
+    delete process.env['SHELLPUPPET_DAEMON_STARTED_WRAPPED'];
+    this.options = { ...options, startedWrapped: options.startedWrapped ?? startedWrapped };
     this.logger = options.logger;
     this.audit = options.audit ?? NULL_AUDITOR;
     this.sessionEnv = options.sessionEnv ?? DEFAULT_SESSION_ENV;

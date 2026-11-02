@@ -43,7 +43,6 @@ async function main(): Promise<void> {
   const daemon = new Daemon({
     home,
     logger,
-    startedWrapped: process.env['SHELLPUPPET_DAEMON_STARTED_WRAPPED'] === '1',
     audit: createAuditor(home, { captureContent: config.audit?.captureContent ?? false }, logger),
     ...(config.policy !== undefined ? { policy: config.policy } : {}),
     ...(config.sessionEnv !== undefined ? { sessionEnv: config.sessionEnv } : {}),

@@ -111,6 +111,29 @@ describe('parseDaemonConfig: the policy section fails CLOSED', () => {
 });
 
 describe('parseDaemonConfig: other fields fail SAFE', () => {
+  it('bounds every daemon start wrapper token and reports a direct fallback', () => {
+    const invalid: unknown[] = [[], Array(17).fill('x'), ['  '], ['x'.repeat(1025)], ['x', 1], ['x', '\0made-up']];
+    for (const startWith of invalid) {
+      const result = parseDaemonConfig({ daemon: { startWith } });
+      expect(result.config.daemon?.startWith).toBeUndefined();
+      expect(result.problems.join(' ')).toContain('daemon.startWith');
+      expect(result.problems.join(' ')).toContain('starting directly');
+    }
+    for (const startWith of [['x'], Array(16).fill('x'), ['x'.repeat(1024)]]) {
+      expect(parseDaemonConfig({ daemon: { startWith } }).config.daemon?.startWith).toEqual(startWith);
+    }
+  });
+
+  it('bounds the daemon wrapper environment condition', () => {
+    for (const condition of ['', ' ', 'x'.repeat(257), 1]) {
+      const result = parseDaemonConfig({ daemon: { startWith: ['x'], startWithOnlyIfEnvContains: condition } });
+      expect(result.config.daemon?.startWithOnlyIfEnvContains).toBeUndefined();
+      expect(result.problems.join(' ')).toContain('daemon.startWithOnlyIfEnvContains');
+    }
+    const valid = 'x'.repeat(256);
+    expect(parseDaemonConfig({ daemon: { startWith: ['x'], startWithOnlyIfEnvContains: valid } })
+      .config.daemon?.startWithOnlyIfEnvContains).toBe(valid);
+  });
   it('an invalid sessionEnv falls back to clean, never passthrough', () => {
     for (const bad of ['Clean', 'PASSTHROUGH', null, 1, ['MY_SETTING', 1], [['MY_SETTING']]]) {
       const { config, problems } = parseDaemonConfig({ sessionEnv: bad });

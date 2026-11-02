@@ -154,9 +154,15 @@ its leading arguments. When any CLI command, `shellpuppet dashboard`, or the
 MCP server needs to start a missing daemon, it runs those arguments followed
 by Node and the daemon entry. A running daemon is reused without running the
 wrapper. With no setting, the daemon starts directly as before. The wrapper
-is found on `PATH` (or by an explicit path); Windows `.cmd` and `.bat` wrappers
-run through the Windows command shell. The configured program runs with your
-user's permissions, so choose one you trust.
+is found on `PATH` (or by an explicit path). Windows wrappers must resolve to
+an `.exe` or `.com` program; `.cmd` and `.bat` files are refused. Point at the
+program itself. No shell interprets the wrapper arguments. The configured
+program runs with your user's permissions, so choose one you trust.
+
+The array has 1 to 16 entries. Each entry must be a non-blank string of at
+most 1024 characters. `startWithOnlyIfEnvContains`, when set, must be a
+non-blank string of at most 256 characters. An invalid setting is reported
+by name and the daemon starts directly.
 
 For 1Password, put references in your own environment, for example set a
 variable to `op://vault/item/field`, then use:
@@ -178,9 +184,11 @@ configure the wrapper.
 
 A direct start has the usual ten-second health bound. A wrapped start allows
 two minutes for a person to unlock the tool. A failed wrapper or health
-timeout reports the wrapper program and `daemon.startWith`, without its
-arguments or any environment values. `shellpuppet daemon status` reports
-`startedWrapped` as a boolean.
+timeout ends the spawned wrapper's process tree and reports the wrapper
+program and `daemon.startWith`, without its arguments or any environment
+values. An early wrapper exit is reported after a short health grace.
+`shellpuppet daemon status` reports `startedWrapped` as a boolean, reported
+by the client that started the daemon. It does not reveal the command.
 
 ## Reading an agent's screen without its reasoning
 

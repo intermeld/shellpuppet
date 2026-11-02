@@ -20,7 +20,7 @@ import { createFileLogger } from '../../src/daemon/logger.js';
 import { chooseFolder } from '../../src/daemon/folderPicker.js';
 import { readDaemonState } from '../../src/daemon/paths.js';
 import type { LauncherConfig } from '../../src/daemon/launchProfiles.js';
-import type { PolicyConfig } from '../../src/core/types.js';
+import type { PolicyConfig, SessionEnvMode } from '../../src/core/types.js';
 import type { SessionOptions } from '../../src/core/types.js';
 import type { Session } from '../../src/core/session.js';
 import {
@@ -141,6 +141,7 @@ async function startLaunchDaemon(options: {
   launcher?: LauncherConfig;
   policy?: PolicyConfig;
   daemonEnv?: NodeJS.ProcessEnv;
+  sessionEnv?: SessionEnvMode;
   folderPicker?: (signal: AbortSignal) => Promise<string | null>;
   folderPickerTimeoutMs?: number;
   dashboardSessionFactory?: (options: SessionOptions) => Session;
@@ -154,6 +155,7 @@ async function startLaunchDaemon(options: {
     audit: createAuditor(home),
     ...(options.policy !== undefined ? { policy: options.policy } : {}),
     ...(options.daemonEnv !== undefined ? { daemonEnv: options.daemonEnv } : {}),
+    ...(options.sessionEnv !== undefined ? { sessionEnv: options.sessionEnv } : {}),
     launchProfiles: options.launcher ?? { profiles: [], problems: [] },
     ...(options.folderPicker === undefined ? {} : { folderPicker: options.folderPicker }),
     ...(options.folderPickerTimeoutMs === undefined ? {} : { folderPickerTimeoutMs: options.folderPickerTimeoutMs }),
@@ -645,6 +647,28 @@ describe('envFromDaemon copies names from the daemon, never from the body', () =
     const explicit = await launch(daemon, { profile: 'explicit' });
     expect(explicit.status).toBe(200);
     await waitForScreen(daemon, String((JSON.parse(explicit.body) as Record<string, unknown>)['id']), 'CLAUDE_CODE_SESSION_ID=made-up-parent-session');
+  });
+
+  it('removes the start marker before an all profile starts a session', async () => {
+    const name = 'SHELLPUPPET_DAEMON_STARTED_WRAPPED';
+    const previous = process.env[name];
+    process.env[name] = '1';
+    try {
+      const daemon = await startLaunchDaemon({
+        sessionEnv: [name],
+        launcher: profilesOf([{ name: 'all-marker', command: process.execPath,
+          args: ['-e', `console.log("MARKER=" + (process.env.${name} ?? "missing"))`],
+          shell: false, envFromDaemon: 'all' }]),
+      });
+      const started = await launch(daemon, { profile: 'all-marker' });
+      expect(started.status).toBe(200);
+      const id = String((JSON.parse(started.body) as Record<string, unknown>)['id']);
+      await waitForScreen(daemon, id, 'MARKER=missing');
+      expect(process.env[name]).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env[name];
+      else process.env[name] = previous;
+    }
   });
 
   it('passes unlisted daemon variables only to an all dashboard profile without exposing values', async () => {
