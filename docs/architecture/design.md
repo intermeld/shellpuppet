@@ -252,7 +252,11 @@ ambiguous in clients that do not, so the prefix stays.
 
 On Windows with node-pty 1.2.0-beta.18, a start whose ConPTY output worker misses
 node-pty's fixed five-second connection bound is retried once after the failed
-terminal and its console host have been released, with a 100 ms pause. The
+terminal's console-host queue confirms the host was ended or is gone. The
+retry waits past node-pty's 1,000 ms worker-disposal timer, then allows a
+100 ms margin. If the queue gives up on the host, the original start failure
+is reported. A killed or stopped session cannot start the second attempt or
+be reported as started after its new program gains a pid. The
 agent's error event identifies this exact timeout; node-pty reports no error
 code for it. Its native `connect` call, which creates the program, runs only
 after the worker connects, so this failure cannot have run the command. Other

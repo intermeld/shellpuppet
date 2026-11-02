@@ -77,6 +77,8 @@ export interface QueuedConsoleHost {
   id: string;
   window: SpawnWindow;
   log: (level: 'info' | 'warn', message: string, meta: Record<string, unknown>) => void;
+  /** True once this host was ended or found gone; false if the queue gave up. */
+  onSettled?: (ended: boolean) => void;
 }
 
 export interface ConsoleHostQueue {
@@ -245,16 +247,17 @@ export function createConsoleHostQueue(options: ConsoleHostQueueOptions): Consol
     timer.unref();
   };
 
-  const finish = (id: string): void => {
-    attempts.delete(id);
-    options.resolved?.(id);
+  const finish = (item: QueuedConsoleHost, ended: boolean): void => {
+    attempts.delete(item.id);
+    options.resolved?.(item.id);
+    item.onSettled?.(ended);
   };
 
   const retry = (item: QueuedConsoleHost): void => {
     const count = (attempts.get(item.id) ?? 0) + 1;
     if (count >= CONSOLE_HOST_MAX_ATTEMPTS) {
       item.log('warn', 'console host not ended', { id: item.id, reason: 'retry limit reached' });
-      finish(item.id);
+      finish(item, false);
       return;
     }
     attempts.set(item.id, count);
@@ -265,7 +268,7 @@ export function createConsoleHostQueue(options: ConsoleHostQueueOptions): Consol
   const noteEndFailure = (item: QueuedConsoleHost, pid: number, error: unknown): void => {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'ESRCH') {
-      finish(item.id);
+      finish(item, true);
       return;
     }
     item.log('warn', 'console host not ended', {
@@ -277,7 +280,7 @@ export function createConsoleHostQueue(options: ConsoleHostQueueOptions): Consol
   };
 
   const noteEnded = (item: QueuedConsoleHost, pid: number): void => {
-    finish(item.id);
+    finish(item, true);
     item.log('info', 'console host ended', { id: item.id, pid });
   };
 
@@ -357,7 +360,7 @@ export function createConsoleHostQueue(options: ConsoleHostQueueOptions): Consol
             // A host can disappear after a kill before this asynchronous list
             // runs. A missing host alone does not establish a leak.
             item.log(count === 0 ? 'info' : 'warn', 'console host not ended', { id: item.id, reason });
-            if (count === 0) finish(item.id);
+            if (count === 0) finish(item, true);
             else retry(item);
             continue;
           }
