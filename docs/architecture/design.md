@@ -241,10 +241,10 @@ ambiguous in clients that do not, so the prefix stays.
 | `terminal_snapshot` | Read the rendered screen as plain text | `session`, `lastLines`, `hideReasoning` |
 | `terminal_type` | Type text (optionally submit) | `session`, `text`, `submit`, `verify` |
 | `terminal_key` | Press a semantic key | `session`, `key` |
-| `terminal_wait` | Block until a condition holds, then return the screen | `session`, `text`\|`regex`\|`quiet`\|`prompt`, `timeout`, `debounce`, `matchAfterInput`, `hideReasoning` |
+| `terminal_wait` | Wait for one screen condition or a prompt in any chosen session | `session` (id, list of ids or omitted with `prompt`), `text`\|`regex`\|`quiet`\|`prompt`, `timeout`, `debounce`, `matchAfterInput`, `now`, `hideReasoning` |
 | `terminal_find` | Regex search the current screen, with line numbers | `session`, `pattern`, `hideReasoning` |
 | `terminal_result` | The answer that ended an agent CLI's latest turn, and nothing else | `session` |
-| `terminal_list` | List sessions and their state | `hideReasoning` |
+| `terminal_list` | List sessions and their state, or just waiting prompts | `waitingOnly`, `hideReasoning` |
 | `terminal_resize` | Set screen geometry | `session`, `cols`, `rows`, `hold` |
 | `terminal_screenshot` | Photograph the viewer as a browser draws it | `session`, `path`, `width`, `height`, `hideReasoning` |
 | `terminal_viewer_url` | Mint a fresh one-use viewer link | `session`, `readOnly` |
@@ -389,6 +389,17 @@ tables and status lines everywhere.
 `terminal_list` flags a session holding a prompt with how long it has waited,
 `terminal_wait` accepts `prompt: true` and returns when the session needs an answer, and
 the viewer badges the prompt and marks its window title.
+For supervision across sessions, `terminal_wait` with `prompt: true` and no
+`session` watches every live session; an array watches the named sessions. It
+returns as soon as any is waiting, including a prompt already present at the
+start, or at the timeout. Its compact response has no screen: each waiting
+session has its id, label, question, options, selected choice and waiting age.
+`now: true` polls that state once. `terminal_list` with `waitingOnly: true`
+returns the same compact rows. The CLI spells these forms `shellpuppet wait
+--prompt [id ...] [--now]` and `shellpuppet list --waiting`.
+Both paths read the daemon's prompt state and omit ended sessions. With
+`hideReasoning`, they leave out questions and options, as a filtered full
+session list does. A single string `session` keeps the existing screen wait.
 The daemon keeps the first-seen time and the single stall alert when a repaint
 shows the same question and options, even if the rendered dialog signature
 changes with its width or nearby text. An incomplete screen gets a one-second

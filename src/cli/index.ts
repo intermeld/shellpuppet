@@ -57,7 +57,7 @@ Usage:
       a file name containing ':' is refused as an alternate data stream.
       Options go BEFORE the command; everything after the command is passed
       to it verbatim (so its own --flags survive).
-  shellpuppet list [--hide-reasoning]               List sessions
+  shellpuppet list [--waiting] [--hide-reasoning]   List sessions, or only waiting prompts
   shellpuppet snap <id> [--last <n>] [--hide-reasoning]
                                                     Print the rendered screen
       --hide-reasoning leaves out an agent CLI's reasoning, each block as one
@@ -80,6 +80,10 @@ Usage:
                         seen to go; --match-after-input false accepts any prompt)
                         --match-after-input true ignores text/regex matches at or
                         before the echo of what you last typed
+  shellpuppet wait --prompt [id ...] [--now] [--timeout <ms>] [--hide-reasoning]
+                                                    Wait for any listed session's prompt,
+                                                    or every live session if no ids are given;
+                                                    --now polls once without waiting
   shellpuppet find <id> <pattern> [--hide-reasoning]
                                                     Regex-search the screen, with line numbers
       Prints each matching line as <row>: <text>. Nothing matching prints
@@ -386,7 +390,10 @@ async function main(): Promise<void> {
     }
 
     case 'list': {
-      const result = await call(connection, 'GET', `/sessions${parsed.flags.get('hide-reasoning') === true ? '?hideReasoning=1' : ''}`);
+      const query = new URLSearchParams();
+      if (parsed.flags.get('hide-reasoning') === true) query.set('hideReasoning', '1');
+      if (parsed.flags.get('waiting') === true) query.set('waitingOnly', '1');
+      const result = await call(connection, 'GET', `/sessions${query.size > 0 ? `?${query.toString()}` : ''}`);
       if (wantJson) {
         printJson(result);
         break;
@@ -397,6 +404,12 @@ async function main(): Promise<void> {
         break;
       }
       for (const s of sessions) {
+        if (parsed.flags.get('waiting') === true) {
+          const waiting = s as unknown as { id: string; label: string; question?: string; options?: string[]; selectedOption?: number; waitingMs: number };
+          console.log(`${waiting.id}  ${waiting.label}  WAITING ${String(Math.round(waiting.waitingMs / 1000))}s` + (waiting.question === undefined ? '' : `: ${waiting.question}`));
+          for (const [index, option] of (waiting.options ?? []).entries()) console.log(`    ${index === waiting.selectedOption ? '* ' : '  '}${option}`);
+          continue;
+        }
         console.log(
           `${s.id}  ${listedState(s)}  ` +
             `${String(s.cols)}x${String(s.rows)}  watchers:${String(s.watchers)}  ` +
@@ -489,6 +502,25 @@ async function main(): Promise<void> {
     }
 
     case 'wait': {
+      const multi = parsed.flags.get('prompt') === true && (parsed.positionals.length !== 1 || parsed.flags.get('now') === true);
+      if (multi) {
+        const params = new URLSearchParams({ prompt: 'true' });
+        for (const id of parsed.positionals) params.append('session', id);
+        if (parsed.flags.get('now') === true) params.set('now', 'true');
+        if (parsed.flags.has('timeout')) params.set('timeout', String(parsed.flags.get('timeout')));
+        if (parsed.flags.get('hide-reasoning') === true) params.set('hideReasoning', '1');
+        const result = await call(connection, 'GET', `/sessions/wait?${params.toString()}`);
+        if (wantJson) printJson(result);
+        else {
+          for (const waiting of result['sessions'] as { id: string; label: string; question?: string; options?: string[]; selectedOption?: number; waitingMs: number }[]) {
+            console.log(`${waiting.id}  ${waiting.label}  WAITING ${String(Math.round(waiting.waitingMs / 1000))}s` + (waiting.question === undefined ? '' : `: ${waiting.question}`));
+            for (const [index, option] of (waiting.options ?? []).entries()) console.log(`    ${index === waiting.selectedOption ? '* ' : '  '}${option}`);
+          }
+          console.error(`${result['matched'] === true ? 'matched' : 'NOT matched'} (${String(result['reason'])}, ${String(result['waitedMs'])} ms)`);
+        }
+        if (result['matched'] !== true && parsed.flags.get('now') !== true) process.exit(3);
+        break;
+      }
       const id = parsed.positionals[0] ?? fail(2, 'wait needs a session id.');
       const params = new URLSearchParams();
       for (const name of ['text', 'regex', 'quiet', 'timeout', 'debounce', 'prompt'] as const) {

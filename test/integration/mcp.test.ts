@@ -432,7 +432,7 @@ describe('MCP adapter', () => {
     })) as TextResult;
     expect(listed.isError).toBe(true);
     expect(resultText(listed)).toContain(
-      "Unknown parameters 'all', 'verbose'. This tool takes: hideReasoning.",
+      "Unknown parameters 'all', 'verbose'. This tool takes: hideReasoning, waitingOnly.",
     );
 
     await client.callTool({ name: 'terminal_kill', arguments: { session: id } });

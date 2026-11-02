@@ -3,12 +3,12 @@
 // dialog was answered. Usage: node dialog-sink.mjs <dialog-screen> <answered-screen>
 import { readFileSync } from 'node:fs';
 
-const [dialogFile, answeredFile] = process.argv.slice(2);
+const [dialogFile, answeredFile, delay] = process.argv.slice(2);
 const screen = (file) => readFileSync(file, 'utf8').replace(/\r?\n/g, '\r\n');
 
 process.stdin.setRawMode?.(true);
 process.stdin.resume();
-process.stdout.write(`\x1b[2J\x1b[H${screen(dialogFile)}`);
+setTimeout(() => process.stdout.write(`\x1b[2J\x1b[H${screen(dialogFile)}`), Number(delay ?? 0));
 
 process.stdin.on('data', (bytes) => {
   if (!bytes.toString('utf8').includes('\r')) return;
