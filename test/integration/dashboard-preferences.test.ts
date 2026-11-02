@@ -128,4 +128,23 @@ describe('dashboard preferences and errors', () => {
     expect(result.resizes).toBeGreaterThan(0);
   });
 
+  it('closes a shortcut error by button or Escape and clears it after a valid shortcut', async (context) => {
+    if (!browser) { context.skip(); return; }
+    const { url } = await setup();
+    const script = `${sentScript}; window.__dashboardTest = async () => {
+      const shortcut = document.getElementById('shortcut');
+      const banner = document.getElementById('error');
+      const press = (key, ctrlKey = false, shiftKey = false) => document.dispatchEvent(
+        new KeyboardEvent('keydown', { key, ctrlKey, shiftKey, bubbles: true, cancelable: true }));
+      shortcut.click(); press('x');
+      const shown = !banner.hidden;
+      banner.querySelector('button[aria-label="Close error"]').click();
+      const byButton = banner.hidden;
+      shortcut.click(); press('x'); press('Escape');
+      const byEscape = banner.hidden;
+      shortcut.click(); press('x'); shortcut.click(); press('Z', true, true);
+      return { shown, byButton, byEscape, validCleared: banner.hidden };
+    };`;
+    expect((await page(url, script)).probe).toEqual({ shown: true, byButton: true, byEscape: true, validCleared: true });
+  });
 });

@@ -122,7 +122,8 @@
     if (popSelf !== null) return item.id === popSelf;
     return !popped.has(item.id) && (windows.size === 1 || assigned === null || assigned.has(item.id));
   });
-  const showError = (message) => { error.textContent = message; error.hidden = false; };
+  const closeError = () => { error.hidden = true; document.getElementById('error-message').textContent = ''; };
+  const showError = (message) => { document.getElementById('error-message').textContent = message; error.hidden = false; };
   function renderPreferences() {
     document.getElementById('auto-fit').setAttribute('aria-pressed', String(autoFit));
     document.getElementById('auto-fit').classList.toggle('active', autoFit);
@@ -879,6 +880,7 @@
   document.getElementById('text-smaller').addEventListener('click', () => setFontSize(Math.max(8, (fontSize ?? 13) - 1)));
   document.getElementById('text-auto').addEventListener('click', () => setFontSize(null));
   document.getElementById('text-larger').addEventListener('click', () => setFontSize(Math.min(32, (fontSize ?? 13) + 1)));
+  document.getElementById('error-close').addEventListener('click', closeError);
   document.getElementById('shortcut').addEventListener('click', () => {
     choosingPrefix = true;
     document.getElementById('shortcut').textContent = 'Press Ctrl+Shift and a letter';
@@ -918,7 +920,10 @@
       if (event.ctrlKey && event.shiftKey && /^[a-z]$/i.test(event.key)) {
         prefix = event.key.toLowerCase();
         persist();
-      } else if (event.key !== 'Escape') {
+        closeError();
+      } else if (event.key === 'Escape') {
+        closeError();
+      } else {
         showError('Choose Ctrl+Shift and a letter.');
       }
       showPrefix();
@@ -928,6 +933,9 @@
       event.preventDefault(); event.stopPropagation(); navigation = true; return;
     }
     const terminalFocused = document.activeElement?.closest('.pane-term') !== null;
+    if (event.key === 'Escape' && !terminalFocused && !error.hidden) {
+      event.preventDefault(); event.stopPropagation(); closeError(); return;
+    }
     if (event.key === 'Escape' && enlarged && (navigation || !terminalFocused)) {
       event.preventDefault(); event.stopPropagation(); navigation = false;
       panes.get(enlarged)?.enlarge.click();

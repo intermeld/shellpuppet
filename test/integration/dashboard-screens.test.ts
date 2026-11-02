@@ -225,7 +225,7 @@ describe('dashboard screen controls in Chromium', () => {
         if (buttons.length !== 2 && state.phase === 0) return null;
         if (state.phase === 0) { window.__block = true; buttons[0].click();
           state.blocked = { count: window.__opens.length, buttons: document.querySelectorAll('#screens button').length,
-            error: document.getElementById('error').textContent }; window.__block = false; state.phase = 1; return null; }
+            error: document.getElementById('error-message').textContent }; window.__block = false; state.phase = 1; return null; }
         buttons[0].click(); state.first = window.__opens.length; state.phase = 2;
         document.querySelector('#screens button')?.click();
         return JSON.stringify({ blocked: state.blocked, first: state.first, opens: window.__opens,
@@ -254,7 +254,7 @@ describe('dashboard screen controls in Chromium', () => {
       if (!button || button.textContent !== 'Open another window') return null;
       ${kind === 'denied' ? 'window.__block = true;' : ''} button.click();
       return JSON.stringify({ opens: window.__opens, button: button.isConnected,
-        error: document.getElementById('error').textContent }); })()`);
+        error: document.getElementById('error-message').textContent }); })()`);
     const opens = result.opens as { url: string; features: string }[];
     expect(opens).toHaveLength(1);
     expect(opens[0]!.features).not.toMatch(/left=|top=|width=|height=/);
