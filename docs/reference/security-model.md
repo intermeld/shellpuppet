@@ -401,8 +401,8 @@ when its client dies. On POSIX, the socket stays in `SHELLPUPPET_HOME` if its
 path fits the platform limit. Otherwise it uses a private
 `shellpuppet-<uid>` folder under the system temporary directory, after checking
 that it is a real directory owned by this user with no access for others, in a
-temporary directory that no other user can write to or that has the sticky bit,
-so no other user can rename or replace it between the check and its use. The
+temporary directory owned by root or the user that no other user can write to
+or that has the sticky bit, so no other user can rename or replace it between the check and its use. The
 directories above that temporary directory are not checked: a `TMPDIR` placed
 below a folder other users can write to is outside this protection.
 A stale socket pathname is removed only after a refused connection, a socket

@@ -236,12 +236,14 @@ function startLockEndpoint(home: string): string {
     const parent = os.tmpdir();
     // The folder below is checked once and then used by name, so nobody else may
     // be able to rename or replace it afterwards. Renaming an entry needs write
-    // access to its parent, whoever owns the parent, so a parent that group or
-    // others can write to must carry the sticky bit (as /tmp does). Ancestors
-    // above the parent are not checked; that limit is documented.
+    // access to its parent, so a parent that group or others can write to must
+    // carry the sticky bit (as /tmp does). The sticky bit still lets the parent's
+    // owner rename entries, so the parent must also belong to root or to this
+    // user. Ancestors above the parent are not checked; that limit is documented.
     const parentStat = fs.lstatSync(parent);
     const othersMayWrite = (parentStat.mode & 0o022) !== 0;
-    if (!parentStat.isDirectory() || (othersMayWrite && (parentStat.mode & 0o1000) === 0)) {
+    if (!parentStat.isDirectory() || (parentStat.uid !== 0 && parentStat.uid !== uid) ||
+        (othersMayWrite && (parentStat.mode & 0o1000) === 0)) {
       throw new Error('unsafe temporary folder');
     }
     const folder = path.join(parent, `shellpuppet-${String(uid)}`);
@@ -285,7 +287,7 @@ function startLockFailureReason(error: unknown): string {
   const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
   if (typeof code === 'string' && /^[A-Z0-9_]+$/.test(code)) return code;
   const message = error instanceof Error ? error.message : '';
-  if (message === 'unsafe short folder' || message === 'user id unavailable' ||
+  if (message === 'unsafe short folder' || message === 'unsafe temporary folder' || message === 'user id unavailable' ||
       message === 'short socket path exceeds platform limit') return message;
   return 'endpoint preparation failed';
 }
