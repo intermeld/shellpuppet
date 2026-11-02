@@ -21,6 +21,8 @@ import { chooseFolder } from '../../src/daemon/folderPicker.js';
 import { readDaemonState } from '../../src/daemon/paths.js';
 import type { LauncherConfig } from '../../src/daemon/launchProfiles.js';
 import type { PolicyConfig } from '../../src/core/types.js';
+import type { SessionOptions } from '../../src/core/types.js';
+import type { Session } from '../../src/core/session.js';
 import {
   api,
   connectWsWithCookie,
@@ -141,6 +143,7 @@ async function startLaunchDaemon(options: {
   daemonEnv?: NodeJS.ProcessEnv;
   folderPicker?: (signal: AbortSignal) => Promise<string | null>;
   folderPickerTimeoutMs?: number;
+  dashboardSessionFactory?: (options: SessionOptions) => Session;
 } = {}): Promise<LaunchDaemon> {
   const home = makeTempHome('dash-launch-');
   const logPath = path.join(home, 'daemon.log');
@@ -154,6 +157,7 @@ async function startLaunchDaemon(options: {
     launchProfiles: options.launcher ?? { profiles: [], problems: [] },
     ...(options.folderPicker === undefined ? {} : { folderPicker: options.folderPicker }),
     ...(options.folderPickerTimeoutMs === undefined ? {} : { folderPickerTimeoutMs: options.folderPickerTimeoutMs }),
+    ...(options.dashboardSessionFactory === undefined ? {} : { dashboardSessionFactory: options.dashboardSessionFactory }),
     viewer: { launchMode: 'no-window' },
     promptScanIntervalMs: 600_000,
     idleCheckIntervalMs: 600_000,
@@ -805,6 +809,53 @@ describe('a profile that allows any local folder', () => {
     expect((await first).status).toBe(504);
   });
 
+  it('answers at timeout while an injected picker never settles and keeps its slot', async () => {
+    let aborts = 0;
+    const daemon = await startLaunchDaemon({ launcher: profilesOf([
+      { name: 'open', command: process.execPath, cwd: 'ask', folders: 'any' },
+    ]), folderPicker: (signal) => {
+      signal.addEventListener('abort', () => { aborts++; }, { once: true });
+      return new Promise<string | null>(() => undefined);
+    }, folderPickerTimeoutMs: 50 });
+    const result = await Promise.race([
+      pickFolder(daemon),
+      new Promise<RawResult>((_resolve, reject) => setTimeout(() => reject(new Error('picker response exceeded its bound')), 300)),
+    ]);
+    expect(result.status).toBe(504);
+    expect(aborts).toBe(1);
+    expect((await pickFolder(daemon)).status).toBe(409);
+    await Promise.race([
+      daemon.daemon.stop(),
+      new Promise<void>((_resolve, reject) => setTimeout(() => reject(new Error('picker stop exceeded its bound')), 4_000)),
+    ]);
+  });
+
+  it('does not start a picker when a paused request body arrives after stop begins', async () => {
+    let starts = 0;
+    const daemon = await startLaunchDaemon({ launcher: profilesOf([
+      { name: 'open', command: process.execPath, cwd: 'ask', folders: 'any' },
+    ]), folderPicker: () => { starts++; return Promise.resolve(null); } });
+    const body = JSON.stringify({ profile: 'open' });
+    const request = http.request({ host: '127.0.0.1', port: daemon.port, method: 'POST',
+      path: '/dashboard/folder-picker', headers: { ...launchHeaders(daemon), 'content-length': String(Buffer.byteLength(body)) } });
+    const response = new Promise<RawResult>((resolve, reject) => {
+      request.on('response', (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: Buffer.concat(chunks).toString('utf8') }));
+      });
+      request.on('error', reject);
+    });
+    request.write(body.slice(0, 1));
+    request.flushHeaders();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const stopped = daemon.daemon.stop();
+    request.end(body.slice(1));
+    expect((await response).status).toBe(503);
+    await stopped;
+    expect(starts).toBe(0);
+  });
+
   it('aborts an unsettled picker when the daemon stops', async () => {
     let aborted = false;
     const daemon = await startLaunchDaemon({ launcher: profilesOf([
@@ -1136,6 +1187,31 @@ describe('concurrent launches respect both caps', () => {
     const started: RawResult[] = [];
     for (let index = 0; index < 8; index++) started.push(await launch(daemon, { profile: 'quick' }));
     expect(started.map((result) => result.status), JSON.stringify(started.filter((result) => result.status !== 200))).toEqual(Array.from({ length: 8 }, () => 200));
+  });
+
+  it('leaves eight parallel rate slots after a burst of refused launches with a stand-in start', async () => {
+    let created = 0;
+    const daemon = await startLaunchDaemon({
+      launcher: profilesOf([{ name: 'quick', command: process.execPath, args: ['-e', '0'], shell: false }]),
+      dashboardSessionFactory: (options) => {
+        const id = `stand-in-${String(++created)}`;
+        return {
+          id, label: options.label ?? options.command,
+          startedProgramPid: () => Promise.resolve(process.pid),
+          summary: () => ({ id, label: options.label ?? options.command, purpose: '', startedBy: 'dashboard',
+            agent: null, command: options.command, args: options.args ?? [], cols: 80, rows: 24,
+            ready: true, readyReason: 'not-tracked', geometryHeld: false, exited: false,
+            exitCode: null, watchers: 0, createdAt: new Date().toISOString() }),
+          onExit: () => () => undefined, onReady: () => () => undefined,
+        } as unknown as Session;
+      },
+    });
+    const refused = await Promise.all(Array.from({ length: 12 }, () => launch(daemon, { profile: 'nope' })));
+    expect(refused.every((result) => result.status === 400)).toBe(true);
+    const started = await Promise.all(Array.from({ length: 8 }, () => launch(daemon, { profile: 'quick' })));
+    expect(started.map((result) => result.status), JSON.stringify(started.filter((result) => result.status !== 200))).toEqual(Array.from({ length: 8 }, () => 200));
+    expect(created).toBe(8);
+    expect((await launch(daemon, { profile: 'quick' })).status).toBe(429);
   });
 
   it('starts exactly maxSessions of ten simultaneous launches', async () => {
