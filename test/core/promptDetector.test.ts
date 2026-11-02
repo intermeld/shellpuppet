@@ -21,6 +21,24 @@ async function museCapture(name: string): Promise<string> {
 }
 
 describe('detectPrompt: Muse Code', () => {
+  it.each([
+    ['muse-approval', [2, 3]],
+    ['muse-stage2', [2, 3]],
+    ['muse-trust', [2]],
+  ] as const)('detects %s after selection moves', async (name, targets) => {
+    const original = await museCapture(name);
+    const baseline = detectPrompt(original);
+    expect(baseline).not.toBeNull();
+    for (const target of targets) {
+      const moved = original.replace(/^⟩ (\d)(\. | {2})/m, '  $1$2')
+        .replace(new RegExp(`^  ${target}(\\. | {2})`, 'm'), `⟩ ${target}$1`);
+      const prompt = detectPrompt(moved);
+      expect(prompt?.question).toBe(baseline?.question);
+      expect(prompt?.options).toEqual(baseline?.options);
+      expect(prompt?.selectedOption).toBe(target - 1);
+    }
+  });
+
   it('detects a one-stage shell approval', async () => {
     const prompt = detectPrompt(await museCapture('muse-approval'));
     expect(prompt?.question).toContain('run the following command?');

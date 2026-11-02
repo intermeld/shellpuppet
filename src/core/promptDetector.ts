@@ -344,29 +344,34 @@ function museQuestion(text: string): boolean {
 
 /** Muse's approval and trust menus use ⟩ with numbered rows and no composer. */
 function musePrompt(raw: string[], tail: Line[]): DetectedPrompt | null {
-  const selected = [...tail].reverse().find((line) => /^⟩ 1(?:\. | {2})/.test(line.text));
+  const selected = [...tail].reverse().find((line) => /^⟩ [1-3](?:\. | {2})/.test(line.text));
   if (selected === undefined) return null;
-  const approval = /^⟩ 1\. /.test(selected.text);
+  const marker = /^⟩ ([1-3])(\. | {2})/.exec(selected.text);
+  if (marker === null) return null;
+  const selectedOption = Number(marker[1]) - 1;
+  const approval = marker[2] === '. ';
   const count = approval ? 3 : 2;
+  if (selectedOption >= count) return null;
+  const first = selected.index - selectedOption;
   const options: string[] = [];
   const optionRows: number[] = [];
   for (let offset = 0; offset < count; offset++) {
-    const row = selected.index + offset;
+    const row = first + offset;
     const text = (raw[row] ?? '').trimEnd();
-    const prefix = `${offset === 0 ? '⟩ ' : '  '}${String(offset + 1)}${approval ? '. ' : '  '}`;
+    const prefix = `${offset === selectedOption ? '⟩ ' : '  '}${String(offset + 1)}${approval ? '. ' : '  '}`;
     if (!text.startsWith(prefix) || text.slice(prefix.length).trim() === '') return null;
     options.push(normalise(text.replace(/^⟩ /, '')));
     optionRows.push(row);
   }
-  const question = [...tail].reverse().find((line) => line.index < selected.index &&
-    selected.index - line.index <= 10 && museQuestion(line.text));
+  const question = [...tail].reverse().find((line) => line.index < first &&
+    first - line.index <= 10 && museQuestion(line.text));
   if (question === undefined) return null;
   if (approval !== question.text.startsWith('Would ')) return null;
-  const stage = approval ? raw.slice(question.index, selected.index).find((line) => /^ {2}Stage \d+\/\d+$/.test(line.trimEnd())) : undefined;
+  const stage = approval ? raw.slice(question.index, first).find((line) => /^ {2}Stage \d+\/\d+$/.test(line.trimEnd())) : undefined;
   return {
     question: question.text,
     options,
-    selectedOption: 0,
+    selectedOption,
     optionRows,
     signature: [question.text, stage ?? '', ...options].join(' | '),
     rows: [question.index, optionRows[optionRows.length - 1]!],

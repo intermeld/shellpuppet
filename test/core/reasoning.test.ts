@@ -451,9 +451,49 @@ describe('Muse Code (built in)', () => {
     expect(hideReasoning(await screen('muse-trust'), muse)?.lines.join('\n')).toContain('Do you trust this workspace?');
   });
 
+  it('hides a wrapped grey reasoning summary and keeps the answer', async () => {
+    const filtered = hideReasoning(await screen('muse-wrapped-summary'), muse);
+    expect(filtered?.lines.join('\n')).not.toContain('◆ Xxxxx:');
+    expect(filtered?.lines.join('\n')).not.toContain('xxxxx xxxxx xxxxx');
+    expect(filtered?.hiddenLines).toBeGreaterThanOrEqual(2);
+    expect(filtered?.lines.join('\n')).toContain('◆ AMBER');
+  });
+
+  it('returns the bold path block from loop 037 as the latest answer', async () => {
+    const lines = await screen('muse-path-answer');
+    const result = latestResult(lines, muse);
+    expect(result.found).toBe(true);
+    if (!result.found) return;
+    expect(result.answer).toHaveLength(2);
+    expect(result.answer[0]).toMatch(/^◆ x+\s*$/);
+    expect(result.answer[1]).toMatch(/^ {2}x+\s*$/);
+    expect(result.answer.join('\n')).not.toContain('Ran xxxxxxx');
+    const pathLine = lines.find((line) => /^◆ x+/.test(line.text));
+    expect(pathLine).toBeDefined();
+    pathLine!.text = pathLine!.text.replace(/^◆ xxx/, '◆ C:\\');
+    const pathShaped = latestResult(lines, muse);
+    expect(pathShaped.found).toBe(true);
+    if (pathShaped.found) expect(pathShaped.answer[0]).toMatch(/^◆ C:\\/);
+  });
+
+  it('resolves only versioned Muse executable names', () => {
+    const cases: [string, boolean][] = [
+      ['muse', true],
+      ['muse-bin-1.4.14.exe', true],
+      ['muse-bin-1.4.14', true],
+      ['muse-bin-2.0.0-beta.1.exe', true],
+      ['muse-bin-1evil.exe', false],
+      ['muse-bin-1unrelated.exe', false],
+    ];
+    for (const [program, recognised] of cases) {
+      expect(agentNameFor(undefined, program) === 'muse', program).toBe(recognised);
+      expect(signatureFor(undefined, program)?.name === 'muse', program).toBe(recognised);
+    }
+  });
+
   it('resolves a launcher script session by its explicit agent and the versioned executable by name', () => {
     expect(agentNameFor('muse', 'pwsh')).toBe('muse');
-    expect(signatureFor('muse', 'pwsh -NoProfile -File muse-seat.ps1')?.name).toBe('muse');
+    expect(signatureFor('muse', 'pwsh -NoProfile -File muse-launch.ps1')?.name).toBe('muse');
     expect(agentNameFor(undefined, 'C:\\Programs\\muse\\muse-bin-1.4.14-R7309.1.exe')).toBe('muse');
     expect(agentNameFor(undefined, 'muse-bin-2.0.0.exe')).toBe('muse');
     expect(agentNameFor(undefined, 'muse')).toBe('muse');
