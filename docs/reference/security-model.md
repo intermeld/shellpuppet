@@ -385,6 +385,13 @@ assuming this result still holds.
 
 ## Environment hygiene
 
+`daemon.startWith` in `config.json` names a program the user chooses to run
+before a new daemon, like the programs in dashboard launch profiles. It can
+resolve secrets into the daemon's environment. Only the local configuration
+file can set the wrapper; client tools and daemon endpoints cannot. The
+direct override skips it but cannot name a replacement program. Status
+reports only whether the daemon started wrapped, never its command or values.
+
 The daemon's environment is inherited from whichever client auto-started it.
 If that client runs under a secrets manager's wrapper, or is an agent CLI
 holding its own API keys, those resolved secrets sit in the daemon's

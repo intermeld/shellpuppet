@@ -21,6 +21,8 @@ export interface DaemonState {
   pid: number;
   version: string;
   startedAt: string;
+  /** Set by the daemon entry from the client's internal start marker. */
+  startedWrapped?: boolean;
 }
 
 export function shellpuppetHome(env: NodeJS.ProcessEnv = process.env): string {

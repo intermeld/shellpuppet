@@ -19,7 +19,7 @@ import type { DaemonConnection } from '../client/http.js';
 import { assertNodeVersion, packageVersion } from '../daemon/meta.js';
 import { NO_MATCHES } from '../core/find.js';
 import { resultRefusal } from '../core/reasoning.js';
-import { shellpuppetHome } from '../daemon/paths.js';
+import { readDaemonState, shellpuppetHome } from '../daemon/paths.js';
 import { planPassedEnv } from '../mcp/config.js';
 import { isEnvNamesProblem, readDaemonConfig } from '../daemon/config.js';
 import { agentNameFor } from '../core/reasoning.js';
@@ -108,6 +108,7 @@ Usage:
       move it, which is what lets the viewer fill.
   shellpuppet kill <id>                             Kill the session and its process tree
   shellpuppet daemon status|start|stop|restart      Manage the shared daemon
+      start/restart: --direct starts without daemon.startWith.
       stop/restart: --force to kill live sessions. status and stop never
       start a daemon: one that has gone is reported as not running.
   shellpuppet mcp                                   Run the MCP stdio server (long-running)
@@ -671,6 +672,8 @@ async function main(): Promise<void> {
 async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> {
   const sub = parsed.positionals[0];
   const force = parsed.flags.get('force') === true;
+  const direct = parsed.flags.get('direct') === true;
+  if (direct && sub !== 'start' && sub !== 'restart') fail(2, '--direct applies only to daemon start or restart.');
 
   // Every request here passes `autoStart: false`: asking about or stopping a
   // daemon must never start one, so a daemon that goes between being found
@@ -730,6 +733,7 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
       }
       surfaceWarnings(connection);
       const list = sessions['sessions'] as SessionSummary[];
+      const startedWrapped = readDaemonState(shellpuppetHome())?.startedWrapped === true;
       // What sessions inherit (ADR-008). A daemon that cannot say is left out
       // of the report rather than failing it.
       const environment = await request(connection, 'GET', '/environment', undefined, {
@@ -747,12 +751,13 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
           port: connection.port,
           version: connection.version,
           sessions: list,
+          startedWrapped,
           ...(environment !== undefined ? { sessionEnv: environment } : {}),
         });
       } else {
         console.log(
           `running on port ${String(connection.port)}, version ${connection.version}, ` +
-            `${String(list.length)} session(s)` +
+            `${String(list.length)} session(s), started wrapped: ${String(startedWrapped)}` +
             (environment !== undefined ? `, session environment ${environment.mode}` : ''),
         );
         if (environment !== undefined && environment.exposed.length > 0) {
@@ -772,14 +777,14 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
       if (existing !== null) {
         surfaceWarnings(existing);
         if (wantJson) {
-          printJson({ running: true, port: existing.port, version: existing.version });
+          printJson({ running: true, port: existing.port, version: existing.version, startedWrapped: readDaemonState(shellpuppetHome())?.startedWrapped === true });
         } else console.log(`already running on port ${String(existing.port)}`);
         return;
       }
-      const connection = await ensureDaemon({ logger: stderrLogger });
+      const connection = await ensureDaemon({ logger: stderrLogger, direct });
       surfaceWarnings(connection);
       if (wantJson) {
-        printJson({ running: true, port: connection.port, version: connection.version });
+        printJson({ running: true, port: connection.port, version: connection.version, startedWrapped: readDaemonState(shellpuppetHome())?.startedWrapped === true });
       } else {
         console.log(`started on port ${String(connection.port)}, version ${connection.version}`);
       }
@@ -803,10 +808,10 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
       // Only the start half may start a daemon.
       const existing = await discoverDaemon({ logger: stderrLogger });
       if (existing !== null) await stopRunning(existing);
-      const connection = await ensureDaemon({ logger: stderrLogger });
+      const connection = await ensureDaemon({ logger: stderrLogger, direct });
       surfaceWarnings(connection);
       if (wantJson) {
-        printJson({ running: true, port: connection.port, version: connection.version });
+        printJson({ running: true, port: connection.port, version: connection.version, startedWrapped: readDaemonState(shellpuppetHome())?.startedWrapped === true });
       } else {
         console.log(`restarted on port ${String(connection.port)}, version ${connection.version}`);
       }

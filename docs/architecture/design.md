@@ -91,6 +91,15 @@ its working directory open, so a daemon started in the first client's folder wou
 that folder from being deleted or renamed on Windows for as long as it ran. Sessions do
 not inherit the daemon's folder either (§3.1).
 
+If `daemon.startWith` is configured, every client that must start a missing daemon runs
+the configured program and leading arguments before Node and the daemon entry. The
+client still detaches the process, ignores its stdio and polls `/health`; a healthy
+daemon wins even if the spawned wrapper exits. Wrapped starts allow two minutes for
+a person to unlock the secrets tool. `daemon.startWithOnlyIfEnvContains` limits the
+wrapper to clients whose inherited environment has a value containing that string.
+`--direct` on daemon start or restart, or `SHELLPUPPET_DAEMON_DIRECT=1` on any client,
+skips the wrapper for that start.
+
 **The auto-start race is normal, not exceptional.** Claude Code launches its MCP servers
 in parallel; two clients will routinely both find no daemon and both spawn one. The loser
 must not conclude "daemon failed" just because its own child died. The rule:
