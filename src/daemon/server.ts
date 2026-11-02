@@ -1653,7 +1653,7 @@ export class Daemon {
 
     const { env, copied } = copyDaemonEnv(profile.envFromDaemon, this.daemonEnv);
     const envNames = Object.keys(env);
-    const folderLabel = folder?.name;
+    const folderLabel = folder?.name ?? (rootCwd !== undefined ? folderName : undefined);
     const options = {
       command: resolvedCommand.file,
       args: [...profile.args],
@@ -1732,7 +1732,8 @@ export class Daemon {
       ...(profile.envFromDaemon === 'all'
         ? { envFromDaemon: 'all' }
         : copied.length > 0 ? { envFromDaemon: copied } : {}),
-      ...(folder !== undefined ? { folder: folder.name } : {}),
+      ...(folderLabel !== undefined ? { folder: folderLabel } : {}),
+      ...(rootCwd !== undefined ? { rootIndex } : {}),
       ...(session.label !== '' ? { label: session.label } : {}),
     });
 

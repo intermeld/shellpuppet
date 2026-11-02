@@ -194,6 +194,13 @@ The daemon lists immediate directories, omits hidden folders and links, and
 caps each root at 500. It checks the choice again at launch, resolves the
 real paths of the root and child, and refuses a deleted folder or a child
 outside the root, including a junction or symbolic link that leads out. A
+local process able to write inside a root can replace a checked child with a
+junction after this check and before the operating system starts the session.
+The path is resolved again at spawn, so the session may start outside the
+root. The check remains immediately before start; a path based start on
+Windows cannot make that check atomic with spawn. This also applies to free
+paths on profiles that allow any folder.
+A
 name with a separator, `..`, a drive or a Windows device name is refused and
 audited. A
 body that also carries a command, arguments, an environment map, a raw path,
