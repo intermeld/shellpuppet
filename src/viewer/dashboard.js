@@ -722,10 +722,20 @@
       divider.removeEventListener('pointerup', onEnd);
       divider.removeEventListener('pointercancel', onCancel);
       divider.removeEventListener('lostpointercapture', onLost);
+      document.removeEventListener('pointermove', onDocumentMove, true);
+      document.removeEventListener('pointerup', onEnd);
+      document.removeEventListener('pointercancel', onCancel);
       if (pointerId !== null && divider.hasPointerCapture(pointerId)) divider.releasePointerCapture(pointerId);
       finishDivider(divider, before);
     };
-    const onMove = (event) => { if (event.pointerId === pointerId) move(axis === 'row' ? event.clientY : event.clientX); };
+    const onDocumentMove = (event) => {
+      if (event.pointerId === pointerId && !divider.hasPointerCapture(pointerId)) release();
+    };
+    const onMove = (event) => {
+      if (event.pointerId !== pointerId) return;
+      if (!divider.hasPointerCapture(pointerId)) { release(); return; }
+      move(axis === 'row' ? event.clientY : event.clientX);
+    };
     const onEnd = (event) => { if (event.pointerId === pointerId) { move(axis === 'row' ? event.clientY : event.clientX); release(); } };
     const onCancel = (event) => { if (event.pointerId === pointerId) release(); };
     const onLost = (event) => { if (event.pointerId === pointerId) release(); };
@@ -736,6 +746,9 @@
       divider.addEventListener('pointerup', onEnd);
       divider.addEventListener('pointercancel', onCancel);
       divider.addEventListener('lostpointercapture', onLost);
+      document.addEventListener('pointermove', onDocumentMove, true);
+      document.addEventListener('pointerup', onEnd);
+      document.addEventListener('pointercancel', onCancel);
     }
     return { move, release };
   }
@@ -774,24 +787,37 @@
     root.append(divider);
     return divider;
   }
-  function renderDividers(layout, columns, rows, count) {
-    const wanted = new Set();
-    if (layout === 'focus' && count > 1) wanted.add('focus:0');
-    if (layout === 'grid' && mode === 'grid' && count > 1) {
-      for (let index = 0; index < columns - 1; index++) wanted.add(`column:${index}`);
-      for (let index = 0; index < rows - 1; index++) wanted.add(`row:${index}`);
+  function renderDividers(layout, columns, rows, items, primary) {
+    const wanted = new Map();
+    const ids = items.map((item) => item.id);
+    if (layout === 'focus' && ids.length > 1) {
+      wanted.set('focus:0', JSON.stringify([[primary], ids.filter((id) => id !== primary)]));
+    }
+    if (layout === 'grid' && mode === 'grid' && ids.length > 1) {
+      for (let index = 0; index < columns - 1; index++) {
+        wanted.set(`column:${index}`, JSON.stringify([
+          ids.filter((_, position) => position % columns === index),
+          ids.filter((_, position) => position % columns === index + 1),
+        ]));
+      }
+      for (let index = 0; index < rows - 1; index++) {
+        wanted.set(`row:${index}`, JSON.stringify([
+          ids.slice(index * columns, (index + 1) * columns),
+          ids.slice((index + 1) * columns, (index + 2) * columns),
+        ]));
+      }
     }
     const existing = new Map([...root.querySelectorAll('.pane-divider')].map((divider) =>
       [`${divider.dataset.axis}:${divider.dataset.index}`, divider]));
     for (const [key, divider] of existing) {
-      if (wanted.has(key)) continue;
+      if (wanted.get(key) === divider.dataset.panes) continue;
       if (divider === activeDivider) endActiveDivider?.();
       divider.remove();
     }
-    for (const key of wanted) {
-      if (existing.has(key)) continue;
+    for (const [key, sides] of wanted) {
+      if (existing.get(key)?.dataset.panes === sides) continue;
       const [axis, index] = key.split(':');
-      addDivider(axis, Number(index));
+      addDivider(axis, Number(index)).dataset.panes = sides;
     }
     positionDividers();
   }
@@ -848,7 +874,7 @@
           }
           lastStructure = structureKey;
         }
-        renderDividers(layout, columns, rows, items.length);
+        renderDividers(layout, columns, rows, items, primary);
         for (const item of items) {
           const box = item.card.getBoundingClientRect();
           const measuredWidth = box.width;
