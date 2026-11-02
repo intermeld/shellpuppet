@@ -155,7 +155,12 @@ describe('configured daemon start wrapper', () => {
     recordPid(home);
     expect(result.code).toBe(0);
     expect(fs.existsSync(marker)).toBe(true);
-    const reason = kind === 'shared-parent' ? 'unsafe temporary folder' : 'unsafe short folder';
+    const reason = {
+      permissive: 'short folder is open to others',
+      readable: 'short folder is open to others',
+      link: 'short folder is a link',
+      'shared-parent': 'temporary folder is shared without the sticky bit',
+    }[kind];
     expect(result.stderr).toContain(`warning: daemon start coordination unavailable (${reason})`);
     expect(result.stderr.match(/daemon start coordination unavailable/g)).toHaveLength(1);
     expect(result.stderr).not.toContain(home);

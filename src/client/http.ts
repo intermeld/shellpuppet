@@ -226,6 +226,50 @@ async function endSpawnedWrapper(child: ChildProcess, logger: Logger): Promise<v
   }
 }
 
+/** The parts of a file's `lstat` result the start-socket checks read. */
+export interface FolderFacts {
+  isDirectory(): boolean;
+  isSymbolicLink(): boolean;
+  uid: number;
+  mode: number;
+}
+
+/** The fixed reasons a start socket folder is refused; each names one guard. */
+export const START_FOLDER_PROBLEMS = [
+  'temporary folder is not a real folder',
+  'temporary folder belongs to another user',
+  'temporary folder is shared without the sticky bit',
+  'short folder is a link',
+  'short folder is not a real folder',
+  'short folder belongs to another user',
+  'short folder is open to others',
+] as const;
+export type StartFolderProblem = typeof START_FOLDER_PROBLEMS[number];
+
+/**
+ * The short socket folder is checked once and then used by name, so nobody else
+ * may be able to rename or replace it afterwards. Renaming an entry needs write
+ * access to its parent, so a parent that group or others can write to must carry
+ * the sticky bit (as /tmp does). The sticky bit still lets the parent's owner
+ * rename entries, so the parent must also belong to root or to this user.
+ * Ancestors above the parent are not checked; that limit is documented.
+ */
+export function temporaryParentProblem(parent: FolderFacts, uid: number): StartFolderProblem | null {
+  if (!parent.isDirectory() || parent.isSymbolicLink()) return 'temporary folder is not a real folder';
+  if (parent.uid !== 0 && parent.uid !== uid) return 'temporary folder belongs to another user';
+  if ((parent.mode & 0o022) !== 0 && (parent.mode & 0o1000) === 0) return 'temporary folder is shared without the sticky bit';
+  return null;
+}
+
+/** The short folder must be a real folder of this user's with no access for others. */
+export function shortFolderProblem(folder: FolderFacts, uid: number): StartFolderProblem | null {
+  if (folder.isSymbolicLink()) return 'short folder is a link';
+  if (!folder.isDirectory()) return 'short folder is not a real folder';
+  if (folder.uid !== uid) return 'short folder belongs to another user';
+  if ((folder.mode & 0o077) !== 0) return 'short folder is open to others';
+  return null;
+}
+
 function startLockEndpoint(home: string): string {
   if (process.platform !== 'win32') {
     const inHome = path.join(home, START_LOCK_SOCKET);
@@ -234,25 +278,13 @@ function startLockEndpoint(home: string): string {
     const uid = process.getuid?.();
     if (uid === undefined) throw new Error('user id unavailable');
     const parent = os.tmpdir();
-    // The folder below is checked once and then used by name, so nobody else may
-    // be able to rename or replace it afterwards. Renaming an entry needs write
-    // access to its parent, so a parent that group or others can write to must
-    // carry the sticky bit (as /tmp does). The sticky bit still lets the parent's
-    // owner rename entries, so the parent must also belong to root or to this
-    // user. Ancestors above the parent are not checked; that limit is documented.
-    const parentStat = fs.lstatSync(parent);
-    const othersMayWrite = (parentStat.mode & 0o022) !== 0;
-    if (!parentStat.isDirectory() || (parentStat.uid !== 0 && parentStat.uid !== uid) ||
-        (othersMayWrite && (parentStat.mode & 0o1000) === 0)) {
-      throw new Error('unsafe temporary folder');
-    }
+    const parentProblem = temporaryParentProblem(fs.lstatSync(parent), uid);
+    if (parentProblem !== null) throw new Error(parentProblem);
     const folder = path.join(parent, `shellpuppet-${String(uid)}`);
     try { fs.mkdirSync(folder, { mode: 0o700 }); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
-    const stat = fs.lstatSync(folder);
-    if (!stat.isDirectory() || stat.uid !== uid || (stat.mode & 0o077) !== 0) {
-      throw new Error('unsafe short folder');
-    }
+    const folderProblem = shortFolderProblem(fs.lstatSync(folder), uid);
+    if (folderProblem !== null) throw new Error(folderProblem);
     const hash = createHash('sha256').update(path.resolve(home)).digest('hex').slice(0, 16);
     const endpoint = path.join(folder, `start-${hash}.sock`);
     if (Buffer.byteLength(endpoint) + 1 > limit) throw new Error('short socket path exceeds platform limit');
@@ -287,7 +319,7 @@ function startLockFailureReason(error: unknown): string {
   const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
   if (typeof code === 'string' && /^[A-Z0-9_]+$/.test(code)) return code;
   const message = error instanceof Error ? error.message : '';
-  if (message === 'unsafe short folder' || message === 'unsafe temporary folder' || message === 'user id unavailable' ||
+  if ((START_FOLDER_PROBLEMS as readonly string[]).includes(message) || message === 'user id unavailable' ||
       message === 'short socket path exceeds platform limit') return message;
   return 'endpoint preparation failed';
 }
