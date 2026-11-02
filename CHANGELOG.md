@@ -18,6 +18,11 @@ version may change behaviour, and every such change is listed here.
   Connected feature credentials, ShellPuppet's own variables, `NODE_OPTIONS`
   and malformed variable names stay out;
   client-token starts are unchanged.
+- A profile with `"cwd": "ask"` may set `"folders": "any"` to accept an
+  existing local folder chosen by path or the desktop picker. Its dashboard
+  box offers recent paths and configured root folders together. The picker
+  requires the dashboard credential and page proof, allows one dialog at a
+  time, and times out after ten minutes.
 - New sessions open in the dashboard by default. The daemon opens one isolated
   dashboard window when needed and waits for it to connect before trying another.
   If the window cannot open, the start still succeeds and returns a viewer link.
@@ -136,6 +141,11 @@ version may change behaviour, and every such change is listed here.
   their row text. Filtered lists omit waiting prompt questions. Filtered waits
   report questions and options only from their filtered screens, and prompt
   stall logs omit question text. MCP instructions explain when to use the flag.
+
+### Fixed
+
+- Root folder lists omit Windows Hidden and System directories. Rooted
+  launches fill `{folder}` and record the selected folder in the start audit.
 
 ### Changed
 

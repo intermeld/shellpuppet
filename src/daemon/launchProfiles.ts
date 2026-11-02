@@ -2,8 +2,9 @@
  * Dashboard launch profiles (`launcher.profiles`, design §4.3 and §5.1).
  *
  * A profile is the only way the dashboard may start a process: the page names
- * a profile and, when the profile offers them, a folder. It never supplies a
- * command, an argument, a path or an environment value. So this module turns
+ * a profile and, when the profile allows it, a folder. Only an `any` profile
+ * may receive a path. It never supplies a command, argument or environment
+ * value. This module turns
  * the configuration's entries into the small, fixed set of starts the launch
  * route is allowed to perform, and leaves out any entry it cannot read whole.
  *
@@ -114,6 +115,23 @@ export function resolveRootFolder(
   } catch { return { error: 'Folder is no longer available.' }; }
 }
 
+/** A free choice must name an existing local directory by an absolute path. */
+export function resolveAnyFolder(value: unknown): { cwd: string } | { error: string } {
+  if (typeof value !== 'string' || value === '' || value.startsWith('\\\\') || value.startsWith('//') ||
+      (process.platform === 'win32' ? !/^[a-z]:[\\/]/i.test(value) : !path.isAbsolute(value))) {
+    return { error: 'Choose an absolute path on a local drive.' };
+  }
+  try {
+    const cwd = fs.realpathSync(value);
+    if (cwd.startsWith('\\\\') || cwd.startsWith('//') ||
+        (process.platform === 'win32' && !/^[a-z]:[\\/]/i.test(cwd))) {
+      return { error: 'Choose a folder on a local drive.' };
+    }
+    if (!fs.statSync(cwd).isDirectory()) return { error: 'The chosen path is not a directory.' };
+    return { cwd };
+  } catch { return { error: 'The chosen folder does not exist.' }; }
+}
+
 export interface LaunchProfilePolicy {
   allow?: string[];
   deny?: string[];
@@ -126,10 +144,11 @@ export interface LaunchProfile {
   shell?: boolean;
   /** A fixed working directory, or absent when `askCwd` is true. */
   cwd?: string;
-  /** True when the profile asks the page to choose one of `folders`. */
+  /** True when the profile asks the page to choose a working directory. */
   askCwd: boolean;
   folders: LaunchFolder[];
   folderRoots: string[];
+  anyFolder: boolean;
   agent?: string;
   /** Names or "all": the values are read from the daemon at launch. */
   envFromDaemon: string[] | 'all';
@@ -309,7 +328,7 @@ export function parseLaunchProfile(
   let folders: LaunchFolder[] = [];
   let folderRoots: string[] = [];
   if (askCwd) {
-    if (raw['folders'] !== undefined) {
+    if (raw['folders'] !== undefined && raw['folders'] !== 'any') {
       const parsed = parseFolders(raw['folders']);
       if ('problem' in parsed) return parsed;
       folders = parsed.folders;
@@ -320,7 +339,7 @@ export function parseLaunchProfile(
       }
       folderRoots = raw['folderRoots'];
     }
-    if (folders.length === 0 && folderRoots.length === 0) return { problem: 'cwd is "ask", so folders or folderRoots must be non-empty' };
+    if (folders.length === 0 && folderRoots.length === 0 && raw['folders'] !== 'any') return { problem: 'cwd is "ask", so folders or folderRoots must be non-empty' };
   } else if (raw['folders'] !== undefined || raw['folderRoots'] !== undefined) {
     return { problem: 'folders and folderRoots are only allowed when cwd is "ask"' };
   }
@@ -392,6 +411,7 @@ export function parseLaunchProfile(
       ...(askCwd || cwd === undefined ? {} : { cwd }),
       folders,
       folderRoots,
+      anyFolder: raw['folders'] === 'any',
       ...(typeof agent === 'string' ? { agent } : {}),
       envFromDaemon,
       ...(typeof readyText === 'string' ? { readyText } : {}),

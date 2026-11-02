@@ -14,6 +14,11 @@
   const folderSelect = document.getElementById('folder');
   const folderFilter = document.getElementById('folder-filter');
   const recentFolders = document.getElementById('recent-folders');
+  const boundedFolder = document.getElementById('bounded-folder');
+  const anyFolder = document.getElementById('any-folder');
+  const folderPath = document.getElementById('folder-path');
+  const folderPathOptions = document.getElementById('folder-path-options');
+  const browseFolder = document.getElementById('browse-folder');
   const launcher = document.getElementById('launcher');
   const watchOnly = document.getElementById('watch-only');
   const profileProblems = document.getElementById('profile-problems');
@@ -108,6 +113,7 @@
       const entry = { profile: value.profile };
       if (typeof value.folder === 'string' && value.folder.length > 0 && !/[\\/:]/.test(value.folder) && !Array.from(value.folder).some((char) => char.charCodeAt(0) < 32) && value.folder !== '..') entry.folder = value.folder;
       if (Number.isInteger(value.rootIndex) && value.rootIndex >= 0) entry.rootIndex = value.rootIndex;
+      if (typeof value.folderPath === 'string' && value.folderPath !== '') entry.folderPath = value.folderPath;
       out[id] = entry;
     }
     return out;
@@ -276,15 +282,16 @@
     } catch { screenState = 'unavailable'; renderScreens(); }
   }
 
-  function rememberLaunch(id, profile, folder, rootIndex) {
+  function rememberLaunch(id, profile, folder, rootIndex, chosenPath, recentPath) {
     if (typeof id !== 'string' || !NAME.test(profile)) return;
     const entry = { profile };
     if (typeof folder === 'string' && folder !== '') entry.folder = folder;
     if (Number.isInteger(rootIndex) && rootIndex >= 0) entry.rootIndex = rootIndex;
+    if (typeof chosenPath === 'string' && chosenPath !== '') entry.folderPath = chosenPath;
     launches[id] = entry;
     persistLaunches();
-    if (entry.folder) {
-      const key = entry.rootIndex === undefined ? entry.folder : `root:${entry.rootIndex}:${entry.folder}`;
+    if (entry.folder || entry.folderPath) {
+      const key = recentPath || entry.folderPath || (entry.rootIndex === undefined ? entry.folder : `root:${entry.rootIndex}:${entry.folder}`);
       recent = ShellPuppetDashboardFolders.remember(recent, profile, key);
       try { window.localStorage.setItem(RECENT_PREF, JSON.stringify(recent)); } catch { /* Recent folders remain available here. */ }
       renderFolders();
@@ -296,6 +303,7 @@
     const body = { profile: entry.profile };
     if (typeof entry.folder === 'string' && entry.folder !== '') body.folder = entry.folder;
     if (Number.isInteger(entry.rootIndex) && entry.rootIndex >= 0) body.rootIndex = entry.rootIndex;
+    if (typeof entry.folderPath === 'string' && entry.folderPath !== '') body.folderPath = entry.folderPath;
     return body;
   }
 
@@ -763,7 +771,10 @@
       return;
     }
     if (typeof payload.id !== 'string') return;
-    rememberLaunch(payload.id, body.profile, body.folder, body.rootIndex);
+    const profile = profiles.find((item) => item?.name === body.profile);
+    const root = profile?.anyFolder && body.rootIndex !== undefined
+      ? profile.rootFolders?.find((item) => item.rootIndex === body.rootIndex && item.name === body.folder) : null;
+    rememberLaunch(payload.id, body.profile, body.folder, body.rootIndex, body.folderPath, root?.path);
     const item = panes.get(payload.id);
     if (item) updateCard(item);
     applyOpen(payload.id, payload.open);
@@ -775,6 +786,20 @@
 
   function renderFolders() {
     const profile = selectedProfile();
+    const free = !!profile?.anyFolder;
+    boundedFolder.hidden = free;
+    anyFolder.hidden = !free;
+    folderField.hidden = !(profile && profile.folderRequired);
+    if (free) {
+      const options = ShellPuppetDashboardFolders.anyOptions(recent, profile.name, profile.rootFolders);
+      folderPathOptions.textContent = '';
+      for (const value of options) {
+        const option = document.createElement('option');
+        option.value = value;
+        folderPathOptions.append(option);
+      }
+      return;
+    }
     const named = Array.isArray(profile?.folders) ? profile.folders : [];
     const rooted = Array.isArray(profile?.rootFolders) ? profile.rootFolders : [];
     const folders = [
@@ -849,6 +874,14 @@
     if (profile === null) return;
     const body = { profile: profile.name };
     if (profile.folderRequired) {
+      if (profile.anyFolder) {
+        if (folderPath.value === '') { showError('Choose a folder.'); return; }
+        const rootChoice = profile.rootFolders?.find((item) => item.path === folderPath.value);
+        if (rootChoice) { body.folder = rootChoice.name; body.rootIndex = rootChoice.rootIndex; }
+        else body.folderPath = folderPath.value;
+        void postLaunch(body);
+        return;
+      }
       if (folderSelect.value === '') { showError('Choose a folder.'); return; }
       const option = folderSelect.selectedOptions[0];
       if (!option) { showError('Choose a folder.'); return; }
@@ -856,6 +889,24 @@
       if (option.dataset.rootIndex !== undefined) body.rootIndex = Number(option.dataset.rootIndex);
     }
     void postLaunch(body);
+  }
+
+  async function browseForFolder() {
+    const profile = selectedProfile();
+    if (!profile?.anyFolder) return;
+    browseFolder.disabled = true;
+    try {
+      const response = await fetch('/dashboard/folder-picker', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-shellpuppet-csrf': proof },
+        body: JSON.stringify({ profile: profile.name }),
+      });
+      if (response.status === 204) return;
+      const payload = await response.json();
+      if (!response.ok) { showError(payload.error || 'The folder picker failed.'); return; }
+      if (typeof payload.path === 'string') folderPath.value = payload.path;
+    } catch { showError('The folder picker failed.'); }
+    finally { browseFolder.disabled = false; }
   }
 
   function restartSession(id) {
@@ -952,6 +1003,8 @@
   profileSelect.addEventListener('change', renderFolders);
   folderFilter.addEventListener('input', renderFolders);
   folderFilter.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); startSelected(); } });
+  folderPath.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); startSelected(); } });
+  browseFolder.addEventListener('click', () => { void browseForFolder(); });
   document.getElementById('start').addEventListener('click', startSelected);
   document.getElementById('fullscreen').addEventListener('click', () => {
     const next = document.fullscreenElement

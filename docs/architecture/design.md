@@ -752,24 +752,32 @@ signature; `label` and `purpose` are non-empty strings with only `{name}`
 and `{folder}` placeholders. `readyText` is a literal substring and
 `readyQuiet` is non-negative finite milliseconds; both together refuse that
 entry. `cwd` is a fixed path or `ask`, which requires named `{ name, path }`
-folders, `folderRoots`, or both. Each root offers up to 500 immediate
-directories in name order. Hidden folders and links are omitted. The browser
-remembers five recent choices per profile and filters the offered list as a
-person types; Enter starts the selected folder. `envFromDaemon` lists variable names; invalid
+folders, `folderRoots`, or `"folders": "any"`. The latter accepts a typed or
+pasted absolute path on a local drive for that profile. Each root offers up to
+500 immediate directories in name order. Hidden folders and links are omitted. The browser
+remembers five recent choices per profile. For `any` profiles, one path box
+offers recent paths and root folders, accepts a typed path, and has Browse
+to ask the daemon for the desktop folder picker. Other profiles filter the
+offered list as a person types; Enter starts the selected folder.
+`envFromDaemon` lists variable names; invalid
 names are dropped and reported. A profile's `policy` holds only `allow` and
 `deny` regex arrays, never `mode` or `maxSessions`. Unknown entry keys,
 including `envNames` and `passEnv`, refuse the entry.
-The daemon rechecks a root child immediately before start. A local process
-with write access inside the root can replace the checked child with a
-junction before spawn resolves the path again. This residual race also
-applies to free paths when a profile allows any folder.
+Residual folder start risks:
+
+- The daemon rechecks a root child immediately before start. A local process
+  with write access inside the root can replace the checked child with a
+  junction before spawn resolves the path again. A path based Windows start
+  cannot make validation atomic with spawn.
+- A free path on an `any` profile has the same race between validation and
+  spawn when a local process can replace its directory with a junction.
 `open` is `grid` by default, or `focus` or `window`, and sets the
 session's initial dashboard placement.
 
 `POST /dashboard/launch` accepts JSON containing `profile` and, only when
 that profile has `cwd: "ask"`, one listed `folder` name and, for a root choice,
-its `rootIndex`. Any other key is
-`400` and starts nothing. The folder resolves to its configured existing
+its `rootIndex`. An `any` profile may instead send `folderPath`. Any other key
+is `400` and starts nothing. The folder resolves to its configured existing
 directory as spawn `cwd`, never to a command-line fragment. A root choice is
 rebuilt by the daemon and its real path must remain inside the root's real
 path, including when a junction or symbolic link is involved. A removed
@@ -1077,6 +1085,7 @@ gets a fresh proof, without replacing the cookie. The routes are:
 | `POST /dashboard/open` | Client token only; opens the isolated window and returns `{ "opened": true }`, never its URL or grant |
 | `GET /dashboard/profiles` | Cookie read; profile descriptions and problems, never environment values |
 | `POST /dashboard/launch` | Cookie, document proof and JSON profile name; limits in §4.3 |
+| `POST /dashboard/folder-picker` | Cookie, same-origin mutation proof and JSON name of an `any` profile; opens one desktop picker at a time for at most ten minutes |
 | `GET /sessions` | Cookie may read the existing list, including prompt state |
 | `DELETE /sessions/<id>` | Cookie plus document proof may kill |
 | `/dashboard/events` | Cookie plus subprotocol; outbound WebSocket; inbound ignored |

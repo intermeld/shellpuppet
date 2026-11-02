@@ -187,9 +187,16 @@ An optional allowlist/denylist evaluates every `terminal_start` command (see
 start. `launcher` is a known top-level key. Each entry has a short lower-case
 name and a command; the optional fields are arguments, an agent signature,
 the shell flag, a label, a purpose, one readiness condition, a fixed working
-directory or `"cwd": "ask"` with named folders or `folderRoots`, `envFromDaemon`,
+directory or `"cwd": "ask"` with named folders, `folderRoots` or
+`"folders": "any"`, `envFromDaemon`,
 that profile's own allow and deny lists, and an `open` placement. The page
 sends the profile name, and a folder name with a root index for a root choice.
+An `any` profile also accepts a typed or picked absolute path to an existing
+directory on a local drive. The daemon refuses relative, UNC, device, file
+and missing paths. Anything able to use the dashboard credential can start
+that profile in any local folder. Browse uses an authenticated, same-origin,
+proof-protected route, with one desktop picker at a time and a ten-minute
+timeout.
 The daemon lists immediate directories, omits hidden folders and links, and
 caps each root at 500. It checks the choice again at launch, resolves the
 real paths of the root and child, and refuses a deleted folder or a child
@@ -200,12 +207,10 @@ The path is resolved again at spawn, so the session may start outside the
 root. The check remains immediately before start; a path based start on
 Windows cannot make that check atomic with spawn. This also applies to free
 paths on profiles that allow any folder.
-A
-name with a separator, `..`, a drive or a Windows device name is refused and
-audited. A
-body that also carries a command, arguments, an environment map, a raw path,
-a label or a purpose is refused and starts nothing. A path typed into the
-page is not a profile.
+A name with a separator, `..`, a drive or a Windows device name is refused and
+audited. A body that also carries a command, arguments, an environment map,
+a raw path for a bounded profile, a label or a purpose is refused and starts
+nothing.
 
 Policy sees the profile's command and arguments, the real command, before the
 Windows shell wrap, under the same modes and failure rules as

@@ -363,8 +363,9 @@ from the daemon and never writes `config.json`.
 
 The dashboard may start a program only by naming a profile from
 `launcher.profiles`. The page sends the profile's name and, when the profile
-offers folders, one folder name. It can never send a command, arguments, a
-path or an environment value, so a profile is the complete description of
+offers folders, one folder name. A profile with `"folders": "any"` also
+accepts a local folder path. The page cannot send a command, arguments or
+environment value, so a profile is the complete description of
 what one click may run. There is no `PATH` scan, no auto-detection and no
 route that writes a profile: you write them here, and the daemon reads them
 at startup.
@@ -378,8 +379,8 @@ Each entry has these keys. Unknown keys refuse that entry.
 | `args` | no | Array of strings, stored literally. |
 | `shell` | no | Boolean. Omitted means the platform default. |
 | `cwd` | no | A fixed directory, or `"ask"`. A relative path is from your home directory. |
-| `folders` | no | Named `{ "name", "path" }` choices when `cwd` is `"ask"`. |
-| `folderRoots` | no | Non-empty array of directories when `cwd` is `"ask"`. The daemon offers up to 500 immediate folders per root, sorted by name. May be used with `folders`. At least one of these two keys is required for `"ask"`. |
+| `folders` | no | Named `{ "name", "path" }` choices, or `"any"` to allow a typed or picked local folder path, when `cwd` is `"ask"`. |
+| `folderRoots` | no | Non-empty array of directories when `cwd` is `"ask"`. The daemon offers up to 500 immediate folders per root, sorted by name. May be used with named folders or `"any"`. At least one folder source is required for `"ask"`. |
 | `agent` | no | A built-in signature name, or one from `agents.signatures`. |
 | `envFromDaemon` | no | An array of variable names copied from the daemon's environment, or `"all"` for its whole environment. |
 | `readyText` | no | A literal substring that marks the session ready. |
@@ -395,7 +396,13 @@ reading the log. A profile with `"cwd": "ask"` needs `folders` or
 `folderRoots`. The page filters offered folders as you type, starts the
 highlighted choice on Enter, and puts the five most recent choices for each
 profile first in its browser profile. Recent choice buttons start in one click.
-The page sends a root index and one folder name, never a path.
+The page sends a root index and one folder name for bounded profiles. An
+`any` profile has one box for recent paths and root folders, accepts typed
+paths, and has Browse for the operating system's folder picker. The daemon
+resolves a free path to an existing directory on a local drive and refuses
+relative, UNC, device, file and missing paths. The picker allows one dialog
+at a time and times out after ten minutes. Anything able to use the
+dashboard credential can start an `any` profile in any local folder.
 
 **Policy and limits.** Global policy runs first, then the profile's own
 `deny` and `allow` lists, both against the real command line before any

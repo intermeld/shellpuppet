@@ -35,6 +35,13 @@ describe('launcher profiles load', () => {
     expect(problems).toEqual([]);
     expect(launcher.profiles[0]?.folderRoots).toEqual(['C:/work']);
   });
+  it('allows an any-folder profile only with cwd ask', () => {
+    const valid = parse({ profiles: [{ name: 'open', command: 'node', cwd: 'ask', folders: 'any' }] });
+    expect(valid.problems).toEqual([]);
+    expect(valid.launcher.profiles[0]?.anyFolder).toBe(true);
+    const invalid = parse({ profiles: [{ name: 'fixed', command: 'node', cwd: 'C:/work', folders: 'any' }] });
+    expect(invalid.launcher.profiles).toEqual([]);
+  });
   it('reads a full profile and applies the documented defaults', () => {
     const { launcher, problems } = parse({
       profiles: [
