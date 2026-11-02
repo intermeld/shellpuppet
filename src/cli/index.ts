@@ -55,8 +55,13 @@ Usage:
       be an .exe or .com, so start a script through the shell. A command with
       a path separator is resolved from the session's working directory, and
       a file name containing ':' is refused as an alternate data stream.
+      On Windows, the default uses cmd.exe /d /s /c. Arguments are joined as
+      shell text: quote spaces for cmd.exe, for example pass the one argument
+      'mcp_servers.x.command="C:/Program Files/nodejs/node.exe"' from Git Bash.
+      cmd.exe also expands %NAME% and interprets ^ & | < >. Use --no-shell
+      with an .exe or .com when each argument must arrive literally.
       Options go BEFORE the command; everything after the command is passed
-      to it verbatim (so its own --flags survive).
+      to the daemon unchanged (so its own --flags survive).
   shellpuppet list [--waiting] [--hide-reasoning]   List sessions, or only waiting prompts
   shellpuppet snap <id> [--last <n>] [--hide-reasoning]
                                                     Print the rendered screen

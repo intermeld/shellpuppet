@@ -37,6 +37,11 @@ import type { TestDaemon } from './helpers.js';
 
 const execFileAsync = promisify(execFile);
 const ensureDaemonFixture = path.join(repoRoot, 'test', 'integration', 'fixtures', 'ensure-daemon.mjs');
+const argvEchoFixture = path.join(repoRoot, 'test', 'integration', 'fixtures', 'argv-echo.mjs');
+const argvValues = [
+  'with space', 'x=with space', 'say "hello"', '"quoted space"', 'trailing\\', 'with space\\',
+  '%PATH%', '^', '&', '|', '<', '>', "single'quote", '', 'café 漢字',
+];
 
 interface RawResult {
   status: number;
@@ -308,6 +313,46 @@ function standInStart(options: SessionOptions, id: string): Session {
 }
 
 describe('the body names a profile and cannot widen it', () => {
+  it('passes literal arguments in a direct profile and shell text in a wrapped profile', async () => {
+    const daemon = await startLaunchDaemon({
+      launcher: profilesOf([
+        { name: 'direct', command: process.execPath, args: [argvEchoFixture, '"quoted space"'], shell: false },
+        { name: 'wrapped', command: process.execPath, args: [argvEchoFixture, 'x=with space'], shell: true },
+      ]),
+    });
+    for (const [profile, expected] of [
+      ['direct', ['"quoted space"']],
+      ['wrapped', ['x=with', 'space']],
+    ] as const) {
+      const started = await launch(daemon, { profile });
+      expect(started.status).toBe(200);
+      const id = String((JSON.parse(started.body) as { id: string }).id);
+      const waited = await api(daemon.port, daemon.token, `/sessions/${id}/wait?text=ARGV%3D&timeout=20000`);
+      expect(waited.body['matched']).toBe(true);
+      const row = (await screenOf(daemon, id)).split('\n').find((line) => line.startsWith('ARGV='));
+      expect(row).toBeDefined();
+      expect(JSON.parse(row!.slice(5).trimEnd())).toEqual(expected);
+    }
+  }, 60_000);
+
+  it('passes the complete argument set through a direct launch profile', async () => {
+    const daemon = await startLaunchDaemon({
+      launcher: profilesOf([
+        { name: 'all-args', command: process.execPath, args: [argvEchoFixture, ...argvValues], shell: false },
+      ]),
+    });
+    const started = await launch(daemon, { profile: 'all-args' });
+    expect(started.status).toBe(200);
+    const id = String((JSON.parse(started.body) as { id: string }).id);
+    const waited = await api(daemon.port, daemon.token, `/sessions/${id}/wait?text=ARGV%3D&timeout=20000`);
+    expect(waited.body['matched']).toBe(true);
+    const rows = (await screenOf(daemon, id)).split('\n');
+    const first = rows.findIndex((line) => line.startsWith('ARGV='));
+    expect(first).toBeGreaterThanOrEqual(0);
+    const json = rows.slice(first).map((line) => line.trimEnd()).join('').slice(5).trimEnd();
+    expect(JSON.parse(json)).toEqual(argvValues);
+  }, 60_000);
+
   it('refuses a command, a missing profile and extra arguments, then starts the profile', async () => {
     const dir = makeDir('dash-launch-cwd-');
     const daemon = await startLaunchDaemon({

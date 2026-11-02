@@ -497,11 +497,16 @@ that number is the live cap instead, and the rate still applies. A refusal
 starts nothing. These caps are on the dashboard route only: a client token's
 `POST /sessions` keeps its existing behaviour.
 
-Under the Windows default shell, `args` are shell text: `cmd.exe` interprets
-a metacharacter in a configured argument (`&`, `|`, `<`, `>`, `^`, `%`) after
-policy has seen the line, as it does for any shell start. Write the
-arguments the program expects, and set `"shell": false` for a program that
-does not need the wrap.
+Under the Windows default shell, ShellPuppet joins `command` and `args` with
+spaces and runs the line through `cmd.exe /d /s /c`. The array keeps each
+string intact until that point, but it is then shell text. Put double quotes
+inside an argument around a value with spaces, for example
+`"mcp_servers.x.command=\"C:/Program Files/nodejs/node.exe\""` in JSON.
+The program receives one argument with the path's space. `cmd.exe` treats
+`^`, `&`, `|`, `<` and `>` as syntax and expands `%NAME%` even within double
+quotes. Set `"shell": false` for an `.exe` or `.com` whose arguments must
+arrive literally. On other platforms, the default is a direct start;
+`"shell": true` runs the joined line through `/bin/sh -c`.
 
 **Environment.** A dashboard start uses the same clean `sessionEnv` baseline
 as any other session. An array in `envFromDaemon` adds only the names listed

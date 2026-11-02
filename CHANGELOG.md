@@ -9,6 +9,8 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Direct Windows starts (`--no-shell` or `shell: false`) now preserve literal
+  arguments which begin and end with double quotes and contain spaces.
 - Dashboard windows retain their session share through slowed browser timers,
   hand sessions back on close, spread overflow by readable capacity and refit
   panes in the window that receives them.
