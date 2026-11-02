@@ -7,7 +7,7 @@
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parseDaemonConfig } from '../../src/daemon/config.js';
 import {
   compileProfilePolicy,
@@ -139,13 +139,17 @@ describe('folders offered under a root', () => {
   it('keeps the event loop available while listing a 400-folder root', async () => {
     const dir = root();
     for (let index = 0; index < 400; index++) fs.mkdirSync(path.join(dir, `folder-${String(index).padStart(3, '0')}`));
-    let ticks = 0;
-    const timer = setInterval(() => { ticks++; }, 1);
+    let yields = 0;
+    const readDir = fs.promises.readdir.bind(fs.promises);
+    const read = vi.spyOn(fs.promises, 'readdir').mockImplementation(async (directory, options) => {
+      await new Promise<void>((resolve) => setImmediate(() => { yields++; resolve(); }));
+      return readDir(directory, options);
+    });
     try {
       const listed = await Promise.all(Array.from({ length: 5 }, () => listRootFolders([dir])));
       expect(listed[0]).toHaveLength(400);
-      expect(ticks).toBeGreaterThan(0);
-    } finally { clearInterval(timer); }
+      expect(yields).toBe(5);
+    } finally { read.mockRestore(); }
   }, 30_000);
 
   it.each(['a/b', 'a\\b'])('rejects a separator as its own name guard: %s', (name) => {

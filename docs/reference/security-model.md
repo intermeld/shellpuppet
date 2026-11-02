@@ -397,8 +397,14 @@ inherit it.
 
 Clients serialise starts with a local listening endpoint, so a competing
 start waits rather than running a second wrapper. The OS releases the listener
-when its client dies. On POSIX, a stale socket pathname is removed only after
-a refused connection and a socket type check. On Windows, Node cannot verify
+when its client dies. On POSIX, the socket stays in `SHELLPUPPET_HOME` if its
+path fits the platform limit. Otherwise it uses a private
+`shellpuppet-<uid>` folder under the system temporary directory, after checking
+that it is a real directory owned by this user and not writable by others.
+A stale socket pathname is removed only after a refused connection, a socket
+type check and an owner check. If the endpoint cannot be used, the client warns
+and starts without coordination; the daemon's single-owner state claim still
+applies. On Windows, Node cannot verify
 the owner of an already occupied named pipe, so another local user could
 occupy its name and deny daemon start; this does not grant daemon access.
 Stop and restart wait for a pending start, within the same bound, and report
