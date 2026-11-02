@@ -41,7 +41,7 @@ async function browserProbe(beforeNavigateScript: string, probe: string): Promis
   return JSON.parse(String(shot.probe)) as Record<string, unknown>;
 }
 
-async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other'): Promise<{
+async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', dragCheck = false): Promise<{
   before: { primary: string[]; other: string[]; childConnected: string };
   after: string[];
   paused: { primary: string[]; other: string[]; toolbar: string[] };
@@ -51,6 +51,8 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other'): 
   oversized: { note: string; horizontal: number; vertical: number; left: number; top: number };
   movedFit: { before: string; after: string; resizes: { cols: number; rows: number; take: boolean }[];
     donorStreams: string[] };
+  dragIsolation?: { firstBefore: number; firstAfter: number; secondBefore: number; secondAfter: number;
+    firstStored: string | null; secondStored: string | null };
 }> {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-screen-cdp-'));
   const child = spawn(browser!, captureBrowserArgs(profile, 1280, 720), { stdio: 'ignore', windowsHide: true });
@@ -178,6 +180,31 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other'): 
           { cols: number; rows: number; take: boolean }[],
       donorStreams: await evaluate(primary.sessionId,
         "window.__dashboardDiagnostics.streams.filter(entry => entry.socket.readyState === 1 && entry.url.includes('/sessions/s3/stream')).map(entry => entry.url)") as string[] };
+    let dragIsolation;
+    if (dragCheck) {
+      await evaluate(second.sessionId, "document.getElementById('focus').click()");
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      const firstBefore = Number(await evaluate(primary.sessionId,
+        "document.querySelector('.pane').getBoundingClientRect().width"));
+      const secondBefore = Number(await evaluate(second.sessionId,
+        "document.getElementById('strip').getBoundingClientRect().width"));
+      const box = await evaluate(second.sessionId,
+        "document.querySelector('.pane-divider[data-axis=focus]').getBoundingClientRect().toJSON()") as
+        { x: number; y: number; width: number; height: number };
+      const x = box.x + box.width / 2;
+      const y = box.y + box.height / 2;
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 }, second.sessionId);
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x - 150, y, button: 'left', buttons: 1 }, second.sessionId);
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: x - 150, y, button: 'left', clickCount: 1 }, second.sessionId);
+      dragIsolation = {
+        firstBefore,
+        firstAfter: Number(await evaluate(primary.sessionId, "document.querySelector('.pane').getBoundingClientRect().width")),
+        secondBefore,
+        secondAfter: Number(await evaluate(second.sessionId, "document.getElementById('strip').getBoundingClientRect().width")),
+        firstStored: await evaluate(primary.sessionId, "sessionStorage.getItem('shellpuppet.dashboard.tracks')") as string | null,
+        secondStored: await evaluate(second.sessionId, "sessionStorage.getItem('shellpuppet.dashboard.tracks')") as string | null,
+      };
+    }
     const oversized = await evaluate(second.sessionId, `(() => {
       const card = document.querySelector('.pane[data-session=s3]');
       const wrap = card.querySelector('.pane-wrap');
@@ -211,7 +238,8 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other'): 
     await send('Target.closeTarget', { targetId: second.targetId });
     await waitFor(async () => (await ids(primary.sessionId) as string[] | undefined)?.length === 3);
     const closeMs = Date.now() - closedAt;
-    return { before, after: await ids(primary.sessionId) as string[], paused, closeMs, movedFit, oversized };
+    return { before, after: await ids(primary.sessionId) as string[], paused, closeMs, movedFit, oversized,
+      ...(dragIsolation ? { dragIsolation } : {}) };
   } finally {
     if (socket?.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ id: ++serial, method: 'Browser.close', params: {} }));
@@ -381,6 +409,17 @@ describe('dashboard screen controls in Chromium', () => {
     expect(result.movedFit.donorStreams).toEqual([]);
     expect(result.closeMs).toBeLessThan(2000);
     expect(result.after).toEqual(sessions);
+  }, 180_000);
+
+  it('keeps a drag in the window where it happened', async (context) => {
+    if (!browser) { context.skip(); return; }
+    await ensureSessions();
+    const result = await multiWindowProbe(await freshUrl(), undefined, true);
+    const drag = result.dragIsolation!;
+    expect(drag.secondAfter).toBeGreaterThan(drag.secondBefore + 100);
+    expect(drag.firstAfter).toBeCloseTo(drag.firstBefore, 0);
+    expect(drag.firstStored).toBeNull();
+    expect(drag.secondStored).toContain('focusStrip');
   }, 180_000);
 
   for (const lost of ['primary', 'other'] as const) it(`returns sessions after the ${lost} dashboard socket closes without pagehide`, async (context) => {

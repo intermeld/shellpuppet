@@ -73,6 +73,12 @@ client token must remain outside the browser.
   `Ctrl+Shift+A` prefix enters navigation and is consumed by the page.
   Pin and reorder are deliberate gestures. The dashboard remembers mode,
   order and pin in its isolated browser profile.
+- **Resize visible tracks.** A pointer drag or keyboard arrow moves the Focus
+  boundary or a Grid row or column boundary. Home resets that direction.
+  The boundary stops at the readable pane minimum or the strip minimum.
+  A release fits only panes that grew; panes that shrank retain their grid.
+  Each window keeps its own track sizes for the session and resets them on
+  Auto, on Grid again, or when its pane count invalidates them.
 - **The terminal changes size only on a deliberate act.** A dashboard pane
   adopts the session grid without driving it when it connects. Auto fit is
   on by default and is the person's continuing choice to fit each pane after
