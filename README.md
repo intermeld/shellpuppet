@@ -371,24 +371,15 @@ and the number of sharing windows. The screen buttons follow windows moved
 between screens. Closing a window returns its sessions to the others. Auto fit
 refits a session in the window that receives it.
 
-### Start ShellPuppet from the Start menu
-
-On Windows, run `shellpuppet desktop --install` once. The per-user ShellPuppet
-shortcut starts the daemon using your configured [`daemon.startWith`](docs/reference/configuration.md#daemon-start-wrapper)
-when needed, then opens the dashboard. Pin the shortcut to Start or the taskbar
-to start ShellPuppet with one click. You can pin the dashboard window to keep
-its place, but use the shortcut to start ShellPuppet. A second click while a
-dashboard page is connected reports that ShellPuppet is already open. The
-shortcut starts minimised, so the console should only blink. Its target is
-Node and the installed package's `dist/cli/index.js` at the package's stable
-global location, which an npm update replaces in place. Run `--install` again
-if you move the package to a different prefix or move or replace Node at a
-different path. `--uninstall` removes only ShellPuppet's shortcut.
-
-On Linux, `--install` writes a per-user `shellpuppet.desktop` application
-launcher. On macOS, shortcut installation is not available yet. You can run
-`shellpuppet desktop` from a terminal on any platform. `shellpuppet dashboard`
-still opens a new isolated window on every call.
+In Focus, drag the boundary between the large pane and its strip. In Grid,
+drag a boundary between columns or rows. Focus a boundary and use the arrow
+keys for small steps, Shift with an arrow for larger steps, or Home to reset
+that direction. A drag stops at the readable pane size, or at the strip's
+minimum width. On release, a pane that grew fits its real terminal, respecting
+Auto fit's rules when it is on; one that shrank keeps its grid and scales or
+scrolls. Sizes stay
+in this window for the session and survive a reload. Choose Auto or Grid
+again to reset them.
 
 Double-click a pane's title bar to Enlarge or Restore it. Escape restores an
 enlarged pane in navigation mode or when focus is outside the terminal;
@@ -408,6 +399,25 @@ scripts can branch on either. `find` prints each matching line as
 line `No matches.` on stderr, never the pattern, as the MCP tool does. With
 `--json` it prints the response, an empty `matches` list included, and still
 exits 3 when nothing matched.
+
+### Start ShellPuppet from the Start menu
+
+On Windows, run `shellpuppet desktop --install` once. The per-user ShellPuppet
+shortcut starts the daemon using your configured [`daemon.startWith`](docs/reference/configuration.md#daemon-start-wrapper)
+when needed, then opens the dashboard. Pin the shortcut to Start or the taskbar
+to start ShellPuppet with one click. You can pin the dashboard window to keep
+its place, but use the shortcut to start ShellPuppet. A second click while a
+dashboard page is connected reports that ShellPuppet is already open. The
+shortcut starts minimised, so the console should only blink. Its target is
+Node and the installed package's `dist/cli/index.js` at the package's stable
+global location, which an npm update replaces in place. Run `--install` again
+if you move the package to a different prefix or move or replace Node at a
+different path. `--uninstall` removes only ShellPuppet's shortcut.
+
+On Linux, `--install` writes a per-user `shellpuppet.desktop` application
+launcher. On macOS, shortcut installation is not available yet. You can run
+`shellpuppet desktop` from a terminal on any platform. `shellpuppet dashboard`
+still opens a new isolated window on every call.
 
 ## How it works
 

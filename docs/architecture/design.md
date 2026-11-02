@@ -1165,7 +1165,14 @@ count after twenty seconds without moving or focusing a pane; the jump key
 selects a waiting pane where it stands. Pin does not reorder a grid; the
 earliest pinned pane takes the large slot in Focus. Only an explicit reorder
 changes order. Mode, order, pin, Auto fit and text size live in `localStorage` in the isolated
-profile; gone session ids are dropped.
+profile; gone session ids are dropped. Focus has a draggable boundary between
+its large pane and strip. Forced Grid has draggable column and row boundaries,
+with one size per track. A boundary is keyboard focusable: arrows move it,
+Shift with an arrow takes larger steps, and Home resets that direction. Panes
+stop at 652 by 446 px and the strip at 300 px; a Grid already below that floor
+cannot be dragged further below it. Track sizes live only in this window's
+`sessionStorage`, survive a reload, and reset on Auto, on Grid again, or when
+the pane count invalidates them.
 
 **Geometry.** Each pane uses the session's grid and measures whole character
 cells to scale its font between 6 px and 40 px, without stretching glyphs.
@@ -1184,7 +1191,11 @@ window, text size or outside grid change settles for 250 ms. It sends at most
 one resize per pane for the settled change and leaves a grid held by another
 client alone. If the same session is resized from outside again within ten
 seconds of that refit, the pane follows it until the person presses Fit. A
-followed or held grid scales its text down to 6 px, then scrolls if it still
+drag changes only the page during pointer movement. On release, panes that
+grew fit their real terminal under the same Auto fit and geometry ownership
+rules; panes that shrank keep their real grid and scale or scroll. With Auto
+fit off, the deliberate release still fits grown panes unless their grid is
+held. A followed or held grid scales its text down to 6 px, then scrolls if it still
 does not fit. It returns to the chosen text size when it fits again. A popped
 out pane follows its own window. Turning Auto fit off restores font scaling without a resize on
 layout and window changes. Fit takes control

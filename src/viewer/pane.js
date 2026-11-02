@@ -719,6 +719,10 @@ window.ShellPuppetPane = (() => {
         return proposed !== null && this.takeGrid(
           Math.max(floorCols, proposed.cols), Math.max(floorRows, proposed.rows));
       },
+      fitAfterDrag(useAutoFit) {
+        if (controlMode === 'held' || captureMode || !geometryDecided) return false;
+        return useAutoFit ? this.autoFitGrid(80, 24) : this.fitGrid(80, 24);
+      },
     };
   }
 

@@ -29,6 +29,7 @@
   strip.id = 'strip';
   const panes = new Map();
   const PREF = 'shellpuppet.dashboard';
+  const TRACK_PREF = 'shellpuppet.dashboard.tracks';
   const LAUNCH_PREF = 'shellpuppet.dashboard.launches';
   const RECENT_PREF = 'shellpuppet.dashboard.recentFolders';
   const NAME = /^[a-z][a-z0-9-]{0,31}$/;
@@ -43,6 +44,13 @@
     ? saved.fontSize : saved.fontSize === null ? null
       : Number.isInteger(configuredFont) && configuredFont >= 8 && configuredFont <= 32 ? configuredFont : null;
   let autoFitTimer = null;
+  if (!window.name) window.name = `shellpuppet-dashboard-${Date.now()}-${Math.random()}`;
+  let tracks = { count: 0, focusStrip: null, columns: null, rows: null };
+  try {
+    const record = JSON.parse(window.sessionStorage.getItem(TRACK_PREF) || 'null');
+    if (record?.owner === window.name && Number.isInteger(record.count)) tracks = record;
+  } catch { /* Track sizes are optional. */ }
+  let activeDivider = null;
   const focusOpenFits = new Set();
   const incomingFits = new Set();
   let prefix = typeof saved.prefix === 'string' && /^[a-z]$/.test(saved.prefix) ? saved.prefix : 'a';
@@ -127,6 +135,58 @@
   const persist = () => {
     try { window.localStorage.setItem(PREF, JSON.stringify({ mode, order, pins, prefix, autoFit, fontSize })); } catch { /* Layout still works. */ }
   };
+  function saveTracks() {
+    try { window.sessionStorage.setItem(TRACK_PREF, JSON.stringify({ ...tracks, owner: window.name })); }
+    catch { /* The current document still keeps its sizes. */ }
+  }
+  function resetTracks() {
+    tracks = { count: shown().length, focusStrip: null, columns: null, rows: null };
+    try { window.sessionStorage.removeItem(TRACK_PREF); } catch { /* The current document still resets. */ }
+    applyTracks();
+  }
+  function applyTracks() {
+    root.style.removeProperty('--strip-width');
+    root.style.removeProperty('--grid-columns');
+    root.style.removeProperty('--grid-rows');
+    if (Number.isFinite(tracks.focusStrip)) root.style.setProperty('--strip-width', `${tracks.focusStrip}px`);
+    if (Array.isArray(tracks.columns)) root.style.setProperty('--grid-columns', tracks.columns.map((x) => `${x}fr`).join(' '));
+    if (Array.isArray(tracks.rows)) root.style.setProperty('--grid-rows', tracks.rows.map((x) => `${x}fr`).join(' '));
+  }
+  function clampTracks(width, height, columns, rows) {
+    const { MIN_PANE_WIDTH: minWidth, MIN_PANE_HEIGHT: minHeight, MIN_STRIP_WIDTH: minStrip } = ShellPuppetDashboardLayout;
+    const focusSpace = width - 6;
+    if (typeof tracks.focusStrip === 'number' && Number.isFinite(tracks.focusStrip)) {
+      tracks.focusStrip = focusSpace >= minWidth + minStrip
+        ? Math.max(minStrip, Math.min(focusSpace - minWidth, tracks.focusStrip)) : null;
+    }
+    for (const [name, count, space, minimum] of [
+      ['columns', columns, width - 6 * (columns - 1), minWidth],
+      ['rows', rows, height - 6 * (rows - 1), minHeight],
+    ]) {
+      const values = tracks[name];
+      if (!Array.isArray(values)) continue;
+      if (values.length !== count || values.some((value) => typeof value !== 'number' || !Number.isFinite(value) || value <= 0) ||
+          space < count * minimum) { tracks[name] = null; continue; }
+      let remaining = space;
+      let weight = values.reduce((sum, value) => sum + value, 0);
+      const sizes = Array(count).fill(0);
+      const free = new Set(values.map((_, index) => index));
+      while (free.size > 0) {
+        const small = [...free].filter((index) => remaining * values[index] / weight < minimum);
+        if (small.length === 0) {
+          for (const index of free) sizes[index] = remaining * values[index] / weight;
+          break;
+        }
+        for (const index of small) {
+          sizes[index] = minimum;
+          remaining -= minimum;
+          weight -= values[index];
+          free.delete(index);
+        }
+      }
+      tracks[name] = sizes.map((size) => size / space);
+    }
+  }
   const persistLaunches = () => {
     try { window.localStorage.setItem(LAUNCH_PREF, JSON.stringify(launches)); } catch { /* Restart still works in this document. */ }
   };
@@ -166,6 +226,7 @@
   }
   function scheduleAutoFit() {
     clearTimeout(autoFitTimer);
+    if (activeDivider) return;
     if (!autoFit) { focusOpenFits.clear(); return; }
     autoFitTimer = setTimeout(() => {
       autoFitTimer = null;
@@ -564,6 +625,141 @@
       if (window.__dashboardTrace) window.__dashboardTrace.visibilityDepth--;
     }
   }
+  function trackSizes(axis) {
+    if (axis === 'focus') return [main.getBoundingClientRect().width, strip.getBoundingClientRect().width];
+    const items = shown();
+    const columns = Math.ceil(Math.sqrt(items.length));
+    const count = axis === 'column' ? columns : Math.ceil(items.length / columns);
+    return Array.from({ length: count }, (_, index) => {
+      const card = items[axis === 'column' ? index : index * columns]?.card;
+      return card?.getBoundingClientRect()[axis === 'column' ? 'width' : 'height'] || 0;
+    });
+  }
+  function setTrackSizes(axis, sizes) {
+    if (axis === 'focus') tracks.focusStrip = sizes[1];
+    else {
+      const total = sizes.reduce((sum, size) => sum + size, 0);
+      tracks[axis === 'column' ? 'columns' : 'rows'] = sizes.map((size) => size / total);
+    }
+    applyTracks();
+    positionDividers();
+  }
+  function positionDividers() {
+    const frame = root.getBoundingClientRect();
+    const items = shown();
+    const columns = Math.ceil(Math.sqrt(items.length));
+    for (const divider of root.querySelectorAll('.pane-divider')) {
+      const axis = divider.dataset.axis;
+      const index = Number(divider.dataset.index);
+      const target = axis === 'focus' ? main : items[axis === 'column' ? index : (index + 1) * columns - 1]?.card;
+      if (!target) continue;
+      const boundary = target.getBoundingClientRect()[axis === 'row' ? 'bottom' : 'right'];
+      if (axis === 'row') {
+        divider.style.left = '6px'; divider.style.right = '6px';
+        divider.style.top = `${boundary - frame.top - 3}px`;
+      } else {
+        divider.style.top = '6px'; divider.style.bottom = '6px';
+        divider.style.left = `${boundary - frame.left - 3}px`;
+      }
+    }
+  }
+  function paneSizes() {
+    return new Map(shown().map((item) => [item.id, item.card.getBoundingClientRect()]));
+  }
+  function finishDivider(divider, before) {
+    activeDivider = null;
+    divider.classList.remove('dragging');
+    saveTracks();
+    positionDividers();
+    lastVisibilityGeometry = null;
+    syncVisibility();
+    for (const item of shown()) {
+      const old = before.get(item.id);
+      if (!old || !item.client || !visible(item)) continue;
+      const now = item.card.getBoundingClientRect();
+      if (now.width > old.width + 1 || now.height > old.height + 1) item.client.fitAfterDrag(autoFit);
+    }
+  }
+  function beginDivider(divider, pointerId, start) {
+    const axis = divider.dataset.axis;
+    const index = Number(divider.dataset.index);
+    const sizes = trackSizes(axis);
+    const before = paneSizes();
+    const minimum = axis === 'row' ? ShellPuppetDashboardLayout.MIN_PANE_HEIGHT : ShellPuppetDashboardLayout.MIN_PANE_WIDTH;
+    const secondMinimum = axis === 'focus' ? ShellPuppetDashboardLayout.MIN_STRIP_WIDTH : minimum;
+    clearTimeout(autoFitTimer);
+    activeDivider = divider;
+    divider.classList.add('dragging');
+    const move = (coordinate) => {
+      const total = sizes[index] + sizes[index + 1];
+      if (total < minimum + secondMinimum) return;
+      const first = Math.max(minimum, Math.min(total - secondMinimum, sizes[index] + coordinate - start));
+      if (Math.abs(first - sizes[index]) < 0.5) return;
+      const next = sizes.slice();
+      next[index] = first; next[index + 1] = total - first;
+      setTrackSizes(axis, next);
+    };
+    const release = () => {
+      divider.removeEventListener('pointermove', onMove);
+      divider.removeEventListener('pointerup', onEnd);
+      divider.removeEventListener('pointercancel', onCancel);
+      if (pointerId !== null && divider.hasPointerCapture(pointerId)) divider.releasePointerCapture(pointerId);
+      finishDivider(divider, before);
+    };
+    const onMove = (event) => move(axis === 'row' ? event.clientY : event.clientX);
+    const onEnd = (event) => { move(axis === 'row' ? event.clientY : event.clientX); release(); };
+    const onCancel = () => { setTrackSizes(axis, sizes); release(); };
+    if (pointerId !== null) {
+      divider.setPointerCapture(pointerId);
+      divider.addEventListener('pointermove', onMove);
+      divider.addEventListener('pointerup', onEnd);
+      divider.addEventListener('pointercancel', onCancel);
+    }
+    return { move, release };
+  }
+  function addDivider(axis, index) {
+    const divider = document.createElement('div');
+    divider.className = 'pane-divider';
+    divider.dataset.axis = axis;
+    divider.dataset.index = String(index);
+    divider.setAttribute('role', 'separator');
+    divider.setAttribute('aria-orientation', axis === 'row' ? 'horizontal' : 'vertical');
+    divider.setAttribute('aria-label', axis === 'focus' ? 'Resize focused pane and strip' :
+      `Resize ${axis === 'column' ? 'columns' : 'rows'} ${index + 1} and ${index + 2}`);
+    divider.tabIndex = 0;
+    divider.addEventListener('pointerdown', (event) => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      divider.focus();
+      beginDivider(divider, event.pointerId, axis === 'row' ? event.clientY : event.clientX);
+    });
+    divider.addEventListener('keydown', (event) => {
+      const steps = axis === 'row' ? { ArrowUp: -24, ArrowDown: 24 } : { ArrowLeft: -24, ArrowRight: 24 };
+      if (event.key !== 'Home' && !Object.hasOwn(steps, event.key)) return;
+      event.preventDefault(); event.stopPropagation();
+      if (event.key === 'Home') {
+        const before = paneSizes();
+        if (axis === 'focus') tracks.focusStrip = null;
+        else tracks[axis === 'column' ? 'columns' : 'rows'] = null;
+        applyTracks(); finishDivider(divider, before);
+      } else {
+        const coordinate = divider.getBoundingClientRect()[axis === 'row' ? 'y' : 'x'];
+        const action = beginDivider(divider, null, coordinate);
+        action.move(coordinate + steps[event.key] * (event.shiftKey ? 4 : 1));
+        action.release();
+      }
+    });
+    root.append(divider);
+  }
+  function renderDividers(layout, columns, rows, count) {
+    for (const divider of root.querySelectorAll('.pane-divider')) divider.remove();
+    if (layout === 'focus' && count > 1) addDivider('focus', 0);
+    if (layout === 'grid' && mode === 'grid' && count > 1) {
+      for (let index = 0; index < columns - 1; index++) addDivider('column', index);
+      for (let index = 0; index < rows - 1; index++) addDivider('row', index);
+    }
+    positionDividers();
+  }
   function arrange(trigger = 'unspecified') {
     traceArrange(trigger);
     if (arranging || syncingVisibility) {
@@ -580,11 +776,17 @@
     }
     try {
       const items = shown();
+      if (items.length > 0 && tracks.count !== items.length) {
+        if (tracks.count > 0) resetTracks();
+        tracks.count = items.length;
+      }
       renderShareCount();
       const width = root.clientWidth - 12;
       const height = root.clientHeight - 12;
       const columns = Math.ceil(Math.sqrt(items.length));
       const rows = Math.ceil(items.length / Math.max(1, columns));
+      if (items.length > 0) clampTracks(width, height, columns, rows);
+      applyTracks();
       const autoGrid = items.length <= 1 || (width / columns >= 652 && height / rows >= 446);
       const layout = popSelf !== null || enlarged ? 'enlarged' : mode === 'auto' ? (autoGrid ? 'grid' : 'focus') : mode;
       const primary = layout === 'focus' ? pins.find((id) => items.some((item) => item.id === id)) ||
@@ -614,11 +816,11 @@
           }
           lastStructure = structureKey;
         }
+        renderDividers(layout, columns, rows, items.length);
         for (const item of items) {
-          const measuredWidth = layout === 'grid' ? width / columns
-            : item.card.parentElement === strip ? 300
-              : layout === 'focus' && items.length > 1 ? width - 300 : width;
-          const measuredHeight = layout === 'grid' ? height / rows : item.card.parentElement === strip ? 170 : height;
+          const box = item.card.getBoundingClientRect();
+          const measuredWidth = box.width;
+          const measuredHeight = box.height;
           item.card.classList.toggle('below-floor', measuredWidth < 652 || measuredHeight < 446);
           updateCard(item);
         }
@@ -1019,6 +1221,7 @@
   for (const name of ['auto', 'grid', 'focus']) {
     document.getElementById(name).addEventListener('click', () => {
       if (name === 'focus') focusId = selected;
+      if (name === 'auto' || name === 'grid') resetTracks();
       mode = name; enlarged = null; persist(); arrange('mode');
       if (name === 'focus' && !autoFit) {
         const items = shown();

@@ -4,8 +4,11 @@
   const readable = (width, height, count) => {
     const columns = Math.ceil(Math.sqrt(count));
     const rows = Math.ceil(count / columns);
-    return width / columns >= 652 && height / rows >= 446;
+    return width / columns >= MIN_PANE_WIDTH && height / rows >= MIN_PANE_HEIGHT;
   };
+  const MIN_PANE_WIDTH = 652;
+  const MIN_PANE_HEIGHT = 446;
+  const MIN_STRIP_WIDTH = 300;
   const capacity = (width, height) => {
     let count = 0;
     while (count < 32 && readable(width, height, count + 1)) count += 1;
@@ -44,5 +47,6 @@
     }
     return result;
   };
-  globalThis.ShellPuppetDashboardLayout = { assign, capacity, allocate };
+  globalThis.ShellPuppetDashboardLayout = { assign, capacity, allocate,
+    MIN_PANE_WIDTH, MIN_PANE_HEIGHT, MIN_STRIP_WIDTH };
 })();

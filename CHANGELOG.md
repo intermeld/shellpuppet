@@ -66,6 +66,9 @@ version may change behaviour, and every such change is listed here.
   box offers recent paths and configured root folders together. The picker
   requires the dashboard credential and page proof, allows one dialog at a
   time, and times out after ten minutes.
+- Focus and Grid pane boundaries can be dragged or moved with the keyboard.
+  Grown panes fit on release; shrunken panes keep their terminal grid. Track
+  sizes survive a reload in their own window and reset with Auto or Grid.
 - New sessions open in the dashboard by default. The daemon opens one isolated
   dashboard window when needed and waits for it to connect before trying another.
   If the window cannot open, the start still succeeds and returns a viewer link.
