@@ -648,6 +648,29 @@ describe('envFromDaemon copies names from the daemon, never from the body', () =
 });
 
 describe('the page chooses a folder by name', () => {
+  it('offers root children and refuses unsafe, escaped or removed choices with an audit', async () => {
+    const root = makeDir('dash-root-');
+    const outside = makeDir('dash-outside-');
+    fs.mkdirSync(path.join(root, 'alpha'));
+    fs.mkdirSync(path.join(root, 'gone'));
+    fs.mkdirSync(path.join(root, '.hidden'));
+    fs.symlinkSync(outside, path.join(root, 'escape'), 'junction');
+    const daemon = await startLaunchDaemon({ launcher: profilesOf([{ name: 'rooted', command: process.execPath, args: ['-e', 'console.log("CWD=" + process.cwd())'], shell: false, cwd: 'ask', folderRoots: [root] }]) });
+    const offered = JSON.parse((await readProfiles(daemon)).body) as { profiles: { rootFolders: { rootIndex: number; name: string }[] }[] };
+    expect(offered.profiles[0]?.rootFolders).toEqual([{ rootIndex: 0, name: 'alpha' }, { rootIndex: 0, name: 'gone' }]);
+    for (const name of ['a/b', '..', path.resolve(root, 'alpha'), 'CON', 'escape']) {
+      expect((await launch(daemon, { profile: 'rooted', rootIndex: 0, folder: name })).status).toBe(400);
+    }
+    expect(await sessionIds(daemon)).toEqual([]);
+    const accepted = await launch(daemon, { profile: 'rooted', rootIndex: 0, folder: 'alpha' });
+    expect(accepted.status).toBe(200);
+    const id = String((JSON.parse(accepted.body) as Record<string, unknown>)['id']);
+    await waitForScreen(daemon, id, `CWD=${fs.realpathSync(path.join(root, 'alpha'))}`);
+    fs.rmdirSync(path.join(root, 'gone'));
+    expect((await launch(daemon, { profile: 'rooted', rootIndex: 0, folder: 'gone' })).status).toBe(400);
+    expect(auditEntries(daemon.home).filter((line) => line['actor'] === 'dashboard' && line['action'] === 'refuse').length).toBeGreaterThanOrEqual(6);
+  });
+
   it('uses the fixed directory, and a listed folder name on an ask profile', async () => {
     const fixedDir = makeDir('dash-launch-fixed-');
     const folderDir = makeDir('dash-launch-folder-');

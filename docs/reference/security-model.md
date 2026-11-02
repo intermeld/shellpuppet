@@ -187,9 +187,15 @@ An optional allowlist/denylist evaluates every `terminal_start` command (see
 start. `launcher` is a known top-level key. Each entry has a short lower-case
 name and a command; the optional fields are arguments, an agent signature,
 the shell flag, a label, a purpose, one readiness condition, a fixed working
-directory or `"cwd": "ask"` with a list of named folders, `envFromDaemon`,
+directory or `"cwd": "ask"` with named folders or `folderRoots`, `envFromDaemon`,
 that profile's own allow and deny lists, and an `open` placement. The page
-sends the profile name, and a folder name when the profile listed folders. A
+sends the profile name, and a folder name with a root index for a root choice.
+The daemon lists immediate directories, omits hidden folders and links, and
+caps each root at 500. It checks the choice again at launch, resolves the
+real paths of the root and child, and refuses a deleted folder or a child
+outside the root, including a junction or symbolic link that leads out. A
+name with a separator, `..`, a drive or a Windows device name is refused and
+audited. A
 body that also carries a command, arguments, an environment map, a raw path,
 a label or a purpose is refused and starts nothing. A path typed into the
 page is not a profile.

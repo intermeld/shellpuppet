@@ -39,6 +39,7 @@ Full example, everything optional:
           { "name": "repo", "path": "C:/work/repo" },
           { "name": "notes", "path": "C:/work/notes" }
         ],
+        "folderRoots": ["C:/work/projects"],
         "envFromDaemon": ["GIT_AUTHOR_NAME"],
         "policy": { "deny": ["rm\\s+-rf\\s+/"] },
         "open": "grid"
@@ -377,7 +378,8 @@ Each entry has these keys. Unknown keys refuse that entry.
 | `args` | no | Array of strings, stored literally. |
 | `shell` | no | Boolean. Omitted means the platform default. |
 | `cwd` | no | A fixed directory, or `"ask"`. A relative path is from your home directory. |
-| `folders` | when `cwd` is `"ask"` | Non-empty array of `{ "name", "path" }`. The page chooses one by name. |
+| `folders` | no | Named `{ "name", "path" }` choices when `cwd` is `"ask"`. |
+| `folderRoots` | no | Non-empty array of directories when `cwd` is `"ask"`. The daemon offers up to 500 immediate folders per root, sorted by name. May be used with `folders`. At least one of these two keys is required for `"ask"`. |
 | `agent` | no | A built-in signature name, or one from `agents.signatures`. |
 | `envFromDaemon` | no | An array of variable names copied from the daemon's environment, or `"all"` for its whole environment. |
 | `readyText` | no | A literal substring that marks the session ready. |
@@ -389,8 +391,11 @@ Each entry has these keys. Unknown keys refuse that entry.
 An entry that cannot be read whole is left out and named in `daemon.log`; its
 siblings still load. The dashboard's profile list shows the problem sentence
 beside the entries that did load, so a mistyped profile is visible without
-reading the log. A profile with `"cwd": "ask"` and no `folders` does not load:
-a path typed into the page is not a profile.
+reading the log. A profile with `"cwd": "ask"` needs `folders` or
+`folderRoots`. The page filters offered folders as you type, starts the
+highlighted choice on Enter, and puts the five most recent choices for each
+profile first in its browser profile. Recent choice buttons start in one click.
+The page sends a root index and one folder name, never a path.
 
 **Policy and limits.** Global policy runs first, then the profile's own
 `deny` and `allow` lists, both against the real command line before any

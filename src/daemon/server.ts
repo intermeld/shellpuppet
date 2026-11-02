@@ -94,6 +94,7 @@ import {
   resolveLaunchCommand,
 } from './launchProfiles.js';
 import type { LaunchFolder, LaunchProfile, LauncherConfig } from './launchProfiles.js';
+import { listRootFolders, resolveRootFolder } from './launchProfiles.js';
 
 const DEFAULT_IDLE_MS = 30 * 60_000;
 /** Stop waits this long for an automatic dashboard launch before continuing. */
@@ -195,6 +196,7 @@ const STATIC_ASSETS: Readonly<
   '/viewer/viewer.css': { file: path.join(viewerDir, 'viewer.css'), type: 'text/css' },
   '/viewer/dashboard.js': { file: path.join(viewerDir, 'dashboard.js'), type: 'text/javascript' },
   '/viewer/dashboard-layout.js': { file: path.join(viewerDir, 'dashboard-layout.js'), type: 'text/javascript' },
+  '/viewer/dashboard-folders.js': { file: path.join(viewerDir, 'dashboard-folders.js'), type: 'text/javascript' },
   '/viewer/dashboard.css': { file: path.join(viewerDir, 'dashboard.css'), type: 'text/css' },
   // The mark. SVG first (crisp at any size, and what the tab uses); the PNGs
   // are for Windows, which wants a raster for the taskbar button of a Chrome
@@ -1410,6 +1412,7 @@ export class Daemon {
       args: [...profile.args],
       folderRequired: profile.askCwd,
       folders: profile.folders.map((folder) => ({ name: folder.name, path: folder.path })),
+      rootFolders: listRootFolders(profile.folderRoots.map((root) => path.resolve(os.homedir(), root))),
       envFromDaemon: profile.envFromDaemon === 'all' ? 'all' : [...profile.envFromDaemon],
     };
   }
@@ -1525,11 +1528,11 @@ export class Daemon {
       return;
     }
     for (const key of Object.keys(body)) {
-      if (key !== 'profile' && key !== 'folder') {
+      if (key !== 'profile' && key !== 'folder' && key !== 'rootIndex') {
         this.auditDashboardRefusal(req, 'body');
         json(res, 400, {
           error:
-            `The launch body may name only profile and folder: "${key}" is not accepted. ` +
+            `The launch body may name only profile, folder and rootIndex: "${key}" is not accepted. ` +
             'A command, arguments, a path and an environment value come from the profile.',
         });
         return;
@@ -1542,7 +1545,9 @@ export class Daemon {
     }
 
     const folderName = body['folder'];
+    const rootIndex = body['rootIndex'];
     let folder: LaunchFolder | undefined;
+    let rootCwd: string | undefined;
     if (profile.askCwd) {
       if (folderName === undefined) {
         json(res, 400, { error: `folder (string) is required for profile "${profileName}".` });
@@ -1552,22 +1557,33 @@ export class Daemon {
         json(res, 400, { error: 'folder must be a string.' });
         return;
       }
-      folder = profile.folders.find((entry) => entry.name === folderName);
-      if (folder === undefined) {
-        json(res, 400, {
-          error: `No such folder for profile "${profileName}": ${folderName}`,
-        });
-        return;
+      if (rootIndex !== undefined) {
+        const choice = resolveRootFolder(profile.folderRoots.map((root) => path.resolve(os.homedir(), root)), rootIndex, folderName);
+        if ('error' in choice) {
+          this.auditDashboardRefusal(req, 'body');
+          json(res, 400, { error: choice.error });
+          return;
+        }
+        rootCwd = choice.cwd;
+      } else {
+        folder = profile.folders.find((entry) => entry.name === folderName);
+        if (folder === undefined) {
+          this.auditDashboardRefusal(req, 'body');
+          json(res, 400, { error: `No such folder for profile "${profileName}": ${folderName}` });
+          return;
+        }
       }
-    } else if (folderName !== undefined) {
+    } else if (folderName !== undefined || rootIndex !== undefined) {
+      this.auditDashboardRefusal(req, 'body');
       json(res, 400, {
         error: `Profile "${profileName}" uses a fixed working directory and does not accept a folder.`,
       });
       return;
     }
 
-    const resolved = this.resolveLaunchCwd(profile, folder);
+    const resolved = rootCwd === undefined ? this.resolveLaunchCwd(profile, folder) : { cwd: rootCwd };
     if ('error' in resolved) {
+      this.auditDashboardRefusal(req, 'body');
       json(res, 400, { error: resolved.error });
       return;
     }

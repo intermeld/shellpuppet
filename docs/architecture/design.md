@@ -751,8 +751,11 @@ literal strings; `shell` is a boolean; `agent` names a built-in or configured
 signature; `label` and `purpose` are non-empty strings with only `{name}`
 and `{folder}` placeholders. `readyText` is a literal substring and
 `readyQuiet` is non-negative finite milliseconds; both together refuse that
-entry. `cwd` is a fixed path or `ask`, which requires a list of named
-`{ name, path }` folders. `envFromDaemon` lists variable names; invalid
+entry. `cwd` is a fixed path or `ask`, which requires named `{ name, path }`
+folders, `folderRoots`, or both. Each root offers up to 500 immediate
+directories in name order. Hidden folders and links are omitted. The browser
+remembers five recent choices per profile and filters the offered list as a
+person types; Enter starts the selected folder. `envFromDaemon` lists variable names; invalid
 names are dropped and reported. A profile's `policy` holds only `allow` and
 `deny` regex arrays, never `mode` or `maxSessions`. Unknown entry keys,
 including `envNames` and `passEnv`, refuse the entry.
@@ -760,9 +763,13 @@ including `envNames` and `passEnv`, refuse the entry.
 session's initial dashboard placement.
 
 `POST /dashboard/launch` accepts JSON containing `profile` and, only when
-that profile has `cwd: "ask"`, one listed `folder` name. Any other key is
+that profile has `cwd: "ask"`, one listed `folder` name and, for a root choice,
+its `rootIndex`. Any other key is
 `400` and starts nothing. The folder resolves to its configured existing
-directory as spawn `cwd`, never to a command-line fragment. Global policy
+directory as spawn `cwd`, never to a command-line fragment. A root choice is
+rebuilt by the daemon and its real path must remain inside the root's real
+path, including when a junction or symbolic link is involved. A removed
+folder refuses the launch. Global policy
 runs first against `commandLine(command, args)` before the Windows wrap;
 profile `deny` may refuse it, and profile `allow` must match when present.
 The route accepts at most eight starts in any sliding sixty seconds (`429`

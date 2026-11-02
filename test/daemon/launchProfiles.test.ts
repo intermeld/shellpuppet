@@ -15,6 +15,8 @@ import {
   expandProfileText,
   parseLauncher,
   resolveLaunchCommand,
+  listRootFolders,
+  resolveRootFolder,
 } from '../../src/daemon/launchProfiles.js';
 import { evaluateCommand } from '../../src/core/policy.js';
 
@@ -25,6 +27,11 @@ function parse(raw: unknown): ReturnType<typeof parseLauncher> {
 }
 
 describe('launcher profiles load', () => {
+  it('accepts folder roots with cwd ask and named folders', () => {
+    const { launcher, problems } = parse({ profiles: [{ name: 'shell', command: 'node', cwd: 'ask', folderRoots: ['C:/work'] }] });
+    expect(problems).toEqual([]);
+    expect(launcher.profiles[0]?.folderRoots).toEqual(['C:/work']);
+  });
   it('reads a full profile and applies the documented defaults', () => {
     const { launcher, problems } = parse({
       profiles: [
@@ -97,6 +104,41 @@ describe('launcher profiles load', () => {
       { name: 'repo', path: 'C:/work/repo' },
       { name: 'docs', path: 'C:/work/docs' },
     ]);
+  });
+});
+
+describe('folders offered under a root', () => {
+  const dirs: string[] = [];
+  afterEach(() => { for (const dir of dirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true }); });
+  function root(): string { const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'launch-root-')); dirs.push(dir); return dir; }
+
+  it('lists one level, sorted, without hidden folders or files', () => {
+    const dir = root();
+    for (const name of ['zeta', 'alpha', '.hidden']) fs.mkdirSync(path.join(dir, name));
+    fs.mkdirSync(path.join(dir, 'alpha', 'nested'));
+    fs.writeFileSync(path.join(dir, 'file'), 'x');
+    expect(listRootFolders([dir])).toEqual([{ rootIndex: 0, name: 'alpha' }, { rootIndex: 0, name: 'zeta' }]);
+  });
+
+  for (const name of ['a/b', 'a\\b', '..', 'C:/work', 'CON', 'NUL.txt']) {
+    it(`refuses unsafe folder name ${name}`, () => {
+      expect('error' in resolveRootFolder([root()], 0, name)).toBe(true);
+    });
+  }
+
+  it('refuses a junction that leaves the root', () => {
+    const dir = root();
+    const outside = root();
+    fs.symlinkSync(outside, path.join(dir, 'escape'), 'junction');
+    expect('error' in resolveRootFolder([dir], 0, 'escape')).toBe(true);
+  });
+
+  it('refuses a folder deleted after it was offered', () => {
+    const dir = root();
+    fs.mkdirSync(path.join(dir, 'gone'));
+    expect(listRootFolders([dir])).toContainEqual({ rootIndex: 0, name: 'gone' });
+    fs.rmdirSync(path.join(dir, 'gone'));
+    expect('error' in resolveRootFolder([dir], 0, 'gone')).toBe(true);
   });
 });
 
