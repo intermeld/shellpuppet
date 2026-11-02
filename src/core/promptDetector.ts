@@ -284,6 +284,15 @@ function detectPlainPrompt(screen: string): DetectedPrompt | null {
   if (lines.length === 0) return null;
   const tail = lines.slice(-TAIL_WINDOW);
 
+  // Muse briefly shows this heading between approval stages, while keys are
+  // inactive. An earlier menu may still be drawn beneath it for that frame.
+  const museHeader = [...tail].reverse().find((line) => /^Approval request · keys active in a moment/.test(line.text));
+  const museTitle = [...tail].reverse().find((line) => museQuestion(line.text));
+  if (museHeader !== undefined && (museTitle === undefined || museHeader.index > museTitle.index)) return null;
+
+  const muse = musePrompt(raw, tail);
+  if (muse !== null) return muse;
+
   const questionMenu = openCodeQuestionMenu(raw, lines);
   if (questionMenu !== null) return questionMenu;
 
@@ -327,6 +336,42 @@ function detectPlainPrompt(screen: string): DetectedPrompt | null {
   }
 
   return null;
+}
+
+function museQuestion(text: string): boolean {
+  return /^Would .+ like to run the following command\?$/.test(text) || text === 'Do you trust this workspace?';
+}
+
+/** Muse's approval and trust menus use ⟩ with numbered rows and no composer. */
+function musePrompt(raw: string[], tail: Line[]): DetectedPrompt | null {
+  const selected = [...tail].reverse().find((line) => /^⟩ 1(?:\. | {2})/.test(line.text));
+  if (selected === undefined) return null;
+  const approval = /^⟩ 1\. /.test(selected.text);
+  const count = approval ? 3 : 2;
+  const options: string[] = [];
+  const optionRows: number[] = [];
+  for (let offset = 0; offset < count; offset++) {
+    const row = selected.index + offset;
+    const text = (raw[row] ?? '').trimEnd();
+    const prefix = `${offset === 0 ? '⟩ ' : '  '}${String(offset + 1)}${approval ? '. ' : '  '}`;
+    if (!text.startsWith(prefix) || text.slice(prefix.length).trim() === '') return null;
+    options.push(normalise(text.replace(/^⟩ /, '')));
+    optionRows.push(row);
+  }
+  const question = [...tail].reverse().find((line) => line.index < selected.index &&
+    selected.index - line.index <= 10 && museQuestion(line.text));
+  if (question === undefined) return null;
+  if (approval !== question.text.startsWith('Would ')) return null;
+  const stage = approval ? raw.slice(question.index, selected.index).find((line) => /^ {2}Stage \d+\/\d+$/.test(line.trimEnd())) : undefined;
+  return {
+    question: question.text,
+    options,
+    selectedOption: 0,
+    optionRows,
+    signature: [question.text, stage ?? '', ...options].join(' | '),
+    rows: [question.index, optionRows[optionRows.length - 1]!],
+    basis: 'marker',
+  };
 }
 
 /** A live left-ruled question menu with its fixed footer and custom-answer choice. */

@@ -1,0 +1,48 @@
+[0m
+[0m
+[0m
+[0m
+[0m
+[0m
+[0;38;2;103;108;116m  [0;1;38;2;204;211;219mMuse Code[0;38;2;204;211;219m 1.4.14[0m
+[0m
+[0;38;2;90;160;255;48;2;38;56;84m❯ [0;38;2;204;211;219;48;2;38;56;84mXxxxx xxxxx xxx xxxx xxxxxxxx xxx xx Xxxxxxxx 9999, xxxx xxxxxx xxxx xxxx xxx xxxxxx xxxx VIOLET.                     [0m
+[0m
+[0;1;38;2;204;211;219m◆ [0;38;2;204;211;219mVIOLET                                                                                                                [0m
+[0m
+[0;38;2;90;160;255;48;2;38;56;84m❯ [0;38;2;204;211;219;48;2;38;56;84mXxxxx xxxxx xxx xxxx xxxx xxx xx Xxxxxxxx 9999, xxxx xxxxxx xxxx xxxx xxx xxxxxx xxxx AMBER.                          [0m
+[0m
+[0;1;38;2;204;211;219m◆ [0;38;2;204;211;219mAMBER                                                                                                                 [0m
+[0m
+[0;38;2;103;108;116m◆ Worked for 3x 15s · 5:29 XX · 2/Xxx                                                                                   [0m
+[0m
+[0;38;2;90;160;255;48;2;38;56;84m❯ [0;38;2;204;211;219;48;2;38;56;84mXxx xxx xxxxx xxxxxxx Xxx-Xxxxxxxx xxxx, xxxx xxxxx xxxx xxxx xxx xxxx xx xxxxxxx.                                    [0m
+[0m
+[0;38;2;166;227;161m◆ [0;1;38;2;204;211;219mRan command[0;38;2;204;211;219m [0;38;2;90;160;255m· Xxxxx xxxxxxx xxxxxxxx xxxx [0;38;2;103;108;116m· ✓ · 9x[0;2;38;2;103;108;116m · ctrl+x[0m
+[0m
+[0m
+[0m
+[0m
+[0;38;2;103;108;116m◆ Worked for 3x 39s · 5:33 XX · 2/Xxx                                                                                   [0m
+[0m
+[0;38;2;103;108;116m◆ Xxxxx: [0;38;2;138;144;152mXxxx xxx xx xxxxxx xxx xxxxxxx xxxxxxxxx xxxx xxxxx xx xxxx. Xxxxx xxxx xxxx xxxxxxxxxxx xx xxxxxxx.           [0m
+[0m
+[0;38;2;90;160;255;48;2;38;56;84m❯ [0;38;2;204;211;219;48;2;38;56;84mXxx xxxxxxx xxxx xxxxx xxxxxxx xxxx: Xxx-Xxxxxxxx | Xxxxxx-Xxxxxx -XxxxxxXxxxxxxx Xxxx. Xxxx xxxxx xxxx xxxx xxx      [0m
+[0;38;2;90;160;255;48;2;38;56;84m  [0;38;2;204;211;219;48;2;38;56;84mxxxxxx.                                                                                                               [0m
+[0m
+[0;38;2;103;108;116m◇ Xxxx[0;38;2;118;123;131mx[0;38;2;154;160;168mx[0;38;2;189;196;204mx t[0;38;2;154;160;168mo[0;38;2;118;123;131mo[0;38;2;103;108;116mls[0;38;2;189;196;204m [0;38;2;103;108;116m(2x 51s · esc to interrupt)[0m                                      [0;38;2;103;108;116m                                       [0m
+[0;38;2;103;108;116m└ xxxx xxxxx 51s xxx[0m
+[0m
+[0;2;38;2;103;108;116m── [0;38;2;138;144;152mVoice input (Alt+V to start)[0;2;38;2;103;108;116m ────────────────────────────────────────────────────────────────────────────────────────[0m
+[0;38;2;204;211;219mWould xxx like to run the following command?[0m
+[0m                                                                                 [0;38;2;90;160;255m                                       [0m
+[0;38;2;90;160;255m  $ [0;38;2;129;162;190mXxx-Xxxxxxxx [0;38;2;162;183;180m| [0;38;2;129;162;190mXxxxxx-Xxxxxx [0;38;2;125;126;127m-[0;38;2;137;161;181mExpandProperty [0;38;2;129;162;190mPath[0m
+[0;1;38;2;204;211;219m  Stage 2/2[0m
+[0;1;38;2;90;160;255m  Current argv: ["Xxxxxx-Xxxxxx","-ExpandProperty","Path"][0m
+[0m
+[0;1;38;2;90;160;255m⟩ [0;38;2;103;108;116m1. [0;1;38;2;204;211;219mAllow this stage once[0;38;2;138;144;152m (x)[0m
+[0;38;2;103;108;116m  2. [0;38;2;204;211;219mAlways allow in this workspace: Xxxxxx-Xxxxxx ... [0;38;2;103;108;116m(x)[0m
+[0;38;2;103;108;116m  3. [0;38;2;204;211;219mAbort the entire command [0;38;2;103;108;116m(esc)     [0m
+[0;38;2;103;108;116mChange approval defaults in /permissions                                                                                [0m
+[0;2;38;2;103;108;116m────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────[0m
+[0;38;2;103;108;116m  [0;38;2;90;160;255mmuse-wonder-full-1.0 [0;38;2;138;144;152m· [0;38;2;90;160;255mlow [0;38;2;138;144;152m· xxxxx · [0;38;2;90;160;255mLaunch overrides[0m

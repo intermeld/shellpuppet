@@ -14,7 +14,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { ScreenRenderer } from '../../src/core/renderer.js';
 import type { StyledLine } from '../../src/core/renderer.js';
 import {
@@ -387,6 +387,76 @@ describe('Codex (built in)', () => {
     // the "Ran" and "Explored" bullets above it are not answers.
     const lines = (await screen('codex-command-running')).filter((line) => !/esc to interrupt/.test(line.text));
     expect(latestResult(lines, codex)).toMatchObject({ found: false, reason: 'no-answer' });
+  });
+});
+
+describe('Muse Code (built in)', () => {
+  let muse: CompiledSignature;
+  beforeEach(() => { muse = builtIn('muse'); });
+
+  it('returns VIOLET and AMBER from the latest turn without requiring a trailer', async () => {
+    const violet = latestResult(await screen('muse-violet'), muse);
+    expect(violet).toMatchObject({ found: true, answer: ['◆ VIOLET'] });
+    expect(violet.status.join('\n')).toContain('Launch overrides');
+    expect(latestResult(await screen('muse-amber'), muse)).toMatchObject({ found: true, answer: ['◆ AMBER'] });
+    const withTrailerLines = await screen('muse-amber');
+    const capturedTrailer = (await screen('muse-amber-trailer')).find((line) => /^◆ Worked for /.test(line.text));
+    expect(capturedTrailer).toBeDefined();
+    const voiceRule = withTrailerLines.findIndex((line) => line.text.startsWith('── Voice input'));
+    withTrailerLines.splice(voiceRule, 0, capturedTrailer!);
+    const withTrailer = latestResult(withTrailerLines, muse);
+    expect(withTrailer).toMatchObject({ found: true, answer: ['◆ AMBER'] });
+    if (withTrailer.found) expect(withTrailer.trailer[0]).toMatch(/^◆ Worked for /);
+  });
+
+  it('refuses while either busy glyph is drawn, even when an earlier answer is visible', async () => {
+    for (const name of ['muse-busy-first', 'muse-busy-second', 'muse-busy-after-tool']) {
+      expect(latestResult(await screen(name), muse), name).toMatchObject({ found: false, reason: 'busy' });
+    }
+  });
+
+  it('recognises running commands, hooks, last events and retries as busy', async () => {
+    const base = (await screen('muse-busy-first')).filter((line) => !/esc to interrupt/.test(line.text));
+    for (const text of [
+      '◇ Running command · ls — running (2s · esc to interrupt)',
+      '└ Hooks running · PreToolUse · 2s',
+      '└ last event 51s ago',
+      '└ Meta Model error (HTTP 503) · retrying in 59s',
+    ]) {
+      expect(latestResult([...base, { text, spans: [] }], muse), text).toMatchObject({ found: false, reason: 'busy' });
+    }
+  });
+
+  it('does not return a tool status line as an answer', async () => {
+    const lines = (await screen('muse-busy-after-tool')).filter((line) => !/esc to interrupt|^└ /.test(line.text));
+    expect(latestResult(lines, muse)).toMatchObject({ found: false, reason: 'no-answer' });
+  });
+
+  it('returns adjacent answer blocks from the same turn', async () => {
+    const lines = await screen('muse-amber');
+    const firstAnswer = (await screen('muse-violet')).find((line) => line.text.trimEnd() === '◆ VIOLET');
+    expect(firstAnswer).toBeDefined();
+    const amber = lines.findIndex((line) => line.text.trimEnd() === '◆ AMBER');
+    lines.splice(amber, 0, firstAnswer!, { text: '', spans: [] });
+    expect(latestResult(lines, muse)).toMatchObject({ found: true, answer: ['◆ VIOLET', '', '◆ AMBER'] });
+  });
+
+  it('hides the live reasoning summary and keeps the answer and approval question', async () => {
+    const filtered = hideReasoning(await screen('muse-busy-after-tool'), muse);
+    expect(filtered?.lines.join('\n')).not.toMatch(/^◆ Xxxxx:/m);
+    expect(filtered?.lines.join('\n')).toContain('◆ AMBER');
+    const approval = hideReasoning(await screen('muse-approval'), muse);
+    expect(approval?.lines.join('\n')).toContain('Would xxx like to run the following command?');
+    expect(approval?.lines.join('\n')).toContain('⟩ 1. Allow this stage once');
+    expect(hideReasoning(await screen('muse-trust'), muse)?.lines.join('\n')).toContain('Do you trust this workspace?');
+  });
+
+  it('resolves a launcher script session by its explicit agent and the versioned executable by name', () => {
+    expect(agentNameFor('muse', 'pwsh')).toBe('muse');
+    expect(signatureFor('muse', 'pwsh -NoProfile -File muse-seat.ps1')?.name).toBe('muse');
+    expect(agentNameFor(undefined, 'C:\\Programs\\muse\\muse-bin-1.4.14-R7309.1.exe')).toBe('muse');
+    expect(agentNameFor(undefined, 'muse-bin-2.0.0.exe')).toBe('muse');
+    expect(agentNameFor(undefined, 'muse')).toBe('muse');
   });
 });
 
