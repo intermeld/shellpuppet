@@ -759,6 +759,10 @@ person types; Enter starts the selected folder. `envFromDaemon` lists variable n
 names are dropped and reported. A profile's `policy` holds only `allow` and
 `deny` regex arrays, never `mode` or `maxSessions`. Unknown entry keys,
 including `envNames` and `passEnv`, refuse the entry.
+The daemon rechecks a root child immediately before start. A local process
+with write access inside the root can replace the checked child with a
+junction before spawn resolves the path again. This residual race also
+applies to free paths when a profile allows any folder.
 `open` is `grid` by default, or `focus` or `window`, and sets the
 session's initial dashboard placement.
 

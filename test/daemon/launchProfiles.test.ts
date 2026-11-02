@@ -5,6 +5,7 @@
  */
 
 import * as fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -17,6 +18,8 @@ import {
   resolveLaunchCommand,
   listRootFolders,
   resolveRootFolder,
+  validRootFolderName,
+  isRootFolderContained,
 } from '../../src/daemon/launchProfiles.js';
 import { evaluateCommand } from '../../src/core/policy.js';
 
@@ -118,6 +121,49 @@ describe('folders offered under a root', () => {
     fs.mkdirSync(path.join(dir, 'alpha', 'nested'));
     fs.writeFileSync(path.join(dir, 'file'), 'x');
     expect(listRootFolders([dir])).toEqual([{ rootIndex: 0, name: 'alpha' }, { rootIndex: 0, name: 'zeta' }]);
+  });
+
+  it('omits Windows Hidden and System directories', () => {
+    if (process.platform !== 'win32') return;
+    const dir = root();
+    for (const name of ['visible', 'hidden', 'system']) fs.mkdirSync(path.join(dir, name));
+    execFileSync('attrib.exe', ['+H', path.join(dir, 'hidden')]);
+    execFileSync('attrib.exe', ['+S', path.join(dir, 'system')]);
+    expect(listRootFolders([dir])).toEqual([{ rootIndex: 0, name: 'visible' }]);
+  }, 30_000);
+
+  it.each(['a/b', 'a\\b'])('rejects a separator as its own name guard: %s', (name) => {
+    expect(validRootFolderName(name)).toBe(false);
+  });
+  it('rejects dot-dot as its own name guard', () => {
+    expect(validRootFolderName('..')).toBe(false);
+  });
+  it.each(['CON', 'NUL.txt'])('rejects a device name as its own name guard: %s', (name) => {
+    expect(validRootFolderName(name)).toBe(false);
+  });
+  it('rejects a resolved child outside its root even when it was initially offered', () => {
+    const dir = root();
+    const outside = root();
+    fs.mkdirSync(path.join(dir, 'pick'));
+    expect(listRootFolders([dir])).toContainEqual({ rootIndex: 0, name: 'pick' });
+    fs.rmdirSync(path.join(dir, 'pick'));
+    fs.symlinkSync(outside, path.join(dir, 'pick'), 'junction');
+    expect(isRootFolderContained(fs.realpathSync(dir), fs.realpathSync(path.join(dir, 'pick')))).toBe(false);
+  });
+  it('requires a still-offered child even while its real directory exists', () => {
+    if (process.platform !== 'win32') return;
+    const dir = root();
+    const child = path.join(dir, 'pick');
+    fs.mkdirSync(child);
+    expect(listRootFolders([dir])).toContainEqual({ rootIndex: 0, name: 'pick' });
+    execFileSync('attrib.exe', ['+H', child]);
+    expect(fs.realpathSync(child)).toBeTruthy();
+    expect(resolveRootFolder([dir], 0, 'pick')).toEqual({ error: 'Folder is no longer offered by this root.' });
+  }, 30_000);
+  it.each([-1, 0.5, '0', 1])('rejects invalid root index %s', (index) => {
+    const dir = root();
+    fs.mkdirSync(path.join(dir, 'pick'));
+    expect(resolveRootFolder([dir], index, 'pick')).toEqual({ error: 'Invalid root folder choice.' });
   });
 
   for (const name of ['a/b', 'a\\b', '..', 'C:/work', 'CON', 'NUL.txt']) {

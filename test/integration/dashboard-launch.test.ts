@@ -655,7 +655,7 @@ describe('the page chooses a folder by name', () => {
     fs.mkdirSync(path.join(root, 'gone'));
     fs.mkdirSync(path.join(root, '.hidden'));
     fs.symlinkSync(outside, path.join(root, 'escape'), 'junction');
-    const daemon = await startLaunchDaemon({ launcher: profilesOf([{ name: 'rooted', command: process.execPath, args: ['-e', 'console.log("CWD=" + process.cwd())'], shell: false, cwd: 'ask', folderRoots: [root] }]) });
+    const daemon = await startLaunchDaemon({ launcher: profilesOf([{ name: 'rooted', command: process.execPath, args: ['-e', 'console.log("CWD=" + process.cwd())'], shell: false, cwd: 'ask', folderRoots: [root], label: 'Root {folder}' }]) });
     const offered = JSON.parse((await readProfiles(daemon)).body) as { profiles: { rootFolders: { rootIndex: number; name: string }[] }[] };
     expect(offered.profiles[0]?.rootFolders).toEqual([{ rootIndex: 0, name: 'alpha' }, { rootIndex: 0, name: 'gone' }]);
     for (const name of ['a/b', '..', path.resolve(root, 'alpha'), 'CON', 'escape']) {
@@ -664,6 +664,10 @@ describe('the page chooses a folder by name', () => {
     expect(await sessionIds(daemon)).toEqual([]);
     const accepted = await launch(daemon, { profile: 'rooted', rootIndex: 0, folder: 'alpha' });
     expect(accepted.status).toBe(200);
+    const audit = fs.readFileSync(path.join(daemon.home, 'audit.log'), 'utf8');
+    expect(audit).toContain('"folder":"alpha"');
+    expect(audit).toContain('"rootIndex":0');
+    expect(audit).toContain('Root alpha');
     const id = String((JSON.parse(accepted.body) as Record<string, unknown>)['id']);
     await waitForScreen(daemon, id, `CWD=${fs.realpathSync(path.join(root, 'alpha'))}`);
     fs.rmdirSync(path.join(root, 'gone'));
