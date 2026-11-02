@@ -352,9 +352,12 @@ export function createConsoleHostQueue(options: ConsoleHostQueueOptions): Consol
         for (const item of batch) {
           const assignment = assignments.find((entry) => entry.id === item.id);
           if (assignment === undefined || assignment.match === null) {
-            const reason = unmatchedReason(assignment?.candidates.length ?? 0);
-            item.log('warn', 'console host not ended', { id: item.id, reason });
-            if (assignment?.candidates.length === 0) finish(item.id);
+            const count = assignment?.candidates.length ?? 0;
+            const reason = unmatchedReason(count);
+            // A host can disappear after a kill before this asynchronous list
+            // runs. A missing host alone does not establish a leak.
+            item.log(count === 0 ? 'info' : 'warn', 'console host not ended', { id: item.id, reason });
+            if (count === 0) finish(item.id);
             else retry(item);
             continue;
           }

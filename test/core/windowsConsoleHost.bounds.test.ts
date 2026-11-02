@@ -10,6 +10,28 @@ const item = (id: string, time: number, log: QueuedConsoleHost['log']): QueuedCo
 });
 
 describe('bounded console host attribution', () => {
+  it('logs a missing host at info level and resolves without retrying', async () => {
+    const entries: { level: string; message: string; reason: unknown }[] = [];
+    const resolved: string[] = [];
+    let lists = 0;
+    const queue = createConsoleHostQueue({
+      parentPid: 4000, coalesceMs: 1,
+      list: () => { lists += 1; return Promise.resolve([]); },
+      endProcess: () => { throw new Error('no host to end'); },
+      resolved: (id) => { resolved.push(id); },
+    });
+    queue.push(item('gone', 1000, (level, message, meta) => {
+      entries.push({ level, message, reason: meta['reason'] });
+    }));
+    await queue.whenSettled();
+    expect(entries).toEqual([{
+      level: 'info', message: 'console host not ended',
+      reason: 'no console host was found in the session window',
+    }]);
+    expect(lists).toBe(1);
+    expect(resolved).toEqual(['gone']);
+  });
+
   it('leaves and logs candidates beyond the work cap', async () => {
     const ended: number[] = [];
     const warnings: string[] = [];

@@ -16,7 +16,6 @@
  */
 
 import * as fs from 'node:fs';
-import type * as http from 'node:http';
 import { afterAll, describe, expect, it } from 'vitest';
 import type { SessionManager } from '../../src/core/manager.js';
 import type { Session } from '../../src/core/session.js';
@@ -26,7 +25,6 @@ import { daemonLogPath } from '../../src/daemon/paths.js';
 import { Daemon } from '../../src/daemon/server.js';
 import { api, connectWs, makeTempHome, removeTempHome } from './helpers.js';
 
-type Handler = (req: http.IncomingMessage, res: http.ServerResponse) => Promise<void>;
 type LogEntry = { level: string; message: string; meta?: Record<string, unknown> };
 
 const daemons: Daemon[] = [];
@@ -35,14 +33,6 @@ afterAll(async () => {
   for (const daemon of daemons) await daemon.stop();
   for (const home of homes) removeTempHome(home);
 });
-
-/** Hold the main thread, as other work on a busy daemon does. */
-function holdMainThread(ms: number): void {
-  const until = Date.now() + ms;
-  while (Date.now() < until) {
-    // Busy on purpose: nothing else may run meanwhile.
-  }
-}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -93,38 +83,45 @@ describe.skipIf(process.platform !== 'win32')('resizes around the end of a progr
     const uncaught: unknown[] = [];
     const listener = (error: unknown): void => void uncaught.push(error);
     process.on('uncaughtException', listener);
+    let output: { pause(): void; resume(): void } | undefined;
     try {
-      const { daemon, port, token } = await startDaemon('resize-exit-zero-');
-      // The daemon's main thread is held by other work right after it has
-      // handled the resize, as on a busy daemon; the route itself is untouched.
-      const target = daemon as unknown as { handleRequest: Handler };
-      const original = target.handleRequest.bind(daemon);
-      target.handleRequest = async (req, res) => {
-        await original(req, res);
-        if (req.method === 'POST' && (req.url ?? '').endsWith('/resize')) holdMainThread(500);
+      const { daemon, port, token, logPath } = await startDaemon('resize-exit-zero-');
+      const manager = (daemon as unknown as { manager: SessionManager }).manager;
+      const create = manager.create.bind(manager);
+      // Keep the output socket from delivering its first data event until
+      // after the HTTP resize and the program's own exit. This forces the
+      // deferred node-pty resize path on every run.
+      manager.create = (options) => {
+        const session = create(options);
+        output = (session as unknown as { pty: { _socket: { pause(): void; resume(): void } } }).pty._socket;
+        output.pause();
+        return session;
       };
-      let held = 0;
-      let last: Session | undefined;
-      for (let round = 0; round < 3; round++) {
-        const started = await api(port, token, '/sessions', { body: { command: 'exit', args: ['0'] } });
-        expect(started.status).toBe(200);
-        const id = String(started.body['id']);
-        const resized = await api(port, token, `/sessions/${id}/resize`, { body: { cols: 100, rows: 30 } });
-        // The program may already have ended when the resize arrives, and then the answer is the
-        // 409 an ended session gets; either way the daemon handled it and carries on.
-        expect([200, 409]).toContain(resized.status);
-        const session = sessionOf(daemon, id);
-        // node-pty holds a resize until the first output only while it is not ready.
-        if ((session as unknown as { pty: { _isReady?: boolean } }).pty._isReady === false) held++;
-        expect(await exitOf(session)).toBe(0);
-        last = session;
-      }
-      expect(held).toBeGreaterThan(0);
+      const marker = `${logPath}.exit-now`;
+      const script = `const fs = require('node:fs'); const timer = setInterval(() => { ` +
+        `if (fs.existsSync(${JSON.stringify(marker)})) { clearInterval(timer); console.log('done'); process.exit(0); } ` +
+        `}, 10);`;
+      const started = await api(port, token, '/sessions', {
+        body: { command: process.execPath, args: ['-e', script], shell: false },
+      });
+      expect(started.status).toBe(200);
+      const id = String(started.body['id']);
+      const session = sessionOf(daemon, id);
+      const pty = (session as unknown as { pty: { _isReady: boolean } }).pty;
+      expect(pty._isReady).toBe(false);
+      const resized = await api(port, token, `/sessions/${id}/resize`, { body: { cols: 100, rows: 30 } });
+      expect(resized.status).toBe(200);
+      expect(pty._isReady).toBe(false);
+      fs.writeFileSync(marker, '');
+      await untilRecordedEnd(session);
+      output?.resume();
+      expect(await exitOf(session)).toBe(0);
       expect(uncaught).toEqual([]);
       expect((await api(port, null, '/health')).status).toBe(200);
       // After an exit with code 0, Session.resize refuses, as for any code.
-      expect(() => last?.resize(80, 24)).toThrow(/exited \(code 0\)/);
+      expect(() => session.resize(80, 24)).toThrow(/exited \(code 0\)/);
     } finally {
+      output?.resume();
       process.off('uncaughtException', listener);
     }
   });
