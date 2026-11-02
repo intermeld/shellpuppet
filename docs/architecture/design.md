@@ -1135,7 +1135,11 @@ cells to scale its font between 6 px and 40 px, without stretching glyphs.
 When a followed or held grid needs more room, it can temporarily use smaller
 text down to 6 px to keep every row and column visible. If the grid still
 exceeds the tile at 6 px, the pane scrolls in both directions as needed and
-shows a status note suggesting Enlarge or Fit. Text enlarged at the grid cap
+shows a wrapping status note. Plain wheel input stays with the terminal;
+Shift+wheel scrolls the pane vertically, horizontal wheel movement scrolls it
+horizontally, and the scrollbars can be dragged. Focusing, typing or selecting
+inside the terminal keeps the pane's scroll position. Enlarge or Fit shows the
+whole grid. Text enlarged at the grid cap
 stops at 40 px.
 A pane below the floor is marked and keeps at least 80 by 24 cells. Auto fit
 is on by default and fits each visible pane's real terminal after a layout,

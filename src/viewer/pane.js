@@ -209,6 +209,16 @@ window.ShellPuppetPane = (() => {
     const fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
     term.open(container);
+    const outerScroll = container.parentElement;
+    const scrollOversizedPane = (event) => {
+      if (!outerScroll?.classList.contains('grid-overflow') ||
+          (!event.shiftKey && event.deltaX === 0)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      outerScroll.scrollLeft += event.deltaX;
+      if (event.shiftKey) outerScroll.scrollTop += event.deltaY;
+    };
+    outerScroll?.addEventListener('wheel', scrollOversizedPane, { capture: true, passive: false });
     const platform = navigator.userAgentData?.platform || navigator.userAgent;
     const isMac = /Mac|iPhone|iPad/i.test(platform);
     // Let the browser deliver paste to xterm's textarea on Windows and Linux.
@@ -426,6 +436,11 @@ window.ShellPuppetPane = (() => {
       const overflowing = controlMode !== 'yours' && term.options.fontSize === MIN_FONT_PX &&
         (screen.offsetWidth > availableWidth + 1 || screen.offsetHeight > availableHeight + 1);
       wrap.classList.toggle('grid-overflow', overflowing);
+      if (overflowing) {
+        const rect = wrap.getBoundingClientRect();
+        wrap.style.setProperty('--textarea-x', `${String(rect.left + 8)}px`);
+        wrap.style.setProperty('--textarea-y', `${String(rect.top + 8)}px`);
+      }
       if (elements.overflowNote) elements.overflowNote.hidden = !overflowing;
     }
 
@@ -604,6 +619,7 @@ window.ShellPuppetPane = (() => {
     return {
       destroy() {
         destroyed = true;
+        outerScroll?.removeEventListener('wheel', scrollOversizedPane, true);
         clearTimeout(reconnectTimer);
         if (ws) ws.close();
         if (redactedCapture) delete window.__shellpuppetCoverRows;
