@@ -15,7 +15,7 @@
  * connects is heard the same way.
  *
  * What can still throw inside the constructor is the input pipe's open, which
- * fails on every start under a sandbox that denies pipe access — after the
+ * fails on every start under a sandbox that denies pipe access, after the
  * worker has started and the deferred connection has been armed. Left alone,
  * a worker that becomes ready afterwards would run the deferred `connect` and
  * spawn the program of a start whose caller was told it failed, and the

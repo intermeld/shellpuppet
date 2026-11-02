@@ -79,7 +79,7 @@ one will be asked to change, however good the rest is.
 
 Node.js 22 or later. `npm install` pulls prebuilt native modules, so Windows,
 macOS and mainstream Linux (glibc, x64 and arm64) need no compiler toolchain.
-Where no prebuilt matches — another architecture, or musl in place of glibc —
+Where no prebuilt matches (another architecture, or musl in place of glibc),
 `node-pty` is built from source with `node-gyp`, so `python3`, `make` and a
 C++ compiler have to be present (the README says the same). npm 12 runs a
 dependency's install script only when the project allows it. The `allowScripts`
