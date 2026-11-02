@@ -345,7 +345,7 @@ describe('profile policy', () => {
 });
 
 describe('the daemon environment copy', () => {
-  it('copies all owned string values except reserved credentials and ShellPuppet variables', () => {
+  it('copies all owned string values except reserved credentials and ShellPuppet session variables', () => {
     const source = Object.create({ INHERITED: 'inherited' }) as NodeJS.ProcessEnv;
     source['UNLISTED'] = 'made-up-value';
     source['FEATURE_CREDENTIAL'] = 'made-up-feature';
@@ -355,8 +355,61 @@ describe('the daemon environment copy', () => {
     source['=C:'] = 'made-up-drive';
     source['ODD-NAME'] = 'made-up-malformed';
     const result = copyDaemonEnv('all', source, new Set(['FEATURE_CREDENTIAL']));
-    expect(result.copied).toEqual(['UNLISTED']);
+    expect(result.copied).toEqual(['UNLISTED', 'SHELLPUPPET_HOME']);
     expect(result.env['UNLISTED'] === 'made-up-value').toBe(true);
+    expect(result.env['SHELLPUPPET_HOME'] === 'made-up-home').toBe(true);
+  });
+  it('keeps agent CLI session scaffolding out of an all profile', () => {
+    const excluded = [
+      'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_PID',
+      'CODEX_THREAD_ID', 'QODER_SESSION_ID', 'GROK_SESSION_ID',
+      'OPENCODE_SESSION_ID', 'GEMINI_CLI_SESSION_ID', 'ANTIGRAVITY_SESSION_ID',
+      'GOOSE_SESSION_ID', 'SHELLPUPPET_SESSION',
+    ];
+    const source: NodeJS.ProcessEnv = {
+      SHELLPUPPET_HOME: 'made-up-home',
+      ANTHROPIC_API_KEY: 'made-up-user-key',
+      CLAUDE_CONFIG_DIR: 'made-up-config-dir',
+      OPENAI_API_KEY: 'made-up-openai-key',
+      ORDINARY_NAME: 'made-up-ordinary',
+    };
+    for (const name of excluded) source[name] = `made-up-${name}`;
+    const result = copyDaemonEnv('all', source);
+    expect(result.env).toEqual({
+      SHELLPUPPET_HOME: 'made-up-home',
+      ANTHROPIC_API_KEY: 'made-up-user-key',
+      CLAUDE_CONFIG_DIR: 'made-up-config-dir',
+      OPENAI_API_KEY: 'made-up-openai-key',
+      ORDINARY_NAME: 'made-up-ordinary',
+    });
+    expect(result.copied).toEqual([
+      'SHELLPUPPET_HOME', 'ANTHROPIC_API_KEY', 'CLAUDE_CONFIG_DIR',
+      'OPENAI_API_KEY', 'ORDINARY_NAME',
+    ]);
+    expect(copyDaemonEnv(['CLAUDE_CODE_SESSION_ID'], source)).toEqual({
+      env: { CLAUDE_CODE_SESSION_ID: 'made-up-CLAUDE_CODE_SESSION_ID' },
+      copied: ['CLAUDE_CODE_SESSION_ID'],
+    });
+  });
+  it.runIf(process.platform === 'win32')('excludes agent CLI session names without regard to case on Windows', () => {
+    const source = {
+      cLaUdEcOdE: 'made-up-claude',
+      cLaUdE_cOdE_sEsSiOn_Id: 'made-up-claude-session',
+      cLaUdE_pId: 'made-up-claude-pid',
+      cOdEx_ThReAd_Id: 'made-up-codex',
+      qOdEr_SeSsIoN_iD: 'made-up-qoder',
+      gRoK_sEsSiOn_Id: 'made-up-grok',
+      oPeNcOdE_sEsSiOn_Id: 'made-up-opencode',
+      gEmInI_cLi_SeSsIoN_iD: 'made-up-gemini',
+      aNtIgRaViTy_SeSsIoN_iD: 'made-up-antigravity',
+      gOoSe_SeSsIoN_iD: 'made-up-goose',
+      sHeLlPuPpEt_SeSsIoN: 'made-up-shellpuppet',
+      sHeLlPuPpEt_HoMe: 'made-up-home',
+    };
+    expect(copyDaemonEnv('all', source)).toEqual({
+      env: { sHeLlPuPpEt_HoMe: 'made-up-home' },
+      copied: ['sHeLlPuPpEt_HoMe'],
+    });
   });
   it('leaves an owned __proto__ name out of an explicit copy', () => {
     const source = Object.create(null) as NodeJS.ProcessEnv;

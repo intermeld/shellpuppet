@@ -26,7 +26,26 @@ import { compilePolicy } from '../core/policy.js';
 import type { CompiledPolicy } from '../core/policy.js';
 
 export { RESERVED_FEATURE_CREDENTIALS };
-const ALL_PROFILE_ENV_EXCLUSIONS: ReadonlySet<string> = new Set(['NODE_OPTIONS']);
+const ALL_PROFILE_ENV_EXCLUSIONS: ReadonlySet<string> = new Set([
+  'NODE_OPTIONS',
+  'CLAUDECODE',
+  'CLAUDE_PID',
+  'CODEX_THREAD_ID',
+  'CODEX_SESSION_ID',
+  'CODEX_SHELL',
+  'GEMINI_CLI',
+]);
+const ALL_PROFILE_ENV_EXCLUSION_PREFIXES = [
+  'CLAUDE_CODE_',
+  'CODEX_INTERNAL_',
+  'QODER_SESSION_',
+  'GROK_SESSION_',
+  'OPENCODE_SESSION_',
+  'GEMINI_CLI_SESSION_',
+  'GEMINI_SESSION_',
+  'ANTIGRAVITY_SESSION_',
+  'GOOSE_SESSION_',
+] as const;
 
 /** The name pattern a profile and each of its folders must match. */
 export const PROFILE_NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
@@ -483,7 +502,7 @@ export function parseLauncher(
 /**
  * The daemon values selected by a profile's `envFromDaemon`: listed names or
  * every valid name for "all". Unset names, reserved credentials, ShellPuppet's
- * own variables and the named all-profile exclusions are skipped. Only owned string values are copied:
+ * session variables and the all-profile exclusions are skipped. Only owned string values are copied:
  * `constructor` and `toString` are inherited functions, not variables.
  * The caller gets values to set and the names copied; neither is logged here.
  */
@@ -495,11 +514,15 @@ export function copyDaemonEnv(
   const env: Record<string, string> = {};
   const copied: string[] = [];
   for (const name of names === 'all' ? Object.keys(source) : names) {
+    const upperName = name.toUpperCase();
     if (names === 'all'
-      && (!ENV_NAME_PATTERN.test(name) || ALL_PROFILE_ENV_EXCLUSIONS.has(name.toUpperCase()))) continue;
-    if (name.toUpperCase().startsWith('SHELLPUPPET_') || name === '__proto__') continue;
+      && (!ENV_NAME_PATTERN.test(name)
+        || ALL_PROFILE_ENV_EXCLUSIONS.has(upperName)
+        || ALL_PROFILE_ENV_EXCLUSION_PREFIXES.some((prefix) => upperName.startsWith(prefix)))) continue;
+    if ((upperName.startsWith('SHELLPUPPET_') && upperName !== 'SHELLPUPPET_HOME')
+      || name === '__proto__') continue;
     if (process.platform === 'win32'
-      ? [...reserved].some((entry) => entry.toUpperCase() === name.toUpperCase())
+      ? [...reserved].some((entry) => entry.toUpperCase() === upperName)
       : reserved.has(name)) continue;
     if (!Object.hasOwn(source, name)) continue;
     const value = source[name];

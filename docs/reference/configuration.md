@@ -438,10 +438,15 @@ that profile through the dashboard the daemon's whole environment without
 listing variables. The daemon's environment comes from whichever client
 started it. A listed name that is unset is skipped and does not refuse the
 start. Connected feature credentials reserved under ADR-007 and ShellPuppet's
-own `SHELLPUPPET_` variables, including `SHELLPUPPET_HOME`, are excluded.
-The `"all"` form also excludes `NODE_OPTIONS` and names that do not match
+per-session variables, including `SHELLPUPPET_SESSION`, are excluded.
+`SHELLPUPPET_HOME` passes through so a launched process can find the same daemon.
+The `"all"` form also excludes `NODE_OPTIONS` and the session markers and
+internal child-process variables of Claude Code, Codex, Qoder, Grok, OpenCode,
+Gemini CLI, Antigravity and Goose. User configuration such as API keys, model
+choices and `CLAUDE_CONFIG_DIR` still passes. Names that do not match
 `^[A-Za-z_][A-Za-z0-9_]*$`, including Windows drive pseudo-variables such as
-`=C:`. The unsafe `__proto__` name is excluded as well.
+`=C:`, are excluded. The unsafe `__proto__` name is excluded as well. An
+explicit array can still name an agent session variable when that is intended.
 `TERM` and `COLORTERM` receive ShellPuppet's terminal values. With an array,
 the response and audit carry copied names; with `"all"`, they record only the
 setting `"all"`. They never carry values. `agents.passEnv` and `envNames` are
@@ -451,8 +456,11 @@ Client-token starts, including `terminal_start` and `shellpuppet start`, do
 not use profiles and keep their configured `sessionEnv` mode.
 
 To supply secrets at run time, start the daemon itself under a secrets tool,
-for example `op run --env-file <file> -- shellpuppet daemon start`. A daemon
-that is already running keeps the environment it started with: running
+for example `op run -- shellpuppet daemon start`. An environment file is
+optional: `op run` also resolves secret references already in the environment.
+If an agent session runs under the secrets tool and starts the daemon, the
+daemon inherits its resolved values without a further prompt. A daemon that
+is already running keeps the environment it started with: running
 `shellpuppet dashboard` under `op run` then changes nothing for that daemon.
 
 A fixed directory, with no folder choice:
