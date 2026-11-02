@@ -334,7 +334,7 @@ and started.
 dashboard or single-session viewer window, the response says so and carries no link. A
 connected dashboard, or one whose window is opening, also needs no viewer link. A link
 nobody asked for would sit in a transcript as a live capability until it expired. When
-nothing opened (`viewer.launchMode` is `none`, or no browser would start), the
+nothing opened (`viewer.launchMode` is `no-window`, or no browser would start), the
 response carries the viewer URL, so the agent can hand the human
 a link at once instead of the human having to be told separately. The URL carries a
 *one-use viewer grant*, not the client token (§4.1). A link on request, for a second

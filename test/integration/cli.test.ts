@@ -707,13 +707,13 @@ describe('shellpuppet CLI', () => {
     // The daemon inherits the environment of the CLI that starts it, so a
     // credential-shaped variable set here is one passthrough would pass on.
     const leakyHome = makeTempHome('shellpuppet-cli-passthrough-');
-    // launchMode none, as makeTempHome wrote before this replaced it. Under
+    // launchMode no-window, as makeTempHome wrote before this replaced it. Under
     // the product default the daemon looks for a browser as it starts, and on
     // macOS that look holds the daemon for 5 to 10 s, longer than
     // `daemon start` waits for a new daemon to answer (viewerLauncher.ts).
     fs.writeFileSync(
       path.join(leakyHome, 'config.json'),
-      JSON.stringify({ viewer: { launchMode: 'none' }, sessionEnv: 'passthrough' }),
+      JSON.stringify({ viewer: { launchMode: 'no-window' }, sessionEnv: 'passthrough' }),
     );
     process.env['SHELLPUPPET_CLI_CANARY_TOKEN'] = 'cli-canary-value-5e2a';
     try {

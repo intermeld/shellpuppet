@@ -379,7 +379,7 @@ describe('a dashboard grant works once, then it is worthless', () => {
       audit: createAuditor(home),
       launcher: (url) => {
         urls.push(url);
-        return Promise.resolve({ launched: false, mode: 'none' as const, reason: 'window did not start' });
+        return Promise.resolve({ launched: false, mode: 'no-window' as const, reason: 'window did not start' });
       },
     });
     running.push(Object.assign(daemon, { urls, logPath, clock: { now: 0 } }));

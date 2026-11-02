@@ -45,7 +45,7 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { NULL_LOGGER, type Logger } from '../core/types.js';
 
-export type ViewerLaunchMode = 'dashboard' | 'isolated-app' | 'default-browser' | 'none';
+export type ViewerLaunchMode = 'dashboard' | 'isolated-app' | 'default-browser' | 'no-window';
 
 export interface ViewerLaunchConfig {
   launchMode?: ViewerLaunchMode;
@@ -464,8 +464,8 @@ async function launchWindow(
   deps: LaunchDependencies,
   allowFallback: boolean,
 ): Promise<ViewerLaunchResult> {
-  const mode = config.launchMode ?? 'none';
-  if (mode === 'none') return { launched: false, mode, reason: 'viewer.launchMode is "none"' };
+  const mode = config.launchMode ?? 'no-window';
+  if (mode === 'no-window') return { launched: false, mode, reason: 'viewer.launchMode is "no-window"' };
 
   if (mode === 'isolated-app') {
     const isolated = await openIsolatedWindow(

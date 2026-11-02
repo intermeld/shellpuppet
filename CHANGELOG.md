@@ -7,6 +7,10 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+### Changed
+
+- Renamed `viewer.launchMode: "none"` to `"no-window"`; `"none"` remains an alias for existing configurations.
+
 ### Added
 
 - New sessions open in the dashboard by default. The daemon opens one isolated

@@ -48,7 +48,7 @@ describe('automatic dashboard launch', () => {
       viewer: { launchMode: 'dashboard' },
       launcher: (url) => {
         urls.push(url);
-        return Promise.resolve({ launched: false, mode: 'none' as const, reason: 'missing browser' });
+        return Promise.resolve({ launched: false, mode: 'no-window' as const, reason: 'missing browser' });
       },
     });
     running.push(daemon);
@@ -87,7 +87,7 @@ describe('automatic dashboard launch', () => {
     expect(urls).toHaveLength(1);
   });
 
-  it('keeps isolated-app and none behaviour', async () => {
+  it('keeps isolated-app and no-window behaviour', async () => {
     const urls: string[] = [];
     const isolated = await startTestDaemon({
       viewer: { launchMode: 'isolated-app' },
@@ -100,10 +100,10 @@ describe('automatic dashboard launch', () => {
     const opened = await start(isolated);
     expect(opened.body['viewer']).toMatchObject({ opened: true, mode: 'isolated-app' });
     expect(urls[0]).toContain('/view?s=');
-    const none = await startTestDaemon({ viewer: { launchMode: 'none' } });
-    running.push(none);
-    const quiet = await start(none);
-    expect(quiet.body['viewer']).toMatchObject({ opened: false, mode: 'none' });
+    const noWindow = await startTestDaemon({ viewer: { launchMode: 'no-window' } });
+    running.push(noWindow);
+    const quiet = await start(noWindow);
+    expect(quiet.body['viewer']).toMatchObject({ opened: false, mode: 'no-window' });
     expect(String(quiet.body['viewerUrl'])).toContain('/view?s=');
   });
 });

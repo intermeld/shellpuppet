@@ -68,7 +68,7 @@ function writeConfig(agentLists: Record<string, string[]> = AGENT_LISTS): void {
   fs.writeFileSync(
     path.join(home, 'config.json'),
     JSON.stringify({
-      viewer: { launchMode: 'none' },
+      viewer: { launchMode: 'no-window' },
       sessionEnv: 'clean',
       envNames: ['SP_TEST_PASSED', 'SP_TEST_LISTED_UNSET'],
       agents: { passEnv: agentLists },
@@ -217,7 +217,7 @@ describe('terminal_start envNames', () => {
   it('passes nothing from a list under mcp.passEnv, reports it, and starts nothing', async () => {
     fs.writeFileSync(
       path.join(home, 'config.json'),
-      JSON.stringify({ viewer: { launchMode: 'none' }, sessionEnv: 'clean', mcp: { passEnv: ['SP_TEST_PASSED'] } }),
+      JSON.stringify({ viewer: { launchMode: 'no-window' }, sessionEnv: 'clean', mcp: { passEnv: ['SP_TEST_PASSED'] } }),
     );
     try {
       const before = await client.callTool({ name: 'terminal_list', arguments: {} });

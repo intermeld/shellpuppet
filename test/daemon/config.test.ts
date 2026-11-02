@@ -147,11 +147,24 @@ describe('parseDaemonConfig: other fields fail SAFE', () => {
 });
 
 describe('viewer launch config', () => {
+  it('accepts none as an alias of no-window without a warning', () => {
+    const { config, problems } = parseDaemonConfig({ viewer: { launchMode: 'none' } });
+    expect(config.viewer?.launchMode).toBe('no-window');
+    expect(problems).toEqual([]);
+  });
+
   it('accepts dashboard launch mode', () => {
     const { config, problems } = parseDaemonConfig({ viewer: { launchMode: 'dashboard' } });
     expect(config.viewer?.launchMode).toBe('dashboard');
     expect(problems).toEqual([]);
   });
+
+  it('accepts no-window launch mode', () => {
+    const { config, problems } = parseDaemonConfig({ viewer: { launchMode: 'no-window' } });
+    expect(config.viewer?.launchMode).toBe('no-window');
+    expect(problems).toEqual([]);
+  });
+
   it('accepts a valid viewer section', () => {
     const { config, problems } = parseDaemonConfig({
       viewer: { launchMode: 'isolated-app', browserPath: 'C:/browser.exe' },
@@ -161,19 +174,19 @@ describe('viewer launch config', () => {
     expect(problems).toEqual([]);
   });
 
-  it('falls back to none, never to launching, on an invalid launchMode', () => {
+  it('falls back to no-window, never to launching, on an invalid launchMode', () => {
     // Config the daemon cannot read must not cause it to start spawning
     // browser windows on someone's desktop. A viewer that did not open is
     // visibly wrong in a way the operator can act on; one that opened when it
     // should not have is not.
     const { config, problems } = parseDaemonConfig({ viewer: { launchMode: 'kiosk' } });
-    expect(config.viewer?.launchMode).toBe('none');
+    expect(config.viewer?.launchMode).toBe('no-window');
     expect(problems.join(' ')).toMatch(/launchMode/);
   });
 
-  it('falls back to none when viewer is not an object', () => {
+  it('falls back to no-window when viewer is not an object', () => {
     const { config, problems } = parseDaemonConfig({ viewer: 'isolated-app' });
-    expect(config.viewer?.launchMode).toBe('none');
+    expect(config.viewer?.launchMode).toBe('no-window');
     expect(problems.join(' ')).toMatch(/viewer must be an object/);
   });
 
@@ -186,7 +199,7 @@ describe('viewer launch config', () => {
   });
 
   it('does not flag viewer as an unknown top-level key', () => {
-    const { problems } = parseDaemonConfig({ viewer: { launchMode: 'none' } });
+    const { problems } = parseDaemonConfig({ viewer: { launchMode: 'no-window' } });
     expect(problems.join(' ')).not.toMatch(/unknown key "viewer"/);
   });
 });

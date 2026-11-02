@@ -243,14 +243,14 @@ describe('config validation end-to-end', () => {
     fs.mkdirSync(home, { recursive: true });
     fs.writeFileSync(
       path.join(home, 'config.json'),
-      // launchMode none: the config written here replaces the one
+      // launchMode no-window: the config written here replaces the one
       // makeTempHome wrote, and the real daemon entry point would otherwise
-      // default to opening a viewer window. Harmless while the session below
+      // default to opening a dashboard window. Harmless while the session below
       // is refused; a session that started would put a browser on the
       // desktop.
       JSON.stringify({
         policy: { mode: 'allowlist', allow: '^goose' },
-        viewer: { launchMode: 'none' },
+        viewer: { launchMode: 'no-window' },
       }),
     );
 

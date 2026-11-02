@@ -99,9 +99,10 @@ Full example, everything optional:
     //                     Windows. Falls back to the default browser if none
     //                     is found; it never fails a session start.
     //   "default-browser": hand the URL to your normal browser.
-    //   "none":           open nothing. Use this on unattended or headless
+    //   "no-window":      open no window. Use this on unattended or headless
     //                     machines, where a window nobody sees just piles up.
     //                     A session start then hands its caller a viewer link.
+    //                     The older name "none" is accepted as an alias.
     "launchMode": "dashboard",
 
     // The dashboard (`shellpuppet dashboard`) always opens in the isolated

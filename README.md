@@ -192,7 +192,7 @@ auto-start, the PTY, the renderer, waiting, input verification and tree-kill.
 **No window?** By default a session start opens the dashboard in ShellPuppet's
 own isolated browser profile. If that window cannot open, `start` prints a
 single-session viewer link. On a headless machine, or if you'd rather have a
-link, set `viewer.launchMode` to `"none"` in `~/.shellpuppet/config.json`:
+link, set `viewer.launchMode` to `"no-window"` in `~/.shellpuppet/config.json`:
 `start` then prints a viewer link,
 and an agent is given one to pass to you. Whatever the setting, `shellpuppet
 viewer-url <id>` mints a fresh link whenever you want one, and `--read-only`

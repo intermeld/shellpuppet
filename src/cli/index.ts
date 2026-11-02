@@ -374,9 +374,9 @@ async function main(): Promise<void> {
           console.log(`viewer: window opened${how} (viewer-url ${String(result['id'])} mints a link)`);
         } else if (typeof result['viewerUrl'] === 'string') {
           const why = viewer?.reason !== undefined ? ` (${viewer.reason})` : '';
-          console.log(`viewer: none opened${why}; link: ${result['viewerUrl']}`);
+          console.log(`viewer: no window opened${why}; link: ${result['viewerUrl']}`);
         } else {
-          console.log(`viewer: none opened (--no-viewer); viewer-url ${String(result['id'])} mints a link`);
+          console.log(`viewer: no window opened (--no-viewer); viewer-url ${String(result['id'])} mints a link`);
         }
         if (result['ready'] !== true) {
           console.log('ready: false. First paint is not readiness; wait before typing.');

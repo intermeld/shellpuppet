@@ -219,7 +219,7 @@ describe('MCP adapter', () => {
     const startText = resultText(started);
     expect(startText).toMatch(/Session s\d+ started/);
     // The test home opens no window, so the URL is the human's way in.
-    expect(startText).toContain('No viewer window opened (viewer.launchMode is "none")');
+    expect(startText).toContain('No viewer window opened (viewer.launchMode is "no-window")');
     expect(startText).toContain('Viewer URL for the human');
     const id = /Session (s\d+) started/.exec(startText)?.[1] ?? '';
 
