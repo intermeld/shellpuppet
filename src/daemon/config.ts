@@ -337,22 +337,31 @@ export function parseDaemonConfig(raw: unknown): ParsedDaemonConfig {
     if (!isRecord(daemon)) {
       problems.push('daemon must be an object: starting directly');
     } else {
+      let valid = true;
       for (const key of Object.keys(daemon)) {
-        if (!DAEMON_KEYS.has(key)) problems.push(`daemon has an unknown key "${key}": ignored (typo?)`);
+        if (!DAEMON_KEYS.has(key)) {
+          problems.push(`daemon has an unknown key "${key}": starting directly`);
+          valid = false;
+        }
       }
       const startWith = daemon['startWith'];
       const condition = daemon['startWithOnlyIfEnvContains'];
-      if (startWith !== undefined && (!isStringArray(startWith) || startWith.length === 0 || startWith.some((part) => part === ''))) {
-        problems.push('daemon.startWith must be a non-empty array of non-empty strings: starting directly');
-      } else if (startWith !== undefined) {
-        config.daemon = { startWith };
+      if (startWith !== undefined && (!Array.isArray(startWith) || startWith.length < 1 ||
+          startWith.length > 16 || startWith.some((part) => typeof part !== 'string' ||
+            part.trim() === '' || part.length > 1024 || part.includes('\0')))) {
+        problems.push('daemon.startWith must have 1 to 16 non-blank strings of at most 1024 characters: starting directly');
+        valid = false;
       }
-      if (condition !== undefined) {
-        if (typeof condition === 'string' && condition !== '') {
-          config.daemon = { ...config.daemon, startWithOnlyIfEnvContains: condition };
-        } else {
-          problems.push('daemon.startWithOnlyIfEnvContains must be a non-empty string: ignored');
-        }
+      if (condition !== undefined && (typeof condition !== 'string' || condition.trim() === '' ||
+          condition.length > 256)) {
+        problems.push('daemon.startWithOnlyIfEnvContains must be a non-blank string of at most 256 characters: starting directly');
+        valid = false;
+      }
+      if (valid && isStringArray(startWith)) {
+        config.daemon = {
+          startWith,
+          ...(typeof condition === 'string' ? { startWithOnlyIfEnvContains: condition } : {}),
+        };
       }
     }
   }
@@ -502,6 +511,99 @@ export function parseDaemonConfig(raw: unknown): ParsedDaemonConfig {
   return { config, problems };
 }
 
+/** Locate a JSON syntax error without using V8's message, which may quote config text. */
+function jsonErrorLocation(raw: string): { line: number; column: number } {
+  class InvalidJson extends Error {
+    constructor(readonly offset: number) { super('invalid JSON'); }
+  }
+  let at = 0;
+  const fail = (): never => { throw new InvalidJson(at); };
+  const space = (): void => {
+    while (at < raw.length && /[ \t\r\n]/.test(raw[at] ?? '')) at++;
+  };
+  const expectChar = (ch: string): void => {
+    if (raw[at] !== ch) fail();
+    at++;
+  };
+  const string = (): void => {
+    expectChar('"');
+    while (at < raw.length) {
+      const ch = raw[at] ?? '';
+      if (ch === '"') { at++; return; }
+      if (ch.charCodeAt(0) < 0x20) fail();
+      if (ch === '\\') {
+        at++;
+        const escaped = raw[at] ?? '';
+        if (escaped === 'u') {
+          at++;
+          for (let n = 0; n < 4; n++, at++) {
+            if (!/[0-9a-fA-F]/.test(raw[at] ?? '')) fail();
+          }
+          continue;
+        }
+        if (!/["\\/bfnrt]/.test(escaped)) fail();
+      }
+      at++;
+    }
+    fail();
+  };
+  const value = (depth: number): void => {
+    if (depth > 256) fail();
+    space();
+    const ch = raw[at];
+    if (ch === '"') { string(); return; }
+    if (ch === '{') {
+      at++;
+      space();
+      if (raw[at] === '}') { at++; return; }
+      for (;;) {
+        string();
+        space();
+        expectChar(':');
+        value(depth + 1);
+        space();
+        if (raw[at] === '}') { at++; return; }
+        expectChar(',');
+        space();
+      }
+    }
+    if (ch === '[') {
+      at++;
+      space();
+      if (raw[at] === ']') { at++; return; }
+      for (;;) {
+        value(depth + 1);
+        space();
+        if (raw[at] === ']') { at++; return; }
+        expectChar(',');
+      }
+    }
+    for (const literal of ['true', 'false', 'null']) {
+      if (ch === literal[0]) {
+        for (const expected of literal) expectChar(expected);
+        return;
+      }
+    }
+    if (ch === '-' || (ch !== undefined && /[0-9]/.test(ch))) {
+      const number = /^-?(?:0|[1-9][0-9]*)(?:\.[0-9]+)?(?:[eE][+-]?[0-9]+)?/.exec(raw.slice(at));
+      if (number === null) return fail();
+      at += number[0].length;
+      return;
+    }
+    fail();
+  };
+  try {
+    value(0);
+    space();
+    if (at < raw.length) fail();
+  } catch (error) {
+    if (!(error instanceof InvalidJson)) at = 0;
+    else at = error.offset;
+  }
+  const lines = raw.slice(0, at).split(/\r\n|\r|\n/);
+  return { line: lines.length, column: (lines.at(-1) ?? '').length + 1 };
+}
+
 /** Read and validate the config file. ENOENT ⇒ defaults; unreadable ⇒ fail closed. */
 export function readDaemonConfig(home: string): ParsedDaemonConfig {
   let rawText: string;
@@ -516,12 +618,15 @@ export function readDaemonConfig(home: string): ParsedDaemonConfig {
       `config.json could not be read (${String(error)}): refusing all commands`,
     );
   }
+  let raw: unknown;
   try {
-    return parseDaemonConfig(JSON.parse(rawText));
-  } catch (error) {
+    raw = JSON.parse(rawText) as unknown;
+  } catch {
+    const { line, column } = jsonErrorLocation(rawText);
     return unknowableConfig(
-      `config.json is not valid JSON (${String(error)}).`,
-      `config.json is not valid JSON (${String(error)}): refusing all commands`,
+      `config.json is not valid JSON at line ${String(line)}, column ${String(column)}.`,
+      `config.json is not valid JSON at line ${String(line)}, column ${String(column)}: refusing all commands`,
     );
   }
+  return parseDaemonConfig(raw);
 }

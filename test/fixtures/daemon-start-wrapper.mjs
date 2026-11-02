@@ -1,8 +1,9 @@
 import { spawn } from 'node:child_process';
 import { writeFileSync } from 'node:fs';
 
-const [marker, delay, program, ...args] = process.argv.slice(2);
-writeFileSync(marker, 'ran');
+const [marker, delay, ...rest] = process.argv.slice(2);
+const [program, ...args] = rest.slice(-2);
+writeFileSync(marker, JSON.stringify({ pid: process.pid }));
 setTimeout(() => {
   const child = spawn(program, args, {
     detached: true,

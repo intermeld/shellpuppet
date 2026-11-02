@@ -17,6 +17,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import type { ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -32,6 +33,7 @@ import {
 import { daemonRunning } from '../daemon/liveness.js';
 import { packageVersion } from '../daemon/meta.js';
 import { NULL_LOGGER } from '../core/types.js';
+import { taskkillTrees } from '../core/session.js';
 import type { Logger } from '../core/types.js';
 
 const AUTO_START_TIMEOUT_MS = 10_000;
@@ -45,7 +47,9 @@ const HEALTH_TIMEOUT_MS = 1_500;
  * caller is told it is busy.
  */
 const PATIENT_HEALTH_TIMEOUTS_MS = [3_000, 5_000];
+const EARLY_WRAPPER_EXIT_GRACE_MS = 10_000;
 let warnedInvalidDirect = false;
+const reportedStartConfigProblems = new Set<string>();
 
 export interface DaemonConnection {
   port: number;
@@ -100,6 +104,8 @@ export interface ClientOptions {
   autoStart?: boolean;
   /** Bypass a configured start wrapper for this start only. */
   direct?: boolean;
+  /** Test seam for failure cleanup. Normal wrapped starts use the named bound. */
+  wrappedStartTimeoutMs?: number;
 }
 
 /**
@@ -168,6 +174,41 @@ export function daemonWorkingDirectory(): string | undefined {
 function defaultDaemonEntry(): string {
   // From dist/client/http.js this resolves to dist/daemon/index.js.
   return fileURLToPath(new URL('../daemon/index.js', import.meta.url));
+}
+
+/** Resolve a configured wrapper without a shell or joined argument string. */
+export function planDaemonStart(
+  wrapper: readonly string[],
+  entry: string,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+): { command: string; args: string[] } {
+  const program = wrapper[0] ?? '';
+  const name = path.basename(program);
+  const resolved = resolveLaunchCommand(program, cwd, env);
+  if ('error' in resolved) {
+    throw new Error(`daemon.startWith program ${name} could not be started: program not found.`);
+  }
+  if (process.platform === 'win32' && !/\.(exe|com)$/i.test(resolved.file)) {
+    throw new Error(`daemon.startWith program ${name} cannot start directly on Windows; point it at the program itself (.exe or .com).`);
+  }
+  return { command: resolved.file, args: [...wrapper.slice(1), process.execPath, entry] };
+}
+
+/** End only the process tree rooted at the child this client spawned. */
+async function endSpawnedWrapper(child: ChildProcess, logger: Logger): Promise<void> {
+  const pid = child.pid;
+  if (pid === undefined || pid <= 0) return;
+  if (process.platform === 'win32') {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    try { process.kill(pid, 0); } catch { return; }
+    const failure = await taskkillTrees([pid]);
+    if (failure !== null) logger.warn('daemon.startWith process tree cleanup did not complete', { pid, timedOut: failure.timedOut });
+  } else {
+    try { process.kill(-pid, 'SIGKILL'); } catch {
+      // The process group has already gone.
+    }
+  }
 }
 
 function versionWarnings(daemonVersion: string): string[] {
@@ -244,7 +285,15 @@ export async function ensureDaemon(options: ClientOptions = {}): Promise<DaemonC
   const entry = options.daemonEntry ?? defaultDaemonEntry();
   const cwd = daemonWorkingDirectory();
   const env: NodeJS.ProcessEnv = { ...process.env, SHELLPUPPET_HOME: home };
-  const configured = readDaemonConfig(home).config.daemon;
+  const parsed = readDaemonConfig(home);
+  for (const problem of parsed.problems) {
+    if ((problem.startsWith('daemon.') || problem.startsWith('daemon must') || problem.startsWith('daemon has')) &&
+        !reportedStartConfigProblems.has(problem)) {
+      logger.warn(problem);
+      reportedStartConfigProblems.add(problem);
+    }
+  }
+  const configured = parsed.config.daemon;
   const condition = configured?.startWithOnlyIfEnvContains;
   const wrapped = options.direct !== true && directValue !== '1' &&
     configured?.startWith !== undefined &&
@@ -254,54 +303,61 @@ export async function ensureDaemon(options: ClientOptions = {}): Promise<DaemonC
   const programName = program === undefined ? undefined : path.basename(program);
   let command = process.execPath;
   let args = [entry];
-  let batchWrapper = false;
   if (program !== undefined) {
-    const resolved = resolveLaunchCommand(program, cwd ?? process.cwd(), env);
-    if ('error' in resolved) {
+    try {
+      ({ command, args } = planDaemonStart(wrapper ?? [], entry, cwd ?? process.cwd(), env));
+    } catch (error) {
       const raced = await discoverDaemon(options);
       if (raced !== null) return raced;
-      throw new Error(`daemon.startWith program ${programName} could not be started: program not found.`);
-    }
-    command = resolved.file;
-    args = [...(wrapper?.slice(1) ?? []), process.execPath, entry];
-    if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(command)) {
-      batchWrapper = true;
-      // As with session starts, cmd handles batch files. Keep the configured
-      // arguments as separate tokens until this explicit Windows shell step.
-      const line = [command, ...args].map((part) => `"${part.replaceAll('"', '""')}"`).join(' ');
-      command = env['ComSpec'] ?? 'cmd.exe';
-      args = ['/d', '/s', '/c', `"${line}"`];
+      throw error;
     }
   }
   env['SHELLPUPPET_DAEMON_STARTED_WRAPPED'] = wrapped ? '1' : '0';
   logger.info('auto-starting daemon', { wrapped });
   let startError = false;
-  const child = spawn(command, args, {
-    detached: true,
-    stdio: 'ignore', // MUST be 'ignore': inherited handles hang the caller (§2.2)
-    windowsHide: true,
-    ...(batchWrapper ? { windowsVerbatimArguments: true } : {}),
-    env,
-    ...(cwd !== undefined ? { cwd } : {}),
-  });
+  let childExitAt: number | null = null;
+  let child: ChildProcess;
+  try {
+    child = spawn(command, args, {
+      detached: true,
+      stdio: 'ignore', // MUST be 'ignore': inherited handles hang the caller (§2.2)
+      windowsHide: true,
+      shell: false,
+      env,
+      ...(cwd !== undefined ? { cwd } : {}),
+    });
+  } catch {
+    if (programName !== undefined) {
+      throw new Error(`daemon.startWith program ${programName} could not be started.`);
+    }
+    throw new Error('The ShellPuppet daemon process could not be started.');
+  }
   // A process that cannot start reports it as an 'error' event, which with no
   // listener would end this client. The poll below reports the failure.
   child.on('error', (error) => {
     startError = true;
+    childExitAt = Date.now();
     logger.warn(programName === undefined ? 'the daemon process did not start' :
       `daemon.startWith program ${programName} did not start`, { code: (error as NodeJS.ErrnoException).code });
   });
+  child.on('exit', () => { childExitAt = Date.now(); });
   child.unref();
 
   // A healthy /health response is success regardless of what happened to the
   // child we spawned (§2.2). Only the poll timing out is failure.
-  const timeoutMs = wrapped ? WRAPPED_START_TIMEOUT_MS : AUTO_START_TIMEOUT_MS;
+  const timeoutMs = wrapped ? (options.wrappedStartTimeoutMs ?? WRAPPED_START_TIMEOUT_MS) : AUTO_START_TIMEOUT_MS;
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const state = readDaemonState(home);
     if (state !== null) {
       const alive = await health(state.port);
       if (alive !== null) {
+        // A direct starter may win while this wrapper is still waiting for
+        // an unlock. The healthy daemon is success, but the losing wrapper
+        // must not remain to launch another daemon later.
+        if (programName !== undefined && state.startedWrapped !== true) {
+          await endSpawnedWrapper(child, logger);
+        }
         return {
           port: state.port,
           token: state.token,
@@ -311,10 +367,13 @@ export async function ensureDaemon(options: ClientOptions = {}): Promise<DaemonC
         };
       }
     }
+    if (wrapped && childExitAt !== null && Date.now() - childExitAt >= EARLY_WRAPPER_EXIT_GRACE_MS) break;
     await new Promise((resolve) => setTimeout(resolve, AUTO_START_POLL_MS));
   }
   if (programName !== undefined) {
+    await endSpawnedWrapper(child, logger);
     throw new Error(`daemon.startWith program ${programName} ${startError ? 'could not be started' :
+      childExitAt !== null && Date.now() < deadline ? 'exited before the daemon became healthy' :
       `did not produce a healthy daemon within ${String(timeoutMs / 1_000)} s`}. Check daemon.log.`);
   }
   throw new Error(`The ShellPuppet daemon did not become healthy within ${String(timeoutMs / 1_000)} s. Check ${home}/daemon.log.`);
