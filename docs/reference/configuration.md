@@ -421,6 +421,9 @@ listing variables. The daemon's environment comes from whichever client
 started it. A listed name that is unset is skipped and does not refuse the
 start. Connected feature credentials reserved under ADR-007 and ShellPuppet's
 own `SHELLPUPPET_` variables, including `SHELLPUPPET_HOME`, are excluded.
+The `"all"` form also excludes `NODE_OPTIONS` and names that do not match
+`^[A-Za-z_][A-Za-z0-9_]*$`, including Windows drive pseudo-variables such as
+`=C:`. The unsafe `__proto__` name is excluded as well.
 `TERM` and `COLORTERM` receive ShellPuppet's terminal values. With an array,
 the response and audit carry copied names; with `"all"`, they record only the
 setting `"all"`. They never carry values. `agents.passEnv` and `envNames` are

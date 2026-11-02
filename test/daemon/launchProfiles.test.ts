@@ -193,6 +193,7 @@ describe('a bad profile is named and left out; its siblings load', () => {
       { name: 'wrong', command: 'cmd.exe', envFromDaemon: 'passthrough' },
     ] });
     expect(launcher.profiles).toHaveLength(1);
+    expect(launcher.profiles.map((profile) => profile.name)).toEqual(['whole']);
     expect(launcher.profiles[0]?.envFromDaemon).toBe('all');
     expect(problems.join('\n')).toContain('envFromDaemon');
   });
@@ -246,10 +247,25 @@ describe('the daemon environment copy', () => {
     source['FEATURE_CREDENTIAL'] = 'made-up-feature';
     source['SHELLPUPPET_HOME'] = 'made-up-home';
     source['SHELLPUPPET_TOKEN'] = 'made-up-token';
-    expect(copyDaemonEnv('all', source, new Set(['FEATURE_CREDENTIAL']))).toEqual({
-      env: { UNLISTED: 'made-up-value' },
-      copied: ['UNLISTED'],
-    });
+    source['NODE_OPTIONS'] = '--no-warnings';
+    source['=C:'] = 'made-up-drive';
+    source['ODD-NAME'] = 'made-up-malformed';
+    const result = copyDaemonEnv('all', source, new Set(['FEATURE_CREDENTIAL']));
+    expect(result.copied).toEqual(['UNLISTED']);
+    expect(result.env['UNLISTED'] === 'made-up-value').toBe(true);
+  });
+  it('leaves an owned __proto__ name out of an explicit copy', () => {
+    const source = Object.create(null) as NodeJS.ProcessEnv;
+    Object.defineProperty(source, '__proto__', { value: 'made-up-prototype', enumerable: true });
+    const result = copyDaemonEnv(['__proto__', 'SAFE'], source);
+    expect(result.copied.includes('__proto__')).toBe(false);
+    expect(Object.hasOwn(result.env, '__proto__')).toBe(false);
+  });
+  it.runIf(process.platform === 'win32')('folds case when excluding reserved credential names', () => {
+    const source = { fEaTuRe_CrEdEnTiAl: 'made-up-feature', SAFE: 'made-up-safe' };
+    const result = copyDaemonEnv('all', source, new Set(['FEATURE_CREDENTIAL']));
+    expect(result.copied.includes('fEaTuRe_CrEdEnTiAl')).toBe(false);
+    expect(result.env['SAFE'] === 'made-up-safe').toBe(true);
   });
   it('copies only the named variables that are set', () => {
     const source = { WANTED: 'value', OTHER: 'no' } as NodeJS.ProcessEnv;

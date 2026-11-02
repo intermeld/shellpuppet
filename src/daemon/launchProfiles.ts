@@ -25,6 +25,7 @@ import { compilePolicy } from '../core/policy.js';
 import type { CompiledPolicy } from '../core/policy.js';
 
 export { RESERVED_FEATURE_CREDENTIALS };
+const ALL_PROFILE_ENV_EXCLUSIONS: ReadonlySet<string> = new Set(['NODE_OPTIONS']);
 
 /** The name pattern a profile and each of its folders must match. */
 export const PROFILE_NAME_PATTERN = /^[a-z][a-z0-9-]{0,31}$/;
@@ -388,8 +389,8 @@ export function parseLauncher(
 
 /**
  * The daemon values selected by a profile's `envFromDaemon`: listed names or
- * every name for "all". Unset names, reserved credentials and ShellPuppet's
- * own variables are skipped. Only owned string values are copied:
+ * every valid name for "all". Unset names, reserved credentials, ShellPuppet's
+ * own variables and the named all-profile exclusions are skipped. Only owned string values are copied:
  * `constructor` and `toString` are inherited functions, not variables.
  * The caller gets values to set and the names copied; neither is logged here.
  */
@@ -401,6 +402,8 @@ export function copyDaemonEnv(
   const env: Record<string, string> = {};
   const copied: string[] = [];
   for (const name of names === 'all' ? Object.keys(source) : names) {
+    if (names === 'all'
+      && (!ENV_NAME_PATTERN.test(name) || ALL_PROFILE_ENV_EXCLUSIONS.has(name.toUpperCase()))) continue;
     if (name.toUpperCase().startsWith('SHELLPUPPET_') || name === '__proto__') continue;
     if (process.platform === 'win32'
       ? [...reserved].some((entry) => entry.toUpperCase() === name.toUpperCase())

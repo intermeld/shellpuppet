@@ -887,6 +887,8 @@ profile adds the names explicitly configured there from the daemon's
 environment, or `"all"` passes the daemon's whole environment to that profile's
 dashboard starts. Unset listed names do not refuse the start. ShellPuppet's
 own `SHELLPUPPET_` variables and connected feature credentials are excluded.
+The `"all"` form also excludes `NODE_OPTIONS`, malformed variable names
+(including Windows drive pseudo-variables) and `__proto__`.
 It has no client environment, so `agents.passEnv` is not consulted. The
 response and audit name copied variables for a list, or record `"all"` as a
 setting, never their values. Client-token starts do not use profiles.
