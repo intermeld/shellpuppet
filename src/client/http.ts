@@ -52,6 +52,10 @@ const HEALTH_TIMEOUT_MS = 1_500;
 const PATIENT_HEALTH_TIMEOUTS_MS = [3_000, 5_000];
 const EARLY_WRAPPER_EXIT_GRACE_MS = 10_000;
 const START_LOCK_SOCKET = 'daemon-start.sock';
+/** sockaddr_un.sun_path includes the terminating NUL byte. */
+const POSIX_SOCKET_PATH_BYTES = { darwin: 104, other: 108 } as const;
+const UNCOORDINATED_START = Symbol('uncoordinated daemon start');
+type StartLockClaim = net.Server | null | typeof UNCOORDINATED_START;
 let warnedInvalidDirect = false;
 const reportedStartConfigProblems = new Set<string>();
 
@@ -223,7 +227,24 @@ async function endSpawnedWrapper(child: ChildProcess, logger: Logger): Promise<v
 }
 
 function startLockEndpoint(home: string): string {
-  if (process.platform !== 'win32') return path.join(home, START_LOCK_SOCKET);
+  if (process.platform !== 'win32') {
+    const inHome = path.join(home, START_LOCK_SOCKET);
+    const limit = process.platform === 'darwin' ? POSIX_SOCKET_PATH_BYTES.darwin : POSIX_SOCKET_PATH_BYTES.other;
+    if (Buffer.byteLength(inHome) + 1 <= limit) return inHome;
+    const uid = process.getuid?.();
+    if (uid === undefined) throw new Error('user id unavailable');
+    const folder = path.join(os.tmpdir(), `shellpuppet-${String(uid)}`);
+    try { fs.mkdirSync(folder, { mode: 0o700 }); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+    const stat = fs.lstatSync(folder);
+    if (!stat.isDirectory() || stat.uid !== uid || (stat.mode & 0o022) !== 0) {
+      throw new Error('unsafe short folder');
+    }
+    const hash = createHash('sha256').update(path.resolve(home)).digest('hex').slice(0, 16);
+    const endpoint = path.join(folder, `start-${hash}.sock`);
+    if (Buffer.byteLength(endpoint) + 1 > limit) throw new Error('short socket path exceeds platform limit');
+    return endpoint;
+  }
   const hash = createHash('sha256').update(path.resolve(home)).update('\0')
     .update(os.userInfo().username).digest('hex').slice(0, 32);
   return `\\\\.\\pipe\\shellpuppet-start-${hash}`;
@@ -249,23 +270,49 @@ function socketRefused(endpoint: string): Promise<boolean> {
   });
 }
 
+function startLockFailureReason(error: unknown): string {
+  const code = error instanceof Error ? (error as NodeJS.ErrnoException).code : undefined;
+  if (typeof code === 'string' && /^[A-Z0-9_]+$/.test(code)) return code;
+  const message = error instanceof Error ? error.message : '';
+  if (message === 'unsafe short folder' || message === 'user id unavailable' ||
+      message === 'short socket path exceeds platform limit') return message;
+  return 'endpoint preparation failed';
+}
+
 /** The listening endpoint is the lock: the OS releases it when this client dies. */
-async function claimStartLock(home: string): Promise<net.Server | null> {
-  const endpoint = startLockEndpoint(home);
+async function claimStartLock(home: string, logger: Logger): Promise<StartLockClaim> {
+  let endpoint: string;
+  try { endpoint = startLockEndpoint(home); }
+  catch (error) {
+    logger.warn(`daemon start coordination unavailable (${startLockFailureReason(error)}); starting without it`);
+    return UNCOORDINATED_START;
+  }
   for (let attempt = 0; attempt < 2; attempt++) {
     const server = net.createServer((socket) => socket.destroy());
-    if (await listenStartLock(server, endpoint)) return server;
+    try { if (await listenStartLock(server, endpoint)) return server; }
+    catch (error) {
+      logger.warn(`daemon start coordination unavailable (${startLockFailureReason(error)}); starting without it`);
+      return UNCOORDINATED_START;
+    }
     if (process.platform === 'win32' || !(await socketRefused(endpoint))) return null;
     // A POSIX socket pathname may survive a crash. Never follow or remove a
     // symlink or a regular file at this path.
     try {
-      if (!fs.lstatSync(endpoint).isSocket()) return null;
+      const stat = fs.lstatSync(endpoint);
+      if (!stat.isSocket() || stat.uid !== process.getuid?.()) {
+        logger.warn('daemon start coordination unavailable (unsafe stale socket); starting without it');
+        return UNCOORDINATED_START;
+      }
       fs.unlinkSync(endpoint);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') return null;
+      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+        logger.warn(`daemon start coordination unavailable (${startLockFailureReason(error)}); starting without it`);
+        return UNCOORDINATED_START;
+      }
     }
   }
-  return null;
+  logger.warn('daemon start coordination unavailable (stale socket remained); starting without it');
+  return UNCOORDINATED_START;
 }
 
 function releaseStartLock(server: net.Server): Promise<void> {
@@ -282,10 +329,10 @@ export async function waitForPendingDaemon(options: ClientOptions = {}): Promise
   if (!fs.existsSync(home)) return discoverDaemon(options);
   const deadline = Date.now() + startWaitBound(home);
   while (Date.now() < deadline) {
-    const lock = await claimStartLock(home);
+    const lock = await claimStartLock(home, options.logger ?? NULL_LOGGER);
     if (lock !== null) {
       try { return await discoverDaemon(options); }
-      finally { await releaseStartLock(lock); }
+      finally { if (lock !== UNCOORDINATED_START) await releaseStartLock(lock); }
     }
     await new Promise((resolve) => setTimeout(resolve, AUTO_START_POLL_MS));
   }
@@ -363,11 +410,11 @@ export async function ensureDaemon(options: ClientOptions = {}): Promise<DaemonC
   const homeResult = await ensureHome(home);
   if (homeResult.warning !== undefined) logger.warn(homeResult.warning);
   const waitDeadline = Date.now() + startWaitBound(home);
-  let lock: net.Server | null = null;
+  let lock: StartLockClaim = null;
   while (Date.now() < waitDeadline) {
     const existing = await discoverDaemon(options);
     if (existing !== null) return existing;
-    lock = await claimStartLock(home);
+    lock = await claimStartLock(home, logger);
     if (lock !== null) break;
     await new Promise((resolve) => setTimeout(resolve, AUTO_START_POLL_MS));
   }
@@ -466,7 +513,7 @@ export async function ensureDaemon(options: ClientOptions = {}): Promise<DaemonC
   }
   throw new Error(`The ShellPuppet daemon did not become healthy within ${String(timeoutMs / 1_000)} s. Check ${home}/daemon.log.`);
   } finally {
-    await releaseStartLock(lock);
+    if (lock !== UNCOORDINATED_START) await releaseStartLock(lock);
   }
 }
 

@@ -21,7 +21,20 @@ const parentWrapper = path.join(repoRoot, 'test', 'fixtures', 'daemon-start-pare
 const boundRunner = path.join(repoRoot, 'test', 'integration', 'fixtures', 'ensure-daemon-bound.mjs');
 const markerEntry = path.join(repoRoot, 'test', 'integration', 'fixtures', 'daemon-entry-marker.mjs');
 const socketHolder = path.join(repoRoot, 'test', 'integration', 'fixtures', 'start-socket-holder.mjs');
-const homes: { home: string; pid?: number }[] = [];
+const homes: { home: string; pid?: number; cleanupRoot?: string }[] = [];
+
+function longPosixHome(): { home: string; marker: string; root: string } {
+  const root = makeTempHome('shellpuppet-long-home-');
+  const home = path.join(root, 'nested-' + 'x'.repeat(80));
+  fs.mkdirSync(home);
+  const marker = path.join(home, 'wrapper-ran');
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({
+    viewer: { launchMode: 'no-window' },
+    daemon: { startWith: [process.execPath, wrapper, marker, '3000'] },
+  }));
+  homes.push({ home, cleanupRoot: root });
+  return { home, marker, root };
+}
 
 function homeWithWrapper(delay = 0): { home: string; marker: string } {
   const home = makeTempHome('shellpuppet-wrapper-');
@@ -78,7 +91,15 @@ function recordPid(home: string): void {
 }
 
 function startEndpoint(home: string): string {
-  if (process.platform !== 'win32') return path.join(home, 'daemon-start.sock');
+  if (process.platform !== 'win32') {
+    const inHome = path.join(home, 'daemon-start.sock');
+    if (Buffer.byteLength(inHome) + 1 <= (process.platform === 'darwin' ? 104 : 108)) return inHome;
+    const folder = path.join(os.tmpdir(), `shellpuppet-${String(process.getuid?.())}`);
+    try { fs.mkdirSync(folder, { mode: 0o700 }); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error; }
+    const hash = createHash('sha256').update(path.resolve(home)).digest('hex').slice(0, 16);
+    return path.join(folder, `start-${hash}.sock`);
+  }
   const hash = createHash('sha256').update(path.resolve(home)).update('\0').update(os.userInfo().username).digest('hex').slice(0, 32);
   return `\\\\.\\pipe\\shellpuppet-start-${hash}`;
 }
@@ -91,16 +112,48 @@ async function listen(server: net.Server, endpoint: string): Promise<void> {
 }
 
 afterEach(async () => {
-  for (const { home, pid } of homes.splice(0)) {
+  for (const { home, pid, cleanupRoot } of homes.splice(0)) {
     const state = readDaemonState(home);
     if (state !== null && state.pid === pid) {
       await api(state.port, state.token, '/daemon/shutdown', { body: { force: true } }).catch(() => undefined);
     }
-    removeTempHome(home);
+    removeTempHome(cleanupRoot ?? home);
   }
 });
 
 describe('configured daemon start wrapper', () => {
+  it.runIf(process.platform !== 'win32')('coordinates two clients with a home beyond the POSIX socket limit', async () => {
+    const { home, marker } = longPosixHome();
+    expect(Buffer.byteLength(path.join(home, 'daemon-start.sock')) + 1).toBeGreaterThan(process.platform === 'darwin' ? 104 : 108);
+    const first = runCli(home, ['daemon', 'start', '--json']);
+    await eventually(() => fs.existsSync(marker), 6_000);
+    expect(fs.existsSync(startEndpoint(home))).toBe(true);
+    const second = runCli(home, ['daemon', 'start', '--json']);
+    const [a, b] = await Promise.all([first, second]);
+    recordPid(home);
+    expect(a.code).toBe(0);
+    expect(b.code).toBe(0);
+    expect(fs.readFileSync(marker, 'utf8').trim().split('\n')).toHaveLength(1);
+    expect((JSON.parse(a.stdout) as { port: number }).port).toBe((JSON.parse(b.stdout) as { port: number }).port);
+  }, 30_000);
+
+  it.runIf(process.platform !== 'win32').each(['permissive', 'link'] as const)('starts without coordination when the short folder is %s', async (kind) => {
+    const { home, marker, root } = longPosixHome();
+    const temp = path.join(root, 'short-temp');
+    fs.mkdirSync(temp);
+    const shortFolder = path.join(temp, `shellpuppet-${String(process.getuid?.())}`);
+    if (kind === 'link') fs.symlinkSync(root, shortFolder, 'dir');
+    else fs.mkdirSync(shortFolder, { mode: 0o777 });
+    if (kind === 'permissive') fs.chmodSync(shortFolder, 0o777);
+    const result = await runCli(home, ['daemon', 'start', '--json'], { TMPDIR: temp });
+    recordPid(home);
+    expect(result.code).toBe(0);
+    expect(fs.existsSync(marker)).toBe(true);
+    expect(result.stderr).toContain('warning: daemon start coordination unavailable');
+    expect(result.stderr.match(/daemon start coordination unavailable/g)).toHaveLength(1);
+    expect(result.stderr).not.toContain(home);
+    expect(result.stderr).not.toContain(temp);
+  }, 30_000);
   it('runs one wrapper for two simultaneous wrapped starters', async () => {
     const { home, marker } = homeWithWrapper(1_200);
     const first = runCli(home, ['daemon', 'start', '--json']);
