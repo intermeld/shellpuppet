@@ -594,8 +594,12 @@ Token-based, following the Jupyter / SSH-agent model, with **five credentials**:
   the viewer launcher's isolated-window path to open `GET /dashboard`. The grant is not
   returned in the response, not printed and not written to the audit log or `daemon.log`.
   Its only use is to be exchanged, once, on a top-level document navigation to
-  `GET /dashboard` or `HEAD /dashboard`. A fetch of that URL does not spend it. A launcher
-  that does not open an isolated window, including a fallback to the default browser,
+  `GET /dashboard` or `HEAD /dashboard`. A fetch of that URL does not spend it.
+  A successful redemption answers `303 See Other` to plain `/dashboard`, with the cookie and
+  no body. The browser's subsequent plain navigation receives the document proof;
+  the grant never reaches page scripts or subresource referrers. Dashboard and
+  viewer responses use `Referrer-Policy: no-referrer`. A launcher that does not
+  open an isolated window, including a fallback to the default browser,
   revokes the grant. The lifetime is `VIEWER_GRANT_TTL_MS`, five minutes. The HTTP client
   cannot choose a shorter or longer one.
 - **Dashboard credential.** What that grant becomes: one `HttpOnly`, `SameSite=Strict`
@@ -1103,7 +1107,10 @@ setting, never their values. Client-token starts do not use profiles.
   the viewer. `POST /dashboard/open` mints the one-use grant and opens that page through
   the existing launcher. `/dashboard/events` is the session feed already kept by the
   daemon: hello, a snapshot, then `session-added`, `session-updated` and `session-removed`.
-  It is outbound only. `prompt-stall` stays on `/events`, which remains client-token only.
+  It is outbound only. The daemon pings dashboard event sockets every 15 seconds
+  and terminates one that gives no pong within 10 seconds, so a stale connection
+  cannot suppress a later desktop open. `prompt-stall` stays on `/events`, which
+  remains client-token only.
 
 ---
 
@@ -1111,7 +1118,8 @@ setting, never their values. Client-token starts do not use profiles.
 
 `GET /dashboard` serves a document with no session data for a bad, spent or
 absent grant and no cookie. A valid `dt` on a top-level navigation sets
-`sp_dash` and embeds a fresh proof. An existing cookie with no `dt` also
+`sp_dash` and redirects to plain `/dashboard` without a body. The plain page
+embeds a fresh proof. An existing cookie with no `dt` also
 gets a fresh proof, without replacing the cookie. The routes are:
 
 | Route | Dashboard behaviour |

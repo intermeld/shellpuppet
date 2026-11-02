@@ -635,7 +635,9 @@ async function main(): Promise<void> {
       if (parsed.positionals.length > 0) fail(2, 'desktop takes no positional arguments.');
       const result = await call(connection, 'POST', '/desktop/open', {});
       if (wantJson) printJson(result);
-      else console.log(result['alreadyOpen'] === true ? 'ShellPuppet is already open' : 'ShellPuppet desktop: window opened');
+      else console.log(result['alreadyOpen'] === true
+        ? 'ShellPuppet is already open. If you cannot see it, run shellpuppet dashboard.'
+        : 'ShellPuppet desktop: window opened');
       break;
     }
 

@@ -173,13 +173,17 @@ async function openDashboard(daemon: PageDaemon): Promise<{ cookie: string; proo
   expect(daemon.urls).toHaveLength(before + 1);
   const url = daemon.urls.at(-1) ?? '';
   const grant = new URL(url).searchParams.get('dt') ?? '';
-  const page = await raw(daemon.port, 'GET', `/dashboard?dt=${grant}`, {
+  const redeemed = await raw(daemon.port, 'GET', `/dashboard?dt=${grant}`, {
     'sec-fetch-mode': 'navigate',
     'sec-fetch-dest': 'document',
     'sec-fetch-site': 'none',
   });
+  expect(redeemed.status).toBe(303);
+  const cookie = cookiePair(redeemed.headers);
+  const page = await raw(daemon.port, 'GET', '/dashboard', {
+    'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document', 'sec-fetch-site': 'same-origin', cookie,
+  });
   expect(page.status).toBe(200);
-  const cookie = cookiePair(page.headers);
   const proof = csrfMeta(page.body);
   expect(cookie).toMatch(/^sp_dash=/);
   expect(proof).toMatch(/^[0-9a-f]{64}$/);

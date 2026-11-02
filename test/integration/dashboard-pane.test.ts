@@ -158,13 +158,17 @@ async function openDashboard(daemon: PaneDaemon): Promise<{ cookie: string; proo
   expect(daemon.urls).toHaveLength(before + 1);
   const grant = new URL(daemon.urls.at(-1) ?? '').searchParams.get('dt') ?? '';
   // One navigation spends the grant. A second fetch would find it already redeemed.
-  const page = await raw(daemon.port, 'GET', `/dashboard?dt=${grant}`, {
+  const redeemed = await raw(daemon.port, 'GET', `/dashboard?dt=${grant}`, {
     'sec-fetch-mode': 'navigate',
     'sec-fetch-dest': 'document',
     'sec-fetch-site': 'none',
   });
+  expect(redeemed.status).toBe(303);
+  const cookie = (headerList(redeemed.headers['set-cookie'])[0] ?? '').split(';')[0] ?? '';
+  const page = await raw(daemon.port, 'GET', '/dashboard', {
+    'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document', 'sec-fetch-site': 'same-origin', cookie,
+  });
   expect(page.status).toBe(200);
-  const cookie = (headerList(page.headers['set-cookie'])[0] ?? '').split(';')[0] ?? '';
   const proof = csrfMeta(page.body);
   expect(cookie).toMatch(/^sp_dash=/);
   expect(proof).toMatch(/^[0-9a-f]{64}$/);

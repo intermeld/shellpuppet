@@ -226,6 +226,8 @@ const dashboardHtmlPath = path.join(viewerDir, 'dashboard.html');
  * xterm uses to size itself. Scripts stay under `default-src 'self'`.
  */
 const PAGE_CSP = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:";
+const DASHBOARD_HEARTBEAT_INTERVAL_MS = 15_000;
+const DASHBOARD_HEARTBEAT_TIMEOUT_MS = 10_000;
 const DASHBOARD_PROOF_META = '<meta name="sp-csrf" content="">';
 const DASHBOARD_FONT_META = '<meta name="sp-dashboard-font-size" content="">';
 
@@ -259,6 +261,9 @@ export interface DaemonOptions {
   viewer?: ViewerLaunchConfig;
   /** Initial dashboard text size, served to the page without a write route. */
   dashboardFontSize?: number;
+  /** Test hooks for the dashboard event socket heartbeat. */
+  dashboardHeartbeatIntervalMs?: number;
+  dashboardHeartbeatTimeoutMs?: number;
   /**
    * Test seam: what actually opens the window. Defaults to the real launcher.
    * It exists so a test can see the URL the daemon would open, and check
@@ -597,6 +602,8 @@ export class Daemon {
   private readonly dashboardEventSockets = new Set<WebSocket>();
   /** Opaque roster ids carried by dashboard feed sockets, never used for authorisation. */
   private readonly dashboardWindowIds = new Map<WebSocket, string>();
+
+  private readonly liveDashboardEventSockets = new Set<WebSocket>();
   /** A launched dashboard has 30 seconds to connect before a start may retry. */
   private dashboardWindowStartedAt = 0;
   private dashboardOpenPromise: Promise<boolean> | null = null;
@@ -1209,7 +1216,6 @@ export class Daemon {
   private sendDashboardPage(
     res: http.ServerResponse,
     proof: string | null,
-    setCookieHeader: string | undefined,
     head: boolean,
   ): void {
     const headers: Record<string, string> = {
@@ -1217,16 +1223,15 @@ export class Daemon {
       'cache-control': 'no-store',
       'content-security-policy': PAGE_CSP,
     };
-    if (setCookieHeader !== undefined) headers['set-cookie'] = setCookieHeader;
     res.writeHead(200, headers);
     res.end(head ? '' : this.dashboardDocument(proof));
   }
 
   /**
    * `GET` and `HEAD /dashboard`. A grant is spent only by an accepted
-   * document navigation. A fetch of the same URL does not spend it. A bad,
-   * spent or absent grant with no live cookie still returns the page, with
-   * no cookie and no proof, so this route does not say whether a grant was real.
+   * document navigation, which redirects with a cookie before any page loads.
+   * A fetch does not spend it. A bad, spent or absent grant without a live
+   * cookie returns the guidance page without revealing whether it was real.
    */
   private handleDashboardPage(req: http.IncomingMessage, res: http.ServerResponse, url: URL): void {
     const site = headerOne(req, 'sec-fetch-site');
@@ -1240,17 +1245,23 @@ export class Daemon {
     const cookiePresented = this.dashboardCookiePresented(req.headers.cookie);
     const cookie = this.dashboardCookieToken(req.headers.cookie);
     if (this.isDocumentNavigation(req)) {
-      let freshCookie: string | undefined;
       if (grantPresented) {
         const redeemed = this.tokens.redeemDashboardGrant(grant, this.now());
         if (redeemed !== null) {
-          freshCookie = dashboardCookie(redeemed.token);
           this.audit.record('dashboard', 'grant-redeem');
+          res.writeHead(303, {
+            location: '/dashboard',
+            'set-cookie': dashboardCookie(redeemed.token),
+            'cache-control': 'no-store',
+          });
+          res.end();
+          return;
         }
+        this.sendDashboardPage(res, null, req.method === 'HEAD');
+        return;
       }
-      const authed = freshCookie !== undefined || cookie !== null;
-      const proof = authed ? this.tokens.issueDashboardProof() : null;
-      this.sendDashboardPage(res, proof, freshCookie, req.method === 'HEAD');
+      const proof = cookie === null ? null : this.tokens.issueDashboardProof();
+      this.sendDashboardPage(res, proof, req.method === 'HEAD');
       return;
     }
     if (grantPresented || cookiePresented) {
@@ -1260,7 +1271,7 @@ export class Daemon {
         return;
       }
     }
-    this.sendDashboardPage(res, null, undefined, req.method === 'HEAD');
+    this.sendDashboardPage(res, null, req.method === 'HEAD');
   }
 
   private async openDashboardWindow(req: http.IncomingMessage, actor: string): Promise<boolean> {
@@ -1318,7 +1329,7 @@ export class Daemon {
     actor: string,
   ): Promise<void> {
     await readBody(req);
-    if (this.dashboardEventSockets.size > 0) {
+    if (this.hasLiveDashboardSocket()) {
       json(res, 200, { opened: false, alreadyOpen: true });
       return;
     }
@@ -1333,7 +1344,7 @@ export class Daemon {
   }
 
   private async openDashboardForStart(req: http.IncomingMessage, actor: string): Promise<ViewerLaunchResult> {
-    if (this.dashboardEventSockets.size > 0) {
+    if (this.hasLiveDashboardSocket()) {
       return { launched: false, mode: 'dashboard', reason: 'a dashboard is connected' };
     }
     if (this.dashboardWindowStartedAt > 0 && this.now() - this.dashboardWindowStartedAt < 30_000) {
@@ -2110,6 +2121,7 @@ export class Daemon {
     req: http.IncomingMessage,
     res: http.ServerResponse,
   ): Promise<void> {
+    res.setHeader('Referrer-Policy', 'no-referrer');
     // DNS-rebinding defence (design §4.2): a browser on any website can make
     // requests reach a loopback port; the Host header gives the rebind away.
     if (!this.hostAllowed(req.headers.host)) {
@@ -3002,7 +3014,7 @@ export class Daemon {
     const wantsViewer = body['openViewer'] !== false;
     // A connected dashboard is the human's window. Do not mint a viewer grant
     // that would sit unused, and do not open a second window.
-    const dashboardWatching = wantsViewer && this.dashboardEventSockets.size > 0;
+    const dashboardWatching = wantsViewer && this.hasLiveDashboardSocket();
     const mode = this.options.viewer?.launchMode ?? 'no-window';
     let viewerUrl =
       wantsViewer && !dashboardWatching && mode !== 'dashboard'
@@ -3600,8 +3612,26 @@ export class Daemon {
   private attachDashboardSocket(ws: WebSocket): void {
     this.sockets.add(ws);
     this.dashboardEventSockets.add(ws);
+    this.liveDashboardEventSockets.add(ws);
     this.dashboardWindowStartedAt = 0;
     this.lastActivity = Date.now();
+    const heartbeatIntervalMs = this.options.dashboardHeartbeatIntervalMs ?? DASHBOARD_HEARTBEAT_INTERVAL_MS;
+    const heartbeatTimeoutMs = this.options.dashboardHeartbeatTimeoutMs ?? DASHBOARD_HEARTBEAT_TIMEOUT_MS;
+    let deadline: NodeJS.Timeout | null = null;
+    const heartbeat = setInterval(() => {
+      if (ws.readyState !== ws.OPEN || deadline !== null) return;
+      deadline = setTimeout(() => {
+        this.liveDashboardEventSockets.delete(ws);
+        ws.terminate();
+      }, heartbeatTimeoutMs);
+      deadline.unref();
+      ws.ping();
+    }, heartbeatIntervalMs);
+    heartbeat.unref();
+    ws.on('pong', () => {
+      if (deadline !== null) clearTimeout(deadline);
+      deadline = null;
+    });
     const unsubscribe = this.subscribeDashboardFeed((frame) => {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(frame));
     });
@@ -3633,12 +3663,26 @@ export class Daemon {
           if (peer.readyState === peer.OPEN) peer.send(notice);
         }
       }
+
+      clearInterval(heartbeat);
+      if (deadline !== null) clearTimeout(deadline);
+      unsubscribe();
+      this.sockets.delete(ws);
+      this.dashboardEventSockets.delete(ws);
+      this.liveDashboardEventSockets.delete(ws);
       if (this.dashboardEventSockets.size === 0) this.dashboardWindowStartedAt = 0;
       this.lastActivity = Date.now();
     });
     ws.on('error', () => {
       ws.close();
     });
+  }
+
+  private hasLiveDashboardSocket(): boolean {
+    for (const ws of this.liveDashboardEventSockets) {
+      if (ws.readyState === ws.OPEN) return true;
+    }
+    return false;
   }
 
   /** Send a JSON control message (TEXT frame) to every watcher of a session. */

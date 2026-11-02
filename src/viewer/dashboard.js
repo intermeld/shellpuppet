@@ -4,9 +4,6 @@
   'use strict';
 
   const proof = document.querySelector('meta[name="sp-csrf"]')?.content || '';
-  if (proof && new URLSearchParams(location.search).has('dt')) {
-    history.replaceState(history.state, '', `/dashboard${location.hash}`);
-  }
   const root = document.getElementById('panes');
   const empty = document.getElementById('empty');
   const error = document.getElementById('error');

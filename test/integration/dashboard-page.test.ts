@@ -1,6 +1,7 @@
 /** Dashboard page behaviour in the same Chromium harness as the viewer. */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
+import * as http from 'node:http';
 import * as path from 'node:path';
 import { captureDashboard } from './dashboardCapture.js';
 import { createAuditor } from '../../src/daemon/audit.js';
@@ -81,18 +82,39 @@ afterAll(async () => { await daemon.stop(); }, 120_000);
 describe('passive dashboard page', () => {
   it('clears a redeemed grant from the address and guides an unauthorised visit', async (context) => {
     if (!browser) { context.skip(); return; }
+    const observed: { url: string; referer: string | undefined }[] = [];
+    const server = (daemon.daemon as unknown as { server: http.Server }).server;
+    const observe = (request: http.IncomingMessage): void => {
+      observed.push({ url: request.url ?? '', referer: request.headers.referer });
+    };
+    server.on('request', observe);
+    try {
     const granted = await captureDashboard({ browser, viewerUrl: await dashboardUrl(), width: 800, height: 600,
-      drive: true, timeoutMs: 60_000,
+      drive: true, timeoutMs: 60_000, beforeNavigateScript: 'window.__firstAddress = location.href;',
       probe: `(() => document.getElementById('connection')?.textContent === 'Connected' &&
-        JSON.stringify({ path: location.pathname, search: location.search, hash: location.hash }))()`,
+        JSON.stringify({ path: location.pathname, search: location.search, hash: location.hash,
+          first: new URL(window.__firstAddress).pathname + new URL(window.__firstAddress).search }))()`,
     });
-    expect(JSON.parse(String(granted.probe))).toEqual({ path: '/dashboard', search: '', hash: '' });
+    expect(JSON.parse(String(granted.probe))).toEqual({ path: '/dashboard', search: '', hash: '', first: '/dashboard' });
+    expect(observed.some((request) => request.url.includes('/dashboard?dt='))).toBe(true);
+    expect(observed.filter((request) => !request.url.startsWith('/dashboard?dt='))
+      .every((request) => !request.url.includes('dt=') && !request.referer?.includes('dt='))).toBe(true);
+    for (const hash of ['#pop=example', '#screen=second&rank=1001']) {
+      const shot = await captureDashboard({ browser, viewerUrl: `${await dashboardUrl()}${hash}`, width: 800, height: 600,
+        drive: true, timeoutMs: 60_000, beforeNavigateScript: 'window.__firstAddress = location.href;',
+        probe: `(() => document.getElementById('connection')?.textContent === 'Connected' &&
+          JSON.stringify({ first: new URL(window.__firstAddress).pathname + new URL(window.__firstAddress).search,
+            hash: location.hash }))()`,
+      });
+      expect(JSON.parse(String(shot.probe))).toEqual({ first: '/dashboard', hash });
+    }
     const anonymous = await captureDashboard({ browser, viewerUrl: `http://127.0.0.1:${String(daemon.port)}/dashboard`, width: 800, height: 600,
       drive: true, timeoutMs: 60_000,
       probe: `(() => document.getElementById('error-message')?.textContent?.includes('Start ShellPuppet from its shortcut or with shellpuppet desktop') || null)()`,
     });
     expect(anonymous.probe).toBe(true);
-  }, 120_000);
+    } finally { server.off('request', observe); }
+  }, 240_000);
 
   it('gives a lone focused pane the full width and restores the strip for a second pane', async (context) => {
     if (!browser) { context.skip(); return; }
