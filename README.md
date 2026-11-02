@@ -381,9 +381,9 @@ its place, but use the shortcut to start ShellPuppet. A second click while a
 dashboard page is connected reports that ShellPuppet is already open. The
 shortcut starts minimised, so the console should only blink. Its target is
 Node and the installed package's `dist/cli/index.js` at the package's stable
-global location, which an npm update replaces in place. If you move the
-package to a different prefix, run `--install` again. `--uninstall` removes
-only ShellPuppet's shortcut.
+global location, which an npm update replaces in place. Run `--install` again
+if you move the package to a different prefix or move or replace Node at a
+different path. `--uninstall` removes only ShellPuppet's shortcut.
 
 On Linux, `--install` writes a per-user `shellpuppet.desktop` application
 launcher. On macOS, shortcut installation is not available yet. You can run

@@ -39,4 +39,16 @@ describe('desktop shortcut', () => {
     uninstallDesktopShortcut({ platform: 'linux', applicationsDir: dir });
     expect(fs.existsSync(path.join(dir, 'shellpuppet.desktop'))).toBe(false);
   });
+
+  it('escapes desktop entry strings and reserved Exec characters', () => {
+    const fields = { target: '/opt/100% $bin\\node', arguments: '"/opt/a%f/cli.js" desktop',
+      workingDirectory: '/home/a\\b\nnext\tpart\rend', icon: '/opt/a\\b\nicon.png',
+      description: 'First\\second\nthird\tfourth\rfifth', showCommand: 7 };
+    const entry = desktopEntry(fields);
+    expect(entry).toContain(String.raw`Exec="/opt/100%% \\$bin\\\\node" "/opt/a%%f/cli.js" desktop`);
+    expect(entry).toContain('Path=/home/a\\\\b\\nnext\\tpart\\rend\n');
+    expect(entry).toContain('Icon=/opt/a\\\\b\\nicon.png\n');
+    expect(entry).toContain('Comment=First\\\\second\\nthird\\tfourth\\rfifth\n');
+    expect(entry).toContain('Name=ShellPuppet\n');
+  });
 });

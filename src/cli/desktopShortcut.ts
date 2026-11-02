@@ -86,11 +86,18 @@ export function parseShellLink(bytes: Buffer): ShortcutFields {
 }
 
 function desktopQuote(value: string): string {
-  return `"${value.replaceAll('\\', '\\\\').replaceAll('"', '\\"').replaceAll('$', '\\$').replaceAll('`', '\\`')}"`;
+  const escape = '\\';
+  return `"${value.replaceAll(escape, escape.repeat(4)).replaceAll('"', escape.repeat(2) + '"').replaceAll('$', escape.repeat(2) + '$').replaceAll('`', escape.repeat(2) + '`').replaceAll('\n', '\\n').replaceAll('\t', '\\t').replaceAll('\r', '\\r')}"`;
+}
+
+function desktopString(value: string): string {
+  return value.replaceAll('\\', '\\\\').replaceAll('\n', '\\n').replaceAll('\t', '\\t').replaceAll('\r', '\\r');
 }
 
 export function desktopEntry(fields: ShortcutFields): string {
-  return `[Desktop Entry]\nType=Application\nName=ShellPuppet\nComment=${fields.description}\nExec=${fields.target.includes(' ') ? desktopQuote(fields.target) : fields.target} ${fields.arguments}\nPath=${fields.workingDirectory}\nIcon=${fields.icon}\nTerminal=false\nCategories=Utility;\n`;
+  const target = /[\s"'\\><~|&;$*?#()`]/.test(fields.target) ? desktopQuote(fields.target) : fields.target;
+  const exec = `${target} ${fields.arguments}`.replaceAll('%', '%%').replaceAll('\n', '\\n').replaceAll('\t', '\\t').replaceAll('\r', '\\r');
+  return `[Desktop Entry]\nType=Application\nName=${desktopString('ShellPuppet')}\nComment=${desktopString(fields.description)}\nExec=${exec}\nPath=${desktopString(fields.workingDirectory)}\nIcon=${desktopString(fields.icon)}\nTerminal=false\nCategories=Utility;\n`;
 }
 
 export function installDesktopShortcut(options: ShortcutOptions): string {

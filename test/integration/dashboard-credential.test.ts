@@ -39,7 +39,8 @@ afterEach(async () => {
   for (const daemon of pending) await daemon.stop();
 });
 
-async function startDash(extra: { clock?: boolean; maxSessions?: number; viewerMode?: 'dashboard'; dashboardFontSize?: number } = {}): Promise<DashDaemon> {
+async function startDash(extra: { clock?: boolean; maxSessions?: number; viewerMode?: 'dashboard'; dashboardFontSize?: number;
+  dashboardHeartbeatIntervalMs?: number; dashboardHeartbeatTimeoutMs?: number } = {}): Promise<DashDaemon> {
   const home = makeTempHome('dash-cred-');
   const logPath = path.join(home, 'daemon.log');
   const urls: string[] = [];
@@ -53,6 +54,8 @@ async function startDash(extra: { clock?: boolean; maxSessions?: number; viewerM
     ...(extra.viewerMode !== undefined ? { viewer: { launchMode: extra.viewerMode } } : {}),
     idleCheckIntervalMs: 600_000,
     ...(extra.dashboardFontSize === undefined ? {} : { dashboardFontSize: extra.dashboardFontSize }),
+    ...(extra.dashboardHeartbeatIntervalMs === undefined ? {} : { dashboardHeartbeatIntervalMs: extra.dashboardHeartbeatIntervalMs }),
+    ...(extra.dashboardHeartbeatTimeoutMs === undefined ? {} : { dashboardHeartbeatTimeoutMs: extra.dashboardHeartbeatTimeoutMs }),
     ...(extra.clock === true ? { now: () => clock.now } : {}),
     launcher: (url) => {
       urls.push(url);
@@ -287,10 +290,16 @@ async function redeem(
   grant: string,
   headers: Record<string, string> = {},
 ): Promise<RawResult> {
-  return raw(daemon.port, 'GET', `/dashboard?dt=${grant}`, {
+  const first = await raw(daemon.port, 'GET', `/dashboard?dt=${grant}`, {
     ...navigationHeaders('none'),
     ...headers,
   });
+  if (first.status !== 303) return first;
+  const page = await raw(daemon.port, 'GET', '/dashboard', {
+    ...navigationHeaders('same-origin'),
+    cookie: cookiePair(first.headers),
+  });
+  return { ...page, headers: { ...page.headers, 'set-cookie': first.headers['set-cookie'] } };
 }
 
 describe('an unauthenticated caller learns nothing and starts nothing', () => {
@@ -340,6 +349,31 @@ describe('an unauthenticated caller learns nothing and starts nothing', () => {
 });
 
 describe('a dashboard grant works once, then it is worthless', () => {
+  it('redirects redemption before any page resource can receive the grant as a referrer', async () => {
+    const daemon = await startDash();
+    const { grant } = await openDashboard(daemon);
+    const first = await raw(daemon.port, 'GET', `/dashboard?dt=${grant}`, navigationHeaders());
+    expect(first.status).toBe(303);
+    expect(first.headers.location).toBe('/dashboard');
+    expect(first.headers['referrer-policy']).toBe('no-referrer');
+    expect(first.body).toBe('');
+    const cookie = cookiePair(first.headers);
+    expect(cookie).toMatch(/^sp_dash=/);
+    const page = await raw(daemon.port, 'GET', '/dashboard', { ...navigationHeaders('same-origin'), cookie });
+    expect(page.status).toBe(200);
+    expect(csrfMeta(page.body)).toMatch(/^[0-9a-f]{64}$/);
+    expect(page.headers['referrer-policy']).toBe('no-referrer');
+    const usedWithCookie = await raw(daemon.port, 'GET', `/dashboard?dt=${grant}`,
+      { ...navigationHeaders('same-origin'), cookie });
+    expect(usedWithCookie.status).toBe(200);
+    expect(csrfMeta(usedWithCookie.body)).toBeNull();
+    expect(usedWithCookie.headers.location).toBeUndefined();
+    for (const asset of ['/viewer/dashboard.js', '/viewer/icon.svg', '/favicon.ico', '/view?s=missing']) {
+      const response = await raw(daemon.port, 'GET', asset);
+      expect(response.headers['referrer-policy']).toBe('no-referrer');
+    }
+  });
+
   it('redeems on a document navigation and then neither again nor after expiry', async () => {
     const daemon = await startDash({ clock: true });
     const { grant } = await openDashboard(daemon);
@@ -450,7 +484,8 @@ describe('dt is redeemed only on a top-level document navigation', () => {
     const daemon = await startDash();
     const { grant } = await openDashboard(daemon);
     const head = await raw(daemon.port, 'HEAD', `/dashboard?dt=${grant}`, navigationHeaders());
-    expect(head.status).toBe(200);
+    expect(head.status).toBe(303);
+    expect(head.headers.location).toBe('/dashboard');
     expect(cookiePair(head.headers)).toMatch(/^sp_dash=/);
     expect(head.body).toBe('');
     const again = await redeem(daemon, grant);
@@ -902,6 +937,25 @@ describe('the cookie does not open the routes outside the dashboard', () => {
 });
 
 describe('/dashboard/events', () => {
+  it('expires a dashboard socket that stops answering pings, allowing desktop to reopen', async () => {
+    const daemon = await startDash({ dashboardHeartbeatIntervalMs: 30, dashboardHeartbeatTimeoutMs: 20 });
+    const { grant } = await openDashboard(daemon);
+    const page = await redeem(daemon, grant);
+    const ws = new WebSocket(`ws://127.0.0.1:${String(daemon.port)}/dashboard/events`,
+      [`sp-csrf.${csrfMeta(page.body) ?? ''}`],
+      { headers: eventsHeaders(daemon.port, cookiePair(page.headers)), autoPong: false });
+    await new Promise<void>((resolve, reject) => { ws.once('open', resolve); ws.once('error', reject); });
+    try {
+      const before = daemon.urls.length;
+      const connected = await api(daemon.port, daemon.token, '/desktop/open', { method: 'POST', body: {} });
+      expect(connected.body).toEqual({ opened: false, alreadyOpen: true });
+      await eventually(() => ws.readyState === WebSocket.CLOSED);
+      const reopened = await api(daemon.port, daemon.token, '/desktop/open', { method: 'POST', body: {} });
+      expect(reopened.body).toEqual({ opened: true, alreadyOpen: false });
+      expect(daemon.urls).toHaveLength(before + 1);
+    } finally { ws.terminate(); }
+  });
+
   it('desktop reuses a connected dashboard without launching or minting a grant', async () => {
     const daemon = await startDash();
     const { grant } = await openDashboard(daemon);
@@ -1038,7 +1092,7 @@ describe('/dashboard/events', () => {
     const open = await api(daemon.port, daemon.token, '/dashboard/open', { method: 'POST', body: {} });
     expect(open.status).toBe(200);
     const grant = new URL(urls[0] ?? '').searchParams.get('dt') ?? '';
-    const page = await raw(daemon.port, 'GET', `/dashboard?dt=${grant}`, navigationHeaders());
+    const page = await redeem(wrapped, grant);
     const cookie = cookiePair(page.headers);
     const proof = csrfMeta(page.body) ?? '';
     const feed = await connectFeed(daemon.port, cookie, proof);

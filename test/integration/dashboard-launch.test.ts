@@ -181,9 +181,11 @@ async function startLaunchDaemon(options: {
   expect(opened.status).toBe(200);
   const url = urls.at(-1) ?? '';
   const grant = new URL(url).searchParams.get('dt') ?? '';
-  const page = await raw(daemon.port, 'GET', `/dashboard?dt=${grant}`, navigationHeaders());
+  const redeemed = await raw(daemon.port, 'GET', `/dashboard?dt=${grant}`, navigationHeaders());
+  expect(redeemed.status).toBe(303);
+  const cookie = cookiePair(redeemed.headers);
+  const page = await raw(daemon.port, 'GET', '/dashboard', { ...navigationHeaders(), cookie });
   expect(page.status).toBe(200);
-  const cookie = cookiePair(page.headers);
   const proof = csrfMeta(page.body) ?? '';
   expect(cookie).toMatch(/^sp_dash=/);
   expect(proof).toMatch(/^[0-9a-f]{64}$/);
@@ -1335,9 +1337,8 @@ describe('concurrent launches respect both caps', () => {
       ]),
       dashboardSessionFactory: (options) => standInStart(options, `refused-${String(++created)}`),
     });
-    const refused = await Promise.all(
-      Array.from({ length: 12 }, () => launch(daemon, { profile: 'nope' })),
-    );
+    const refused: RawResult[] = [];
+    for (let index = 0; index < 12; index++) refused.push(await launch(daemon, { profile: 'nope' }));
     expect(refused.every((result) => result.status === 400)).toBe(true);
 
     const started: RawResult[] = [];
