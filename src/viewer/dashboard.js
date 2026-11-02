@@ -51,6 +51,7 @@
     if (record?.owner === window.name && Number.isInteger(record.count)) tracks = record;
   } catch { /* Track sizes are optional. */ }
   let activeDivider = null;
+  let endActiveDivider = null;
   const focusOpenFits = new Set();
   const incomingFits = new Set();
   let prefix = typeof saved.prefix === 'string' && /^[a-z]$/.test(saved.prefix) ? saved.prefix : 'a';
@@ -140,6 +141,7 @@
     catch { /* The current document still keeps its sizes. */ }
   }
   function resetTracks() {
+    endActiveDivider?.();
     tracks = { count: shown().length, focusStrip: null, columns: null, rows: null };
     try { window.sessionStorage.removeItem(TRACK_PREF); } catch { /* The current document still resets. */ }
     applyTracks();
@@ -654,6 +656,17 @@
       const target = axis === 'focus' ? main : items[axis === 'column' ? index : (index + 1) * columns - 1]?.card;
       if (!target) continue;
       const boundary = target.getBoundingClientRect()[axis === 'row' ? 'bottom' : 'right'];
+      const sizes = trackSizes(axis);
+      const minimum = axis === 'row' ? ShellPuppetDashboardLayout.MIN_PANE_HEIGHT : ShellPuppetDashboardLayout.MIN_PANE_WIDTH;
+      const secondMinimum = axis === 'focus' ? ShellPuppetDashboardLayout.MIN_STRIP_WIDTH : minimum;
+      const total = sizes[index] + sizes[index + 1];
+      const movable = total >= minimum + secondMinimum;
+      const value = Math.round(sizes[index]);
+      divider.setAttribute('aria-valuenow', String(value));
+      divider.setAttribute('aria-valuemin', String(movable ? minimum : value));
+      divider.setAttribute('aria-valuemax', String(movable ? Math.round(total - secondMinimum) : value));
+      divider.setAttribute('aria-valuetext', axis === 'focus' ? `Focus pane ${value} pixels wide` :
+        `${axis === 'column' ? 'Column' : 'Row'} ${index + 1} ${value} pixels ${axis === 'column' ? 'wide' : 'high'}`);
       if (axis === 'row') {
         divider.style.left = '6px'; divider.style.right = '6px';
         divider.style.top = `${boundary - frame.top - 3}px`;
@@ -668,6 +681,7 @@
   }
   function finishDivider(divider, before) {
     activeDivider = null;
+    endActiveDivider = null;
     divider.classList.remove('dragging');
     saveTracks();
     positionDividers();
@@ -677,10 +691,11 @@
       const old = before.get(item.id);
       if (!old || !item.client || !visible(item)) continue;
       const now = item.card.getBoundingClientRect();
-      if (now.width > old.width + 1 || now.height > old.height + 1) item.client.fitAfterDrag(autoFit);
+      if (autoFit && (now.width > old.width + 1 || now.height > old.height + 1)) item.client.fitAfterDrag(true);
     }
   }
   function beginDivider(divider, pointerId, start) {
+    endActiveDivider?.();
     const axis = divider.dataset.axis;
     const index = Number(divider.dataset.index);
     const sizes = trackSizes(axis);
@@ -699,21 +714,28 @@
       next[index] = first; next[index + 1] = total - first;
       setTrackSizes(axis, next);
     };
+    let ended = false;
     const release = () => {
+      if (ended) return;
+      ended = true;
       divider.removeEventListener('pointermove', onMove);
       divider.removeEventListener('pointerup', onEnd);
       divider.removeEventListener('pointercancel', onCancel);
+      divider.removeEventListener('lostpointercapture', onLost);
       if (pointerId !== null && divider.hasPointerCapture(pointerId)) divider.releasePointerCapture(pointerId);
       finishDivider(divider, before);
     };
-    const onMove = (event) => move(axis === 'row' ? event.clientY : event.clientX);
-    const onEnd = (event) => { move(axis === 'row' ? event.clientY : event.clientX); release(); };
-    const onCancel = () => { setTrackSizes(axis, sizes); release(); };
+    const onMove = (event) => { if (event.pointerId === pointerId) move(axis === 'row' ? event.clientY : event.clientX); };
+    const onEnd = (event) => { if (event.pointerId === pointerId) { move(axis === 'row' ? event.clientY : event.clientX); release(); } };
+    const onCancel = (event) => { if (event.pointerId === pointerId) release(); };
+    const onLost = (event) => { if (event.pointerId === pointerId) release(); };
+    endActiveDivider = release;
     if (pointerId !== null) {
       divider.setPointerCapture(pointerId);
       divider.addEventListener('pointermove', onMove);
       divider.addEventListener('pointerup', onEnd);
       divider.addEventListener('pointercancel', onCancel);
+      divider.addEventListener('lostpointercapture', onLost);
     }
     return { move, release };
   }
@@ -750,13 +772,26 @@
       }
     });
     root.append(divider);
+    return divider;
   }
   function renderDividers(layout, columns, rows, count) {
-    for (const divider of root.querySelectorAll('.pane-divider')) divider.remove();
-    if (layout === 'focus' && count > 1) addDivider('focus', 0);
+    const wanted = new Set();
+    if (layout === 'focus' && count > 1) wanted.add('focus:0');
     if (layout === 'grid' && mode === 'grid' && count > 1) {
-      for (let index = 0; index < columns - 1; index++) addDivider('column', index);
-      for (let index = 0; index < rows - 1; index++) addDivider('row', index);
+      for (let index = 0; index < columns - 1; index++) wanted.add(`column:${index}`);
+      for (let index = 0; index < rows - 1; index++) wanted.add(`row:${index}`);
+    }
+    const existing = new Map([...root.querySelectorAll('.pane-divider')].map((divider) =>
+      [`${divider.dataset.axis}:${divider.dataset.index}`, divider]));
+    for (const [key, divider] of existing) {
+      if (wanted.has(key)) continue;
+      if (divider === activeDivider) endActiveDivider?.();
+      divider.remove();
+    }
+    for (const key of wanted) {
+      if (existing.has(key)) continue;
+      const [axis, index] = key.split(':');
+      addDivider(axis, Number(index));
     }
     positionDividers();
   }
@@ -776,10 +811,7 @@
     }
     try {
       const items = shown();
-      if (items.length > 0 && tracks.count !== items.length) {
-        if (tracks.count > 0) resetTracks();
-        tracks.count = items.length;
-      }
+      if (tracks.count !== items.length) resetTracks();
       renderShareCount();
       const width = root.clientWidth - 12;
       const height = root.clientHeight - 12;
@@ -802,7 +834,7 @@
         root.style.setProperty('--rows', String(Math.max(1, rows)));
         for (const name of ['auto', 'grid', 'focus']) document.getElementById(name).classList.toggle('active', mode === name);
         if (structureKey !== lastStructure) {
-          root.textContent = '';
+          for (const child of [...root.children]) if (!child.classList.contains('pane-divider')) child.remove();
           if (layout === 'grid') {
             for (const item of items) root.append(item.card);
           } else if (layout === 'focus') {

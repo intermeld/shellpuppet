@@ -76,7 +76,9 @@ client token must remain outside the browser.
 - **Resize visible tracks.** A pointer drag or keyboard arrow moves the Focus
   boundary or a Grid row or column boundary. Home resets that direction.
   The boundary stops at the readable pane minimum or the strip minimum.
-  A release fits only panes that grew; panes that shrank retain their grid.
+  With Auto fit on, a release fits only panes that grew; panes that shrank retain
+  their grid. With Auto fit off, release keeps the grid until Fit is pressed.
+  Boundaries announce their current track size in pixels.
   Each window keeps its own track sizes for the session and resets them on
   Auto, on Grid again, or when its pane count invalidates them.
 - **The terminal changes size only on a deliberate act.** A dashboard pane
