@@ -8,6 +8,7 @@
 
 import { Session, TREE_KILL_TIMEOUT_MS, taskkillTrees } from './session.js';
 import type { SessionDeps } from './session.js';
+import { whenConsoleHostBatchSettled } from './windowsConsoleHost.js';
 import { checkSessionCapacity, evaluateCommand } from './policy.js';
 import type { CompiledPolicy } from './policy.js';
 import { NULL_LOGGER } from './types.js';
@@ -20,12 +21,23 @@ export class PolicyViolationError extends Error {
   }
 }
 
+export class SessionStartError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SessionStartError';
+  }
+}
+
+/** A short pause gives Windows time to release the failed worker's handles. */
+export const CONPTY_START_RETRY_DELAY_MS = 100;
+
 export class SessionManager {
   private readonly sessions = new Map<string, Session>();
   private readonly logger: Logger;
   private readonly sessionDeps: SessionDeps;
   private policy: CompiledPolicy;
   private seq = 0;
+  private readonly starting = new Set<string>();
 
   constructor(
     policy: CompiledPolicy,
@@ -67,6 +79,46 @@ export class SessionManager {
     return session;
   }
 
+  /** Finish the deferred Windows start contract, retrying one proven worker
+   * connection timeout under the same id after the failed attempt is ended.
+   * The starting reservation remains in the capacity count throughout.
+   */
+  async finishStart(session: Session, options: SessionOptions): Promise<Session> {
+    this.starting.add(session.id);
+    let current = session;
+    try {
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (await current.startedProgramPid() !== null) return current;
+        const retry = attempt === 0 && current.conptyConnectionTimedOut;
+        const failure = current.startFailure();
+        await current.kill();
+        if (!retry) {
+          this.sessions.delete(session.id);
+          this.onRemoved(session.id);
+          throw new SessionStartError(failure);
+        }
+        // The first attempt's console host must be settled before this id is
+        // registered again; the host queue attributes windows by session id.
+        await whenConsoleHostBatchSettled();
+        if (this.sessions.get(session.id) !== current) throw new SessionStartError('Session start was cancelled.');
+        this.logger.warn('session ConPTY start retry', { id: session.id, delayMs: CONPTY_START_RETRY_DELAY_MS });
+        await new Promise<void>((resolve) => setTimeout(resolve, CONPTY_START_RETRY_DELAY_MS));
+        if (this.sessions.get(session.id) !== current) throw new SessionStartError('Session start was cancelled.');
+        try {
+          current = new Session(session.id, options, { ...this.sessionDeps, retryAttempt: true });
+        } catch (error) {
+          this.sessions.delete(session.id);
+          this.onRemoved(session.id);
+          throw error;
+        }
+        this.sessions.set(session.id, current);
+      }
+      throw new Error('unreachable start attempt');
+    } finally {
+      this.starting.delete(session.id);
+    }
+  }
+
   get(id: string): Session | undefined {
     return this.sessions.get(id);
   }
@@ -75,9 +127,9 @@ export class SessionManager {
     return [...this.sessions.values()].map((s) => s.summary());
   }
 
-  /** Sessions whose process has not exited. */
+  /** Live sessions, including an exited first attempt holding a retry slot. */
   liveCount(): number {
-    return [...this.sessions.values()].filter((s) => !s.exited).length;
+    return [...this.sessions.values()].filter((s) => !s.exited || this.starting.has(s.id)).length;
   }
 
   size(): number {

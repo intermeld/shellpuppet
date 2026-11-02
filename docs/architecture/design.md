@@ -250,6 +250,15 @@ ambiguous in clients that do not, so the prefix stays.
 | `terminal_viewer_url` | Mint a fresh one-use viewer link | `session`, `readOnly` |
 | `terminal_kill` | Terminate a session **and its whole process tree** | `session` |
 
+On Windows with node-pty 1.2.0-beta.18, a start whose ConPTY output worker misses
+node-pty's fixed five-second connection bound is retried once after the failed
+terminal and its console host have been released, with a 100 ms pause. The
+agent's error event identifies this exact timeout; node-pty reports no error
+code for it. Its native `connect` call, which creates the program, runs only
+after the worker connects, so this failure cannot have run the command. Other
+start failures are returned without retry. The second attempt keeps the same
+session id and capacity reservation, and the retry log names only that id.
+
 Every tool refuses a parameter it does not define: the error names it and lists what the
 tool takes, and each schema says `additionalProperties: false`. A dropped key would fail
 silently, as when the CLI's `--enter` is sent to `terminal_type` as `enter` (its flag is
