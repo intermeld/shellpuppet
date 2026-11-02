@@ -1194,8 +1194,9 @@ seconds of that refit, the pane follows it until the person presses Fit. A
 drag changes only the page during pointer movement. On release, panes that
 grew fit their real terminal under the same Auto fit and geometry ownership
 rules; panes that shrank keep their real grid and scale or scroll. With Auto
-fit off, the deliberate release still fits grown panes unless their grid is
-held. A followed or held grid scales its text down to 6 px, then scrolls if it still
+fit off, release keeps the real terminal size until Fit is pressed. Each
+boundary exposes its current track size, minimum and maximum in pixels to
+assistive technology. A followed or held grid scales its text down to 6 px, then scrolls if it still
 does not fit. It returns to the chosen text size when it fits again. A popped
 out pane follows its own window. Turning Auto fit off restores font scaling without a resize on
 layout and window changes. Fit takes control

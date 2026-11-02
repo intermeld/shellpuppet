@@ -152,3 +152,219 @@ it('drags Grid columns and rows with minimums and keyboard steps, then resets on
   expect(result.key).not.toBe(result.home);
   expect(result.reset.split(' ')[0]).toBe(result.reset.split(' ')[1]);
 }, 150_000);
+
+it('keeps a Focus drag alive through relayout and announces its pixel value', async (context) => {
+  if (!browser) { context.skip(); return; }
+  const shot = await exercise(2, async ({ evaluate, send }) => {
+    await evaluate(`document.getElementById('focus').click()`);
+    const first = await evaluate(`(() => { const d = document.querySelector('.pane-divider[data-axis="focus"]');
+      const b = d.getBoundingClientRect(); window.__dragDivider = d; window.__resizes.length = 0;
+      return { x: b.x + b.width / 2, y: b.y + b.height / 2, value: d.getAttribute('aria-valuenow') }; })()`) as { x: number; y: number; value: string | null };
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: first.x, y: first.y, button: 'left', clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: first.x - 220, y: first.y, button: 'left', buttons: 1 });
+    const moved = await evaluate(`(() => { const root = document.getElementById('panes'); root.style.width = '2050px';
+      window.dispatchEvent(new Event('resize')); const d = document.querySelector('.pane-divider[data-axis="focus"]');
+      return { same: d === window.__dragDivider, dragging: d.classList.contains('dragging'),
+        value: d.getAttribute('aria-valuenow'), min: d.getAttribute('aria-valuemin'),
+        max: d.getAttribute('aria-valuemax'), text: d.getAttribute('aria-valuetext') }; })()`);
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: first.x - 220, y: first.y, button: 'left', clickCount: 1 });
+    await new Promise(resolve => setTimeout(resolve, 350));
+    const released = await evaluate(`(() => ({ stored: sessionStorage.getItem('shellpuppet.dashboard.tracks'),
+      dragging: document.querySelector('.pane-divider[data-axis="focus"]').classList.contains('dragging'),
+      frames: window.__resizes.length }))()`);
+    await evaluate(`(() => { const d = document.querySelector('.pane-divider[data-axis="focus"]'); d.focus();
+      d.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true, cancelable: true })); })()`);
+    const key = await evaluate(`(() => { const d = document.querySelector('.pane-divider[data-axis="focus"]');
+      return { value: d.getAttribute('aria-valuenow'), text: d.getAttribute('aria-valuetext') }; })()`);
+    return { first, moved, released, key };
+  });
+  const result = shot.probe as { first: { value: string | null }; moved: { same: boolean; dragging: boolean;
+    value: string | null; min: string | null; max: string | null; text: string | null };
+    released: { stored: string | null; dragging: boolean; frames: number }; key: { value: string | null; text: string | null } };
+  expect(result.moved.same).toBe(true);
+  expect(result.moved.dragging).toBe(true);
+  expect(Number(result.moved.value)).toBeGreaterThan(Number(result.moved.min));
+  expect(Number(result.moved.value)).toBeLessThan(Number(result.moved.max));
+  expect(result.moved.text).toMatch(/Focus pane \d+ pixels wide/);
+  expect(result.released.stored).toContain('focusStrip');
+  expect(result.released.dragging).toBe(false);
+  expect(result.released.frames).toBeGreaterThan(0);
+  expect(result.key.value).not.toBe(result.moved.value);
+  expect(result.key.text).toMatch(/Focus pane \d+ pixels wide/);
+}, 150_000);
+
+it('commits a cancelled drag and a release outside the window', async (context) => {
+  if (!browser) { context.skip(); return; }
+  const shot = await exercise(2, async ({ evaluate, send }) => {
+    await evaluate(`(() => { document.getElementById('focus').click(); window.__resizes.length = 0;
+      document.addEventListener('pointerdown', e => window.__dragPointer = e.pointerId, true); })()`);
+    const box = await evaluate(`document.querySelector('.pane-divider[data-axis="focus"]').getBoundingClientRect().toJSON()`) as { x: number; y: number; width: number; height: number };
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x - 180, y, button: 'left', buttons: 1 });
+    const during = await evaluate(`document.getElementById('strip').getBoundingClientRect().width`);
+    await evaluate(`(() => { const d = document.querySelector('.pane-divider[data-axis="focus"]');
+      d.dispatchEvent(new PointerEvent('pointercancel', { pointerId: window.__dragPointer, bubbles: true })); })()`);
+    const cancelled = await evaluate(`(() => ({ stored: sessionStorage.getItem('shellpuppet.dashboard.tracks'),
+      dragging: document.querySelector('.pane-divider[data-axis="focus"]').classList.contains('dragging'),
+      width: document.getElementById('strip').getBoundingClientRect().width, frames: window.__resizes.length }))()`);
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: x - 180, y, button: 'left', clickCount: 1 });
+    const next = await evaluate(`document.querySelector('.pane-divider[data-axis="focus"]').getBoundingClientRect().toJSON()`) as { x: number; y: number; width: number; height: number };
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: next.x + next.width / 2, y, button: 'left', clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: next.x + next.width / 2 - 120, y, button: 'left', buttons: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: -30, y: -30, button: 'left', clickCount: 1 });
+    const outside = await evaluate(`(() => ({ stored: sessionStorage.getItem('shellpuppet.dashboard.tracks'),
+      dragging: document.querySelector('.pane-divider[data-axis="focus"]').classList.contains('dragging') }))()`);
+    const final = await evaluate(`document.querySelector('.pane-divider[data-axis="focus"]').getBoundingClientRect().toJSON()`) as { x: number; y: number; width: number; height: number };
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: final.x + final.width / 2, y, button: 'left', clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: final.x + final.width / 2 - 80, y, button: 'left', buttons: 1 });
+    const lost = await evaluate(`(async () => { const d = document.querySelector('.pane-divider[data-axis="focus"]');
+      const width = document.getElementById('strip').getBoundingClientRect().width;
+      const capturedBefore = d.hasPointerCapture(window.__dragPointer);
+      d.releasePointerCapture(window.__dragPointer);
+      await new Promise(resolve => setTimeout(resolve, 50));
+      return { width, after: document.getElementById('strip').getBoundingClientRect().width,
+        dragging: d.classList.contains('dragging'), stored: sessionStorage.getItem('shellpuppet.dashboard.tracks'),
+        capturedBefore, capturedAfter: d.hasPointerCapture(window.__dragPointer) }; })()`);
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: -30, y: -30, button: 'left', clickCount: 1 });
+    return { during, cancelled, outside, lost };
+  });
+  const result = shot.probe as { during: number; cancelled: { stored: string | null; dragging: boolean; width: number; frames: number };
+    outside: { stored: string | null; dragging: boolean };
+    lost: { width: number; after: number; dragging: boolean; stored: string | null;
+      capturedBefore: boolean; capturedAfter: boolean } };
+  expect(result.cancelled.width).toBeCloseTo(result.during, 0);
+  expect(result.cancelled.stored).toContain('focusStrip');
+  expect(result.cancelled.dragging).toBe(false);
+  expect(result.cancelled.frames).toBeGreaterThan(0);
+  expect(result.outside.stored).toContain('focusStrip');
+  expect(result.outside.dragging).toBe(false);
+  expect(result.lost.after).toBeCloseTo(result.lost.width, 0);
+  expect(result.lost.capturedBefore, JSON.stringify(result)).toBe(true);
+  expect(result.lost.dragging, JSON.stringify(result)).toBe(false);
+  expect(result.lost.stored).toContain('focusStrip');
+}, 150_000);
+
+it('ends a drag when sessions arrive or move to another window', async (context) => {
+  if (!browser) { context.skip(); return; }
+  const shot = await exercise(2, async ({ evaluate, send }) => {
+    await evaluate(`document.getElementById('focus').click()`);
+    const box = await evaluate(`document.querySelector('.pane-divider[data-axis="focus"]').getBoundingClientRect().toJSON()`) as { x: number; y: number; width: number; height: number };
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await evaluate(`window.__arriveDivider = document.querySelector('.pane-divider[data-axis="focus"]')`);
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x - 160, y, button: 'left', buttons: 1 });
+    const added = await api(daemon!.port, daemon!.token, '/sessions', { body: {
+      command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], shell: false, openViewer: false,
+    } });
+    expect(added.status).toBe(200);
+    await new Promise(resolve => setTimeout(resolve, 650));
+    const arrival = await evaluate(`(() => ({ count: document.querySelectorAll('.pane').length,
+      same: document.querySelector('.pane-divider[data-axis="focus"]') === window.__arriveDivider,
+      dragging: document.querySelector('.pane-divider[data-axis="focus"]').classList.contains('dragging'),
+      stored: sessionStorage.getItem('shellpuppet.dashboard.tracks') }))()`);
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: x - 160, y, button: 'left', clickCount: 1 });
+    const current = await evaluate(`document.querySelector('.pane-divider[data-axis="focus"]').getBoundingClientRect().toJSON()`) as { x: number; y: number; width: number; height: number };
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: current.x + current.width / 2, y, button: 'left', clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: current.x + current.width / 2 - 110, y, button: 'left', buttons: 1 });
+    const moved = await evaluate(`(async () => { const channel = new BroadcastChannel('shellpuppet.dashboard');
+      const id = await new Promise(resolve => { channel.onmessage = e => {
+        if (e.data?.type === 'window-roster' && e.data.window?.rank === 0) resolve(e.data.window.id);
+      }; });
+      channel.postMessage({ type: 'window-roster', token: 'test-other', window:
+        { id: 'test-other', rank: -1, openedAt: 1, width: 1300, height: 900 } });
+      await new Promise(resolve => setTimeout(resolve, 80));
+      channel.postMessage({ type: 'window-assignment', token: 'test-other', owner: 'test-other',
+        byWindow: { [id]: [document.querySelector('.pane').dataset.session] } });
+      await new Promise(resolve => setTimeout(resolve, 150));
+      window.__resizes.length = 0;
+      document.getElementById('text-larger').click();
+      await new Promise(resolve => setTimeout(resolve, 400));
+      channel.close();
+      return { count: document.querySelectorAll('.pane').length,
+        oldDragging: document.querySelector('.pane-divider.dragging') !== null,
+        divider: document.querySelector('.pane-divider[data-axis="focus"]') !== null,
+        stored: sessionStorage.getItem('shellpuppet.dashboard.tracks'), frames: window.__resizes.length }; })()`);
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: -30, y: -30, button: 'left', clickCount: 1 });
+    return { arrival, moved };
+  });
+  const result = shot.probe as { arrival: { count: number; same: boolean; dragging: boolean; stored: string | null };
+    moved: { count: number; oldDragging: boolean; divider: boolean; stored: string | null; frames: number } };
+  expect(result.arrival.count).toBe(3);
+  expect(result.arrival.same).toBe(true);
+  expect(result.arrival.dragging).toBe(false);
+  expect(result.arrival.stored).toBeNull();
+  expect(result.moved.count).toBe(1);
+  expect(result.moved.oldDragging).toBe(false);
+  expect(result.moved.divider).toBe(false);
+  expect(result.moved.stored).toBeNull();
+  expect(result.moved.frames).toBeGreaterThan(0);
+}, 150_000);
+
+it('does not fit with Auto fit off after a pen drag, but Fit still takes the grid', async (context) => {
+  if (!browser) { context.skip(); return; }
+  const shot = await exercise(2, async ({ evaluate, send }) => {
+    await evaluate(`(() => { document.getElementById('focus').click(); document.getElementById('auto-fit').click();
+      window.__pointerTypes = []; document.addEventListener('pointerdown', e => window.__pointerTypes.push(e.pointerType), true);
+      window.__resizes.length = 0; })()`);
+    await new Promise(resolve => setTimeout(resolve, 350));
+    await evaluate(`window.__resizes.length = 0`);
+    const box = await evaluate(`document.querySelector('.pane-divider[data-axis="focus"]').getBoundingClientRect().toJSON()`) as { x: number; y: number; width: number; height: number };
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1, pointerType: 'pen' });
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x - 240, y, button: 'left', buttons: 1, pointerType: 'pen' });
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: x - 240, y, button: 'left', clickCount: 1, pointerType: 'pen' });
+    const dragged = await evaluate(`({ width: document.getElementById('strip').getBoundingClientRect().width,
+      pointerTypes: window.__pointerTypes, frames: window.__resizes.length })`);
+    await evaluate(`document.querySelector('#strip .pane button[aria-label="Fit"]').click()`);
+    const fitted = await evaluate(`window.__resizes.length`);
+    return { dragged, fitted };
+  });
+  const result = shot.probe as { dragged: { width: number; pointerTypes: string[]; frames: number }; fitted: number };
+  expect(result.dragged.pointerTypes).toContain('pen');
+  expect(result.dragged.width).toBeGreaterThan(450);
+  expect(result.dragged.frames).toBe(0);
+  expect(result.fitted).toBeGreaterThan(0);
+}, 150_000);
+
+it('forgets saved tracks when the pane count passes through zero', async (context) => {
+  if (!browser) { context.skip(); return; }
+  const shot = await exercise(2, async ({ evaluate, send }) => {
+    await evaluate(`document.getElementById('focus').click()`);
+    const box = await evaluate(`document.querySelector('.pane-divider[data-axis="focus"]').getBoundingClientRect().toJSON()`) as { x: number; y: number; width: number; height: number };
+    const x = box.x + box.width / 2;
+    const y = box.y + box.height / 2;
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x - 180, y, button: 'left', buttons: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: x - 180, y, button: 'left', clickCount: 1 });
+    const saved = await evaluate(`sessionStorage.getItem('shellpuppet.dashboard.tracks')`);
+    const interval = await evaluate(`(async () => { const channel = new BroadcastChannel('shellpuppet.dashboard');
+      const id = await new Promise(resolve => { channel.onmessage = e => {
+        if (e.data?.type === 'window-roster' && e.data.window?.rank === 0) resolve(e.data.window.id);
+      }; });
+      const ids = [...document.querySelectorAll('.pane')].map(x => x.dataset.session);
+      channel.postMessage({ type: 'window-roster', token: 'test-zero', window:
+        { id: 'test-zero', rank: -1, openedAt: 1, width: 1300, height: 900 } });
+      await new Promise(resolve => setTimeout(resolve, 80));
+      channel.postMessage({ type: 'window-assignment', token: 'test-zero', owner: 'test-zero', byWindow: { [id]: [] } });
+      await new Promise(resolve => setTimeout(resolve, 120));
+      const empty = { count: document.querySelectorAll('.pane').length,
+        stored: sessionStorage.getItem('shellpuppet.dashboard.tracks') };
+      channel.postMessage({ type: 'window-assignment', token: 'test-zero', owner: 'test-zero', byWindow: { [id]: ids } });
+      await new Promise(resolve => setTimeout(resolve, 120));
+      const refilled = { count: document.querySelectorAll('.pane').length,
+        width: document.getElementById('strip').getBoundingClientRect().width };
+      channel.close(); return { empty, refilled }; })()`);
+    return { saved, ...(interval as object) };
+  });
+  const result = shot.probe as { saved: string | null; empty: { count: number; stored: string | null };
+    refilled: { count: number; width: number } };
+  expect(result.saved).toContain('focusStrip');
+  expect(result.empty.count).toBe(0);
+  expect(result.empty.stored).toBeNull();
+  expect(result.refilled.count).toBe(2);
+  expect(result.refilled.width).toBeCloseTo(300, 0);
+}, 150_000);

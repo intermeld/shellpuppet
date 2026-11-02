@@ -377,7 +377,8 @@ keys for small steps, Shift with an arrow for larger steps, or Home to reset
 that direction. A drag stops at the readable pane size, or at the strip's
 minimum width. On release, a pane that grew fits its real terminal, respecting
 Auto fit's rules when it is on; one that shrank keeps its grid and scales or
-scrolls. Sizes stay
+scrolls. With Auto fit off, release keeps the real terminal size until Fit is
+pressed. The boundary announces its position in pixels. Sizes stay
 in this window for the session and survive a reload. Choose Auto or Grid
 again to reset them.
 
