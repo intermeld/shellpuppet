@@ -345,6 +345,55 @@ describe('profile policy', () => {
 });
 
 describe('the daemon environment copy', () => {
+  it('excludes verified agent child markers that prefixes missed', () => {
+    const names = [
+      'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_SSE_PORT',
+      'CLAUDE_CODE_EXECPATH', 'CLAUDE_CODE_BRIDGE_SESSION_ID', 'CLAUDE_CODE_REMOTE_SESSION_ID',
+      'CODEX_TOOL_CALL_ID', 'CODEX_VERSION', 'CODEX_PERMISSION_PROFILE',
+      'CODEX_SANDBOX', 'CODEX_SANDBOX_NETWORK_DISABLED', 'GROK_AGENT',
+      'OPENCODE_TERMINAL', 'OPENCODE_CLIENT',
+    ];
+    const source: NodeJS.ProcessEnv = { ORDINARY_NAME: 'made-up-ordinary' };
+    for (const name of names) source[name] = `made-up-${name}`;
+    expect(copyDaemonEnv('all', source)).toEqual({
+      env: { ORDINARY_NAME: 'made-up-ordinary' },
+      copied: ['ORDINARY_NAME'],
+    });
+  });
+  it('passes documented user settings and unverified CLI prefixes', () => {
+    const source = {
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS: 'made-up-output-limit',
+      CLAUDE_CODE_USE_BEDROCK: 'made-up-provider-choice',
+      CLAUDE_CODE_GIT_BASH_PATH: 'made-up-shell-path',
+      QODER_SESSION_ID: 'made-up-qoder-choice',
+      QODER_SESSION_NAME: 'made-up-qoder-name',
+      ANTIGRAVITY_SESSION_ID: 'made-up-antigravity-setting',
+      GOOSE_SESSION_ID: 'made-up-goose-setting',
+      GEMINI_CLI_SESSION_ID: 'made-up-gemini-setting',
+      OPENCODE_SESSION_ID: 'made-up-opencode-setting',
+      CODEX_SHELL: 'made-up-codex-setting',
+    };
+    expect(copyDaemonEnv('all', source)).toEqual({
+      env: source,
+      copied: Object.keys(source),
+    });
+  });
+  it.runIf(process.platform === 'win32')('matches new exact markers without regard to case on Windows', () => {
+    const source = {
+      cOdEx_ToOl_CaLl_Id: 'made-up-codex',
+      oPeNcOdE_tErMiNaL: 'made-up-opencode',
+      gRoK_aGeNt: 'made-up-grok',
+      cLaUdE_cOdE_mAx_OuTpUt_ToKeNs: 'made-up-setting',
+      qOdEr_SeSsIoN_nAmE: 'made-up-session-name',
+    };
+    expect(copyDaemonEnv('all', source)).toEqual({
+      env: {
+        cLaUdE_cOdE_mAx_OuTpUt_ToKeNs: 'made-up-setting',
+        qOdEr_SeSsIoN_nAmE: 'made-up-session-name',
+      },
+      copied: ['cLaUdE_cOdE_mAx_OuTpUt_ToKeNs', 'qOdEr_SeSsIoN_nAmE'],
+    });
+  });
   it('copies all owned string values except reserved credentials and ShellPuppet session variables', () => {
     const source = Object.create({ INHERITED: 'inherited' }) as NodeJS.ProcessEnv;
     source['UNLISTED'] = 'made-up-value';
@@ -362,9 +411,8 @@ describe('the daemon environment copy', () => {
   it('keeps agent CLI session scaffolding out of an all profile', () => {
     const excluded = [
       'CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_PID',
-      'CODEX_THREAD_ID', 'QODER_SESSION_ID', 'GROK_SESSION_ID',
-      'OPENCODE_SESSION_ID', 'GEMINI_CLI_SESSION_ID', 'ANTIGRAVITY_SESSION_ID',
-      'GOOSE_SESSION_ID', 'SHELLPUPPET_SESSION',
+      'CODEX_THREAD_ID', 'GROK_SESSION_ID', 'OPENCODE_TERMINAL',
+      'GEMINI_CLI', 'SHELLPUPPET_SESSION',
     ];
     const source: NodeJS.ProcessEnv = {
       SHELLPUPPET_HOME: 'made-up-home',
@@ -397,12 +445,9 @@ describe('the daemon environment copy', () => {
       cLaUdE_cOdE_sEsSiOn_Id: 'made-up-claude-session',
       cLaUdE_pId: 'made-up-claude-pid',
       cOdEx_ThReAd_Id: 'made-up-codex',
-      qOdEr_SeSsIoN_iD: 'made-up-qoder',
       gRoK_sEsSiOn_Id: 'made-up-grok',
-      oPeNcOdE_sEsSiOn_Id: 'made-up-opencode',
-      gEmInI_cLi_SeSsIoN_iD: 'made-up-gemini',
-      aNtIgRaViTy_SeSsIoN_iD: 'made-up-antigravity',
-      gOoSe_SeSsIoN_iD: 'made-up-goose',
+      oPeNcOdE_tErMiNaL: 'made-up-opencode',
+      gEmInI_cLi: 'made-up-gemini',
       sHeLlPuPpEt_SeSsIoN: 'made-up-shellpuppet',
       sHeLlPuPpEt_HoMe: 'made-up-home',
     };
