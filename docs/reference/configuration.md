@@ -354,6 +354,12 @@ the MCP server on stderr, and by the CLI on a start that names a variable.
 
 ## Dashboard launch profiles
 
+Set `dashboard.fontSize` to an integer from 8 to 32 for the dashboard's initial
+text size, for example `"dashboard": { "fontSize": 16 }`. A text size saved
+in the dashboard browser profile takes precedence. The page reads this value
+from the daemon and never writes `config.json`.
+
+
 The dashboard may start a program only by naming a profile from
 `launcher.profiles`. The page sends the profile's name and, when the profile
 offers folders, one folder name. It can never send a command, arguments, a

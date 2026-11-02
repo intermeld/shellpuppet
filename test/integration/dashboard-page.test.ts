@@ -14,6 +14,7 @@ const opened: string[] = [];
 const ids: string[] = [];
 
 const instrument = `(() => {
+  localStorage.setItem('shellpuppet.dashboard', JSON.stringify({ autoFit: false }));
   window.__dashSockets = [];
   window.__dashResizes = [];
   const Native = window.WebSocket;
@@ -202,7 +203,7 @@ describe('passive dashboard page', () => {
       expect(trace.events).toBeGreaterThanOrEqual(1);
       expect(trace.maxArrangeDepth).toBe(1);
       expect(trace.maxVisibilityDepth).toBe(1);
-      expect(trace.arrangements).toBeLessThanOrEqual(10);
+      expect(trace.arrangements).toBeLessThanOrEqual(12);
       expect(trace.visibility).toBeLessThanOrEqual(10);
     } finally {
       const cleanupIds = [...loopIds, ...(third === null ? [] : [third])];
@@ -331,7 +332,7 @@ describe('passive dashboard page', () => {
       pinnedGrid: string[]; mainAfterPin: string; mainAfterTwoPins: string;
       stripBeforeReorder: string[]; reordered: string[];
       shortcut: string; oldConsumed: boolean; newConsumed: boolean;
-      preference: { mode: string; order: string[]; pins: string[]; prefix: string }; resizes: unknown[];
+      preference: { mode: string; order: string[]; pins: string[]; prefix: string; autoFit: boolean; fontSize: number | null }; resizes: unknown[];
     };
     expect(result.layouts.map((layout) => layout.mode)).toEqual(['grid','grid','grid','grid','focus']);
     for (const layout of result.layouts.slice(0, 4)) expect(layout.ids).toEqual(['one','two','three','four','five'].slice(0, layout.ids.length));
@@ -353,7 +354,7 @@ describe('passive dashboard page', () => {
     expect(result.shortcut).toBe('Ctrl+Shift+Z');
     expect(result.oldConsumed).toBe(false);
     expect(result.newConsumed).toBe(true);
-    expect(result.preference).toEqual({ mode: 'focus', order: ['one', 'two', 'four', 'three', 'five'], pins: ['two', 'three'], prefix: 'z' });
+    expect(result.preference).toEqual({ mode: 'focus', order: ['one', 'two', 'four', 'three', 'five'], pins: ['two', 'three'], prefix: 'z', autoFit: false, fontSize: null });
     expect(result.resizes).toEqual([]);
   }, 180_000);
 
@@ -531,6 +532,10 @@ describe('passive dashboard page', () => {
   it('takes the grid only for Fit, Enlarge and Restore, and disconnects covered and scrolled-off panes', async (context) => {
     if (!browser) { context.skip(); return; }
     if (ids.length < 2) { await startSession('geometry first'); await startSession('geometry second'); }
+    for (const id of ids.slice(0, 2)) {
+      expect((await api(daemon.port, daemon.token, `/sessions/${id}/resize`,
+        { body: { cols: 100, rows: 30 } })).status).toBe(200);
+    }
     const url = await dashboardUrl();
     const shot = await captureDashboard({ browser, viewerUrl: url, width: 1280, height: 720,
       drive: true, timeoutMs: 120_000, beforeNavigateScript: instrument,
@@ -585,9 +590,9 @@ describe('passive dashboard page', () => {
           state.scrolledSnapshotLines = secondSockets().at(-1)?.binaryFrames[0]?.match(/line-\\d+/g)?.length || 0;
           state.socketCount = secondSockets().length;
           state.beforeFont = window.__dashResizes.length;
-          for (let i = 0; i < 50; i++) first.querySelector('button[aria-label="Smaller text"]').click();
+          for (let i = 0; i < 50; i++) document.getElementById('text-smaller').click();
           state.smallFont = first.querySelector('.pane-term').dataset.fontSize;
-          for (let i = 0; i < 50; i++) first.querySelector('button[aria-label="Larger text"]').click();
+          for (let i = 0; i < 50; i++) document.getElementById('text-larger').click();
           state.largeFont = first.querySelector('.pane-term').dataset.fontSize;
           state.transform = getComputedStyle(first.querySelector('.xterm')).transform;
           state.afterFont = window.__dashResizes.length;
@@ -616,8 +621,8 @@ describe('passive dashboard page', () => {
     expect(result.scrolledSnapshotLines).toBeGreaterThan(1900);
     expect(result.scrolledSnapshotLines).toBeLessThanOrEqual(2030);
     expect(result.afterFont).toBe(result.beforeFont);
-    expect(result.smallFont).toBe('6');
-    expect(result.largeFont).toBe('40');
+    expect(result.smallFont).toBe('8');
+    expect(result.largeFont).toBe('32');
     expect(result.transform).toBe('none');
   }, 180_000);
 

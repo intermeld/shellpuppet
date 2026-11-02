@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ShellPuppet dashboard</title>
 <meta name="sp-csrf" content="">
+<meta name="sp-dashboard-font-size" content="">
 <link rel="icon" type="image/svg+xml" href="/viewer/icon.svg">
 <link rel="stylesheet" href="/vendor/xterm.css">
 <link rel="stylesheet" href="/viewer/dashboard.css">
@@ -15,6 +16,7 @@
   <span class="spacer"></span>
   <button id="auto" type="button">Auto</button><button id="grid" type="button">Grid</button><button id="focus" type="button">Focus</button>
   <button id="auto-fit" type="button" aria-pressed="true">Auto fit</button>
+  <span id="text-size" aria-label="Text size"><button id="text-smaller" type="button" aria-label="Smaller text">Smaller</button><button id="text-auto" type="button" aria-label="Auto text">Auto text</button><button id="text-larger" type="button" aria-label="Larger text">Larger</button></span>
   <button id="shortcut" type="button" title="Choose the navigation shortcut">Shortcut: Ctrl+Shift+A</button>
   <span id="launcher" hidden>
     <label>Profile <select id="profile"></select></label>

@@ -29,6 +29,10 @@
   let pins = Array.isArray(saved.pins) ? saved.pins.filter((id) => typeof id === 'string') : [];
   let mode = ['auto', 'grid', 'focus'].includes(saved.mode) ? saved.mode : 'auto';
   let autoFit = saved.autoFit !== false;
+  const configuredFont = Number(document.querySelector('meta[name="sp-dashboard-font-size"]')?.content);
+  let fontSize = Number.isInteger(saved.fontSize) && saved.fontSize >= 8 && saved.fontSize <= 32
+    ? saved.fontSize : saved.fontSize === null ? null
+      : Number.isInteger(configuredFont) && configuredFont >= 8 && configuredFont <= 32 ? configuredFont : null;
   let autoFitTimer = null;
   let prefix = typeof saved.prefix === 'string' && /^[a-z]$/.test(saved.prefix) ? saved.prefix : 'a';
   let choosingPrefix = false;
@@ -103,7 +107,7 @@
   }
 
   const persist = () => {
-    try { window.localStorage.setItem(PREF, JSON.stringify({ mode, order, pins, prefix, autoFit })); } catch { /* Layout still works. */ }
+    try { window.localStorage.setItem(PREF, JSON.stringify({ mode, order, pins, prefix, autoFit, fontSize })); } catch { /* Layout still works. */ }
   };
   const persistLaunches = () => {
     try { window.localStorage.setItem(LAUNCH_PREF, JSON.stringify(launches)); } catch { /* Restart still works in this document. */ }
@@ -119,9 +123,11 @@
     return !popped.has(item.id) && (windows.size === 1 || assigned === null || assigned.has(item.id));
   });
   const showError = (message) => { error.textContent = message; error.hidden = false; };
-  function renderAutoFit() {
+  function renderPreferences() {
     document.getElementById('auto-fit').setAttribute('aria-pressed', String(autoFit));
     document.getElementById('auto-fit').classList.toggle('active', autoFit);
+    document.getElementById('text-auto').textContent = fontSize === null ? 'Auto text' : `${fontSize} px`;
+    document.getElementById('text-auto').classList.toggle('active', fontSize === null);
   }
   function scheduleAutoFit() {
     clearTimeout(autoFitTimer);
@@ -130,6 +136,15 @@
       autoFitTimer = null;
       for (const item of shown()) if (visible(item)) item.client?.autoFitGrid();
     }, 250);
+  }
+  function broadcastPreferences() {
+    channel?.postMessage({ type: 'preferences', autoFit, fontSize, token: windowToken });
+  }
+  function setFontSize(value, broadcast = true) {
+    fontSize = value;
+    for (const item of panes.values()) item.client?.setFontOverride(value);
+    renderPreferences(); persist(); scheduleAutoFit();
+    if (broadcast) broadcastPreferences();
   }
   const makeButton = (label, action) => {
     const button = document.createElement('button');
@@ -278,9 +293,6 @@
     size.className = 'pane-size';
     const item = { id: summary.id, summary, card, label, purpose, badge, state, size, client: null, previousGrid: null };
     item.fit = makeButton('Fit', () => { select(item.id); item.client?.fitGrid(); });
-    item.smaller = makeButton('Smaller text', () => item.client?.nudgeFont(-1));
-    item.larger = makeButton('Larger text', () => item.client?.nudgeFont(1));
-    item.autoText = makeButton('Auto text', () => item.client?.setFontOverride(null));
     item.enlarge = makeButton('Enlarge', () => {
       select(item.id);
       if (enlarged === item.id) {
@@ -317,8 +329,8 @@
     item.dismiss.dataset.action = 'dismiss';
     menu.append(item.kill, item.copy, item.pop, item.restart, item.dismiss);
     item.menu = menu;
-    head.append(label, purpose, badge, state, space, size, item.smaller, item.autoText, item.larger,
-      item.fit, item.enlarge, item.pin, item.left, item.right, item.menuButton);
+    head.append(label, purpose, badge, state, space, size, item.fit, item.enlarge,
+      item.pin, item.left, item.right, item.menuButton);
     head.addEventListener('dblclick', (event) => {
       if (!event.target.closest('button')) item.enlarge.click();
     });
@@ -404,6 +416,7 @@
     item.clientHeight = height;
     item.client = ShellPuppetPane.create({
       container: item.term, sessionId: item.id, dashboardProof: proof,
+      initialFontOverride: fontSize,
       elements: { banner: item.banner, promptAlert: item.prompt, size: item.size },
       onAttentionChange: () => updateAttention(),
       onGeometryReady: () => scheduleAutoFit(),
@@ -809,9 +822,10 @@
   function onWindowMessage(event) {
     const data = event.data;
     if (typeof data !== 'object' || data === null || data.token === windowToken) return;
-    if (data.type === 'auto-fit-preference' && typeof data.autoFit === 'boolean') {
+    if (data.type === 'preferences' && typeof data.autoFit === 'boolean' &&
+        (data.fontSize === null || (Number.isInteger(data.fontSize) && data.fontSize >= 8 && data.fontSize <= 32))) {
       autoFit = data.autoFit;
-      renderAutoFit(); persist(); scheduleAutoFit();
+      setFontSize(data.fontSize, false);
       return;
     }
     if (data.type === 'window-roster' && popSelf === null && data.window &&
@@ -860,9 +874,11 @@
   strip.addEventListener('scroll', syncVisibility);
   document.getElementById('auto-fit').addEventListener('click', () => {
     autoFit = !autoFit;
-    renderAutoFit(); persist(); scheduleAutoFit();
-    channel?.postMessage({ type: 'auto-fit-preference', autoFit, token: windowToken });
+    renderPreferences(); persist(); scheduleAutoFit(); broadcastPreferences();
   });
+  document.getElementById('text-smaller').addEventListener('click', () => setFontSize(Math.max(8, (fontSize ?? 13) - 1)));
+  document.getElementById('text-auto').addEventListener('click', () => setFontSize(null));
+  document.getElementById('text-larger').addEventListener('click', () => setFontSize(Math.min(32, (fontSize ?? 13) + 1)));
   document.getElementById('shortcut').addEventListener('click', () => {
     choosingPrefix = true;
     document.getElementById('shortcut').textContent = 'Press Ctrl+Shift and a letter';
@@ -938,7 +954,7 @@
     else if (key === '?') document.getElementById('help').hidden = !document.getElementById('help').hidden;
   }, true);
   showPrefix();
-  renderAutoFit();
+  renderPreferences();
   if (popSelf === null) {
     advertise();
     rosterTimer = setInterval(() => {

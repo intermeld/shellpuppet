@@ -220,6 +220,7 @@ const dashboardHtmlPath = path.join(viewerDir, 'dashboard.html');
  */
 const PAGE_CSP = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:";
 const DASHBOARD_PROOF_META = '<meta name="sp-csrf" content="">';
+const DASHBOARD_FONT_META = '<meta name="sp-dashboard-font-size" content="">';
 
 export interface DaemonOptions {
   home: string;
@@ -248,6 +249,8 @@ export interface DaemonOptions {
    * point supplies the product default of `dashboard`.
    */
   viewer?: ViewerLaunchConfig;
+  /** Initial dashboard text size, served to the page without a write route. */
+  dashboardFontSize?: number;
   /**
    * Test seam: what actually opens the window. Defaults to the real launcher.
    * It exists so a test can see the URL the daemon would open, and check
@@ -1148,8 +1151,11 @@ export class Daemon {
 
   private dashboardDocument(proof: string | null): string {
     const html = fs.readFileSync(dashboardHtmlPath, 'utf8');
-    if (proof === null) return html.replace(DASHBOARD_PROOF_META, '');
-    return html.replace(DASHBOARD_PROOF_META, `<meta name="sp-csrf" content="${proof}">`);
+    const withProof = proof === null ? html.replace(DASHBOARD_PROOF_META, '')
+      : html.replace(DASHBOARD_PROOF_META, `<meta name="sp-csrf" content="${proof}">`);
+    const size = this.options.dashboardFontSize;
+    return withProof.replace(DASHBOARD_FONT_META,
+      size === undefined ? '' : `<meta name="sp-dashboard-font-size" content="${String(size)}">`);
   }
 
   private sendDashboardPage(
