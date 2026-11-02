@@ -400,7 +400,9 @@ start waits rather than running a second wrapper. The OS releases the listener
 when its client dies. On POSIX, the socket stays in `SHELLPUPPET_HOME` if its
 path fits the platform limit. Otherwise it uses a private
 `shellpuppet-<uid>` folder under the system temporary directory, after checking
-that it is a real directory owned by this user and not writable by others.
+that it is a real directory owned by this user with no access for others, in a
+temporary directory that is the user's own or has the sticky bit, so no other
+user can rename or replace it between the check and its use.
 A stale socket pathname is removed only after a refused connection, a socket
 type check and an owner check. If the endpoint cannot be used, the client warns
 and starts without coordination; the daemon's single-owner state claim still

@@ -137,7 +137,7 @@ describe('configured daemon start wrapper', () => {
     expect((JSON.parse(a.stdout) as { port: number }).port).toBe((JSON.parse(b.stdout) as { port: number }).port);
   }, 30_000);
 
-  it.runIf(process.platform !== 'win32').each(['permissive', 'link'] as const)('starts without coordination when the short folder is %s', async (kind) => {
+  it.runIf(process.platform !== 'win32').each(['permissive', 'readable', 'link'] as const)('starts without coordination when the short folder is %s', async (kind) => {
     const { home, marker, root } = longPosixHome();
     const temp = path.join(root, 'short-temp');
     fs.mkdirSync(temp);
@@ -145,6 +145,7 @@ describe('configured daemon start wrapper', () => {
     if (kind === 'link') fs.symlinkSync(root, shortFolder, 'dir');
     else fs.mkdirSync(shortFolder, { mode: 0o777 });
     if (kind === 'permissive') fs.chmodSync(shortFolder, 0o777);
+    if (kind === 'readable') fs.chmodSync(shortFolder, 0o755);
     const result = await runCli(home, ['daemon', 'start', '--json'], { TMPDIR: temp });
     recordPid(home);
     expect(result.code).toBe(0);
