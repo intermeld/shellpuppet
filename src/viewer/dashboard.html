@@ -20,7 +20,7 @@
   <button id="shortcut" type="button" title="Choose the navigation shortcut">Shortcut: Ctrl+Shift+A</button>
   <span id="launcher" hidden>
     <label>Profile <select id="profile"></select></label>
-    <label id="folder-field" hidden>Folder <select id="folder"></select></label>
+    <span id="folder-field" hidden><label>Filter folders <input id="folder-filter" type="search" autocomplete="off"></label><label>Folder <select id="folder"></select></label><span id="recent-folders"></span></span>
     <button id="start" type="button">Start</button>
   </span>
   <span id="watch-only" class="hint" hidden>No profile is loaded.</span>
@@ -37,6 +37,7 @@
 <script src="/vendor/addon-fit.js"></script>
 <script src="/viewer/pane.js"></script>
 <script src="/viewer/dashboard-layout.js"></script>
+<script src="/viewer/dashboard-folders.js"></script>
 <script src="/viewer/dashboard.js"></script>
 </body>
 </html>

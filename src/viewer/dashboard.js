@@ -1,5 +1,5 @@
 /** The dashboard's feed, arrangement, launch controls and human controls. */
-/* global ShellPuppetPane, ShellPuppetDashboardLayout */
+/* global ShellPuppetPane, ShellPuppetDashboardLayout, ShellPuppetDashboardFolders */
 (() => {
   'use strict';
 
@@ -12,6 +12,8 @@
   const profileSelect = document.getElementById('profile');
   const folderField = document.getElementById('folder-field');
   const folderSelect = document.getElementById('folder');
+  const folderFilter = document.getElementById('folder-filter');
+  const recentFolders = document.getElementById('recent-folders');
   const launcher = document.getElementById('launcher');
   const watchOnly = document.getElementById('watch-only');
   const profileProblems = document.getElementById('profile-problems');
@@ -22,6 +24,7 @@
   const panes = new Map();
   const PREF = 'shellpuppet.dashboard';
   const LAUNCH_PREF = 'shellpuppet.dashboard.launches';
+  const RECENT_PREF = 'shellpuppet.dashboard.recentFolders';
   const NAME = /^[a-z][a-z0-9-]{0,31}$/;
   let saved = {};
   try { saved = JSON.parse(window.localStorage.getItem(PREF) || '{}') || {}; } catch { /* Preferences are optional. */ }
@@ -46,6 +49,8 @@
   let profiles = [];
   /** Sessions this page started: profile name and, where used, folder name. */
   let launches = loadLaunches();
+  let recent = {};
+  try { recent = JSON.parse(window.localStorage.getItem(RECENT_PREF) || '{}') || {}; } catch { recent = {}; }
   /** Panes another window holds, hidden from this grid until that window closes. */
   const popped = new Set();
   /** This document is the pop-out window for one session, or null. */
@@ -101,7 +106,8 @@
     for (const [id, value] of Object.entries(raw)) {
       if (typeof value !== 'object' || value === null || typeof value.profile !== 'string' || !NAME.test(value.profile)) continue;
       const entry = { profile: value.profile };
-      if (typeof value.folder === 'string' && NAME.test(value.folder)) entry.folder = value.folder;
+      if (typeof value.folder === 'string' && value.folder.length > 0 && !/[\\/:]/.test(value.folder) && !Array.from(value.folder).some((char) => char.charCodeAt(0) < 32) && value.folder !== '..') entry.folder = value.folder;
+      if (Number.isInteger(value.rootIndex) && value.rootIndex >= 0) entry.rootIndex = value.rootIndex;
       out[id] = entry;
     }
     return out;
@@ -270,18 +276,26 @@
     } catch { screenState = 'unavailable'; renderScreens(); }
   }
 
-  function rememberLaunch(id, profile, folder) {
+  function rememberLaunch(id, profile, folder, rootIndex) {
     if (typeof id !== 'string' || !NAME.test(profile)) return;
     const entry = { profile };
     if (typeof folder === 'string' && folder !== '') entry.folder = folder;
+    if (Number.isInteger(rootIndex) && rootIndex >= 0) entry.rootIndex = rootIndex;
     launches[id] = entry;
     persistLaunches();
+    if (entry.folder) {
+      const key = entry.rootIndex === undefined ? entry.folder : `root:${entry.rootIndex}:${entry.folder}`;
+      recent = ShellPuppetDashboardFolders.remember(recent, profile, key);
+      try { window.localStorage.setItem(RECENT_PREF, JSON.stringify(recent)); } catch { /* Recent folders remain available here. */ }
+      renderFolders();
+    }
   }
 
   function launchBody(entry) {
     if (!entry || typeof entry.profile !== 'string') return null;
     const body = { profile: entry.profile };
     if (typeof entry.folder === 'string' && entry.folder !== '') body.folder = entry.folder;
+    if (Number.isInteger(entry.rootIndex) && entry.rootIndex >= 0) body.rootIndex = entry.rootIndex;
     return body;
   }
 
@@ -749,7 +763,7 @@
       return;
     }
     if (typeof payload.id !== 'string') return;
-    rememberLaunch(payload.id, body.profile, body.folder);
+    rememberLaunch(payload.id, body.profile, body.folder, body.rootIndex);
     const item = panes.get(payload.id);
     if (item) updateCard(item);
     applyOpen(payload.id, payload.open);
@@ -761,15 +775,36 @@
 
   function renderFolders() {
     const profile = selectedProfile();
-    const folders = Array.isArray(profile?.folders) ? profile.folders : [];
+    const named = Array.isArray(profile?.folders) ? profile.folders : [];
+    const rooted = Array.isArray(profile?.rootFolders) ? profile.rootFolders : [];
+    const folders = [
+      ...named.filter((folder) => folder && typeof folder.name === 'string').map((folder) => ({ name: folder.name, value: folder.name })),
+      ...rooted.filter((folder) => folder && typeof folder.name === 'string' && Number.isInteger(folder.rootIndex)).map((folder) => ({ name: folder.name, value: `root:${folder.rootIndex}:${folder.name}`, rootIndex: folder.rootIndex })),
+    ];
+    const remembered = Array.isArray(recent[profile?.name]) ? recent[profile.name] : [];
+    const ordered = ShellPuppetDashboardFolders.order(folders, recent, profile?.name);
+    const query = folderFilter.value.trim().toLocaleLowerCase();
+    const previous = folderSelect.value;
     folderSelect.textContent = '';
+    recentFolders.textContent = '';
     folderField.hidden = !(profile && profile.folderRequired && folders.length > 0);
-    for (const folder of folders) {
-      if (!folder || typeof folder.name !== 'string') continue;
+    for (const folder of ordered) {
+      if (query && !folder.name.toLocaleLowerCase().includes(query)) continue;
       const option = document.createElement('option');
-      option.value = folder.name;
-      option.textContent = folder.name;
+      option.value = folder.value;
+      option.textContent = folder.rootIndex === undefined ? folder.name : `${folder.name} (root ${folder.rootIndex + 1})`;
+      option.dataset.name = folder.name;
+      if (folder.rootIndex !== undefined) option.dataset.rootIndex = String(folder.rootIndex);
       folderSelect.append(option);
+    }
+    if (Array.from(folderSelect.options).some((option) => option.value === previous)) folderSelect.value = previous;
+    for (const folder of ordered.filter((choice) => remembered.includes(choice.value))) {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = folder.rootIndex === undefined ? folder.name : `${folder.name} (root ${folder.rootIndex + 1})`;
+      button.title = `Start in ${button.textContent}`;
+      button.addEventListener('click', () => { folderFilter.value = ''; renderFolders(); folderSelect.value = folder.value; startSelected(); });
+      recentFolders.append(button);
     }
   }
 
@@ -815,7 +850,10 @@
     const body = { profile: profile.name };
     if (profile.folderRequired) {
       if (folderSelect.value === '') { showError('Choose a folder.'); return; }
-      body.folder = folderSelect.value;
+      const option = folderSelect.selectedOptions[0];
+      if (!option) { showError('Choose a folder.'); return; }
+      body.folder = option.dataset.name;
+      if (option.dataset.rootIndex !== undefined) body.rootIndex = Number(option.dataset.rootIndex);
     }
     void postLaunch(body);
   }
@@ -912,6 +950,8 @@
     if (waiting) select(waiting.id);
   });
   profileSelect.addEventListener('change', renderFolders);
+  folderFilter.addEventListener('input', renderFolders);
+  folderFilter.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); startSelected(); } });
   document.getElementById('start').addEventListener('click', startSelected);
   document.getElementById('fullscreen').addEventListener('click', () => {
     const next = document.fullscreenElement

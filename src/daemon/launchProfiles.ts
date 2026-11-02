@@ -39,6 +39,57 @@ export interface LaunchFolder {
   path: string;
 }
 
+export interface RootFolderChoice {
+  rootIndex: number;
+  name: string;
+}
+
+const DEVICE_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\.|$)/i;
+
+/** A single path segment, safe on Windows as well as POSIX. */
+export function validRootFolderName(name: unknown): name is string {
+  return typeof name === 'string' && name.length > 0 && name !== '.' && name !== '..' &&
+    !/[\\/:]/.test(name) && !Array.from(name).some((char) => char.charCodeAt(0) < 32) &&
+    !/[. ]$/.test(name) && !DEVICE_NAME.test(name);
+}
+
+/** Offer at most 500 immediate directories per root in stable name order. */
+export function listRootFolders(roots: readonly string[]): RootFolderChoice[] {
+  const folders: RootFolderChoice[] = [];
+  roots.forEach((root, rootIndex) => {
+    try {
+      const names = fs.readdirSync(path.resolve(root), { withFileTypes: true })
+        .filter((entry) => entry.isDirectory() && !entry.name.startsWith('.') && validRootFolderName(entry.name))
+        .map((entry) => entry.name)
+        .sort((a, b) => a.localeCompare(b));
+      for (const name of names.slice(0, 500)) folders.push({ rootIndex, name });
+    } catch { /* An unavailable root offers no folders. */ }
+  });
+  return folders;
+}
+
+/** Recheck a choice at launch and resolve both sides before containment. */
+export function resolveRootFolder(
+  roots: readonly string[], rootIndex: unknown, name: unknown,
+): { cwd: string } | { error: string } {
+  if (!Number.isInteger(rootIndex) || typeof rootIndex !== 'number' || rootIndex < 0 || rootIndex >= roots.length || !validRootFolderName(name)) {
+    return { error: 'Invalid root folder choice.' };
+  }
+  const root = roots[rootIndex];
+  if (root === undefined || !listRootFolders([root]).some((entry) => entry.name === name)) {
+    return { error: 'Folder is no longer offered by this root.' };
+  }
+  try {
+    const realRoot = fs.realpathSync(path.resolve(root));
+    const realFolder = fs.realpathSync(path.join(root, name));
+    const relative = path.relative(realRoot, realFolder);
+    if (relative === '' || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) || !fs.statSync(realFolder).isDirectory()) {
+      return { error: 'Folder is outside its root or is not a directory.' };
+    }
+    return { cwd: realFolder };
+  } catch { return { error: 'Folder is no longer available.' }; }
+}
+
 export interface LaunchProfilePolicy {
   allow?: string[];
   deny?: string[];
@@ -54,6 +105,7 @@ export interface LaunchProfile {
   /** True when the profile asks the page to choose one of `folders`. */
   askCwd: boolean;
   folders: LaunchFolder[];
+  folderRoots: string[];
   agent?: string;
   /** Names or "all": the values are read from the daemon at launch. */
   envFromDaemon: string[] | 'all';
@@ -78,6 +130,7 @@ const PROFILE_KEYS = new Set([
   'shell',
   'cwd',
   'folders',
+  'folderRoots',
   'agent',
   'envFromDaemon',
   'readyText',
@@ -230,12 +283,22 @@ export function parseLaunchProfile(
   }
 
   let folders: LaunchFolder[] = [];
+  let folderRoots: string[] = [];
   if (askCwd) {
-    const parsed = parseFolders(raw['folders']);
-    if ('problem' in parsed) return parsed;
-    folders = parsed.folders;
-  } else if (raw['folders'] !== undefined) {
-    return { problem: 'folders is only allowed when cwd is "ask"' };
+    if (raw['folders'] !== undefined) {
+      const parsed = parseFolders(raw['folders']);
+      if ('problem' in parsed) return parsed;
+      folders = parsed.folders;
+    }
+    if (raw['folderRoots'] !== undefined) {
+      if (!isStringArray(raw['folderRoots']) || raw['folderRoots'].length === 0 || raw['folderRoots'].some((entry) => entry === '')) {
+        return { problem: 'folderRoots must be a non-empty array of paths' };
+      }
+      folderRoots = raw['folderRoots'];
+    }
+    if (folders.length === 0 && folderRoots.length === 0) return { problem: 'cwd is "ask", so folders or folderRoots must be non-empty' };
+  } else if (raw['folders'] !== undefined || raw['folderRoots'] !== undefined) {
+    return { problem: 'folders and folderRoots are only allowed when cwd is "ask"' };
   }
 
   const agent = raw['agent'];
@@ -304,6 +367,7 @@ export function parseLaunchProfile(
       ...(askCwd ? { askCwd: true } : { askCwd: false }),
       ...(askCwd || cwd === undefined ? {} : { cwd }),
       folders,
+      folderRoots,
       ...(typeof agent === 'string' ? { agent } : {}),
       envFromDaemon,
       ...(typeof readyText === 'string' ? { readyText } : {}),
