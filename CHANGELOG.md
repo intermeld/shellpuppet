@@ -17,8 +17,9 @@ version may change behaviour, and every such change is listed here.
 - Dashboard panes fill their tile at the 400 by 150 grid cap.
 - Dashboard panes fill their tile at the 400 by 150 grid cap. Auto fit refits
   after a settled outside resize, but follows a client that resizes again
-  within ten seconds. Followed and held grids scale to stay fully visible;
-  Fit restores the chosen text size.
+  within ten seconds. Followed and held grids scale down to 6 px, then scroll
+  when still larger than the pane. A pane note suggests Enlarge or Fit. Text
+  stops growing at 40 px; Fit restores the chosen text size.
 - Renamed `viewer.launchMode: "none"` to `"no-window"`; `"none"` remains an alias for existing configurations.
 
 ### Added

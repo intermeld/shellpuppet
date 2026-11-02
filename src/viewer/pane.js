@@ -407,22 +407,29 @@ window.ShellPuppetPane = (() => {
         if (Math.abs(scale - 1) < 0.01 || (scale > 1 && !grow)) return;
 
         const current = term.options.fontSize || DEFAULT_FONT_PX;
-        const minimum = dashboardProof !== null && controlMode !== 'yours' ? 2 : MIN_FONT_PX;
-        const next = Math.min(MAX_FONT_PX, Math.max(minimum, Math.floor(current * scale)));
-        if (next === current) {
-          if (scale < 1 && dashboardProof !== null && controlMode !== 'yours') {
-            term.element.style.transform = `scale(${String(scale)})`;
-          }
-          return;
-        }
+        const next = Math.min(MAX_FONT_PX, Math.max(MIN_FONT_PX, Math.floor(current * scale)));
+        if (next === current) return;
 
         term.options.fontSize = next;
         term.resize(cols, rows);
       }
     }
 
+    function updateOverflowState() {
+      if (dashboardProof === null) return;
+      const wrap = container.parentElement;
+      const screen = term.element?.querySelector('.xterm-screen');
+      if (!wrap || !screen) return;
+      const styles = window.getComputedStyle(wrap);
+      const availableWidth = wrap.clientWidth - parseFloat(styles.paddingLeft) - parseFloat(styles.paddingRight);
+      const availableHeight = wrap.clientHeight - parseFloat(styles.paddingTop) - parseFloat(styles.paddingBottom);
+      const overflowing = controlMode !== 'yours' && term.options.fontSize === MIN_FONT_PX &&
+        (screen.offsetWidth > availableWidth + 1 || screen.offsetHeight > availableHeight + 1);
+      wrap.classList.toggle('grid-overflow', overflowing);
+      if (elements.overflowNote) elements.overflowNote.hidden = !overflowing;
+    }
+
     function applyFontPreference(cols, rows) {
-      if (term.element) term.element.style.transform = '';
       if (fontOverride === null) {
         fitGridByFont(cols, rows);
       } else {
@@ -437,6 +444,7 @@ window.ShellPuppetPane = (() => {
       }
       updateZoomButtons();
       container.dataset.fontSize = String(term.options.fontSize);
+      updateOverflowState();
     }
 
     function applyGeometry(cols, rows, max) {
@@ -656,6 +664,7 @@ window.ShellPuppetPane = (() => {
         if (dashboardProof === null) return false;
         followingExternal = false;
         outsideResizePending = false;
+        lastOutsideFitAt = 0;
         if (term.options.fontSize !== fixedFontPx()) {
           term.options.fontSize = fixedFontPx();
           term.resize(term.cols, term.rows);

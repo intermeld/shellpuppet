@@ -1133,16 +1133,19 @@ profile; gone session ids are dropped.
 **Geometry.** Each pane uses the session's grid and measures whole character
 cells to scale its font between 6 px and 40 px, without stretching glyphs.
 When a followed or held grid needs more room, it can temporarily use smaller
-text to keep every row and column visible.
+text down to 6 px to keep every row and column visible. If the grid still
+exceeds the tile at 6 px, the pane scrolls in both directions as needed and
+shows a status note suggesting Enlarge or Fit. Text enlarged at the grid cap
+stops at 40 px.
 A pane below the floor is marked and keeps at least 80 by 24 cells. Auto fit
 is on by default and fits each visible pane's real terminal after a layout,
 window, text size or outside grid change settles for 250 ms. It sends at most
 one resize per pane for the settled change and leaves a grid held by another
 client alone. If the same session is resized from outside again within ten
 seconds of that refit, the pane follows it until the person presses Fit. A
-followed or held grid scales its text down enough to show the whole grid, then
-returns to the chosen text size when it fits again. A popped out pane follows
-its own window. Turning Auto fit off restores font scaling without a resize on
+followed or held grid scales its text down to 6 px, then scrolls if it still
+does not fit. It returns to the chosen text size when it fits again. A popped
+out pane follows its own window. Turning Auto fit off restores font scaling without a resize on
 layout and window changes. Fit takes control
 and fits the pane. Enlarge covers the pane's
 current screen and fits the real terminal to it; Restore sends its previous

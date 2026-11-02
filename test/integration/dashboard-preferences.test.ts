@@ -73,10 +73,20 @@ describe('dashboard preferences and errors', () => {
           return null;
         }
         return { pressed: document.getElementById('auto-fit').getAttribute('aria-pressed'),
-          sizes: [...document.querySelectorAll('.pane-term')].map(x => x.dataset.fontSize) };
+          remembered: JSON.parse(localStorage.getItem('shellpuppet.dashboard')).fontSize,
+          panes: [...document.querySelectorAll('.pane-term')].map(term => {
+            const tile = term.getBoundingClientRect();
+            const screen = term.querySelector('.xterm-screen').getBoundingClientRect();
+            return { font: Number(term.dataset.fontSize), fits: screen.width <= tile.width + 2 &&
+              screen.height <= tile.height + 2 };
+          }) };
       })()`,
     });
-    expect(shot.probe).toEqual({ pressed: 'false', sizes: ['18', '18'] });
+    const result = shot.probe as { pressed: string; remembered: number; panes: { font: number; fits: boolean }[] };
+    expect(result.pressed).toBe('false');
+    expect(result.remembered).toBe(18);
+    expect(result.panes).toHaveLength(2);
+    expect(result.panes.every(pane => pane.font >= 6 && pane.font <= 18 && pane.fits)).toBe(true);
   });
 
   it('auto fits layout changes once, honours the floor and a held grid, and off sends no resize', async (context) => {

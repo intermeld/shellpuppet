@@ -55,6 +55,7 @@ it('fills the tile at the 400 column cap with a fixed text choice', async (conte
     tileHeight: number; screenHeight: number };
   expect(measured.size).toContain('400×');
   expect(measured.font, JSON.stringify(measured)).toBeGreaterThan(12);
+  expect(measured.font).toBeLessThanOrEqual(40);
   expect(measured.screenWidth / measured.tileWidth).toBeGreaterThan(0.94);
   expect(measured.screenWidth).toBeLessThanOrEqual(measured.tileWidth + 2);
 }, 150_000);
@@ -93,20 +94,42 @@ it('refits one outside resize, follows a second, shows held grids whole, and Fit
     const held = await evaluate(`(async () => { await new Promise(resolve => setTimeout(resolve, 650));
       const tile = document.querySelector('.pane-term').getBoundingClientRect();
       const screen = document.querySelector('.xterm-screen').getBoundingClientRect();
+      const wrap = document.querySelector('.pane-wrap');
       return { frames: window.__resizes.slice(), size: document.querySelector('.pane-size').textContent,
         tile: [tile.width, tile.height], screen: [screen.width, screen.height],
+        font: Number(document.querySelector('.pane-term').dataset.fontSize),
+        scrolls: getComputedStyle(wrap).overflow === 'auto',
         contained: screen.width <= tile.width + 2 && screen.height <= tile.height + 2 }; })()`);
+    const stripSession = await api(daemon.port, daemon.token, '/sessions', { body: {
+      command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], shell: false,
+      openViewer: false, cols: 220, rows: 115, hold: true,
+    } });
+    expect(stripSession.status).toBe(200);
     const narrowHeld = await evaluate(`(async () => {
-      const root = document.getElementById('panes'); root.style.width = '140px';
-      window.dispatchEvent(new Event('resize'));
-      await new Promise(resolve => setTimeout(resolve, 550));
-      const tile = document.querySelector('.pane-term').getBoundingClientRect();
-      const screen = document.querySelector('.xterm-screen').getBoundingClientRect();
+      await new Promise(resolve => setTimeout(resolve, 450));
+      document.querySelector('.pane').click();
+      document.getElementById('focus').click();
+      await new Promise(resolve => setTimeout(resolve, 700));
+      const card = document.querySelector('#strip .pane');
+      if (!card) return { error: 'no strip pane', layout: document.getElementById('panes').className };
+      if (!card.querySelector('.xterm-screen')) return { error: 'strip pane has no screen', layout: document.getElementById('panes').className };
+      const tile = card.querySelector('.pane-term').getBoundingClientRect();
+      const screenElement = card.querySelector('.xterm-screen');
+      const screen = screenElement.getBoundingClientRect();
+      const wrap = card.querySelector('.pane-wrap');
       const result = { tile: [tile.width, tile.height], screen: [screen.width, screen.height],
-        contained: screen.left >= tile.left - 2 && screen.right <= tile.right + 2 &&
-          screen.top >= tile.top - 2 && screen.bottom <= tile.bottom + 2 };
-      root.style.width = ''; window.dispatchEvent(new Event('resize'));
-      await new Promise(resolve => setTimeout(resolve, 550));
+        font: Number(card.querySelector('.pane-term').dataset.fontSize),
+        scrollWidth: wrap.scrollWidth, clientWidth: wrap.clientWidth,
+        scrollHeight: wrap.scrollHeight, clientHeight: wrap.clientHeight,
+        overflow: getComputedStyle(wrap).overflow,
+        note: card.querySelector('.pane-overflow-note')?.textContent || '',
+        stripWidth: card.getBoundingClientRect().width };
+      wrap.scrollLeft = wrap.scrollWidth; wrap.scrollTop = wrap.scrollHeight;
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      const end = screenElement.getBoundingClientRect();
+      const viewport = wrap.getBoundingClientRect();
+      result.reachable = wrap.scrollLeft > 0 && wrap.scrollTop > 0 &&
+        end.right <= viewport.right + 2 && end.bottom <= viewport.bottom + 2;
       return result;
     })()`);
     expect((await api(daemon.port, daemon.token, `/sessions/${id}/resize`,
@@ -119,8 +142,10 @@ it('refits one outside resize, follows a second, shows held grids whole, and Fit
   });
   const measured = result as { heldFirst: { frames: unknown[]; size: string }; first: { frames: unknown[]; size: string };
     second: { frames: unknown[]; size: string; font: number; contained: boolean };
-    held: { frames: unknown[]; size: string; contained: boolean };
-    narrowHeld: { tile: number[]; screen: number[]; contained: boolean }; fit: { font: number; size: string } };
+    held: { frames: unknown[]; size: string; font: number; scrolls: boolean; contained: boolean };
+    narrowHeld: { tile: number[]; screen: number[]; font: number; scrollWidth: number; clientWidth: number;
+      scrollHeight: number; clientHeight: number; overflow: string; note: string; stripWidth: number;
+      reachable: boolean }; fit: { font: number; size: string } };
   expect(measured.heldFirst.frames).toHaveLength(0);
   expect(measured.heldFirst.size).toContain('fixed');
   expect(measured.first.frames).toHaveLength(1);
@@ -131,7 +156,13 @@ it('refits one outside resize, follows a second, shows held grids whole, and Fit
   expect(measured.second.font).toBeLessThan(12);
   expect(measured.held.frames).toHaveLength(0);
   expect(measured.held.size).toContain('fixed');
-  expect(measured.held.contained, JSON.stringify(measured)).toBe(true);
-  expect(measured.narrowHeld.contained, JSON.stringify(measured)).toBe(true);
+  expect(measured.held.contained || (measured.held.font === 6 && measured.held.scrolls), JSON.stringify(measured)).toBe(true);
+  expect(measured.narrowHeld.font, JSON.stringify(measured)).toBe(6);
+  expect(measured.narrowHeld.stripWidth).toBeCloseTo(300, 0);
+  expect(measured.narrowHeld.scrollWidth).toBeGreaterThan(measured.narrowHeld.clientWidth);
+  expect(measured.narrowHeld.scrollHeight).toBeGreaterThan(measured.narrowHeld.clientHeight);
+  expect(measured.narrowHeld.overflow).toBe('auto');
+  expect(measured.narrowHeld.note).toContain('Enlarge or Fit');
+  expect(measured.narrowHeld.reachable, JSON.stringify(measured)).toBe(true);
   expect(measured.fit.font).toBe(12);
 }, 150_000);
