@@ -337,6 +337,28 @@ window.ShellPuppetPane = (() => {
       return fontOverride === null ? DEFAULT_FONT_PX : fontOverride;
     }
 
+    function proposeDashboardGrid() {
+      const drawn = term.options.fontSize;
+      let proposed;
+      try {
+        term.options.fontSize = fixedFontPx();
+        proposed = propose();
+        if (proposed === null) return null;
+        if (proposed.cols > gridMax.cols || proposed.rows > gridMax.rows) {
+          for (let font = fixedFontPx() + 1; font <= MAX_FONT_PX; font++) {
+            term.options.fontSize = font;
+            const larger = propose();
+            if (larger === null ||
+                (larger.cols < gridMax.cols && larger.rows < gridMax.rows)) break;
+            proposed = larger;
+          }
+        }
+      } finally {
+        term.options.fontSize = drawn;
+      }
+      return proposed;
+    }
+
     function drivingFontPx() {
       const fixed = fixedFontPx();
       const drawn = term.options.fontSize;
@@ -390,9 +412,13 @@ window.ShellPuppetPane = (() => {
     function applyFontPreference(cols, rows) {
       if (fontOverride === null) {
         fitGridByFont(cols, rows);
-      } else if (term.options.fontSize !== fontOverride) {
-        term.options.fontSize = fontOverride;
-        term.resize(cols, rows);
+      } else {
+        if (term.options.fontSize !== fontOverride) {
+          term.options.fontSize = fontOverride;
+          term.resize(cols, rows);
+        }
+        if (dashboardProof !== null && controlMode === 'yours' &&
+            (cols >= gridMax.cols || rows >= gridMax.rows)) fitGridByFont(cols, rows);
       }
       updateZoomButtons();
       container.dataset.fontSize = String(term.options.fontSize);
@@ -406,7 +432,7 @@ window.ShellPuppetPane = (() => {
         gridMax = { cols: max.cols, rows: max.rows };
       }
       if (term.cols !== cols || term.rows !== rows) term.resize(cols, rows);
-      if (controlMode === 'yours' && !captureMode) {
+      if (controlMode === 'yours' && !captureMode && dashboardProof === null) {
         updateZoomButtons();
       } else {
         applyFontPreference(cols, rows);
@@ -578,14 +604,7 @@ window.ShellPuppetPane = (() => {
       autoFitGrid(floorCols = 80, floorRows = 24, force = false) {
         if (dashboardProof === null || controlMode === 'held' || !geometryDecided ||
             !ws || ws.readyState !== 1 || sessionEnded) return false;
-        const drawn = term.options.fontSize;
-        let proposed;
-        try {
-          term.options.fontSize = fixedFontPx();
-          proposed = propose();
-        } finally {
-          term.options.fontSize = drawn;
-        }
+        let proposed = proposeDashboardGrid();
         if (proposed === null) {
           if (container.clientWidth <= 0 || container.clientHeight <= 0) return false;
           proposed = { cols: floorCols, rows: floorRows };
@@ -603,7 +622,7 @@ window.ShellPuppetPane = (() => {
       },
       fitGrid(floorCols = 0, floorRows = 0) {
         if (dashboardProof === null) return false;
-        const proposed = propose();
+        const proposed = proposeDashboardGrid();
         return proposed !== null && this.takeGrid(
           Math.max(floorCols, proposed.cols), Math.max(floorRows, proposed.rows));
       },
