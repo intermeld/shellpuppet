@@ -25,6 +25,8 @@ version may change behaviour, and every such change is listed here.
 - Auto fit is on by default in the dashboard. It remembers the toggle and
   refits visible panes after layout or window changes settle, respecting the
   80 by 24 floor and geometry held by another client.
+- One remembered dashboard text size control applies to every pane and window.
+  `dashboard.fontSize` sets its initial size when the browser has no saved choice.
 
 - The dashboard can assign panes across several windows. It asks for screen
   permission only on an Allow screens click, opens at most one window per

@@ -16,6 +16,14 @@ function decide(raw: unknown, command: string): { allowed: boolean; reason?: str
 }
 
 describe('parseDaemonConfig: valid input', () => {
+  it('accepts a bounded dashboard text size and ignores invalid values', () => {
+    expect(parseDaemonConfig({ dashboard: { fontSize: 18 } })).toEqual({ config: { dashboard: { fontSize: 18 } }, problems: [] });
+    for (const fontSize of [7, 33, 12.5, '18', null]) {
+      const result = parseDaemonConfig({ dashboard: { fontSize } });
+      expect(result.config.dashboard?.fontSize).toBeUndefined();
+      expect(result.problems.join(' ')).toContain('dashboard.fontSize');
+    }
+  });
   it('no file (undefined) means pure defaults and no problems', () => {
     expect(parseDaemonConfig(undefined)).toEqual({ config: {}, problems: [] });
   });

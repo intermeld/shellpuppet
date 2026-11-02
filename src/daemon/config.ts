@@ -55,6 +55,8 @@ export interface DaemonConfig {
   audit?: { captureContent?: boolean };
   /** How the viewer window is opened. */
   viewer?: ViewerLaunchConfig;
+  /** Initial dashboard text size when the browser has no saved preference. */
+  dashboard?: { fontSize?: number };
   /**
    * The named programs the dashboard may start (`launcher.profiles`, design
    * §4.3). Absent means a watch-only dashboard. Invalid entries are named in
@@ -108,6 +110,7 @@ const TOP_LEVEL_KEYS = new Set([
   'audit',
   'mcp',
   'viewer',
+  'dashboard',
   'prompts',
   'agents',
   'envNames',
@@ -359,6 +362,25 @@ export function parseDaemonConfig(raw: unknown): ParsedDaemonConfig {
   }
 
   if (raw['viewer'] !== undefined) config.viewer = parseViewer(raw['viewer'], problems);
+  if (raw['dashboard'] !== undefined) {
+    const dashboard = raw['dashboard'];
+    if (!isRecord(dashboard)) {
+      problems.push('dashboard must be an object: ignored');
+    } else {
+      config.dashboard = {};
+      for (const key of Object.keys(dashboard)) {
+        if (key !== 'fontSize') problems.push(`dashboard has an unknown key "${key}": ignored (typo?)`);
+      }
+      if (dashboard['fontSize'] !== undefined) {
+        const size = dashboard['fontSize'];
+        if (typeof size === 'number' && Number.isInteger(size) && size >= 8 && size <= 32) {
+          config.dashboard.fontSize = size;
+        } else {
+          problems.push('dashboard.fontSize must be an integer from 8 to 32: ignored');
+        }
+      }
+    }
+  }
 
   // Extra dialog signatures. A broken one is reported and left out, and the
   // built-in ones are recognised regardless: detection that misses a dialog

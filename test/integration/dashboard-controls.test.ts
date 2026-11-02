@@ -700,7 +700,7 @@ describe('human controls in the browser', () => {
     expect(result.opened?.[0]).not.toContain('dt=');
     expect(result.orderAfter).toEqual([...(result.orderBefore ?? []), result.pop]);
     expect(result.orderAfter).toContain(result.pop);
-    expect(result.prefKeys).toEqual(['mode', 'order', 'pins', 'prefix']);
+    expect(result.prefKeys).toEqual(['autoFit', 'fontSize', 'mode', 'order', 'pins', 'prefix']);
   }, 180_000);
 
   it('restores mode, order and pin from the browser and writes nothing to the daemon home', async (context) => {
@@ -756,7 +756,7 @@ describe('human controls in the browser', () => {
     expect(result.connection).toBe('Connected');
     expect(result.layout).toBe('grid');
     expect(result.ids).toEqual([second, first]);
-    expect(result.pref).toEqual({ mode: 'grid', order: [second, first], pins: [first], prefix: 'a' });
+    expect(result.pref).toEqual({ mode: 'grid', order: [second, first], pins: [first], prefix: 'a', autoFit: true, fontSize: null });
     expect(result.pref?.order).not.toContain('gone-session');
     expect(fs.readdirSync(daemon.home).sort()).toEqual(beforeNames);
     expect(fs.readFileSync(path.join(daemon.home, 'config.json'))).toEqual(beforeConfig);
