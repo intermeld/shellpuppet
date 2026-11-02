@@ -368,6 +368,9 @@ describe('a dashboard grant works once, then it is worthless', () => {
     expect(usedWithCookie.status).toBe(200);
     expect(csrfMeta(usedWithCookie.body)).toBeNull();
     expect(usedWithCookie.headers.location).toBeUndefined();
+    const emptyWithCookie = await raw(daemon.port, 'GET', '/dashboard?dt=', { ...navigationHeaders('same-origin'), cookie });
+    expect(emptyWithCookie.status).toBe(200);
+    expect(csrfMeta(emptyWithCookie.body)).toBeNull();
     for (const asset of ['/viewer/dashboard.js', '/viewer/icon.svg', '/favicon.ico', '/view?s=missing']) {
       const response = await raw(daemon.port, 'GET', asset);
       expect(response.headers['referrer-policy']).toBe('no-referrer');

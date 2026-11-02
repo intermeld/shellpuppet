@@ -43,6 +43,9 @@ function fileItem(name: string, directory: boolean): Buffer {
 }
 
 function targetIdList(target: string): Buffer {
+  if (!/^[A-Za-z]:\\/.test(target)) {
+    throw new Error('A ShellPuppet shortcut needs Node on a local drive letter; start ShellPuppet with shellpuppet desktop instead.');
+  }
   const root = Buffer.from('14001f50e04fd020ea3a6910a2d808002b30309d', 'hex');
   const volume = Buffer.alloc(0x19);
   volume.writeUInt16LE(volume.length);
@@ -51,6 +54,7 @@ function targetIdList(target: string): Buffer {
   const parts = target.slice(path.win32.parse(target).root.length).split('\\');
   const entries = parts.map((name, index) => fileItem(name, index < parts.length - 1));
   const body = Buffer.concat([root, volume, ...entries, Buffer.alloc(2)]);
+  if (body.length > 0xffff) throw new Error('The path to Node is too long for a Windows shortcut.');
   const size = Buffer.alloc(2);
   size.writeUInt16LE(body.length);
   return Buffer.concat([size, body]);
@@ -117,7 +121,9 @@ function desktopQuote(value: string): string {
 }
 
 function desktopString(value: string): string {
-  return value.replaceAll('\\', '\\\\').replaceAll('\n', '\\n').replaceAll('\t', '\\t').replaceAll('\r', '\\r');
+  // Leading and trailing spaces are kept with the specification's \s escape.
+  return value.replaceAll('\\', '\\\\').replaceAll('\n', '\\n').replaceAll('\t', '\\t').replaceAll('\r', '\\r')
+    .replace(/^ /, '\\s').replace(/ $/, '\\s');
 }
 
 export function desktopEntry(fields: ShortcutFields): string {
