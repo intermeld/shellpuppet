@@ -45,6 +45,11 @@ import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { NULL_LOGGER, type Logger } from '../core/types.js';
 
+/** A stalled filesystem check cannot hold browser detection indefinitely. */
+const BROWSER_ACCESS_TIMEOUT_MS = 1_500;
+/** Bound the wait for Node's spawn or error event, including dashboard launches. */
+const BROWSER_SPAWN_TIMEOUT_MS = 3_000;
+
 export type ViewerLaunchMode = 'dashboard' | 'isolated-app' | 'default-browser' | 'no-window';
 
 export interface ViewerLaunchConfig {
@@ -249,11 +254,18 @@ export async function detectBrowser(
 }
 
 async function exists(file: string): Promise<boolean> {
+  let timer: NodeJS.Timeout | undefined;
   try {
-    await fs.promises.access(file);
-    return true;
+    return await Promise.race([
+      fs.promises.access(file).then(() => true, () => false),
+      new Promise<false>((resolve) => {
+        timer = setTimeout(() => resolve(false), BROWSER_ACCESS_TIMEOUT_MS);
+      }),
+    ]);
   } catch {
     return false;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
@@ -416,6 +428,11 @@ export interface LaunchDependencies {
   opener?: (url: string) => DefaultBrowserCommand;
   /** How long to wait for the opener's exit code; `OPENER_SETTLE_MS` by default. */
   openerSettleMs?: number;
+  /** Checked after detection and immediately before an isolated browser spawn. */
+  shouldLaunch?: () => boolean;
+  /** Test seams for the two sides of the shutdown race. */
+  findBrowser?: typeof findBrowser;
+  spawnIsolated?: (command: string, args: string[]) => Promise<SpawnOutcome>;
 }
 
 export async function launchViewer(
@@ -474,6 +491,7 @@ async function launchWindow(
       config,
       logger,
       allowFallback ? 'viewer' : 'dashboard',
+      deps,
     );
     if (isolated.launched) return isolated;
     if (!allowFallback) return isolated;
@@ -502,9 +520,13 @@ async function openIsolatedWindow(
   config: ViewerLaunchConfig,
   logger: Logger,
   kind: 'viewer' | 'dashboard',
+  deps: LaunchDependencies,
 ): Promise<ViewerLaunchResult> {
   const mode: ViewerLaunchMode = 'isolated-app';
-  const browser = await findBrowser(config.browserPath, logger);
+  const browser = await (deps.findBrowser ?? findBrowser)(config.browserPath, logger);
+  if (deps.shouldLaunch?.() === false) {
+    return { launched: false, mode, reason: 'daemon is stopping' };
+  }
   if (browser === null) {
     logger.warn(`no Chromium-family browser found for the isolated ${kind} window`, {
       hint:
@@ -529,7 +551,10 @@ async function openIsolatedWindow(
   // Its exit is not judged: a Chromium launched beside a running instance of
   // the same profile hands the URL over and exits at once, with code 0, and
   // the window is in the other process.
-  const outcome = await spawnDetached(browser, isolatedWindowArgs(url, profileDir));
+  if (deps.shouldLaunch?.() === false) {
+    return { launched: false, mode, reason: 'daemon is stopping' };
+  }
+  const outcome = await (deps.spawnIsolated ?? spawnDetached)(browser, isolatedWindowArgs(url, profileDir));
   if (outcome.spawned) {
     logger.info(`${kind} window opened`, { browser, profileDir });
     return { launched: true, mode, browser };
@@ -669,8 +694,10 @@ function spawnDetached(
     const settle = (outcome: SpawnOutcome): void => {
       if (settled) return;
       settled = true;
+      clearTimeout(launchTimer);
       resolve(outcome);
     };
+    const launchTimer = setTimeout(() => settle({ spawned: false, error: 'browser spawn timed out' }), BROWSER_SPAWN_TIMEOUT_MS);
     let child: ChildProcess;
     try {
       child = spawn(command, args, {
@@ -685,6 +712,7 @@ function spawnDetached(
     }
     child.on('error', (error) => settle({ spawned: false, error: String(error) }));
     child.on('spawn', () => {
+      if (settled) return;
       if (settleMs <= 0) {
         settle({ spawned: true });
         return;
