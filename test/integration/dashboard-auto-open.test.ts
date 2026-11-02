@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import type { TokenStore } from '../../src/daemon/auth.js';
 import { DEFAULT_VIEWER_LAUNCH_MODE } from '../../src/daemon/config.js';
+import { launchDashboard } from '../../src/daemon/viewerLauncher.js';
 import { api, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 
@@ -185,6 +186,72 @@ describe('automatic dashboard launch', () => {
     const grant = new URL(urls[0] ?? '').searchParams.get('dt');
     const tokens = (daemon.daemon as unknown as { tokens: TokenStore }).tokens;
     expect(tokens.redeemDashboardGrant(grant)).toBeNull();
+  });
+
+  it('bounds shutdown when a dashboard launcher never settles and revokes its grant', async () => {
+    const urls: string[] = [];
+    let finishLaunch: (() => void) | undefined;
+    const pending = new Promise<void>((resolve) => { finishLaunch = resolve; });
+    let launchStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => { launchStarted = resolve; });
+    const daemon = await startTestDaemon({
+      viewer: { launchMode: 'dashboard' },
+      launcher: (url) => {
+        urls.push(url);
+        launchStarted?.();
+        return pending.then(() => ({ launched: true, mode: 'isolated-app' as const }));
+      },
+    });
+    running.push(daemon);
+    const automaticOpen = (daemon.daemon as unknown as {
+      openDashboardForStart: (req: http.IncomingMessage, actor: string) => Promise<unknown>;
+    }).openDashboardForStart({ method: 'POST', url: '/sessions', headers: {} } as http.IncomingMessage, 'cli');
+    await started;
+    const stop = daemon.daemon.stop();
+    const settled = await Promise.race([
+      stop.then(() => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 5_000)),
+    ]);
+    const grant = new URL(urls[0] ?? '').searchParams.get('dt');
+    const tokens = (daemon.daemon as unknown as { tokens: TokenStore }).tokens;
+    const usableAfterStop = settled ? tokens.redeemDashboardGrant(grant) : null;
+    finishLaunch?.();
+    await stop;
+    await automaticOpen;
+    expect(settled).toBe(true);
+    expect(usableAfterStop).toBeNull();
+  });
+
+  it('does not spawn a dashboard when stop begins during browser detection', async () => {
+    let finishDetection: ((browser: string) => void) | undefined;
+    const detection = new Promise<string>((resolve) => { finishDetection = resolve; });
+    let detectionStarted: (() => void) | undefined;
+    const started = new Promise<void>((resolve) => { detectionStarted = resolve; });
+    let spawns = 0;
+    const daemon = await startTestDaemon({
+      viewer: { launchMode: 'dashboard', browserPath: 'missing-browser-for-regression-test' },
+      launcher: (url, home, config, logger, deps) => launchDashboard(url, home, config, logger, {
+        ...deps,
+        findBrowser: () => { detectionStarted?.(); return detection; },
+        spawnIsolated: () => { spawns++; return Promise.resolve({ spawned: true }); },
+      }),
+    });
+    running.push(daemon);
+    const request = start(daemon).catch(() => undefined);
+    const didDetect = await Promise.race([
+      started.then(() => true),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 2_000)),
+    ]);
+    if (!didDetect) {
+      await request;
+      expect(didDetect).toBe(true);
+      return;
+    }
+    const stop = daemon.daemon.stop();
+    finishDetection?.(process.execPath);
+    await stop;
+    await request;
+    expect(spawns).toBe(0);
   });
 
   it('keeps isolated-app and no-window behaviour', async () => {

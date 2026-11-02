@@ -96,6 +96,8 @@ import {
 import type { LaunchFolder, LaunchProfile, LauncherConfig } from './launchProfiles.js';
 
 const DEFAULT_IDLE_MS = 30 * 60_000;
+/** Stop waits this long for an automatic dashboard launch before continuing. */
+const DASHBOARD_LAUNCH_SHUTDOWN_WAIT_MS = 3_000;
 const IDLE_CHECK_INTERVAL_MS = 60_000;
 /**
  * How often a running daemon checks that daemon.json still names it, and
@@ -574,6 +576,7 @@ export class Daemon {
   /** A launched dashboard has 30 seconds to connect before a start may retry. */
   private dashboardWindowStartedAt = 0;
   private dashboardOpenPromise: Promise<boolean> | null = null;
+  private readonly pendingDashboardGrants = new Set<string>();
   private stopping = false;
   /**
    * Per-session prompt tracking for stall alerts: the signature of the prompt
@@ -1000,9 +1003,17 @@ export class Daemon {
     }
 
     await this.manager.killAll();
-    // An in-flight automatic launch must settle before shutdown completes.
-    // Its grant is revoked below if it succeeds after stopping began.
-    await this.dashboardOpenPromise;
+    // Revoke grants even if browser detection or spawn never settles. A late
+    // launcher result also takes the stopping path in openDashboardWindow.
+    for (const grant of this.pendingDashboardGrants) this.tokens.revokeDashboardGrant(grant);
+    if (this.dashboardOpenPromise !== null) {
+      let timer: NodeJS.Timeout | undefined;
+      await Promise.race([
+        this.dashboardOpenPromise,
+        new Promise<void>((resolve) => { timer = setTimeout(resolve, DASHBOARD_LAUNCH_SHUTDOWN_WAIT_MS); }),
+      ]);
+      if (timer !== undefined) clearTimeout(timer);
+    }
     if (opts.removeState !== false) {
       // Remove this daemon's record, or a file that holds none. A file that
       // cannot be read says nothing about what it holds, so it stays.
@@ -1201,6 +1212,7 @@ export class Daemon {
   private async openDashboardWindow(req: http.IncomingMessage, actor: string): Promise<boolean> {
     if (this.stopping) return false;
     const grant = this.tokens.mintDashboardGrant({ now: this.now() });
+    this.pendingDashboardGrants.add(grant);
     const pageUrl = `http://127.0.0.1:${String(this.port)}/dashboard?dt=${grant}`;
     // The dashboard opens only in the isolated profile. The viewer launcher
     // may fall back to the default browser so a session start never fails;
@@ -1208,11 +1220,14 @@ export class Daemon {
     const launch = this.options.launcher ?? launchDashboard;
     let opened: ViewerLaunchResult;
     try {
-      opened = await launch(pageUrl, this.options.home, this.options.viewer ?? {}, this.logger);
+      opened = await launch(pageUrl, this.options.home, this.options.viewer ?? {}, this.logger, {
+        shouldLaunch: () => !this.stopping,
+      });
     } catch {
       // The thrown text can carry the URL. It is not logged and not returned.
       opened = { launched: false, mode: 'no-window' };
     }
+    this.pendingDashboardGrants.delete(grant);
     if (this.stopping || !opened.launched || opened.mode === 'default-browser') {
       this.tokens.revokeDashboardGrant(grant);
       this.auditDashboardRefusal(req, 'launch-failed');
