@@ -118,11 +118,11 @@ const VIEWER_LAUNCH_MODES: readonly ViewerLaunchMode[] = [
   'dashboard',
   'isolated-app',
   'default-browser',
-  'none',
+  'no-window',
 ];
 
 /**
- * Viewer launch options. An invalid value falls back to "none", NOT to the
+ * Viewer launch options. An invalid value falls back to "no-window", NOT to the
  * launching default: config the daemon cannot read must not cause it to start
  * spawning browser windows on someone's desktop, and a viewer that did not
  * open is visibly wrong in a way the operator can act on.
@@ -130,7 +130,7 @@ const VIEWER_LAUNCH_MODES: readonly ViewerLaunchMode[] = [
 function parseViewer(raw: unknown, problems: string[]): ViewerLaunchConfig {
   if (!isRecord(raw)) {
     problems.push('viewer must be an object: not opening the viewer automatically');
-    return { launchMode: 'none' };
+    return { launchMode: 'no-window' };
   }
   for (const key of Object.keys(raw)) {
     if (!VIEWER_KEYS.has(key)) {
@@ -140,13 +140,15 @@ function parseViewer(raw: unknown, problems: string[]): ViewerLaunchConfig {
   const config: ViewerLaunchConfig = {};
   const launchMode = raw['launchMode'];
   if (launchMode !== undefined) {
-    if (
+    if (launchMode === 'none') {
+      config.launchMode = 'no-window';
+    } else if (
       typeof launchMode === 'string' &&
       VIEWER_LAUNCH_MODES.includes(launchMode as ViewerLaunchMode)
     ) {
       config.launchMode = launchMode as ViewerLaunchMode;
     } else {
-      config.launchMode = 'none';
+      config.launchMode = 'no-window';
       problems.push(
         `viewer.launchMode must be one of ${VIEWER_LAUNCH_MODES.join(' | ')}: not opening the viewer automatically`,
       );

@@ -41,10 +41,10 @@ describe('viewerLine', () => {
 
   it('gives the URL and says why nothing opened', () => {
     const line = viewerLine({
-      viewer: { opened: false, mode: 'none', reason: 'viewer.launchMode is "none"' },
+      viewer: { opened: false, mode: 'no-window', reason: 'viewer.launchMode is "no-window"' },
       viewerUrl: url,
     });
-    expect(line).toContain('No viewer window opened (viewer.launchMode is "none").');
+    expect(line).toContain('No viewer window opened (viewer.launchMode is "no-window").');
     expect(line).toContain('Viewer URL for the human');
     expect(line.endsWith(url)).toBe(true);
   });

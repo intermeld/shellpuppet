@@ -225,8 +225,8 @@ describe('session lifecycle over HTTP', () => {
         opened.push(url);
         return Promise.resolve({
           launched: false,
-          mode: 'none' as const,
-          reason: 'viewer.launchMode is "none"',
+          mode: 'no-window' as const,
+          reason: 'viewer.launchMode is "no-window"',
         });
       },
     });
@@ -246,8 +246,8 @@ describe('session lifecycle over HTTP', () => {
       };
       expect(body.viewer).toEqual({
         opened: false,
-        mode: 'none',
-        reason: 'viewer.launchMode is "none"',
+        mode: 'no-window',
+        reason: 'viewer.launchMode is "no-window"',
       });
       expect(opened).toEqual([body.viewerUrl]);
 

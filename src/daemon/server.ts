@@ -241,7 +241,7 @@ export interface DaemonOptions {
   promptStallMs?: number;
   /**
    * How the viewer window is opened on session start. Absent means
-   * "none", a deliberately inert default, so a test daemon cannot put browser
+   * "no-window", a deliberately inert default, so a test daemon cannot put browser
    * windows on someone's desktop by forgetting to opt out. The daemon entry
    * point supplies the product default of `dashboard`.
    */
@@ -736,7 +736,7 @@ export class Daemon {
     // a session start waits for its viewer launch, so look once now and let the
     // memoised answer serve every start. It never holds the event loop, so the
     // daemon answers /health and everything else while it runs.
-    if (['dashboard', 'isolated-app'].includes(this.options.viewer?.launchMode ?? 'none')) {
+    if (['dashboard', 'isolated-app'].includes(this.options.viewer?.launchMode ?? 'no-window')) {
       void findBrowser(this.options.viewer?.browserPath, this.logger).catch(() => undefined);
     }
 
@@ -1203,7 +1203,7 @@ export class Daemon {
       opened = await launch(pageUrl, this.options.home, this.options.viewer ?? {}, this.logger);
     } catch {
       // The thrown text can carry the URL. It is not logged and not returned.
-      opened = { launched: false, mode: 'none' };
+      opened = { launched: false, mode: 'no-window' };
     }
     if (!opened.launched || opened.mode === 'default-browser') {
       this.tokens.revokeDashboardGrant(grant);
@@ -2690,7 +2690,7 @@ export class Daemon {
     // A connected dashboard is the human's window. Do not mint a viewer grant
     // that would sit unused, and do not open a second window.
     const dashboardWatching = wantsViewer && this.dashboardEventSockets.size > 0;
-    const mode = this.options.viewer?.launchMode ?? 'none';
+    const mode = this.options.viewer?.launchMode ?? 'no-window';
     let viewerUrl =
       wantsViewer && !dashboardWatching && mode !== 'dashboard'
         ? this.viewerUrlFor(session.id, this.tokens.mintViewerGrant(session.id))
@@ -2707,7 +2707,7 @@ export class Daemon {
     if (dashboardWatching) {
       opened = { launched: false, mode: 'dashboard', reason: 'a dashboard is connected' };
     } else if (!wantsViewer) {
-      opened = { launched: false, mode: 'none', reason: 'not requested at start' };
+      opened = { launched: false, mode: 'no-window', reason: 'not requested at start' };
     } else if (mode === 'dashboard') {
       opened = await this.openDashboardForStart(req, actor);
       if (!opened.launched && opened.reason === 'the dashboard window did not open') {
@@ -2720,7 +2720,7 @@ export class Daemon {
         this.logger.warn('viewer launch failed', { id: session.id, error: String(error) });
         opened = {
           launched: false,
-          mode: this.options.viewer?.launchMode ?? 'none',
+          mode: this.options.viewer?.launchMode ?? 'no-window',
           reason: String(error),
         };
       }

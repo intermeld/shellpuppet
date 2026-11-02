@@ -140,7 +140,8 @@ make a reachable terminal safe.
   per-session viewer window and the response carries no viewer URL. With the
   default `viewer.launchMode: "dashboard"`, a start opens the dashboard in
   the isolated profile when it is not connected; a failed launch revokes the
-  dashboard grant and returns a single-session viewer link. A second
+  dashboard grant and returns a single-session viewer link. `no-window` opens
+  no browser window and returns a viewer link. A second
   redemption replaces the cookie and drops the proofs it had. Cookies ignore
   ports, so a planted `sp_dash` is tried and skipped. The value the daemon
   issued still wins.

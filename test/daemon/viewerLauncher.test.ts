@@ -91,19 +91,19 @@ describe('launchViewer', () => {
   it('does nothing when no launch mode is configured', async () => {
     // The launcher's own default is inert, so an in-process test daemon
     // cannot open a window by forgetting to opt out. The product default
-    // (isolated-app) comes from the entry point, and test homes opt out in
+    // (dashboard) comes from the entry point, and test homes opt out in
     // config.
     const result = await launchViewer('http://127.0.0.1:1/view/s1', tempDir, {}, NULL_LOGGER);
     expect(result.launched).toBe(false);
-    expect(result.mode).toBe('none');
-    expect(result.reason).toContain('none');
+    expect(result.mode).toBe('no-window');
+    expect(result.reason).toContain('no-window');
   });
 
-  it('does nothing when explicitly set to none', async () => {
+  it('does nothing when explicitly set to no-window', async () => {
     const result = await launchViewer(
       'http://127.0.0.1:1/view/s1',
       tempDir,
-      { launchMode: 'none' },
+      { launchMode: 'no-window' },
       NULL_LOGGER,
     );
     expect(result.launched).toBe(false);

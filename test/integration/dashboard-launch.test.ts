@@ -147,7 +147,7 @@ async function startLaunchDaemon(options: {
     audit: createAuditor(home),
     ...(options.policy !== undefined ? { policy: options.policy } : {}),
     launchProfiles: options.launcher ?? { profiles: [], problems: [] },
-    viewer: { launchMode: 'none' },
+    viewer: { launchMode: 'no-window' },
     promptScanIntervalMs: 600_000,
     idleCheckIntervalMs: 600_000,
     launcher: (url) => {
@@ -398,7 +398,7 @@ describe('a bad profile is left out and its siblings load', () => {
     fs.writeFileSync(
       path.join(home, 'config.json'),
       JSON.stringify({
-        viewer: { launchMode: 'none' },
+        viewer: { launchMode: 'no-window' },
         launcher: {
           profiles: [
             { name: 'bad-entry', command: 'cmd.exe', surprise: true },

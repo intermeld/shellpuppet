@@ -36,7 +36,7 @@ function writeConfig(envNames: string[], agentPassEnv: Record<string, string[]> 
   fs.writeFileSync(
     path.join(home, 'config.json'),
     JSON.stringify({
-      viewer: { launchMode: 'none' },
+      viewer: { launchMode: 'no-window' },
       sessionEnv: 'clean',
       envNames,
       agents: { passEnv: agentPassEnv },
@@ -193,7 +193,7 @@ describe('shellpuppet start --env-name', () => {
   it('--no-viewer says no window opened and prints no link', async () => {
     const started = await startReporter('--no-viewer');
     expect(started.code).toBe(0);
-    expect(started.stdout).toContain(`viewer: none opened (--no-viewer); viewer-url ${started.id} mints a link`);
+    expect(started.stdout).toContain(`viewer: no window opened (--no-viewer); viewer-url ${started.id} mints a link`);
     expect(started.stdout).not.toContain('/view');
   }, 90_000);
 
@@ -219,7 +219,7 @@ describe('shellpuppet start --env-name', () => {
   it('passes nothing from a list under mcp.passEnv, says the list is read from envNames, and starts nothing', async () => {
     fs.writeFileSync(
       path.join(home, 'config.json'),
-      JSON.stringify({ viewer: { launchMode: 'none' }, sessionEnv: 'clean', mcp: { passEnv: ['SP_TEST_PASSED'] } }),
+      JSON.stringify({ viewer: { launchMode: 'no-window' }, sessionEnv: 'clean', mcp: { passEnv: ['SP_TEST_PASSED'] } }),
     );
     try {
       const before = await sessionCount();

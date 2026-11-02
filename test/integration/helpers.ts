@@ -27,16 +27,15 @@ export function makeTempHome(prefix = 'shellpuppet-test-'): string {
   // Silence the viewer launcher for every test home.
   //
   // Tests that drive the CLI spawn the REAL daemon entry point, and that entry
-  // point supplies the product default of `isolated-app`, so without this the
-  // suite opens a browser window per session it starts, on the desktop of
-  // whoever is running it.
+  // point supplies the product default of `dashboard`, so without this the
+  // suite opens a browser window on the desktop of whoever is running it.
   //
   // Written as config rather than injected, because config.json is the real
   // mechanism a user has for turning this off, so the suite exercises the
   // documented escape hatch instead of a test-only back door.
   fs.writeFileSync(
     path.join(home, 'config.json'),
-    JSON.stringify({ viewer: { launchMode: 'none' } }, null, 2),
+    JSON.stringify({ viewer: { launchMode: 'no-window' } }, null, 2),
   );
   return home;
 }

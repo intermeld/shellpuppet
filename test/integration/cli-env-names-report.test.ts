@@ -36,7 +36,7 @@ async function cli(...args: string[]): Promise<{ code: number; stdout: string; s
 }
 
 beforeAll(async () => {
-  writeConfig(JSON.stringify({ viewer: { launchMode: 'none' }, sessionEnv: 'clean' }));
+  writeConfig(JSON.stringify({ viewer: { launchMode: 'no-window' }, sessionEnv: 'clean' }));
   await cli('list');
 }, 60_000);
 
@@ -54,7 +54,7 @@ afterAll(async () => {
 
 describe('shellpuppet start and config envNames problems', () => {
   it('says nothing about envNames on a start with no --env-name', async () => {
-    writeConfig(JSON.stringify({ viewer: { launchMode: 'none' }, sessionEnv: 'clean', envNames: 'SP_TEST_ENV_NAME' }));
+    writeConfig(JSON.stringify({ viewer: { launchMode: 'no-window' }, sessionEnv: 'clean', envNames: 'SP_TEST_ENV_NAME' }));
     const started = await cli('start', '--no-shell', process.execPath, '-e', REPORTER);
     expect(started.code).toBe(0);
     expect(started.stderr).not.toContain('envNames');
@@ -63,7 +63,7 @@ describe('shellpuppet start and config envNames problems', () => {
   }, 90_000);
 
   it('reports a list that is not one when --env-name is used, and starts nothing', async () => {
-    writeConfig(JSON.stringify({ viewer: { launchMode: 'none' }, sessionEnv: 'clean', envNames: 'SP_TEST_ENV_NAME' }));
+    writeConfig(JSON.stringify({ viewer: { launchMode: 'no-window' }, sessionEnv: 'clean', envNames: 'SP_TEST_ENV_NAME' }));
     const started = await cli('start', '--env-name', 'SP_TEST_ENV_NAME', '--no-shell', process.execPath, '-e', REPORTER);
     expect(started.code).toBe(2);
     expect(started.stderr).toContain('warning: envNames in config.json must be an array of variable names: passing none');
@@ -80,7 +80,7 @@ describe('shellpuppet start with a config.json that does not parse', () => {
       expect(started.stdout + started.stderr).not.toContain(VALUE);
       expect(started.stderr).toMatch(/not valid JSON|could not be parsed/);
     } finally {
-      writeConfig(JSON.stringify({ viewer: { launchMode: 'none' }, sessionEnv: 'clean' }));
+      writeConfig(JSON.stringify({ viewer: { launchMode: 'no-window' }, sessionEnv: 'clean' }));
     }
   }, 90_000);
 });

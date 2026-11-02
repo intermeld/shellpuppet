@@ -48,9 +48,9 @@ async function main(): Promise<void> {
     ...(config.sessionEnv !== undefined ? { sessionEnv: config.sessionEnv } : {}),
     ...(config.idleMinutes !== undefined ? { idleMs: config.idleMinutes * 60_000 } : {}),
     // The product default is to open the dashboard; the library default in
-    // DaemonOptions stays "none" so a test daemon can never put browser
+    // DaemonOptions stays "no-window" so a test daemon can never put browser
     // windows on someone's desktop by forgetting to opt out. Set
-    // `viewer.launchMode` to "none" in config.json for unattended machines.
+    // `viewer.launchMode` to "no-window" in config.json for unattended machines.
     viewer: { launchMode: DEFAULT_VIEWER_LAUNCH_MODE, ...config.viewer },
     ...(config.launcher !== undefined ? { launchProfiles: config.launcher } : {}),
     onSelfStop: () => process.exit(0),
