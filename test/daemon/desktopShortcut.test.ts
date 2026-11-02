@@ -52,6 +52,17 @@ describe('desktop shortcut', () => {
     expect(entry).toContain('Comment=First\\\\second\\nthird\\tfourth\\rfifth\n');
     expect(entry).toContain('Name=ShellPuppet\n');
   });
+  it('keeps boundary spaces in desktop entry strings', () => {
+    const entry = desktopEntry({ target: '/opt/node', arguments: 'desktop', workingDirectory: ' /tmp/name ', icon: '/tmp/icon ', description: 'Start', showCommand: 7 });
+    expect(entry).toContain(String.raw`Path=\s/tmp/name\s` + '\n');
+    expect(entry).toContain(String.raw`Icon=/tmp/icon\s` + '\n');
+  });
+  it('refuses Windows targets it cannot express', () => {
+    const base = { arguments: 'desktop', workingDirectory: String.raw`C:\Users\Example`, icon: String.raw`C:\icon.ico`, description: 'Start', showCommand: 7 };
+    expect(() => shellLink({ ...base, target: String.raw`\\long-server-name\long-share-name\node.exe` })).toThrow(/local drive letter/);
+    const long = 'C:' + String.fromCharCode(92) + Array.from({ length: 130 }, () => 'a'.repeat(250)).join(String.fromCharCode(92)) + String.fromCharCode(92) + 'node.exe';
+    expect(() => shellLink({ ...base, target: long })).toThrow(/too long/);
+  });
 
   it.runIf(process.platform === 'win32')('resolves Windows targets through both Shell Link readers', () => {
     const root = folder();
@@ -65,7 +76,8 @@ describe('desktop shortcut', () => {
         icon: target, description: 'Start ShellPuppet', showCommand: 7 };
       installDesktopShortcut({ platform: 'win32', applicationsDir: dir, fields });
       const encoded = Buffer.from(link, 'utf16le').toString('base64');
-      const script = `$p=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${encoded}')); $item=(New-Object -ComObject Shell.Application).NameSpace([IO.Path]::GetDirectoryName($p)).ParseName([IO.Path]::GetFileName($p)); $shell=$item.GetLink.Path; $wscript=(New-Object -ComObject WScript.Shell).CreateShortcut($p).TargetPath; [pscustomobject]@{shell=$shell;wscript=$wscript}|ConvertTo-Json -Compress`;
+      // Console output uses the OEM code page unless told otherwise; ask for UTF-8.
+      const script = `[Console]::OutputEncoding=[Text.Encoding]::UTF8; $p=[Text.Encoding]::Unicode.GetString([Convert]::FromBase64String('${encoded}')); $item=(New-Object -ComObject Shell.Application).NameSpace([IO.Path]::GetDirectoryName($p)).ParseName([IO.Path]::GetFileName($p)); $shell=$item.GetLink.Path; $wscript=(New-Object -ComObject WScript.Shell).CreateShortcut($p).TargetPath; [pscustomobject]@{shell=$shell;wscript=$wscript}|ConvertTo-Json -Compress`;
       const result = JSON.parse(execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script],
         { encoding: 'utf8' })) as { shell: string; wscript: string };
       expect(result.shell).toBe(target);

@@ -1241,7 +1241,8 @@ export class Daemon {
       return;
     }
     const grant = url.searchParams.get('dt');
-    const grantPresented = grant !== null && grant !== '';
+    // An empty dt is still a presented grant: it must never fall through to a cookie.
+    const grantPresented = grant !== null;
     const cookiePresented = this.dashboardCookiePresented(req.headers.cookie);
     const cookie = this.dashboardCookieToken(req.headers.cookie);
     if (this.isDocumentNavigation(req)) {
@@ -3477,7 +3478,7 @@ export class Daemon {
     // exception, on which the daemon shuts down with every session.
     socket.on('error', () => socket.destroy());
     const reject = (code: number, reason: string): void => {
-      socket.write(`HTTP/1.1 ${String(code)} ${reason}\r\nConnection: close\r\n\r\n`);
+      socket.write(`HTTP/1.1 ${String(code)} ${reason}\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n`);
       socket.destroy();
     };
 
@@ -3663,12 +3664,8 @@ export class Daemon {
           if (peer.readyState === peer.OPEN) peer.send(notice);
         }
       }
-
       clearInterval(heartbeat);
       if (deadline !== null) clearTimeout(deadline);
-      unsubscribe();
-      this.sockets.delete(ws);
-      this.dashboardEventSockets.delete(ws);
       this.liveDashboardEventSockets.delete(ws);
       if (this.dashboardEventSockets.size === 0) this.dashboardWindowStartedAt = 0;
       this.lastActivity = Date.now();
