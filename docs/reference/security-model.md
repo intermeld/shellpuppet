@@ -397,7 +397,8 @@ readable as any other variable there: a program in the session, or the agent
 typing into it, can print it.
 
 A session the dashboard starts is under the same clean default. The profile
-may name `envFromDaemon`. Those names are copied from the daemon's
+may name `envFromDaemon`, or set it to `"all"`. Listed names or, for `"all"`,
+the daemon's whole environment are copied from the daemon's
 environment, which is the environment of whichever client first started the
 daemon, into that profile's sessions only. The page cannot send a value. A
 listed name that is unset does not refuse the start; the dashboard shows the
@@ -406,7 +407,12 @@ there is no client environment to copy from. A name you want a
 dashboard-started agent CLI to see is written in that profile's
 `envFromDaemon`. Once in the session, the value is as readable as any other
 variable there. A variable reserved for a connected feature's own credential
-is never copied, whatever `sessionEnv` says
+and ShellPuppet's own `SHELLPUPPET_` variables are never copied by the profile.
+`TERM` and `COLORTERM` take ShellPuppet's terminal values. Anyone able to use
+the dashboard credential can start an `"all"` profile and reach every other
+secret the daemon holds through its session. Client-token starts do not use
+profiles and retain their configured `sessionEnv` mode. Reserved credentials
+stay excluded whatever `sessionEnv` says
 ([ADR-007](../decisions/ADR-007-connected-features.md)).
 
 Where a secret has to reach a process at all, the best place for it is that
@@ -442,9 +448,10 @@ method, the path and a reason code (`origin` for a missing or foreign
 `content-type`, `proof`, `body`, `body-size`, `policy`, `rate`, `limit`,
 `command` and `unauthenticated`), and never a header, a query, a cookie, a
 proof or a grant. A dashboard start records the profile name, the real
-command line, the resolved file that ran, plus the names in `envFromDaemon`
-that were actually copied and the folder name when one was chosen; it never
-records a variable value. (`report` is a viewer's terminal
+command line, the resolved file that ran, plus the names in an array
+`envFromDaemon` that were actually copied, or the setting `"all"`, and the
+folder name when one was chosen; it never records a variable value. (`report`
+is a viewer's terminal
 answering the program rather than a person typing, as described under
 *Screen content is untrusted input*; `reap` is the daemon's own cleanup of a
 naturally-exited session once its grace period lapses; `prompt-stall` is the

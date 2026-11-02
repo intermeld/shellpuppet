@@ -187,6 +187,16 @@ describe('a bad profile is named and left out; its siblings load', () => {
     expect(problems.join('\n')).toContain('NOT A NAME');
   });
 
+  it('accepts all but rejects every other string for envFromDaemon', () => {
+    const { launcher, problems } = parse({ profiles: [
+      { name: 'whole', command: 'cmd.exe', envFromDaemon: 'all' },
+      { name: 'wrong', command: 'cmd.exe', envFromDaemon: 'passthrough' },
+    ] });
+    expect(launcher.profiles).toHaveLength(1);
+    expect(launcher.profiles[0]?.envFromDaemon).toBe('all');
+    expect(problems.join('\n')).toContain('envFromDaemon');
+  });
+
   it('a launcher section that is not an object has no profiles and does not touch policy', () => {
     const { config, problems } = parseDaemonConfig({ launcher: 'shell' });
     expect(config.launcher?.profiles).toEqual([]);
@@ -230,6 +240,17 @@ describe('profile policy', () => {
 });
 
 describe('the daemon environment copy', () => {
+  it('copies all owned string values except reserved credentials and ShellPuppet variables', () => {
+    const source = Object.create({ INHERITED: 'inherited' }) as NodeJS.ProcessEnv;
+    source['UNLISTED'] = 'made-up-value';
+    source['FEATURE_CREDENTIAL'] = 'made-up-feature';
+    source['SHELLPUPPET_HOME'] = 'made-up-home';
+    source['SHELLPUPPET_TOKEN'] = 'made-up-token';
+    expect(copyDaemonEnv('all', source, new Set(['FEATURE_CREDENTIAL']))).toEqual({
+      env: { UNLISTED: 'made-up-value' },
+      copied: ['UNLISTED'],
+    });
+  });
   it('copies only the named variables that are set', () => {
     const source = { WANTED: 'value', OTHER: 'no' } as NodeJS.ProcessEnv;
     expect(copyDaemonEnv(['WANTED', 'MISSING'], source)).toEqual({

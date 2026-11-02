@@ -13,6 +13,10 @@ version may change behaviour, and every such change is listed here.
 
 ### Added
 
+- Dashboard launch profiles accept `"envFromDaemon": "all"` to pass the
+  daemon's environment to sessions a person starts from that profile.
+  Connected feature credentials and ShellPuppet's own variables stay out;
+  client-token starts are unchanged.
 - New sessions open in the dashboard by default. The daemon opens one isolated
   dashboard window when needed and waits for it to connect before trying another.
   If the window cannot open, the start still succeeds and returns a viewer link.

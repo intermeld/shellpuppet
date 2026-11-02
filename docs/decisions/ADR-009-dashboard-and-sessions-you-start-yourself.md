@@ -50,7 +50,9 @@ client token must remain outside the browser.
   when `policy.maxSessions` is unset; a configured cap takes its place.
   Client-token starts keep their existing limit. Sessions start with the
   clean environment, plus variables explicitly named by that profile in
-  `envFromDaemon`; values are never returned or logged.
+  an `envFromDaemon` array; values are never returned or logged.
+  The owner also decided that a profile may set `envFromDaemon` to `"all"`
+  to pass the daemon's whole environment to its dashboard-started sessions.
   A connected feature's reserved credential stays out of sessions under
   ADR-007, including on this path.
 - **Fill, then focus.** Auto arranges panes in an even grid while each can

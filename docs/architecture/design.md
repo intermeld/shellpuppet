@@ -883,12 +883,13 @@ default (ADR-008).
 - Always inject `TERM=xterm-256color` and `COLORTERM=truecolor` regardless (§7).
 
 A dashboard start uses the same clean baseline. `envFromDaemon` on its
-profile adds only the names explicitly configured there from the daemon's
-environment; unset names do not refuse the start. It has no client
-environment, so `agents.passEnv` is not consulted. The response and audit
-name variables, never their values.
-A variable reserved for a connected feature's own credential stays out of
-sessions under ADR-007, including on this path.
+profile adds the names explicitly configured there from the daemon's
+environment, or `"all"` passes the daemon's whole environment to that profile's
+dashboard starts. Unset listed names do not refuse the start. ShellPuppet's
+own `SHELLPUPPET_` variables and connected feature credentials are excluded.
+It has no client environment, so `agents.passEnv` is not consulted. The
+response and audit name copied variables for a list, or record `"all"` as a
+setting, never their values. Client-token starts do not use profiles.
 
 ---
 
