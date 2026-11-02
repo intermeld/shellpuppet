@@ -18,6 +18,17 @@ let daemon: TestDaemon;
 const grants: string[] = [];
 const sessions: string[] = [];
 
+async function ensureSessions(): Promise<void> {
+  if (sessions.length > 0) return;
+  for (let index = 0; index < 3; index++) {
+    const response = await api(daemon.port, daemon.token, '/sessions', { body: {
+      command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], shell: false,
+      openViewer: false, label: `screen-${index}` } });
+    expect(response.status).toBe(200);
+    sessions.push(String(response.body['id']));
+  }
+}
+
 async function freshUrl(): Promise<string> {
   const response = await api(daemon.port, daemon.token, '/dashboard/open', { method: 'POST', body: {} });
   expect(response.status).toBe(200);
@@ -30,11 +41,14 @@ async function browserProbe(beforeNavigateScript: string, probe: string): Promis
   return JSON.parse(String(shot.probe)) as Record<string, unknown>;
 }
 
-async function multiWindowProbe(url: string): Promise<{
+async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other'): Promise<{
   before: { primary: string[]; other: string[]; childConnected: string };
   after: string[];
   paused: { primary: string[]; other: string[]; toolbar: string[] };
   closeMs: number;
+  failureMs?: number;
+  survivor?: string[];
+  oversized: { note: string; horizontal: number; vertical: number; left: number; top: number };
   movedFit: { before: string; after: string; resizes: { cols: number; rows: number; take: boolean }[];
     donorStreams: string[] };
 }> {
@@ -164,6 +178,28 @@ async function multiWindowProbe(url: string): Promise<{
           { cols: number; rows: number; take: boolean }[],
       donorStreams: await evaluate(primary.sessionId,
         "window.__dashboardDiagnostics.streams.filter(entry => entry.socket.readyState === 1 && entry.url.includes('/sessions/s3/stream')).map(entry => entry.url)") as string[] };
+    const oversized = await evaluate(second.sessionId, `(() => {
+      const card = document.querySelector('.pane[data-session=s3]');
+      const wrap = card.querySelector('.pane-wrap');
+      return { note: card.querySelector('.pane-overflow-note').hidden ? '' : card.querySelector('.pane-overflow-note').textContent,
+        horizontal: wrap.scrollWidth - wrap.clientWidth, vertical: wrap.scrollHeight - wrap.clientHeight,
+        left: wrap.scrollLeft, top: wrap.scrollTop };
+    })()`) as { note: string; horizontal: number; vertical: number; left: number; top: number };
+    if (lostSocket) {
+      const victim = lostSocket === 'primary' ? primary : second;
+      const survivor = lostSocket === 'primary' ? second : primary;
+      await evaluate(victim.sessionId, `(() => {
+        window.__pauseRoster = true;
+        const socket = window.__dashboardDiagnostics.streams.find(entry => entry.url.endsWith('/dashboard/events'))?.socket;
+        if (!socket) throw new Error('No dashboard socket');
+        socket.onclose = null;
+        socket.close();
+      })()`);
+      const failedAt = Date.now();
+      await waitFor(async () => (await ids(survivor.sessionId) as string[] | undefined)?.length === 3);
+      return { before, movedFit, oversized, after: [], paused: { primary: [], other: [], toolbar: [] }, closeMs: 0,
+        failureMs: Date.now() - failedAt, survivor: await ids(survivor.sessionId) as string[] };
+    }
     await evaluate(second.sessionId, 'window.__pauseRoster = true');
     await new Promise((resolve) => setTimeout(resolve, 5400));
     const paused = { primary: await ids(primary.sessionId) as string[], other: await ids(second.sessionId) as string[],
@@ -175,7 +211,7 @@ async function multiWindowProbe(url: string): Promise<{
     await send('Target.closeTarget', { targetId: second.targetId });
     await waitFor(async () => (await ids(primary.sessionId) as string[] | undefined)?.length === 3);
     const closeMs = Date.now() - closedAt;
-    return { before, after: await ids(primary.sessionId) as string[], paused, closeMs, movedFit };
+    return { before, after: await ids(primary.sessionId) as string[], paused, closeMs, movedFit, oversized };
   } finally {
     if (socket?.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify({ id: ++serial, method: 'Browser.close', params: {} }));
@@ -330,13 +366,7 @@ describe('dashboard screen controls in Chromium', () => {
 
   it('assigns sessions to channel-connected windows in creation order and returns them on close', async (context) => {
     if (!browser) { context.skip(); return; }
-    for (let index = 0; index < 3; index++) {
-      const response = await api(daemon.port, daemon.token, '/sessions', { body: {
-        command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], shell: false,
-        openViewer: false, label: `screen-${index}` } });
-      expect(response.status).toBe(200);
-      sessions.push(String(response.body['id']));
-    }
+    await ensureSessions();
     const result = await multiWindowProbe(await freshUrl());
     const before = result.before;
     expect(before.primary).toEqual([sessions[0]]);
@@ -351,5 +381,24 @@ describe('dashboard screen controls in Chromium', () => {
     expect(result.movedFit.donorStreams).toEqual([]);
     expect(result.closeMs).toBeLessThan(2000);
     expect(result.after).toEqual(sessions);
+  }, 180_000);
+
+  for (const lost of ['primary', 'other'] as const) it(`returns sessions after the ${lost} dashboard socket closes without pagehide`, async (context) => {
+    if (!browser) { context.skip(); return; }
+    await ensureSessions();
+    const result = await multiWindowProbe(await freshUrl(), lost);
+    expect(result.failureMs).toBeLessThan(2000);
+    expect(result.survivor).toEqual(sessions);
+  }, 180_000);
+
+  it('starts a moved held oversized pane at the receiver origin with its overflow controls', async (context) => {
+    if (!browser) { context.skip(); return; }
+    await ensureSessions();
+    expect((await api(daemon.port, daemon.token, `/sessions/${sessions[2]}/resize`,
+      { body: { cols: 220, rows: 115, hold: true } })).status).toBe(200);
+    const result = await multiWindowProbe(await freshUrl());
+    expect(result.oversized.note).toContain('Shift+wheel');
+    expect(Math.max(result.oversized.horizontal, result.oversized.vertical)).toBeGreaterThan(0);
+    expect([result.oversized.left, result.oversized.top]).toEqual([0, 0]);
   }, 180_000);
 });

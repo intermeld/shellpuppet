@@ -11,19 +11,19 @@
     while (count < 32 && readable(width, height, count + 1)) count += 1;
     return count;
   };
-  const assign = (ids, windows) => {
-    const result = {};
-    if (windows.length === 0) return result;
-    const capacities = windows.map((window) => capacity(window.width, window.height));
+  const allocate = (total, capacities) => {
     const counts = capacities.map(() => 0);
     let next = 0;
-    for (let index = 0; index < windows.length; index++) {
-      counts[index] = Math.min(capacities[index], ids.length - next);
+    for (let index = 0; index < capacities.length; index++) {
+      counts[index] = Math.min(capacities[index], total - next);
       next += counts[index];
     }
-    while (next < ids.length) {
-      let target = 0;
-      for (let index = 1; index < windows.length; index++) {
+    const eligible = capacities.some((value) => value > 0)
+      ? capacities.map((value, index) => value > 0 ? index : -1).filter((index) => index >= 0)
+      : capacities.map((_, index) => index);
+    while (next < total && eligible.length > 0) {
+      let target = eligible[0];
+      for (const index of eligible.slice(1)) {
         const left = counts[index] / Math.max(1, capacities[index]);
         const right = counts[target] / Math.max(1, capacities[target]);
         if (left < right) target = index;
@@ -31,12 +31,18 @@
       counts[target]++;
       next++;
     }
-    next = 0;
+    return counts;
+  };
+  const assign = (ids, windows) => {
+    const result = {};
+    if (windows.length === 0) return result;
+    const counts = allocate(ids.length, windows.map((window) => capacity(window.width, window.height)));
+    let next = 0;
     for (const [index, window] of windows.entries()) {
       result[window.id] = ids.slice(next, next + counts[index]);
       next += counts[index];
     }
     return result;
   };
-  globalThis.ShellPuppetDashboardLayout = { assign, capacity };
+  globalThis.ShellPuppetDashboardLayout = { assign, capacity, allocate };
 })();

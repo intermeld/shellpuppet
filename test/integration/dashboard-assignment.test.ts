@@ -8,6 +8,7 @@ const source = fs.readFileSync(path.join(repoRoot, 'src/viewer/dashboard-layout.
 const context: { ShellPuppetDashboardLayout?: {
   assign: (ids: string[], windows: { id: string; width: number; height: number }[]) => Record<string, string[]>;
   capacity: (width: number, height: number) => number;
+  allocate: (total: number, capacities: number[]) => number[];
 } } = {};
 vm.runInNewContext(source, context);
 const layout = context.ShellPuppetDashboardLayout!;
@@ -39,4 +40,17 @@ it('spreads overflow by capacity, including equal rank zero windows', () => {
 it('splits equal-capacity overflow evenly with a stable tie', () => {
   const windows = ['a', 'b', 'c'].map((id) => ({ id, width: 1280, height: 720 }));
   expect(counts(layout.assign(ids(8), windows))).toEqual([3, 3, 2]);
+});
+
+it('keeps overflow away from zero-capacity windows while another can show a pane', () => {
+  const oneAndZero = [{ id: 'one', width: 1280, height: 720 }, { id: 'zero', width: 300, height: 720 }];
+  expect(oneAndZero.map((entry) => layout.capacity(entry.width, entry.height))).toEqual([1, 0]);
+  expect(counts(layout.assign(ids(3), oneAndZero))).toEqual([3, 0]);
+  const fourZeroTwo = [{ id: 'four', width: 1920, height: 900 },
+    { id: 'zero', width: 300, height: 720 }, { id: 'two', width: 1500, height: 720 }];
+  expect(fourZeroTwo.map((entry) => layout.capacity(entry.width, entry.height))).toEqual([4, 0, 2]);
+  expect(counts(layout.assign(ids(12), fourZeroTwo))).toEqual([8, 0, 4]);
+  expect(layout.allocate(10, [3, 0, 2])).toEqual([6, 0, 4]);
+  const allZero = ['a', 'b'].map((id) => ({ id, width: 300, height: 720 }));
+  expect(counts(layout.assign(ids(5), allZero))).toEqual([3, 2]);
 });

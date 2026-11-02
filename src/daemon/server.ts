@@ -591,6 +591,8 @@ export class Daemon {
    * not launch a per-session viewer window and does not hand back a viewer URL.
    */
   private readonly dashboardEventSockets = new Set<WebSocket>();
+  /** Opaque roster ids carried by dashboard feed sockets, never used for authorisation. */
+  private readonly dashboardWindowIds = new Map<WebSocket, string>();
   /** A launched dashboard has 30 seconds to connect before a start may retry. */
   private dashboardWindowStartedAt = 0;
   private dashboardOpenPromise: Promise<boolean> | null = null;
@@ -3564,13 +3566,32 @@ export class Daemon {
     const unsubscribe = this.subscribeDashboardFeed((frame) => {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(frame));
     });
-    ws.on('message', () => {
-      // Outbound only. A frame is not a keystroke, a resize or a launch.
+    ws.on('message', (raw) => {
+      // This id only speeds roster departure. It grants no daemon action.
+      if (this.dashboardWindowIds.has(ws)) return;
+      let frame: unknown;
+      try {
+        const bytes = Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw as ArrayBuffer);
+        frame = JSON.parse(bytes.toString('utf8'));
+      } catch { return; }
+      if (typeof frame !== 'object' || frame === null) return;
+      const claim = frame as { type?: unknown; id?: unknown };
+      if (claim.type !== 'window-register' || typeof claim.id !== 'string' ||
+          !/^[a-z0-9]+-[a-z0-9]+(?:-[1-9][0-9]*)?$/.test(claim.id) || claim.id.length > 100) return;
+      this.dashboardWindowIds.set(ws, claim.id);
     });
     ws.on('close', () => {
+      const windowId = this.dashboardWindowIds.get(ws);
+      this.dashboardWindowIds.delete(ws);
       unsubscribe();
       this.sockets.delete(ws);
       this.dashboardEventSockets.delete(ws);
+      if (windowId !== undefined && ![...this.dashboardWindowIds.values()].includes(windowId)) {
+        const notice = JSON.stringify({ type: 'window-gone', id: windowId });
+        for (const peer of this.dashboardEventSockets) {
+          if (peer.readyState === peer.OPEN) peer.send(notice);
+        }
+      }
       if (this.dashboardEventSockets.size === 0) this.dashboardWindowStartedAt = 0;
       this.lastActivity = Date.now();
     });
