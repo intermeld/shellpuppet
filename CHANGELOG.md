@@ -14,6 +14,7 @@ version may change behaviour, and every such change is listed here.
   is not read. Folder picker helpers run from fixed system paths and are
   cancelled on timeout or daemon shutdown. A mapped drive letter may still
   name a network drive.
+- Dashboard panes fill their tile at the 400 by 150 grid cap.
 - Renamed `viewer.launchMode: "none"` to `"no-window"`; `"none"` remains an alias for existing configurations.
 
 ### Added

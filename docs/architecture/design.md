@@ -1142,7 +1142,8 @@ and fits the pane. Enlarge covers the pane's
 current screen and fits the real terminal to it; Restore sends its previous
 grid. A focused or enlarged pane also fits the real terminal when the
 person takes control. The dashboard window can use the browser's full-screen
-key. The viewport cap remains 400 by 150. Covered panes and panes scrolled
+key. The viewport cap remains 400 by 150. At the cap, the text grows to fill
+the tile when the chosen size would leave spare space. Covered panes and panes scrolled
 out of a strip close their stream sockets; a revealed pane receives the
 existing bounded snapshot on reconnect.
 
