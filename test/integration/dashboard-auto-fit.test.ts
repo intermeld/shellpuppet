@@ -363,3 +363,160 @@ it('keeps pane control through Enlarge, a closed session, and Restore in two win
   expect(result.second.resizes.filter((frame) => frame.url.includes(`/sessions/${ids[5]}/stream`)).length,
     JSON.stringify(result)).toBeLessThanOrEqual(1);
 }, 180_000);
+
+it('takes only the final grid when two window assignments arrive in separate steps', async (context) => {
+  if (!browser) { context.skip(); return; }
+  const urls: string[] = [];
+  const daemon = running = await startTestDaemon({
+    launcher: (url) => { urls.push(url); return Promise.resolve({ launched: true, mode: 'isolated-app', browser: 'mock' }); },
+    idleCheckIntervalMs: 600_000,
+  });
+  const ids: string[] = [];
+  const startSession = async () => {
+    const started = await api(daemon.port, daemon.token, '/sessions', { body: {
+      command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], shell: false,
+      openViewer: false, cols: 129, rows: 49,
+    } });
+    expect(started.status).toBe(200);
+    ids.push(String(started.body['id']));
+  };
+  for (let index = 0; index < 6; index++) await startSession();
+  expect((await api(daemon.port, daemon.token, '/dashboard/open', { method: 'POST', body: {} })).status).toBe(200);
+  const shot = await captureDashboard({ browser, viewerUrl: urls.at(-1)!, width: 1920, height: 1080,
+    drive: true, timeoutMs: 120_000,
+    beforeNavigateScript: `(() => {
+      window.__resizes = [];
+      const send = WebSocket.prototype.send;
+      WebSocket.prototype.send = function(data) {
+        if (typeof data === 'string' && data.includes('"type":"resize"'))
+          window.__resizes.push({ url: this.url, ...JSON.parse(data) });
+        return send.call(this, data);
+      };
+    })()`,
+    probe: `(() => document.getElementById('connection')?.textContent === 'Connected' &&
+      document.querySelectorAll('.pane-size').length === 6 &&
+      [...document.querySelectorAll('.pane-size')].every(node => node.textContent.includes('×')) ? true : null)()`,
+    interact: async ({ evaluate, send }) => {
+      const target = await send('Target.createTarget', { url: 'about:blank' }, true) as { targetId: string };
+      const attached = await send('Target.attachToTarget', { targetId: target.targetId, flatten: true }, true) as { sessionId: string };
+      const evaluateSecond = async (expression: string): Promise<unknown> => {
+        const response = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true },
+          attached.sessionId) as { result: { value?: unknown }; exceptionDetails?: { text: string; exception?: { description?: string } } };
+        if (response.exceptionDetails) throw new Error(response.exceptionDetails.exception?.description || response.exceptionDetails.text);
+        return response.result.value;
+      };
+      await send('Page.enable', {}, attached.sessionId);
+      await send('Emulation.setDeviceMetricsOverride',
+        { width: 1920, height: 1080, deviceScaleFactor: 1, mobile: false }, attached.sessionId);
+      await send('Page.navigate', { url: `${new URL(urls.at(-1)!).origin}/dashboard` }, attached.sessionId);
+      const read = (run: (expression: string) => Promise<unknown>) => run(`(() => ({
+        share: document.getElementById('share-count')?.textContent,
+        panes: [...document.querySelectorAll('.pane')].map(card => ({ id: card.dataset.session,
+          size: card.querySelector('.pane-size')?.textContent })),
+        resizes: window.__resizes.slice(),
+      }))()`);
+      const waitFor = async (step: string, run: () => Promise<unknown>, ready: (value: unknown) => boolean) => {
+        let last: unknown;
+        const started = Date.now();
+        while (Date.now() - started < 20_000) {
+          try { last = await run(); if (ready(last)) return; }
+          catch (error) { last = String(error); }
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        throw new Error(`${step} did not settle: ${JSON.stringify(last)}`);
+      };
+      await waitFor('initial primary share', () => read(evaluate),
+        value => (value as { share?: string })?.share === '4 of 6 here, 2 windows');
+      await waitFor('initial second share',
+        () => evaluateSecond("document.getElementById('share-count')?.textContent"),
+        value => value === '2 of 6 here, 2 windows');
+      await evaluateSecond(`(() => {
+        window.__resizes = [];
+        const send = WebSocket.prototype.send;
+        WebSocket.prototype.send = function(data) {
+          if (typeof data === 'string' && data.includes('"type":"resize"'))
+            window.__resizes.push({ url: this.url, ...JSON.parse(data) });
+          return send.call(this, data);
+        };
+      })()`);
+      await waitFor('initial fits', async () => [await read(evaluate), await read(evaluateSecond)],
+        value => (value as { panes: { size: string }[] }[]).every(state =>
+          state.panes.every(pane => pane.size.includes('×') && !pane.size.includes('following'))));
+      await evaluate(`window.__resizes.length = 0`);
+      await evaluateSecond(`window.__resizes.length = 0`);
+      const assignment = await evaluate(`(() => {
+        const post = BroadcastChannel.prototype.postMessage;
+        let published;
+        BroadcastChannel.prototype.postMessage = function(data) {
+          if (data.type === 'window-assignment') published = data;
+          return post.call(this, data);
+        };
+        window.dispatchEvent(new Event('resize'));
+        BroadcastChannel.prototype.postMessage = post;
+        return published;
+      })()`) as { owner: string; byWindow: Record<string, string[]> };
+      expect(assignment?.owner).toBeTruthy();
+      const secondId = Object.keys(assignment.byWindow).find(id => id !== assignment.owner);
+      expect(secondId).toBeTruthy();
+      await evaluate(`window.__resizes.length = 0`);
+      await evaluateSecond(`window.__resizes.length = 0`);
+      await evaluate(`(() => {
+        const layout = ShellPuppetDashboardLayout;
+        const assign = layout.assign;
+        const first = { '${assignment.owner}': ${JSON.stringify(ids.slice(0, 5))},
+          '${secondId}': ${JSON.stringify(ids.slice(5))} };
+        const final = { '${assignment.owner}': ${JSON.stringify([...ids.slice(0, 3), ids[4]])},
+          '${secondId}': ${JSON.stringify([ids[3], ids[5]])} };
+        layout.assign = (...args) => window.__stagedAssignment || assign(...args);
+        window.__stagedAssignment = first;
+        const channel = new BroadcastChannel('shellpuppet.dashboard');
+        channel.postMessage({ type: 'window-assignment', token: 'test-two-step',
+          owner: '${assignment.owner}', byWindow: first });
+        setTimeout(() => {
+          window.__stagedAssignment = final;
+          channel.postMessage({ type: 'window-assignment', token: 'test-two-step',
+            owner: '${assignment.owner}', byWindow: final });
+          channel.close();
+        }, 350);
+      })()`);
+      await send('Page.bringToFront');
+      await waitFor('final primary assignment', () => read(evaluate),
+        value => {
+          const state = value as { share?: string; panes?: { id: string }[] };
+          return state?.share === '4 of 6 here, 2 windows' &&
+            JSON.stringify(state.panes?.map(pane => pane.id)) === JSON.stringify([...ids.slice(0, 3), ids[4]]);
+        });
+      await send('Page.bringToFront', {}, attached.sessionId);
+      await waitFor('final second assignment and fit', () => read(evaluateSecond), value => {
+        const state = value as { share?: string; panes?: { id: string; size: string }[]; resizes?: { url: string; take: boolean }[] };
+        return state?.share === '2 of 6 here, 2 windows' && state.panes?.length === 2 &&
+          JSON.stringify(state.panes.map(pane => pane.id)) === JSON.stringify([ids[3], ids[5]]) &&
+          state.panes.every(pane => pane.size === '121×64') &&
+          state.resizes?.some(frame => frame.url.includes(`/sessions/${ids[3]}/stream`) && frame.take) === true;
+      });
+      return { first: await read(evaluate), second: await read(evaluateSecond) };
+    },
+  });
+  const result = shot.probe as { first: { panes: { id: string; size: string }[];
+    resizes: { url: string; cols: number; rows: number; take: boolean }[] };
+    second: { panes: { id: string; size: string }[];
+      resizes: { url: string; cols: number; rows: number; take: boolean }[] } };
+  expect(result.first.panes.map(pane => pane.id)).toEqual([...ids.slice(0, 3), ids[4]]);
+  expect(result.second.panes.map(pane => pane.id)).toEqual([ids[3], ids[5]]);
+  for (const state of [result.first, result.second]) {
+    for (const frame of state.resizes.filter(frame => frame.take)) {
+      const id = ids.find(id => frame.url.includes(`/sessions/${id}/stream`));
+      expect(state.panes.find(pane => pane.id === id)?.size, JSON.stringify(result)).toBe(`${frame.cols}×${frame.rows}`);
+    }
+  }
+  for (const id of [...ids.slice(0, 3), ids[4]])
+    expect(result.first.resizes.filter(frame => frame.take && frame.url.includes(`/sessions/${id}/stream`)).length,
+      JSON.stringify(result)).toBeLessThanOrEqual(1);
+  for (const id of [ids[3]!, ids[5]!])
+    expect(result.second.resizes.filter(frame => frame.take && frame.url.includes(`/sessions/${id}/stream`)).length,
+      JSON.stringify(result)).toBeLessThanOrEqual(1);
+  expect(result.second.resizes.filter(frame => frame.take && frame.url.includes(`/sessions/${ids[3]}/stream`)),
+    JSON.stringify(result)).toHaveLength(1);
+  expect(result.first.resizes.filter(frame => frame.take && frame.url.includes(`/sessions/${ids[3]}/stream`)),
+    JSON.stringify(result)).toHaveLength(0);
+}, 180_000);

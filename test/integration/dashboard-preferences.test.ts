@@ -124,10 +124,21 @@ describe('dashboard preferences and errors', () => {
     const { url } = await setup(17);
     const script = `${sentScript}; window.__dashboardTest = async () => {
       const sizes = () => [...document.querySelectorAll('.pane-term')].map(x => x.dataset.fontSize);
-      const configured = sizes();
+      const waitForSizes = async (wanted) => {
+        const started = Date.now();
+        while (Date.now() - started < 5000) {
+          const current = sizes();
+          if (current.length === 2 && current.every(size => size === wanted)) return current;
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        throw Error('font size ' + wanted + ' did not settle: ' + JSON.stringify(sizes()));
+      };
+      const configured = await waitForSizes('17');
       document.getElementById('text-larger').click();
-      await new Promise(resolve => setTimeout(resolve, 350));
-      const changed = sizes();
+      const changed = await waitForSizes('18');
+      const started = Date.now();
+      while (window.__resizes.length === 0 && Date.now() - started < 5000)
+        await new Promise(resolve => setTimeout(resolve, 50));
       const saved = JSON.parse(localStorage.getItem('shellpuppet.dashboard')).fontSize;
       return { configured, changed, saved, resizes: window.__resizes.length };
     };`;

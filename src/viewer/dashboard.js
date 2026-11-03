@@ -44,6 +44,7 @@
     ? saved.fontSize : saved.fontSize === null ? null
       : Number.isInteger(configuredFont) && configuredFont >= 8 && configuredFont <= 32 ? configuredFont : null;
   let autoFitTimer = null;
+  let assignmentSettleUntil = 0;
   if (!window.name) window.name = `shellpuppet-dashboard-${Date.now()}-${Math.random()}`;
   let tracks = { count: 0, focusStrip: null, columns: null, rows: null };
   try {
@@ -233,16 +234,24 @@
     if (!autoFit) { focusOpenFits.clear(); return; }
     autoFitTimer = setTimeout(() => {
       autoFitTimer = null;
+      if (window.performance.now() < assignmentSettleUntil) { scheduleAutoFit(); return; }
       for (const item of shown()) {
         if (!visible(item)) continue;
         item.client?.autoFitGrid(80, 24, focusOpenFits.has(item.id) || incomingFits.has(item.id));
       }
-    }, 250);
+    }, Math.max(250, assignmentSettleUntil - window.performance.now()));
+  }
+  function settleAssignmentFits() {
+    // A feed change and its window assignment can arrive in separate tasks.
+    // Wait for the last change before taking a pane's grid.
+    assignmentSettleUntil = window.performance.now() + 900;
+    scheduleAutoFit();
   }
   function broadcastPreferences() {
     channel?.postMessage({ type: 'preferences', autoFit, fontSize, token: windowToken });
   }
   function setFontSize(value, broadcast = true) {
+    assignmentSettleUntil = 0;
     fontSize = value;
     for (const item of panes.values()) item.client?.setFontOverride(value);
     renderPreferences(); persist(); scheduleAutoFit();
@@ -272,6 +281,7 @@
   function applyAssignment(ids) {
     const next = new Set(ids);
     if (assigned !== null && next.size === assigned.size && [...next].every((id) => assigned.has(id))) return;
+    settleAssignmentFits();
     const previous = assigned === null ? new Set() : assigned;
     assigned = next;
     for (const id of next) if (!previous.has(id)) incomingFits.add(id);
@@ -293,6 +303,7 @@
   function removeWindow(id) {
     goneWindows.add(id);
     if (!windows.delete(id)) return;
+    settleAssignmentFits();
     lastSeen.delete(id);
     const watch = childWatches.get(id);
     if (watch !== undefined) { clearInterval(watch); childWatches.delete(id); }
@@ -823,6 +834,7 @@
     positionDividers();
   }
   function arrange(trigger = 'unspecified') {
+    if (trigger === 'enlarge' || trigger === 'restore' || trigger === 'window resize') assignmentSettleUntil = 0;
     traceArrange(trigger);
     if (arranging || syncingVisibility) {
       pendingArrange = true;
@@ -902,6 +914,8 @@
 
   function reconcile(sessions, full = false) {
     const incoming = new Map(sessions.filter((s) => s && typeof s.id === 'string').map((s) => [s.id, s]));
+    if ([...panes.keys()].some((id) => !incoming.has(id) || dismissed.has(id)) ||
+        [...incoming.keys()].some((id) => !panes.has(id) && !dismissed.has(id))) settleAssignmentFits();
     // A snapshot is the whole list. An added or removed frame is not, so it
     // must not forget a dismissal or a launch for a session it did not mention.
     if (full) {
@@ -1293,6 +1307,7 @@
   }
   strip.addEventListener('scroll', syncVisibility);
   document.getElementById('auto-fit').addEventListener('click', () => {
+    assignmentSettleUntil = 0;
     autoFit = !autoFit;
     renderPreferences(); persist(); scheduleAutoFit(); broadcastPreferences();
   });

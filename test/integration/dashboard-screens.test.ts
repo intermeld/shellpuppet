@@ -41,7 +41,7 @@ async function browserProbe(beforeNavigateScript: string, probe: string): Promis
   return JSON.parse(String(shot.probe)) as Record<string, unknown>;
 }
 
-async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', dragCheck = false): Promise<{
+async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', dragCheck = false, held = false): Promise<{
   before: { primary: string[]; other: string[]; childConnected: string };
   after: string[];
   paused: { primary: string[]; other: string[]; toolbar: string[] };
@@ -182,7 +182,19 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
       childConnected: String(await evaluate(second.sessionId, "document.getElementById('connection')?.textContent")) };
     await waitFor(async () => String(await evaluate(second.sessionId,
       "document.querySelector('.pane[data-session=s3] .pane-size')?.textContent")).includes('×'));
-    await new Promise((resolve) => setTimeout(resolve, 700));
+    if (held) {
+      await waitFor(async () => await evaluate(second.sessionId,
+        "document.querySelector('.pane[data-session=s3] .pane-overflow-note')?.hidden === false") === true);
+    } else {
+      await waitFor(async () => {
+        const size = String(await evaluate(second.sessionId,
+          "document.querySelector('.pane[data-session=s3] .pane-size')?.textContent"));
+        const frames = await evaluate(second.sessionId,
+          "window.__resizeFrames.filter(frame => frame.url.includes('/sessions/s3/stream'))") as
+            { take: boolean }[] | undefined;
+        return size !== initialSize && !size.includes('following') && frames?.some((frame) => frame.take) === true;
+      });
+    }
     const movedFit = { before: initialSize,
       after: String(await evaluate(second.sessionId,
         "document.querySelector('.pane[data-session=s3] .pane-size')?.textContent")),
@@ -452,7 +464,7 @@ describe('dashboard screen controls in Chromium', () => {
     await ensureSessions();
     expect((await api(daemon.port, daemon.token, `/sessions/${sessions[2]}/resize`,
       { body: { cols: 220, rows: 115, hold: true } })).status).toBe(200);
-    const result = await multiWindowProbe(await freshUrl());
+    const result = await multiWindowProbe(await freshUrl(), undefined, false, true);
     expect(result.oversized.note).toContain('Shift+wheel');
     expect(Math.max(result.oversized.horizontal, result.oversized.vertical)).toBeGreaterThan(0);
     expect([result.oversized.left, result.oversized.top]).toEqual([0, 0]);
