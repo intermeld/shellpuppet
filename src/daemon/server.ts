@@ -593,6 +593,8 @@ export class Daemon {
    * viewer or client socket, and it cannot make a dashboard socket drive.
    */
   private readonly geometryController = new Map<string, WebSocket>();
+  /** A dashboard document keeps its grid while a covered pane reconnects. */
+  private readonly dashboardGeometryOwner = new Map<string, string>();
   /** Subscribers to the daemon-wide event stream (`/events`). */
   private readonly eventSockets = new Set<WebSocket>();
   /**
@@ -2835,6 +2837,7 @@ export class Daemon {
         // back by moving that window, which is the only escape they have while
         // there is no takeover control to press (§5).
         this.geometryController.delete(id);
+        this.dashboardGeometryOwner.delete(id);
         this.announceGeometry(id, session);
         json(res, 200, { ok: true, cols, rows, geometryHeld: session.geometryHeld });
         return;
@@ -3177,6 +3180,7 @@ export class Daemon {
     }
     this.sessionSockets.delete(id);
     this.geometryController.delete(id);
+    this.dashboardGeometryOwner.delete(id);
   }
 
   /** Whether a live viewport is currently driving this session's grid. */
@@ -3838,12 +3842,19 @@ export class Daemon {
     // this is the only place a socket becomes the controller without sending
     // `take`.
     if (
+      credential.kind === 'dashboard' &&
+      this.dashboardGeometryOwner.get(session.id) === ws.protocol &&
+      !this.hasGeometryController(session.id)
+    ) {
+      this.geometryController.set(session.id, ws);
+    } else if (
       !session.geometryHeld &&
       !readOnly &&
       !passive &&
       !this.hasGeometryController(session.id)
     ) {
       this.geometryController.set(session.id, ws);
+      this.dashboardGeometryOwner.delete(session.id);
     }
     ws.send(JSON.stringify(this.geometryFrame(session, ws)));
 
@@ -3969,6 +3980,8 @@ export class Daemon {
             // the grid actually moves: a viewport that already fits is still
             // the one driving.
             this.geometryController.set(session.id, ws);
+            if (credential.kind === 'dashboard') this.dashboardGeometryOwner.set(session.id, ws.protocol);
+            else this.dashboardGeometryOwner.delete(session.id);
             // A geometry change is a geometry change whoever made it, and
             // `resize` is on the list of audited actions the security page
             // publishes. Only the ones that actually took: a proposal the

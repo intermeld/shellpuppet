@@ -183,3 +183,76 @@ it('debounces a changing-width drag into one resize after settling', async (cont
   expect(result.frames, JSON.stringify(result)).toHaveLength(1);
   expect(result.frames[0]).toMatchObject({ take: true });
 }, 150_000);
+
+it('keeps pane control through Enlarge, a closed session, and Restore in two windows', async (context) => {
+  if (!browser) { context.skip(); return; }
+  const urls: string[] = [];
+  const daemon = running = await startTestDaemon({
+    launcher: (url) => { urls.push(url); return Promise.resolve({ launched: true, mode: 'isolated-app', browser: 'mock' }); },
+    idleCheckIntervalMs: 600_000,
+  });
+  const ids: string[] = [];
+  for (let index = 0; index < 5; index++) {
+    const started = await api(daemon.port, daemon.token, '/sessions', { body: {
+      command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], shell: false,
+      openViewer: false, cols: 129, rows: 49,
+    } });
+    expect(started.status).toBe(200);
+    ids.push(String(started.body['id']));
+  }
+  expect((await api(daemon.port, daemon.token, '/dashboard/open', { method: 'POST', body: {} })).status).toBe(200);
+  const shot = await captureDashboard({ browser, viewerUrl: urls.at(-1)!, width: 1920, height: 1080,
+    drive: true, timeoutMs: 120_000,
+    beforeNavigateScript: `(() => {
+      window.__resizes = [];
+      const send = WebSocket.prototype.send;
+      WebSocket.prototype.send = function(data) {
+        if (typeof data === 'string' && data.includes('"type":"resize"'))
+          window.__resizes.push({ url: this.url, ...JSON.parse(data) });
+        return send.call(this, data);
+      };
+    })()`,
+    probe: `(() => document.getElementById('connection')?.textContent === 'Connected' &&
+      document.querySelectorAll('.pane-size').length === 5 &&
+      [...document.querySelectorAll('.pane-size')].every(node => node.textContent.includes('×')) ? true : null)()`,
+    interact: async ({ evaluate, send }) => {
+      await send('Target.createTarget', { url: `${new URL(urls.at(-1)!).origin}/dashboard` });
+      const shared = await evaluate(`(async () => {
+        for (let attempt = 0; attempt < 100; attempt++) {
+          if (document.getElementById('share-count')?.textContent === '4 of 5 here, 2 windows') return true;
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        return document.getElementById('share-count')?.textContent;
+      })()`);
+      expect(shared).toBe(true);
+      await evaluate(`(async () => {
+        await new Promise(resolve => setTimeout(resolve, 700));
+        document.querySelector('.pane[data-session="${ids[1]}"] button[aria-label="Enlarge"]').click();
+        await new Promise(resolve => setTimeout(resolve, 600));
+      })()`);
+      expect((await api(daemon.port, daemon.token, `/sessions/${ids[0]}`, { method: 'DELETE' })).status).toBe(200);
+      return evaluate(`(async () => {
+        for (let attempt = 0; attempt < 100; attempt++) {
+          if (document.getElementById('share-count')?.textContent === '4 of 4 here, 2 windows') break;
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        window.__resizes.length = 0;
+        document.querySelector('.pane button[aria-label="Restore"]').click();
+        await new Promise(resolve => setTimeout(resolve, 3000));
+        return { share: document.getElementById('share-count')?.textContent,
+          panes: [...document.querySelectorAll('.pane')].map(card => ({ id: card.dataset.session,
+            size: card.querySelector('.pane-size')?.textContent })),
+          resizes: window.__resizes.slice() };
+      })()`);
+    },
+  });
+  const result = shot.probe as { share: string; panes: { id: string; size: string }[];
+    resizes: { url: string; cols: number; rows: number; take: boolean }[] };
+  expect(result.share).toBe('4 of 4 here, 2 windows');
+  expect(result.panes.map((pane) => pane.id)).toEqual(ids.slice(1));
+  expect(result.panes.every((pane) => !pane.size.includes('following')), JSON.stringify(result)).toBe(true);
+  for (const id of ids.slice(1)) {
+    expect(result.resizes.filter((frame) => frame.url.includes(`/sessions/${id}/stream`)).length,
+      JSON.stringify(result)).toBeLessThanOrEqual(1);
+  }
+}, 180_000);
