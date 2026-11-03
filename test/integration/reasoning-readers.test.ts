@@ -53,6 +53,51 @@ async function replay(name: string, agent?: string): Promise<string> {
   return id;
 }
 
+async function longWrappedLine(name: string, line: string): Promise<string> {
+  const file = path.join(td.home, `${name}.ansi`);
+  fs.writeFileSync(file, ` > ask\r\n${line}\r\n\x1b[38;2;149;149;143m >  Type\x1b[0m`);
+  const started = await api(td.port, td.token, '/sessions', {
+    body: {
+      command: process.execPath,
+      args: ['-e', `process.stdout.write(require('fs').readFileSync(${JSON.stringify(file)}, 'utf8')); setInterval(() => {}, 500)`],
+      shell: false, agent: 'qoder', cols: 30, rows: 10, hold: true,
+    },
+  });
+  expect(started.status).toBe(200);
+  const id = String(started.body['id']);
+  await eventually(async () => String((await api(td.port, td.token, `/sessions/${id}/snapshot`)).body['screen']).includes(line[3]!.repeat(4)), 30_000);
+  return id;
+}
+
+describe('wrapped lines longer than the reasoning context', () => {
+  it('keeps a visible answer in snapshot, lastLines, find and result', async () => {
+    const id = await longWrappedLine('long-answer', ` ▪ ${'M'.repeat(30 * 410)}`);
+    const plain = await api(td.port, td.token, `/sessions/${id}/snapshot`);
+    expect(String(plain.body['screen'])).toContain('MMMM');
+    const hidden = await api(td.port, td.token, `/sessions/${id}/snapshot?hideReasoning=1&lastLines=3`);
+    expect(hidden.status).toBe(200);
+    expect(String(hidden.body['screen'])).toContain('MMMM');
+    expect((hidden.body['lastLines'] as string[]).join('\n')).toContain('MMMM');
+    const found = await api(td.port, td.token, `/sessions/${id}/find?pattern=MMMM&hideReasoning=1`);
+    expect((found.body['matches'] as unknown[]).length).toBeGreaterThan(0);
+    const result = await api(td.port, td.token, `/sessions/${id}/result`);
+    expect(result.body['found'], JSON.stringify(result.body)).toBe(true);
+    expect((result.body['answer'] as string[]).join('')).toContain('MMMM');
+  }, 60_000);
+
+  it('hides visible reasoning whose parent lies beyond the context', async () => {
+    const id = await longWrappedLine('long-reasoning', ` │ ${'S'.repeat(30 * 410)}`);
+    const plain = await api(td.port, td.token, `/sessions/${id}/snapshot`);
+    expect(String(plain.body['screen'])).toContain('SSSS');
+    const hidden = await api(td.port, td.token, `/sessions/${id}/snapshot?hideReasoning=1&lastLines=2`);
+    expect(hidden.status).toBe(200);
+    expect(String(hidden.body['screen'])).not.toContain('SSSS');
+    expect((hidden.body['lastLines'] as string[]).join('\n')).not.toContain('SSSS');
+    const found = await api(td.port, td.token, `/sessions/${id}/find?pattern=SSSS&hideReasoning=1`);
+    expect(found.body['matches']).toEqual([]);
+  }, 60_000);
+});
+
 describe('starting a session as an agent', () => {
   it('refuses an agent it has no signature for, and names the ones it has', async () => {
     const started = await api(td.port, td.token, '/sessions', {

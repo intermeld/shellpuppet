@@ -73,6 +73,66 @@ function horizontalDetail(png: Buffer, top: number, bottom: number): number {
 }
 
 describe('filtered screenshot in Chromium', () => {
+  it('leaves visible rows of an answer longer than the context uncovered', async (context) => {
+    if (browser === null) { context.skip(); return; }
+    const fixture = path.join(td.home, 'long-answer.ansi');
+    fs.writeFileSync(fixture, ` ▪ ${'M'.repeat(30 * 410)}\r\n\x1b[38;2;149;149;143m >  Type\x1b[0m`);
+    const started = await api(td.port, td.token, '/sessions', {
+      body: {
+        command: process.execPath,
+        args: ['-e', `process.stdout.write(require('fs').readFileSync(${JSON.stringify(fixture)}, 'utf8')); setInterval(() => {}, 500)`],
+        shell: false, agent: 'qoder', cols: 30, rows: 10, hold: true,
+      },
+    });
+    expect(started.status).toBe(200);
+    const id = String(started.body['id']);
+    await eventually(async () => String((await api(td.port, td.token, `/sessions/${id}/snapshot`)).body['screen']).includes('MMMM'), 30_000);
+    const plain = await captureViewer({
+      browser, viewerUrl: String(started.body['viewerUrl']), width: 1000, height: 900,
+      probe: `(() => { const row = Array.from(document.querySelectorAll('.xterm-rows > div')).find(r => r.textContent.includes('MMMM')); const box = row?.getBoundingClientRect(); return box ? { top: box.top, bottom: box.bottom } : null; })()`,
+    });
+    const box = plain.probe as { top: number; bottom: number };
+    expect(box.bottom).toBeGreaterThan(box.top);
+    const hidden = await api(td.port, td.token, `/sessions/${id}/screenshot`, {
+      body: { width: 1000, height: 900, hideReasoning: true }, method: 'POST',
+    });
+    expect(hidden.status, String(hidden.body['error'])).toBe(200);
+    expect((hidden.body['lines'] as string[]).join('\n')).toContain('MMMM');
+    const hiddenPng = Buffer.from(String(hidden.body['png']), 'base64');
+    expect(horizontalDetail(hiddenPng, box.top, box.bottom)).toBeGreaterThan(horizontalDetail(plain.png, box.top, box.bottom) * 0.75);
+  }, 120_000);
+
+  it('covers a continuation whose parent has left the buffer', async (context) => {
+    if (browser === null) { context.skip(); return; }
+    const fixture = path.join(td.home, 'lost-parent.ansi');
+    fs.writeFileSync(fixture, ` │ ${'S'.repeat(30 * 5010)}\r\n\x1b[38;2;149;149;143m >  Type\x1b[0m`);
+    const started = await api(td.port, td.token, '/sessions', {
+      body: {
+        command: process.execPath,
+        args: ['-e', `process.stdout.write(require('fs').readFileSync(${JSON.stringify(fixture)}, 'utf8')); setInterval(() => {}, 500)`],
+        shell: false, agent: 'qoder', cols: 30, rows: 10, hold: true,
+      },
+    });
+    expect(started.status).toBe(200);
+    const id = String(started.body['id']);
+    await eventually(async () => String((await api(td.port, td.token, `/sessions/${id}/snapshot`)).body['screen']).includes('SSSS'), 60_000);
+    const plain = await captureViewer({
+      browser, viewerUrl: String(started.body['viewerUrl']), width: 1000, height: 900,
+      probe: `(() => { const row = Array.from(document.querySelectorAll('.xterm-rows > div')).filter(r => r.textContent.includes('SSSS'))[1]; const box = row?.getBoundingClientRect(); return box ? { top: box.top, bottom: box.bottom } : null; })()`,
+    });
+    const box = plain.probe as { top: number; bottom: number };
+    expect(box.bottom).toBeGreaterThan(box.top);
+    const hidden = await api(td.port, td.token, `/sessions/${id}/screenshot`, {
+      body: { width: 1000, height: 900, hideReasoning: true }, method: 'POST',
+    });
+    expect(hidden.status, String(hidden.body['error'])).toBe(200);
+    expect((hidden.body['lines'] as string[]).join('\n')).not.toContain('SSSS');
+    expect((hidden.body['lines'] as string[]).join('\n')).toContain('[reasoning hidden:');
+    const hiddenPng = Buffer.from(String(hidden.body['png']), 'base64');
+    expect(horizontalDetail(plain.png, box.top, box.bottom)).toBeGreaterThan(500);
+    expect(horizontalDetail(hiddenPng, box.top, box.bottom)).toBeLessThan(horizontalDetail(plain.png, box.top, box.bottom) * 0.01);
+  }, 120_000);
+
   it('covers every physical row of a soft-wrapped reasoning bar', async (context) => {
     if (browser === null) { context.skip(); return; }
     const fixture = path.join(td.home, 'wrapped-reasoning.ansi');
