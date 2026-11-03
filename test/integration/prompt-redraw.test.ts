@@ -1,14 +1,50 @@
 /** A repaint retains the held prompt; a different or departed dialog does not. */
 import * as path from 'node:path';
+import * as fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { api, connectWs, eventually, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
+import { museWrappedAnsi } from '../fixtures/museWrapped.js';
 
 const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'repaint-dialog.mjs');
+const museFixture = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'muse-hold.mjs');
 let td: TestDaemon;
 beforeAll(async () => { td = await startTestDaemon({ promptScanIntervalMs: 100, promptStallMs: 300 }); });
 afterAll(async () => { await td.stop(); });
+
+it.each([
+  ['muse-8a-stage1of3', 6, 96, 30],
+  ['muse-9a-stage1of3-88col', 21, 120, 34],
+] as const)('flags a held %s menu with %i wrapped rows at %ix%i', async (capture, extra, cols, rows) => {
+  const screenFile = path.join(td.home, `${capture}-${String(extra)}.ansi`);
+  fs.writeFileSync(screenFile, await museWrappedAnsi(capture, extra));
+  const started = await api(td.port, td.token, '/sessions', {
+    body: { command: process.execPath, args: [museFixture, screenFile], shell: false, cols, rows, label: 'Muse menu stand-in' },
+  });
+  expect(started.status).toBe(200);
+  const id = String(started.body['id']);
+  try {
+    const waited = await api(td.port, td.token, `/sessions/${id}/wait?prompt=true&timeout=10000`);
+    expect(waited.body).toMatchObject({ matched: true, reason: 'prompt' });
+    expect(waited.body['prompt']).toMatchObject({ question: 'Would you like to run the following command?' });
+    await eventually(async () => {
+      const listed = await api(td.port, td.token, '/sessions?waitingOnly=true');
+      return (listed.body['sessions'] as { id: string }[]).some((session) => session.id === id);
+    }, 10_000);
+    const listed = await api(td.port, td.token, '/sessions');
+    const session = (listed.body['sessions'] as { id: string; waitingOnPrompt?: { alerted: boolean; options: string[] } }[])
+      .find((entry) => entry.id === id);
+    expect(session?.waitingOnPrompt?.options).toHaveLength(3);
+    await eventually(async () => {
+      const result = await api(td.port, td.token, '/sessions');
+      return (result.body['sessions'] as { id: string; waitingOnPrompt?: { alerted: boolean } }[])
+        .find((entry) => entry.id === id)?.waitingOnPrompt?.alerted === true;
+    }, 10_000);
+  } finally {
+    await api(td.port, td.token, `/sessions/${id}`, { method: 'DELETE' });
+  }
+}, 30_000);
 
 it('keeps age and one stall through a resize repaint and a short gap, then replaces and clears', async () => {
   const started = await api(td.port, td.token, '/sessions', {

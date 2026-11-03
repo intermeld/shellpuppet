@@ -355,8 +355,18 @@ function musePrompt(raw: string[], tail: Line[]): DetectedPrompt | null {
     options.push(normalise(text.replace(/^⟩ /, '')));
     optionRows.push(row);
   }
-  const question = [...tail].reverse().find((line) => line.index < first &&
-    first - line.index <= 10 && museQuestion(line.text));
+  // Walk the visible menu itself: a long wrapped command can put the heading
+  // beyond the tail and more than ten rows above the first choice. The first
+  // transcript or composer boundary prevents borrowing an answered question.
+  let question: Line | undefined;
+  for (let index = first - 1; index >= 0 && first - index <= 60; index--) {
+    const text = (raw[index] ?? '').trimEnd();
+    if (museQuestion(text)) {
+      question = { text, index };
+      break;
+    }
+    if (/^\s*(?:[◆◇◈]|❯(?:\s|$)|[─━═]{2,})/u.test(text)) break;
+  }
   if (question === undefined) return null;
   if (approval !== question.text.startsWith('Would ')) return null;
   const stage = approval ? raw.slice(question.index, first).find((line) => /^ {2}Stage \d+\/\d+$/.test(line.trimEnd())) : undefined;

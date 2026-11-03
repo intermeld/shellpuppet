@@ -20,6 +20,8 @@ version may change behaviour, and every such change is listed here.
   and its staged approvals (stage 1/3 to 3/3) are recognised at any width.
 - `terminal_wait` and `shellpuppet wait` with `debounce` now settle once the
   condition holds continuously, even when a busy timer keeps repainting.
+- Muse Code approval menus whose command wraps over many rows are now
+  recognised, so they raise waiting alerts and resolve prompt waits.
 - `terminal_wait` and `shellpuppet wait` with `hideReasoning` now match text and
   regex only on the filtered screen.
 - Filtered screenshots repair extra replay text left by terminal serialisation
