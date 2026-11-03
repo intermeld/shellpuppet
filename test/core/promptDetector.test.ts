@@ -15,7 +15,7 @@ async function museCapture(name: string): Promise<string> {
   const meta = JSON.parse(fs.readFileSync(`${root}.json`, 'utf8')) as { cols: number; rows: number };
   const renderer = new ScreenRenderer({ cols: meta.cols, rows: meta.rows });
   await renderer.write(fs.readFileSync(`${root}.ansi`, 'utf8'));
-  const screen = renderer.styledLines({ last: 2000 }).lines.map((line) => line.text).join('\n');
+  const screen = renderer.snapshot().screen;
   renderer.dispose();
   return screen;
 }
@@ -35,6 +35,21 @@ describe('detectPrompt: Muse Code', () => {
 
   it('does not offer the captured between-stages menu while its keys are inactive', async () => {
     expect(detectPrompt(await museCapture('muse-8b-between-stages'))).toBeNull();
+  });
+
+  it('recognises the active stage menu without an activity row', async () => {
+    const active = await museCapture('muse-8c-stage2of3');
+    expect(detectPrompt(active.replace(/^└ .*\n/m, ''))?.question).toBe('Would you like to run the following command?');
+  });
+
+  it('does not offer an inactive stage when an activity row is inserted', async () => {
+    const inactive = await museCapture('muse-8b-between-stages');
+    expect(detectPrompt(inactive.replace(/(── Voice input[^\n]*\n)/, '└ xxxx xxxxx\n$1'))).toBeNull();
+  });
+
+  it('does not offer a stale stage above an answer and fresh composer', async () => {
+    const active = await museCapture('muse-8c-stage2of3');
+    expect(detectPrompt(`${active}\n◆ Answer complete\n❯ `)).toBeNull();
   });
   it.each([
     ['muse-approval', [2, 3]],

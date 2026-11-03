@@ -64,6 +64,8 @@ export interface StyleSpan extends CellStyle {
 export interface StyledLine {
   text: string;
   spans: StyleSpan[];
+  /** The first cell after visible text, for TUIs that style heading padding. */
+  trailingStyle?: CellStyle;
   /** xterm says this row continues the physical row above it. */
   wrapped?: boolean;
 }
@@ -238,10 +240,11 @@ export class ScreenRenderer {
     while (lines.length > 0 && lines[lines.length - 1]?.trim() === '') {
       lines.pop();
     }
-    // Most screens have no menu. Avoid walking every cell for its attributes
-    // unless the text detector has found option rows that could be selected.
+    // Muse's staged menus also need the heading's cell styling to decide
+    // whether their keys are active during a repaint.
     const prompt = detectPrompt(lines.join('\n'));
-    const marked = prompt?.optionRows === undefined
+    const museHeading = lines.some((line) => /^Would .+ like to run the following command\?$/.test(line));
+    const marked = prompt?.optionRows === undefined && !museHeading
       ? lines
       : markSelectedOption(this.styledLines().lines, prompt);
     return {
@@ -343,7 +346,10 @@ export class ScreenRenderer {
         if (span.from >= trimmed.length) break;
         kept.push({ ...span, to: Math.min(span.to, trimmed.length) });
       }
-      lines.push({ text: trimmed, spans: kept, ...(line.isWrapped ? { wrapped: true } : {}) });
+      const trailingStyle = spans.find((span) => span.to > trimmed.length);
+      lines.push({ text: trimmed, spans: kept,
+        ...(trailingStyle === undefined ? {} : { trailingStyle: styleOfSpan(trailingStyle) }),
+        ...(line.isWrapped ? { wrapped: true } : {}) });
     }
     if (options.last === undefined) {
       while (lines.length > firstVisible && lines[lines.length - 1]?.text.trim() === '') lines.pop();
@@ -384,4 +390,8 @@ function sameStyle(a: CellStyle, b: CellStyle): boolean {
     a.fg === b.fg &&
     a.bg === b.bg
   );
+}
+
+function styleOfSpan(span: StyleSpan): CellStyle {
+  return { bold: span.bold, dim: span.dim, italic: span.italic, inverse: span.inverse, fg: span.fg, bg: span.bg };
 }

@@ -368,15 +368,15 @@ export const BUILT_IN_SIGNATURES: readonly AgentSignature[] = [
     // Muse Code 1.4.14. A completed answer is a bold ◆ block. Tool calls
     // use a green ◆, and the live reasoning summary uses a grey ◆. The
     // composer is ❯ below the voice input rule, with or without typed text.
-    // Submitted turns have a highlighted background. The Muse Code banner
+    // Submitted turns sit above the voice rule. The Muse Code banner
     // sits above the transcript, and the status line ending in Launch overrides
     // sits below the composer. A
     // finished turn may have no Worked for line.
     name: 'muse',
     programs: ['muse', 'muse-bin-*'],
     measured: 'Muse Code 1.4.14',
-    composer: { text: '^❯(?:\\s*$| \\S)', lead: { bg: ['default'] } },
-    typed: { text: '^❯ \\S', lead: { bg: ['default'] } },
+    composer: { text: '^❯(?:\\s*$| \\S)' },
+    typed: { text: '^❯ \\S', body: { dim: false } },
     chrome: [{ text: '^── Voice input \\(Alt\\+V to start\\)' }, { text: RULE }],
     frame: { text: RULE },
     busy: [
@@ -782,8 +782,19 @@ function guarded<T>(signature: CompiledSignature, body: () => T): T | null {
 
 /** The index of the composer's line and the first line of chrome, or null. */
 function composerAt(lines: readonly StyledLine[], signature: CompiledSignature): { line: number; chrome: number } | null {
+  let museVoice = -1;
+  if (signature.name === 'muse') {
+    for (let row = lines.length - 1; row >= 0; row--) {
+      if (/^── Voice input \(Alt\+V to start\)/.test(lines[row]!.text)) {
+        museVoice = row;
+        break;
+      }
+    }
+  }
   for (let i = lines.length - 1; i >= 0; i--) {
     if (!lineFits(lines[i]!, signature.composer)) continue;
+    if (signature.name === 'muse' && (museVoice < 0 || i <= museVoice ||
+      !lines.slice(i + 1).some((line) => /^─{10,}/.test(line.text)))) continue;
     // Reasoning is never drawn below the composer. A line with reasoning under
     // it is the echo of the person's prompt, taken for the composer while a
     // dialog stands in its place: no composer is found, so the filter reads
@@ -1021,11 +1032,6 @@ export function latestResult(lines: readonly StyledLine[], signature: CompiledSi
       .slice(composer.line + 1)
       .filter((line) => !blank(line) && !(signature.frame !== undefined && lineFits(line, signature.frame)))
       .map((line) => line.text);
-    if (signature.typed !== undefined) {
-      for (let i = composer.chrome; i <= composer.line; i++) {
-        if (lineFits(lines[i]!, signature.typed)) return { found: false, reason: 'prompt-typed', status };
-      }
-    }
     let turnStart = 0;
     let prompt: string | null = null;
     if (signature.turn !== undefined) {
@@ -1042,6 +1048,11 @@ export function latestResult(lines: readonly StyledLine[], signature: CompiledSi
     const current = lines.slice(turnStart);
     if (signature.busy.some((test) => current.some((line) => lineFits(line, test)))) {
       return { found: false, reason: 'busy', status };
+    }
+    if (signature.typed !== undefined) {
+      for (let i = composer.chrome; i <= composer.line; i++) {
+        if (lineFits(lines[i]!, signature.typed)) return { found: false, reason: 'prompt-typed', status };
+      }
     }
     const ranges = reasoningRanges(lines, signature, composer.chrome);
     const inReasoning = (i: number): boolean => ranges.some(([from, to]) => i >= from && i < to);

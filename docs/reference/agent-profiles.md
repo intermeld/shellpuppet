@@ -268,9 +268,9 @@ shellpuppet type <id> "your prompt" --verify      # retry after `key <id> escape
   the busy line to clear before reading `terminal_result`; a `◆ Worked for`
   line is optional. The submitting Enter was swallowed on every observed turn,
   including `/exit`; a second Enter submitted. `terminal_result` reports
-  `prompt-typed`, and a wait returns `prompt-typed`, while text remains in the
-  composer. Press Enter again in that state. Once submitted, the prompt appears
-  as a highlighted transcript row.
+  `prompt-typed`, and a wait returns `prompt-typed`, when Muse is idle and text
+  remains in the composer. Press Enter again in that state. Once submitted,
+  the prompt appears as a highlighted transcript row.
   Answer shell approvals one stage at a time with `Allow this stage once`.
   Wait past `Approval request · keys active in a moment` for the next menu,
   and never choose `Always allow in this workspace`.
