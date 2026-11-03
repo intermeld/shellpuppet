@@ -98,8 +98,11 @@ export class WaitConditionError extends Error {
  *   would be discarded. A test pins this.
  * - `debounce` (text/regex/prompt): after the first match, keep polling until
  *   the screen has been stable for that long, so a mid-paint TUI can settle.
- *   The match is not re-checked after settling: it appeared, which is what
- *   was asked. The overall timeout still applies while settling.
+ *   On the raw screen the match is not re-checked after settling: it
+ *   appeared, which is what was asked. A wait that hides reasoning checks the
+ *   match again on the settled, filtered screen, so the text it reports
+ *   matching is the text it returns. The overall timeout still applies while
+ *   settling.
  * - `prompt` resolves as soon as a permission prompt is on screen, INCLUDING
  *   one already there when the wait began. It means "wait until a prompt is
  *   showing", not "wait for the next one". There is one exception, on by
