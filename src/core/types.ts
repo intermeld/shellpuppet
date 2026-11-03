@@ -214,10 +214,9 @@ export interface WaitOptions {
   /** Overall timeout in ms. Defaults to 60,000, clamped to 300,000 (§3.1). */
   timeout?: number;
   /**
-   * For text, regex and prompt conditions: after the first match, keep
-   * polling until the screen has been stable for this many ms before resolving
-   * (0 = resolve immediately on match). Lets a mid-paint TUI settle before the
-   * screen is read.
+   * For text, regex and prompt conditions: resolve after the condition has
+   * held on every poll for this many ms (0 = resolve immediately). A poll
+   * without a match restarts the interval; other screen output does not.
    */
   debounce?: number;
   /**

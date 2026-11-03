@@ -301,20 +301,70 @@ describe('waitFor text/regex with matchAfterInput', () => {
 });
 
 describe('waitFor debounce (settle after match)', () => {
-  it('holds the match until the screen has been stable for debounce ms', async () => {
+  it('settles a matching menu despite a busy timer repainting below it', async () => {
     const target = new FakeTarget();
-    const wait = waitFor(target, { text: 'menu' }, { ...POLL, debounce: 300 });
-    target.emit('menu'); // match found, but the TUI keeps painting…
-    await vi.advanceTimersByTimeAsync(100);
-    target.emit(' [1] option one');
-    await vi.advanceTimersByTimeAsync(100);
-    target.emit(' [2] option two');
-    // …now it settles.
-    await vi.advanceTimersByTimeAsync(400);
+    target.emit('Stage 1/3\n◇ Calling tools (0s)');
+    const wait = waitFor(target, { regex: 'Stage 1/3' }, { ...POLL, debounce: 1_500, timeout: 2_600 });
+    for (let second = 1; second <= 9; second++) {
+      await vi.advanceTimersByTimeAsync(300);
+      target.screen = `Stage 1/3\n◇ Calling tools (${second}s)`;
+      target.emit('');
+    }
+    const result = await wait;
+    expect(result).toMatchObject({ matched: true, reason: 'regex' });
+    expect(result.waitedMs).toBeGreaterThanOrEqual(1_500);
+    expect(result.waitedMs).toBeLessThanOrEqual(2_500);
+    expect(result.screen).toContain('Calling tools');
+    expect(result.screen).not.toBe(target.screen); // the screen at settlement, not a later repaint
+  });
+
+  it('settles a match on a signature-filtered screen with a busy timer', async () => {
+    const target = new FakeTarget();
+    target.emit('● reasoning: checking\nStage 1/3\n◇ Calling tools (0s)');
+    const filtered = (): string => target.screen.replace('● reasoning: checking', '[reasoning hidden]');
+    const wait = waitFor(target, { text: 'Stage 1/3' }, {
+      ...POLL, debounce: 1_500, timeout: 2_600, screenForMatch: filtered,
+    });
+    for (let second = 1; second <= 9; second++) {
+      await vi.advanceTimersByTimeAsync(300);
+      target.screen = `● reasoning: checking\nStage 1/3\n◇ Calling tools (${second}s)`;
+      target.emit('');
+    }
     const result = await wait;
     expect(result).toMatchObject({ matched: true, reason: 'text' });
-    expect(result.screen).toContain('[2] option two'); // settled screen, not first-match screen
-    expect(result.waitedMs).toBeGreaterThanOrEqual(500);
+    expect(result.waitedMs).toBeGreaterThanOrEqual(1_500);
+    expect(result.waitedMs).toBeLessThanOrEqual(2_500);
+    expect(result.screen).toContain('[reasoning hidden]');
+    expect(result.screen).not.toContain('● reasoning');
+  });
+
+  it('restarts settling after a mid-paint poll loses the match', async () => {
+    const target = new FakeTarget();
+    target.emit('Stage 1/3\n◇ Calling tools (0s)');
+    const wait = waitFor(target, { text: 'Stage 1/3' }, { ...POLL, debounce: 1_500, timeout: 2_800 });
+    let settled = false;
+    void wait.then(() => { settled = true; });
+    await vi.advanceTimersByTimeAsync(500);
+    target.screen = '◇ Calling tools (1s)';
+    target.emit('');
+    await vi.advanceTimersByTimeAsync(50); // one poll sees the incomplete paint
+    target.screen = 'Stage 1/3\n◇ Calling tools (1s)';
+    target.emit('');
+    for (let second = 2; second <= 5; second++) {
+      await vi.advanceTimersByTimeAsync(300);
+      target.screen = `Stage 1/3\n◇ Calling tools (${second}s)`;
+      target.emit('');
+    }
+    await vi.advanceTimersByTimeAsync(200);
+    expect(settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(300);
+    target.screen = 'Stage 1/3\n◇ Calling tools (6s)';
+    target.emit('');
+    await vi.advanceTimersByTimeAsync(800);
+    const result = await wait;
+    expect(result).toMatchObject({ matched: true, reason: 'text' });
+    expect(result.waitedMs).toBeGreaterThanOrEqual(2_050);
+    expect(result.waitedMs).toBeLessThanOrEqual(2_500);
   });
 
   it('does not lose the match when the process exits mid-settle', async () => {
@@ -700,6 +750,22 @@ describe('waitFor prompt: debounce retraction', () => {
     const result = await wait;
     expect(result.matched).toBe(true);
     expect(result.reason).toBe('prompt');
+    expect(result.prompt?.question).toContain('Allow this command to run?');
+  });
+
+  it('settles a prompt above a ticking busy line', async () => {
+    const target = new FakeTarget();
+    target.emit(`${PROMPT}◇ Calling tools (0s)`);
+    const wait = waitFor(target, { prompt: true }, { ...POLL, debounce: 1_500, timeout: 2_600 });
+    for (let second = 1; second <= 9; second++) {
+      await vi.advanceTimersByTimeAsync(300);
+      target.screen = `${PROMPT}◇ Calling tools (${second}s)`;
+      target.emit('');
+    }
+    const result = await wait;
+    expect(result).toMatchObject({ matched: true, reason: 'prompt' });
+    expect(result.waitedMs).toBeGreaterThanOrEqual(1_500);
+    expect(result.waitedMs).toBeLessThanOrEqual(2_500);
     expect(result.prompt?.question).toContain('Allow this command to run?');
   });
 });

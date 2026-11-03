@@ -98,13 +98,11 @@ export class WaitConditionError extends Error {
  *   it is not started: silence counted from session creation would report a
  *   CLI ready before its first byte, and a prompt typed on that false ready
  *   would be discarded. A test pins this.
- * - `debounce` (text/regex/prompt): after the first match, keep polling until
- *   the screen has been stable for that long, so a mid-paint TUI can settle.
- *   On the raw screen the match is not re-checked after settling: it
- *   appeared, which is what was asked. A wait that hides reasoning checks the
- *   match again on the settled, filtered screen, so the text it reports
- *   matching is the text it returns. The overall timeout still applies while
- *   settling.
+ * - `debounce` (text/regex/prompt): the condition must hold on every poll for
+ *   the given time. A poll without a match restarts settling, while output
+ *   elsewhere on the screen does not. With hidden reasoning, each poll checks
+ *   the filtered screen. The reply carries the screen at settlement. The
+ *   overall timeout still applies while settling.
  * - `prompt` resolves as soon as a permission prompt is on screen, INCLUDING
  *   one already there when the wait began. It means "wait until a prompt is
  *   showing", not "wait for the next one". There is one exception, on by
@@ -286,74 +284,42 @@ export function waitFor(
         ? options.screenForMatch()
         : target.getScreen();
 
-      if (matchedAt === null) {
-        if (pattern !== null) {
-          // The echo guard: with matchAfterInput, a match must lie after the
-          // echo of the last input, when that echo can be placed at all.
-          const from = afterInput ? (echoEnd(screen, target.lastInput() ?? '') ?? 0) : 0;
-          if (matchAt(screen, from) !== -1) {
-            matchedAt = now;
-            matchedReason = patternReason;
-          } else {
-            echoOnly = from > 0 && matchAt(screen, 0) !== -1;
-          }
-        } else if (condition.prompt === true) {
-          // Re-detected on every tick while settling below, because a
-          // mid-paint TUI can change WHICH prompt is drawn; the result must
-          // carry the prompt as it stands when the wait resolves, not a
-          // half-painted earlier read of it.
-          const detected = detectPrompt(screen);
-          target.observePrompt(detected?.signature ?? null);
-          if (detected === null) {
-            staleOnly = false;
-          } else if (afterInput && target.isStalePrompt(detected.signature)) {
-            // The question the caller has just answered, on a screen the
-            // program has not repainted yet. Handing it back would have the
-            // supervisor answer it again, into whatever has focus by then.
-            staleOnly = true;
-          } else {
-            staleOnly = false;
-            matchedAt = now;
-            matchedReason = 'prompt';
-            matchedPrompt = detected;
-          }
-        }
-        if (matchedAt !== null && debounceMs === 0) {
-          finish(true, matchedReason ?? 'text', screen);
-          return;
-        }
-      } else if (matchedReason === 'prompt') {
-        const stillThere = detectPrompt(screen);
-        target.observePrompt(stillThere?.signature ?? null);
-        if (stillThere === null) {
-          // The prompt went away while we were settling: answered by the
-          // human at the viewer, or redrawn past. Reporting `matched: true`
-          // with the remembered prompt would hand the caller a question that
-          // is no longer on screen, and a supervisor acting on it would answer
-          // a prompt that no longer exists. Retract the match and keep
-          // waiting: the condition asked for a prompt that is THERE.
-          matchedAt = null;
-          matchedPrompt = null;
-          matchedReason = null;
+      if (pattern !== null) {
+        // The echo guard applies on every poll: a match at or before the last
+        // input's echo does not keep a debounced condition alive.
+        const from = afterInput ? (echoEnd(screen, target.lastInput() ?? '') ?? 0) : 0;
+        if (matchAt(screen, from) !== -1) {
+          matchedAt ??= now;
+          matchedReason = patternReason;
+          echoOnly = false;
         } else {
-          matchedPrompt = stillThere;
+          matchedAt = null;
+          matchedReason = null;
+          echoOnly = from > 0 && matchAt(screen, 0) !== -1;
+        }
+      } else if (condition.prompt === true) {
+        // Detect the current prompt on each poll so the reply carries the
+        // question actually showing when the wait settles.
+        const detected = detectPrompt(screen);
+        target.observePrompt(detected?.signature ?? null);
+        staleOnly = detected !== null && afterInput && target.isStalePrompt(detected.signature);
+        if (detected !== null && !staleOnly) {
+          matchedAt ??= now;
+          matchedReason = 'prompt';
+          matchedPrompt = detected;
+        } else {
+          matchedAt = null;
+          matchedReason = null;
+          matchedPrompt = null;
         }
       }
 
       if (matchedAt !== null) {
-        // Settling: resolve once the screen has been stable for debounceMs.
-        // An exited process's screen is final and so trivially settled, and the
-        // match must not be lost to the exit check below.
-        if (now - target.lastChangeAt() >= debounceMs || target.isExited()) {
-          if (pattern !== null && options.screenForMatch !== undefined) {
-            const from = afterInput ? (echoEnd(screen, target.lastInput() ?? '') ?? 0) : 0;
-            if (matchAt(screen, from) === -1) {
-              matchedAt = null;
-              matchedReason = null;
-            }
-          }
-          if (matchedAt !== null) finish(true, matchedReason ?? 'text', screen);
-          if (matchedAt !== null) return;
+        // An exited process's final screen cannot repaint, so a match there
+        // still resolves before the exit check below.
+        if (now - matchedAt >= debounceMs || target.isExited()) {
+          finish(true, matchedReason ?? 'text', screen);
+          return;
         }
       } else if (options.composerPending?.() === true) {
         finish(false, 'prompt-typed', screen);
