@@ -71,6 +71,7 @@ window.ShellPuppetPane = (() => {
       onFontOverrideChange = () => {},
       onGeometryReady = () => {},
       onOutsideGeometry = () => {},
+      onGridTaken = () => {},
       dashboardProof = null,
       onAttentionChange = () => {},
     } = config;
@@ -589,6 +590,7 @@ window.ShellPuppetPane = (() => {
             if (dashboardProof !== null && !firstGeometry) {
               if (controlMode === 'yours' && pendingTakeGrid) {
                 pendingTakeGrid = false;
+                onGridTaken();
               } else if (controlMode === 'adopt' && !followingExternal) {
                 pendingTakeGrid = false;
                 if (Date.now() - lastOutsideFitAt < 10_000) {

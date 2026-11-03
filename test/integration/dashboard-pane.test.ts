@@ -381,11 +381,12 @@ describe('a dashboard stream is passive without drive=0', () => {
     pane.close();
     await eventually(() => closes() > closedBefore);
 
-    // The query cannot widen a dashboard credential. With nobody driving,
-    // drive=1 still adopts, and a plain resize still does not move the grid.
+    // The same document keeps its grid when a covered pane reconnects.
+    // The query still cannot widen a dashboard credential, and a plain
+    // resize still does not move the grid.
     const forced = await connectDash(daemon.port, id, cookie, proof, 'drive=1');
     const again = await forced.waitForControl((control) => control['type'] === 'geometry');
-    expect(again['control']).toBe('adopt');
+    expect(again['control']).toBe('yours');
     expect(again['cols']).toBe(100);
     expect(again['rows']).toBe(40);
     forced.send(JSON.stringify({ type: 'resize', cols: 80, rows: 24 }));
@@ -394,6 +395,36 @@ describe('a dashboard stream is passive without drive=0', () => {
     expect(held).toMatchObject({ cols: 100, rows: 40 });
     expect(resizes(daemon.home, id)).toHaveLength(1);
     forced.close();
+  });
+
+  it('keeps the assigned dashboard as driver through a covered pane and lets another window take it', async () => {
+    const daemon = await startPane();
+    const id = await startGrid(daemon, 'two-windows');
+    const first = await openDashboard(daemon);
+    const secondPage = await raw(daemon.port, 'GET', '/dashboard', {
+      'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document', 'sec-fetch-site': 'same-origin',
+      cookie: first.cookie,
+    });
+    expect(secondPage.status).toBe(200);
+    const second = { cookie: first.cookie, proof: csrfMeta(secondPage.body) };
+    const original = await connectDash(daemon.port, id, first.cookie, first.proof);
+    await original.waitForControl((frame) => frame['type'] === 'geometry');
+    original.send(JSON.stringify({ type: 'resize', cols: 100, rows: 40, take: true }));
+    await original.waitForControl((frame) => frame['type'] === 'geometry' && frame['control'] === 'yours');
+    original.close();
+    await eventually(() => auditOf(daemon.home).filter((line) => line.action === 'ws-close' && line.session === id).length > 0);
+
+    const other = await connectDash(daemon.port, id, second.cookie, second.proof);
+    expect((await other.waitForControl((frame) => frame['type'] === 'geometry'))['control']).toBe('adopt');
+    const restored = await connectDash(daemon.port, id, first.cookie, first.proof);
+    expect((await restored.waitForControl((frame) => frame['type'] === 'geometry'))['control']).toBe('yours');
+    expect(resizes(daemon.home, id)).toHaveLength(1);
+
+    other.send(JSON.stringify({ type: 'resize', cols: 100, rows: 40, take: true }));
+    await other.waitForControl((frame) => frame['type'] === 'geometry' && frame['control'] === 'yours');
+    await restored.waitForControl((frame) => frame['type'] === 'geometry' && frame['control'] === 'adopt');
+    other.close();
+    restored.close();
   });
 });
 

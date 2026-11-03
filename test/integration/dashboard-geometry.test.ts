@@ -41,6 +41,86 @@ async function openDashboard(width: number, height: number, interact: Parameters
   return { id, daemon, result: shot.probe };
 }
 
+it('shows a short coloured TUI field inside the same grid and canvas as a full field', async (context) => {
+  if (!browser) { context.skip(); return; }
+  const urls: string[] = [];
+  const daemon = running = await startTestDaemon({
+    launcher: (url) => { urls.push(url); return Promise.resolve({ launched: true, mode: 'isolated-app', browser: 'mock' }); },
+    idleCheckIntervalMs: 600_000,
+  });
+  const ids: string[] = [];
+  for (const width of [129, 80]) {
+    const script = `process.stdout.write('\\x1b[?1049h\\x1b[1;1H\\x1b[48;2;40;70;90m' +
+      '${width === 129 ? 'F' : 'N'}'.repeat(${width - 1}) + '|\\x1b[0m'); setInterval(() => {}, 1000)`;
+    const started = await api(daemon.port, daemon.token, '/sessions', { body: {
+      command: process.execPath, args: ['-e', script], shell: false,
+      openViewer: false, cols: 129, rows: 49, hold: true,
+    } });
+    expect(started.status).toBe(200);
+    ids.push(String(started.body['id']));
+  }
+  expect((await api(daemon.port, daemon.token, '/dashboard/open', { method: 'POST', body: {} })).status).toBe(200);
+  const shot = await captureDashboard({ browser, viewerUrl: urls.at(-1)!, width: 1920, height: 1080,
+    drive: true, timeoutMs: 120_000,
+    probe: `(() => [...document.querySelectorAll('.pane-size')].length === 2 &&
+      [...document.querySelectorAll('.pane-size')].every(node => node.textContent.includes('129×49')) ? true : null)()`,
+    interact: async ({ evaluate }) => evaluate(`(async () => {
+      await new Promise(resolve => setTimeout(resolve, 500));
+      return [...document.querySelectorAll('.pane')].map(card => ({
+        id: card.dataset.session,
+        size: card.querySelector('.pane-size').textContent,
+        font: card.querySelector('.pane-term').dataset.fontSize,
+        canvas: card.querySelector('.xterm-screen').offsetWidth,
+        first: card.querySelector('.xterm-rows > div').textContent,
+      }));
+    })()`),
+  });
+  const panes = shot.probe as { id: string; size: string; font: string; canvas: number; first: string }[];
+  expect(panes.map((pane) => pane.id)).toEqual(ids);
+  expect(panes[0]?.size).toBe(panes[1]?.size);
+  expect(panes[0]?.font).toBe(panes[1]?.font);
+  expect(panes[0]?.canvas).toBe(panes[1]?.canvas);
+  const snapshots = await Promise.all(ids.map((id) => api(daemon.port, daemon.token, `/sessions/${id}/snapshot`)));
+  expect(snapshots.map((snapshot) => snapshot.status)).toEqual([200, 200]);
+  expect(String(snapshots[0]!.body['screen']).split('\n')[0]?.indexOf('|')).toBe(128);
+  expect(String(snapshots[1]!.body['screen']).split('\n')[0]?.indexOf('|')).toBe(79);
+  expect(panes[0]?.first.indexOf('|')).toBe(128);
+  expect(panes[1]?.first.indexOf('|')).toBe(79);
+}, 150_000);
+
+it('repaints an idle full-screen program from the daemon after narrowing and widening', async (context) => {
+  if (!browser) { context.skip(); return; }
+  const script = `process.stdout.write('\\x1b[?1049h'); for (let row = 0; row < 25; row++)
+    process.stdout.write('\\x1b[' + (row + 1) + ';1HROW' + String(row).padStart(2, '0') +
+      ':' + String(row % 10).repeat(85)); setInterval(() => {}, 1000)`;
+  const { result } = await openDashboard(1400, 900, async ({ evaluate }) => {
+    const id = String(await evaluate(`document.querySelector('.pane').dataset.session`));
+    await evaluate(`document.getElementById('auto-fit').click()`);
+    const before = await api(running!.port, running!.token, `/sessions/${id}/snapshot`);
+    expect(before.status).toBe(200);
+    expect((await api(running!.port, running!.token, `/sessions/${id}/resize`,
+      { body: { cols: 80, rows: 24 } })).status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect((await api(running!.port, running!.token, `/sessions/${id}/resize`,
+      { body: { cols: 100, rows: 30 } })).status).toBe(200);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    const after = await api(running!.port, running!.token, `/sessions/${id}/snapshot`);
+    expect(after.status).toBe(200);
+    const pane = await evaluate(`(() => ({
+      size: document.querySelector('.pane-size').textContent,
+      rows: [...document.querySelectorAll('.xterm-rows > div')].map(row => row.textContent.trimEnd()),
+    }))()`);
+    return { before: String(before.body['screen']), after: String(after.body['screen']), pane };
+  }, script);
+  const measured = result as { before: string; after: string;
+    pane: { size: string; rows: string[] } };
+  expect(measured.pane.size).toContain('100×30');
+  const daemonRows = measured.after.split('\n').map((row) => row.trimEnd());
+  expect(measured.pane.rows.slice(0, daemonRows.length)).toEqual(daemonRows);
+  expect(measured.pane.rows.slice(daemonRows.length).every((row) => row === '')).toBe(true);
+  expect(measured.after).not.toBe(measured.before);
+}, 150_000);
+
 it('fills the tile at the 400 column cap with a fixed text choice', async (context) => {
   if (!browser) { context.skip(); return; }
   const { result } = await openDashboard(5000, 1000, async ({ evaluate }) => evaluate(`(async () => {

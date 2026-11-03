@@ -234,10 +234,7 @@
       autoFitTimer = null;
       for (const item of shown()) {
         if (!visible(item)) continue;
-        if (item.client?.autoFitGrid(80, 24, focusOpenFits.has(item.id) || incomingFits.has(item.id))) {
-          focusOpenFits.delete(item.id);
-          incomingFits.delete(item.id);
-        }
+        item.client?.autoFitGrid(80, 24, focusOpenFits.has(item.id) || incomingFits.has(item.id));
       }
     }, 250);
   }
@@ -564,6 +561,7 @@
       onAttentionChange: () => updateAttention(),
       onGeometryReady: () => scheduleAutoFit(),
       onOutsideGeometry: () => scheduleAutoFit(),
+      onGridTaken: () => { focusOpenFits.delete(item.id); incomingFits.delete(item.id); },
     });
   }
   function deactivate(item) {
