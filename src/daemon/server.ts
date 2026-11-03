@@ -55,6 +55,7 @@ import {
   cookieValues,
   dashboardCookie,
   dashboardProofFromProtocol,
+  tokensEqual,
   viewerCookie,
 } from './auth.js';
 import { NULL_AUDITOR } from './audit.js';
@@ -1925,7 +1926,11 @@ export class Daemon {
     this.lastActivity = Date.now();
 
     this.sessionFeed.add(this.summaryWithPrompt(session.summary()));
-    session.onExit(() => this.updateFeedSession(session.id));
+    session.onExit(() => {
+      this.geometryController.delete(session.id);
+      this.dashboardGeometryOwner.delete(session.id);
+      this.updateFeedSession(session.id);
+    });
     session.onReady(() => this.updateFeedSession(session.id));
 
     // The profile name and the written command line, the file that was
@@ -3007,6 +3012,8 @@ export class Daemon {
     session.onExit(() => {
       this.clearPromptGraceCheck(session.id);
       this.promptStates.delete(session.id);
+      this.geometryController.delete(session.id);
+      this.dashboardGeometryOwner.delete(session.id);
       this.updateFeedSession(session.id);
     });
     session.onReady(() => this.updateFeedSession(session.id));
@@ -3868,7 +3875,11 @@ export class Daemon {
     // `take`.
     if (
       credential.kind === 'dashboard' &&
-      this.dashboardGeometryOwner.get(session.id) === ws.protocol &&
+      // The remembered proof identifies the dashboard credential, not a browser window;
+      // any holder may already take this grid deliberately, so restoring it is enough.
+      this.dashboardGeometryOwner.has(session.id) &&
+      tokensEqual(this.dashboardGeometryOwner.get(session.id)!, ws.protocol) &&
+      !session.exited &&
       !this.hasGeometryController(session.id)
     ) {
       this.geometryController.set(session.id, ws);
@@ -4044,6 +4055,7 @@ export class Daemon {
             // driver goes on believing it is theirs.
             if (changed) this.announceGeometry(session.id, session);
             else if (handedOver) this.announceGeometry(session.id, session, { resync: false });
+            else ws.send(JSON.stringify(this.geometryFrame(session, ws)));
           }
           return;
         }

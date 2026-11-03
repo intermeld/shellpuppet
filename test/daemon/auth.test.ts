@@ -12,8 +12,16 @@ import {
   cookieValue,
   cookieValues,
   generateToken,
+  tokensEqual,
   viewerCookie,
 } from '../../src/daemon/auth.js';
+
+it('compares a remembered dashboard proof through the token helper', () => {
+  const proof = generateToken();
+  expect(tokensEqual(`sp-csrf.${proof}`, `sp-csrf.${proof}`)).toBe(true);
+  expect(tokensEqual(`sp-csrf.${proof}`, `sp-csrf.${generateToken()}`)).toBe(false);
+  expect(tokensEqual(`sp-csrf.${proof}`, proof)).toBe(false);
+});
 
 describe('client token', () => {
   it('verifies its own token and nothing else', () => {
