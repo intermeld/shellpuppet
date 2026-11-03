@@ -1321,6 +1321,7 @@
   if (channel !== null) channel.onmessage = onWindowMessage;
   window.addEventListener('resize', () => { advertise(); arrange('window resize'); });
   window.addEventListener('beforeunload', () => {
+    endActiveDivider?.();
     leaveWindow();
     clearTimeout(retry);
     clearTimeout(autoFitTimer);
@@ -1331,6 +1332,7 @@
     clearInterval(rosterTimer);
   });
   window.addEventListener('pagehide', () => {
+    endActiveDivider?.();
     leaveWindow();
     if (popSelf === null || channel === null) return;
     channel.postMessage({ type: 'pop-release', id: popSelf, token: windowToken });
