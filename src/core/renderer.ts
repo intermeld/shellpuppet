@@ -64,6 +64,8 @@ export interface StyleSpan extends CellStyle {
 export interface StyledLine {
   text: string;
   spans: StyleSpan[];
+  /** xterm says this row continues the physical row above it. */
+  wrapped?: boolean;
 }
 
 /** The rendered viewport plus cursor state (screen-level, not session-level). */
@@ -271,7 +273,7 @@ export class ScreenRenderer {
         if (span.from >= trimmed.length) break;
         kept.push({ ...span, to: Math.min(span.to, trimmed.length) });
       }
-      lines.push({ text: trimmed, spans: kept });
+      lines.push({ text: trimmed, spans: kept, ...(line.isWrapped ? { wrapped: true } : {}) });
     }
     if (options.last === undefined) {
       while (lines.length > firstVisible && lines[lines.length - 1]?.text.trim() === '') lines.pop();
