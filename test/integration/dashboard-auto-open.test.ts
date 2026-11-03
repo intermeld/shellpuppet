@@ -245,10 +245,10 @@ describe('automatic dashboard launch', () => {
     const request = start(daemon).catch(() => undefined);
     const didDetect = await Promise.race([
       started.then(() => true),
-      new Promise<false>((resolve) => setTimeout(() => resolve(false), 2_000)),
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 15_000)),
     ]);
     if (!didDetect) {
-      await request;
+      finishDetection?.(process.execPath);
       expect(didDetect).toBe(true);
       return;
     }

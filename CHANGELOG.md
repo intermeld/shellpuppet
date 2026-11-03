@@ -27,6 +27,8 @@ version may change behaviour, and every such change is listed here.
   condition holds continuously, even when a busy timer keeps repainting.
 - Muse Code approval menus whose command wraps over many rows are now
   recognised, so they raise waiting alerts and resolve prompt waits.
+- Dashboard relayouts now settle session and window assignments before taking
+  pane grids, avoiding intermediate resizes when sessions move between windows.
 - When a dashboard window closes, a late roster message from it no longer
   takes its sessions back from the windows that received them.
 - `terminal_wait` and `shellpuppet wait` with `hideReasoning` now match text and
