@@ -172,6 +172,31 @@ const MAX_VIEWPORT_ROWS = 150;
  */
 const VIEWER_WIPE = '\x1bc\x1b[3J';
 
+/** Bounded, text-free facts about a browser replay that disagrees with its source. */
+function rowDifferenceDiagnostics(expected: readonly string[], actual: readonly string[]) {
+  const differingRows: { row: number; expectedLength: number; actualLength: number; firstColumn: number }[] = [];
+  let differenceCount = 0;
+  for (let row = 0; row < Math.max(expected.length, actual.length); row++) {
+    const left = expected[row] ?? '';
+    const right = actual[row] ?? '';
+    if (expected[row] === actual[row]) continue;
+    differenceCount++;
+    if (differingRows.length === 5) continue;
+    let firstColumn = 0;
+    while (firstColumn < Math.min(left.length, right.length) &&
+        left[firstColumn] === right[firstColumn]) firstColumn++;
+    differingRows.push({
+      row, expectedLength: left.length, actualLength: right.length, firstColumn,
+    });
+  }
+  return {
+    differenceCount,
+    expectedRowCount: expected.length,
+    actualRowCount: actual.length,
+    differingRows,
+  };
+}
+
 /**
  * What a watcher is shown when the session ends: grey, on its own line
  * and identical whether it was sent live at the moment of exit or replayed
@@ -2505,7 +2530,12 @@ export class Daemon {
           });
           if (expectedRows !== undefined &&
               JSON.stringify(capture.rows) !== JSON.stringify(expectedRows)) {
-            json(res, 409, { error: 'The screen changed before its filtered picture could be taken. Try again.' });
+            const diagnostics = rowDifferenceDiagnostics(expectedRows, capture.rows);
+            this.logger.warn('filtered screenshot rows differ', { id, ...diagnostics });
+            json(res, 409, {
+              error: 'The screen changed before its filtered picture could be taken. Try again.',
+              diagnostics,
+            });
             return;
           }
           this.audit.record(actor, 'screenshot', id, { width, height });

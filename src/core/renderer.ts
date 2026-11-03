@@ -148,19 +148,64 @@ export class ScreenRenderer {
   }
 
   /** Read styled rows and replay bytes at the same parser boundary. */
-  capture(options: { above: number; scrollback: number }): Promise<{
+  async capture(options: { above: number; scrollback: number }): Promise<{
     view: { lines: StyledLine[]; firstVisible: number };
     state: string;
     cols: number;
     rows: number;
   }> {
-    return new Promise((resolve) => {
+    const captured = await new Promise<{
+      view: { lines: StyledLine[]; firstVisible: number };
+      state: string;
+      cols: number;
+      rows: number;
+      eraseColumns: number[];
+    }>((resolve) => {
       this.term.write('', () => {
         const view = this.styledLines({ above: options.above });
         const state = this.serializer.serialize({ scrollback: options.scrollback });
-        resolve({ view, state, cols: this.term.cols, rows: this.term.rows });
+        const visible = view.lines.slice(view.firstVisible);
+        const buffer = this.term.buffer.active;
+        const cell = buffer.getNullCell();
+        const eraseColumns = visible.map((row, y) => {
+          const line = buffer.getLine(buffer.baseY + y);
+          if (!line || row.text.length === 0) return 1;
+          let length = 0;
+          for (let x = 0; x < line.length; x++) {
+            line.getCell(x, cell);
+            if (cell.getWidth() === 0) continue;
+            length += (cell.getChars() || ' ').length;
+            if (length >= row.text.length) return x + cell.getWidth() + 1;
+          }
+          return line.length + 1;
+        });
+        resolve({ view, state, cols: this.term.cols, rows: this.term.rows, eraseColumns });
       });
     });
+    // The serialiser can leave a placeholder character behind when a wrapped
+    // row was deleted. Check its replay before handing the bytes to Chromium.
+    // Erasing only an extra suffix preserves the rest of the row, including
+    // its attributes; any other disagreement stays for the daemon's backstop.
+    const replay = new ScreenRenderer({ cols: captured.cols, rows: captured.rows,
+      scrollback: options.scrollback });
+    let state = captured.state;
+    try {
+      await replay.write('\x1bc\x1b[3J' + state);
+      const expected = captured.view.lines.slice(captured.view.firstVisible);
+      const actual = replay.styledLines().lines;
+      const repairs: string[] = [];
+      for (let row = 0; row < Math.max(expected.length, actual.length); row++) {
+        const source = expected[row]?.text ?? '';
+        const shown = actual[row]?.text ?? '';
+        if (shown !== source && shown.startsWith(source)) {
+          repairs.push(`\x1b[${String(row + 1)};${String(captured.eraseColumns[row] ?? 1)}H\x1b[K`);
+        }
+      }
+      if (repairs.length > 0) state += '\x1b7\x1b[?6l' + repairs.join('') + '\x1b8';
+    } finally {
+      replay.dispose();
+    }
+    return { view: captured.view, state, cols: captured.cols, rows: captured.rows };
   }
 
   /** Render the visible viewport (the bottom page when scrolled fully down). */

@@ -3,7 +3,10 @@ import * as path from 'node:path';
 import { inflateSync } from 'node:zlib';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { captureViewer } from '../../src/daemon/screenshot.js';
+import type { ScreenRenderer } from '../../src/core/renderer.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
+import { NULL_LOGGER } from '../../src/core/types.js';
+import { captureDashboard } from './dashboardCapture.js';
 import { api, connectWs, connectWsWithCookie, eventually, redeemViewerUrl, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 
@@ -73,6 +76,62 @@ function horizontalDetail(png: Buffer, top: number, bottom: number): number {
 }
 
 describe('filtered screenshot in Chromium', () => {
+  it('matches a watched inline TUI after a wrapped row is deleted', async (context) => {
+    if (browser === null) { context.skip(); return; }
+    const dashboardUrls: string[] = [];
+    const watched = await startTestDaemon({
+      launcher: (url) => { dashboardUrls.push(url); return Promise.resolve({ launched: true, mode: 'isolated-app', browser: 'mock' }); },
+      idleCheckIntervalMs: 600_000,
+    });
+    try {
+      const started = await api(watched.port, watched.token, '/sessions', { body: {
+        command: process.execPath,
+        args: [path.join(__dirname, '..', 'fixtures', 'serialise-delete-tui.mjs')],
+        shell: false, agent: 'codex', cols: 120, rows: 34, openViewer: false,
+      } });
+      expect(started.status).toBe(200);
+      const id = String(started.body['id']);
+      expect((await api(watched.port, watched.token, '/dashboard/open', { body: {} })).status).toBe(200);
+      expect(dashboardUrls).toHaveLength(1);
+      await captureDashboard({
+        browser, viewerUrl: dashboardUrls[0]!, width: 1400, height: 900,
+        drive: true, timeoutMs: 120_000,
+        probe: `(() => document.getElementById('connection')?.textContent === 'Connected' &&
+          document.querySelector('.pane-size')?.textContent.includes('×') ? true : null)()`,
+        interact: async () => {
+          expect((await api(watched.port, watched.token, `/sessions/${id}/resize`,
+            { body: { cols: 129, rows: 31 } })).status).toBe(200);
+          await eventually(async () => {
+            const screen = String((await api(watched.port, watched.token,
+              `/sessions/${id}/snapshot`)).body['screen']);
+            return screen.includes('Working (') && screen.includes('a a a');
+          }, 30_000);
+          // ConPTY canonicalises the stand-in's control stream. Feed the exact
+          // wrapped-line deletion at the renderer boundary to retain the case.
+          const manager = (watched.daemon as unknown as { manager: {
+            get: (key: string) => { renderer: ScreenRenderer } | undefined;
+          } }).manager;
+          const renderer = manager.get(id)?.renderer;
+          expect(renderer).toBeDefined();
+          await renderer!.write('\x1b[2J\x1b[H\x1b[5;20H\x1b[?2026h' +
+            ' a'.repeat(140) + '\x1b[5;20H\x1b[1M\x1b[?2026l');
+          const before = await api(watched.port, watched.token, `/sessions/${id}/snapshot`);
+          expect(String(before.body['screen']).split('\n')[3]?.length).toBe(0);
+          await eventually(async () => String((await api(watched.port, watched.token,
+            `/sessions/${id}/snapshot`)).body['screen']).includes('Working ('), 5_000);
+          const shot = await api(watched.port, watched.token, `/sessions/${id}/screenshot`,
+            { body: { width: 1000, height: 800, hideReasoning: true } });
+          expect(shot.status, JSON.stringify(shot.body['diagnostics'] ?? shot.body['error'])).toBe(200);
+          expect((shot.body['lines'] as string[]).some((line) =>
+            line.includes('Working ('))).toBe(true);
+          return true;
+        },
+      });
+    } finally {
+      await watched.stop();
+    }
+  }, 180_000);
+
   it('leaves visible rows of an answer longer than the context uncovered', async (context) => {
     if (browser === null) { context.skip(); return; }
     const fixture = path.join(td.home, 'long-answer.ansi');
@@ -250,8 +309,10 @@ describe('filtered screenshot in Chromium', () => {
 
 describe('the screenshot capture credential', () => {
   it('refuses a filtered picture when the browser reports different rows', async () => {
+    const warnings: Record<string, unknown>[] = [];
     const shooter = await startTestDaemon({
       viewer: { browserPath: process.execPath },
+      logger: { ...NULL_LOGGER, warn: (_message, meta) => { warnings.push(meta ?? {}); } },
       capture: () => Promise.resolve({ png: Buffer.from('not-a-png'), width: 800, height: 600, rows: ['wrong rows'] }),
     });
     try {
@@ -263,6 +324,22 @@ describe('the screenshot capture credential', () => {
       await eventually(async () => String((await api(shooter.port, shooter.token, `/sessions/${id}/snapshot`)).body['screen']).includes('MANGO'), 30_000);
       const shot = await api(shooter.port, shooter.token, `/sessions/${id}/screenshot`, { body: { hideReasoning: true } });
       expect(shot.status).toBe(409);
+      const diagnostics = shot.body['diagnostics'] as Record<string, unknown>;
+      expect(typeof diagnostics['expectedRowCount']).toBe('number');
+      expect(diagnostics['actualRowCount']).toBe(1);
+      expect(diagnostics['differenceCount']).toBeGreaterThan(0);
+      const differingRows = diagnostics['differingRows'] as Record<string, unknown>[];
+      expect(differingRows.length).toBeGreaterThan(0);
+      expect(differingRows.length).toBeLessThanOrEqual(5);
+      for (const row of differingRows) {
+        expect(typeof row['row']).toBe('number');
+        expect(typeof row['expectedLength']).toBe('number');
+        expect(typeof row['actualLength']).toBe('number');
+        expect(typeof row['firstColumn']).toBe('number');
+      }
+      expect(warnings.some((warning) => warning['differenceCount'] === diagnostics['differenceCount'] &&
+        warning['actualRowCount'] === diagnostics['actualRowCount'])).toBe(true);
+      expect(JSON.stringify(shot.body) + JSON.stringify(warnings)).not.toContain('MANGO');
     } finally {
       await shooter.stop();
     }
