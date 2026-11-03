@@ -2755,6 +2755,7 @@ export class Daemon {
         // `prompt === true` only.
         if (prompt !== null) condition.prompt = prompt !== 'false' && prompt !== '0';
         const filteredMatch = reader !== null && (condition.text !== undefined || condition.regex !== undefined);
+        const muse = signatureFor(session.agent, session.command);
         let matchView: ReturnType<typeof filteredWaitScreen> | undefined;
         const timeoutParam = url.searchParams.get('timeout');
         const debounceParam = url.searchParams.get('debounce');
@@ -2784,6 +2785,12 @@ export class Daemon {
               matchView = filteredWaitScreen(session, reader);
               return matchView.screen;
             } } : {}),
+            ...(muse?.name === 'muse' ? {
+              composerPending: () => {
+                const result = latestResult(session.styledScreenNow(REASONING_CONTEXT_LINES).lines, muse);
+                return !result.found && result.reason === 'prompt-typed';
+              },
+            } : {}),
             signal: abort.signal,
           });
         } finally {

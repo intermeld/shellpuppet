@@ -508,6 +508,15 @@ describe('Muse Code (built in)', () => {
   let muse: CompiledSignature;
   beforeEach(() => { muse = builtIn('muse'); });
 
+  it('reports typed text in the swallowed composer, then treats the highlighted row as submitted', async () => {
+    expect(latestResult(await screen('muse-7a-composer-swallowed'), muse)).toMatchObject({
+      found: false, reason: 'prompt-typed',
+    });
+    expect(latestResult(await screen('muse-7b-after-second-enter'), muse)).not.toMatchObject({
+      reason: 'prompt-typed',
+    });
+  });
+
   it('returns VIOLET and AMBER from the latest turn without requiring a trailer', async () => {
     const violet = latestResult(await screen('muse-violet'), muse);
     expect(violet).toMatchObject({ found: true, answer: ['◆ VIOLET'] });

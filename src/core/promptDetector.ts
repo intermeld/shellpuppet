@@ -368,6 +368,10 @@ function musePrompt(raw: string[], tail: Line[]): DetectedPrompt | null {
   if (question === undefined) return null;
   if (approval !== question.text.startsWith('Would ')) return null;
   const stage = approval ? raw.slice(question.index, first).find((line) => /^ {2}Stage \d+\/\d+$/.test(line.trimEnd())) : undefined;
+  // During a stage transition Muse draws the next menu before its activity
+  // detail line has returned. The choices are visible then, but keys are not
+  // active. A complete approval has that detail just above the voice rule.
+  if (stage !== undefined && !raw.slice(Math.max(0, question.index - 5), question.index).some((line) => /^└ /.test(line))) return null;
   return {
     question: question.text,
     options,

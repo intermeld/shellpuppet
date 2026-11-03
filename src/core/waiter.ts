@@ -64,6 +64,8 @@ export interface WaiterInternals {
   pollIntervalMs?: number;
   /** Screen used for text and regex evaluation and returned with their result. */
   screenForMatch?: () => string;
+  /** The agent signature has found unsent text in its composer. */
+  composerPending?: () => boolean;
 }
 
 /** Thrown for caller mistakes: bad condition shape or an unparsable regex. */
@@ -265,7 +267,9 @@ export function waitFor(
       if (settled) return;
       settled = true;
       options.signal?.removeEventListener('abort', onAbort);
-      const detail = matched ? undefined : explain();
+      const detail = matched ? undefined : reason === 'prompt-typed'
+        ? 'The prompt is still in the composer; press Enter again to submit it.'
+        : explain();
       resolve({
         matched,
         reason,
@@ -351,6 +355,9 @@ export function waitFor(
           if (matchedAt !== null) finish(true, matchedReason ?? 'text', screen);
           if (matchedAt !== null) return;
         }
+      } else if (options.composerPending?.() === true) {
+        finish(false, 'prompt-typed', screen);
+        return;
       } else if (
         condition.quiet !== undefined &&
         // No paint, no quiet: silence from a program that has not drawn

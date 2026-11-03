@@ -401,6 +401,8 @@ the session that agent's list whatever it runs, so list a key only for agents
 whose sessions may see it. A mistake in an entry, such as an agent with no
 signature or a list that is not one, is reported in `daemon.log` as a
 `CONFIG PROBLEM` and that entry is left out; the rest still applies.
+A client passes an agent's list only if its build knows that agent, so restart
+an MCP server session started before that agent was added.
 
 ## Passing a variable to a session that is not an agent
 

@@ -248,6 +248,7 @@ export type WaitReason =
   | 'regex'
   | 'quiet'
   | 'prompt'
+  | 'prompt-typed'
   | 'exited'
   | 'timeout'
   | 'aborted';

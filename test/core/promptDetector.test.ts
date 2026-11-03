@@ -22,6 +22,21 @@ async function museCapture(name: string): Promise<string> {
 
 describe('detectPrompt: Muse Code', () => {
   it.each([
+    ['muse-8a-stage1of3', '1/3'],
+    ['muse-8c-stage2of3', '2/3'],
+    ['muse-8d-stage3of3', '3/3'],
+    ['muse-9a-stage1of3-88col', '1/3'],
+  ])('detects the captured %s menu', async (name, stage) => {
+    const prompt = detectPrompt(await museCapture(name));
+    expect(prompt?.question).toBe('Would you like to run the following command?');
+    expect(prompt?.options).toHaveLength(3);
+    expect(prompt?.signature).toContain(`Stage ${stage}`);
+  });
+
+  it('does not offer the captured between-stages menu while its keys are inactive', async () => {
+    expect(detectPrompt(await museCapture('muse-8b-between-stages'))).toBeNull();
+  });
+  it.each([
     ['muse-approval', [2, 3]],
     ['muse-stage2', [2, 3]],
     ['muse-trust', [2]],
