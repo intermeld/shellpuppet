@@ -33,8 +33,8 @@ describe('detectPrompt: Muse Code', () => {
     expect(prompt?.signature).toContain(`Stage ${stage}`);
   });
 
-  it('does not offer the captured between-stages menu while its keys are inactive', async () => {
-    expect(detectPrompt(await museCapture('muse-8b-between-stages'))).toBeNull();
+  it('offers the captured between-stages menu while it remains on screen', async () => {
+    expect(detectPrompt(await museCapture('muse-8b-between-stages'))?.signature).toContain('Stage 2/3');
   });
 
   it('recognises the active stage menu without an activity row', async () => {
@@ -42,9 +42,27 @@ describe('detectPrompt: Muse Code', () => {
     expect(detectPrompt(active.replace(/^└ .*\n/m, ''))?.question).toBe('Would you like to run the following command?');
   });
 
-  it('does not offer an inactive stage when an activity row is inserted', async () => {
+  it('offers the between-stages menu when an activity row is inserted', async () => {
     const inactive = await museCapture('muse-8b-between-stages');
-    expect(detectPrompt(inactive.replace(/(── Voice input[^\n]*\n)/, '└ xxxx xxxxx\n$1'))).toBeNull();
+    expect(detectPrompt(inactive.replace(/(── Voice input[^\n]*\n)/, '└ xxxx xxxxx\n$1'))?.signature).toContain('Stage 2/3');
+  });
+
+  it('offers an active menu even when its heading padding is recoloured', async () => {
+    const root = path.join(__dirname, '..', 'fixtures', 'reasoning', 'muse-8c-stage2of3');
+    const meta = JSON.parse(fs.readFileSync(`${root}.json`, 'utf8')) as { cols: number; rows: number };
+    const renderer = new ScreenRenderer({ cols: meta.cols, rows: meta.rows });
+    try {
+      await renderer.write(fs.readFileSync(`${root}.ansi`, 'utf8'));
+      const lines = renderer.styledLines().lines;
+      const row = lines.findIndex((line) => line.text === 'Would you like to run the following command?');
+      expect(row).toBeGreaterThanOrEqual(0);
+      const paddingColumn = lines[row]!.text.length + 1;
+      await renderer.write(`\x1b[${row + 1};${paddingColumn}H\x1b[38;2;138;144;152m \x1b[0m`);
+      expect(renderer.styledLines().lines[row]?.text).toBe(lines[row]!.text);
+      expect(detectPrompt(renderer.snapshot().screen)?.signature).toContain('Stage 2/3');
+    } finally {
+      renderer.dispose();
+    }
   });
 
   it('does not offer a stale stage above an answer and fresh composer', async () => {

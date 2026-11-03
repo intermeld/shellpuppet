@@ -272,8 +272,9 @@ shellpuppet type <id> "your prompt" --verify      # retry after `key <id> escape
   remains in the composer. Press Enter again in that state. Once submitted,
   the prompt appears as a highlighted transcript row.
   Answer shell approvals one stage at a time with `Allow this stage once`.
-  Wait past `Approval request · keys active in a moment` for the next menu,
-  and never choose `Always allow in this workspace`.
+  Between stages Muse ignores keys for about a second. If a staged menu is
+  still on screen after an answer, answer it again. Never choose
+  `Always allow in this workspace`.
   A client passes `agents.passEnv.muse` only if its build knows Muse; restart an
   MCP server session started before the Muse signature was added.
 - **Expect the human's window to set the grid.** The viewport watching a

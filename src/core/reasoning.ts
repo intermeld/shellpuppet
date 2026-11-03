@@ -367,8 +367,8 @@ export const BUILT_IN_SIGNATURES: readonly AgentSignature[] = [
   {
     // Muse Code 1.4.14. A completed answer is a bold ◆ block. Tool calls
     // use a green ◆, and the live reasoning summary uses a grey ◆. The
-    // composer is ❯ below the voice input rule, with or without typed text.
-    // Submitted turns sit above the voice rule. The Muse Code banner
+    // composer is the last ❯ row followed only by chrome, with or without
+    // typed text. Submitted turns sit above it. The Muse Code banner
     // sits above the transcript, and the status line ending in Launch overrides
     // sits below the composer. A
     // finished turn may have no Worked for line.
@@ -782,19 +782,10 @@ function guarded<T>(signature: CompiledSignature, body: () => T): T | null {
 
 /** The index of the composer's line and the first line of chrome, or null. */
 function composerAt(lines: readonly StyledLine[], signature: CompiledSignature): { line: number; chrome: number } | null {
-  let museVoice = -1;
-  if (signature.name === 'muse') {
-    for (let row = lines.length - 1; row >= 0; row--) {
-      if (/^── Voice input \(Alt\+V to start\)/.test(lines[row]!.text)) {
-        museVoice = row;
-        break;
-      }
-    }
-  }
   for (let i = lines.length - 1; i >= 0; i--) {
     if (!lineFits(lines[i]!, signature.composer)) continue;
-    if (signature.name === 'muse' && (museVoice < 0 || i <= museVoice ||
-      !lines.slice(i + 1).some((line) => /^─{10,}/.test(line.text)))) continue;
+    if (signature.name === 'muse' && !lines.slice(i + 1).every((line) =>
+      line.text.trim() === '' || /^[─━]{10,}$/.test(line.text) || /· Launch overrides\s*$/.test(line.text))) continue;
     // Reasoning is never drawn below the composer. A line with reasoning under
     // it is the echo of the person's prompt, taken for the composer while a
     // dialog stands in its place: no composer is found, so the filter reads
@@ -1027,7 +1018,11 @@ export type AgentResult =
 export function latestResult(lines: readonly StyledLine[], signature: CompiledSignature): AgentResult {
   const result = guarded<AgentResult>(signature, () => {
     const composer = composerAt(lines, signature);
-    if (composer === null) return { found: false, reason: 'no-composer', status: [] };
+    if (composer === null) {
+      const museBusy = signature.name === 'muse' && lines.some((line) =>
+        signature.busy.some((test) => lineFits(line, test)));
+      return { found: false, reason: museBusy ? 'busy' : 'no-composer', status: [] };
+    }
     const status = lines
       .slice(composer.line + 1)
       .filter((line) => !blank(line) && !(signature.frame !== undefined && lineFits(line, signature.frame)))
