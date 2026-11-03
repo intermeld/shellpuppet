@@ -483,7 +483,7 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
         prompt: z.boolean().optional().describe('Resolve once the session is holding a permission prompt that needs a human answer: the supervision wait. Returns the question, unchanged options and any zero-based selectedOption.'),
         now: z.boolean().optional().describe('With a multi-session prompt wait, return the currently waiting sessions at once.'),
         timeout: z.number().optional().describe('Overall timeout ms (default 60000, max 300000). Be generous with agent CLIs.'),
-        debounce: z.number().optional().describe('After a text/regex/prompt match, wait until the screen has been stable this many ms before returning it.'),
+        debounce: z.number().optional().describe('For text/regex/prompt, return once the condition has held on every poll for this many ms. A poll without a match restarts the interval; other output, such as a ticking timer, does not.'),
         matchAfterInput: z.boolean().optional().describe('Only count what comes after your last input. For text/regex (default false): ignore matches at or before the echo of what you typed. Use it whenever the pattern describes output you asked for. For prompt (default true): do not return the prompt you have just answered until the screen has been seen without it; false accepts whatever prompt is on screen.'),
         hideReasoning: z.boolean().optional().describe('Leave reasoning out of a single-session screen, or question and options out of multi-session prompt details (default false). A single-session screen whose agent has no signature is refused.'),
       }),

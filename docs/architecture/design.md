@@ -379,6 +379,14 @@ discarded. The same rule governs `readyQuiet`. Paint is judged by the
 renderer, not by bytes: ConPTY emits mode-set sequences ~140 ms after spawn that render
 nothing.
 
+For `text`, `regex` and a single-session `prompt: true` wait, `debounce: <ms>`
+resolves after the condition has held on every poll for that long. A poll where
+the condition does not hold restarts the interval, so a mid-paint screen must
+settle. Output elsewhere on the screen, including an elapsed-time counter,
+does not restart it. With `hideReasoning`, text and regex are checked on the
+filtered screen at each poll. The reply reports the screen at settlement.
+`quiet` still means no output for its own interval.
+
 **`terminal_type` must warn about the echo trap in its own description.** Typing `foo` and
 then waiting for `foo` matches the *echo of the input*, not the output: measured at 0 ms.
 Guidance: wait for text that only appears in output, or use quiescence. **The warning is

@@ -255,6 +255,28 @@ describe('the hideReasoning flag', () => {
 });
 
 describe('waiting without the reasoning', () => {
+  it('debounces a visible Muse menu while its busy timer keeps painting', async () => {
+    const program = [
+      "let seconds = 0;",
+      "process.stdout.write('  Muse Code 1.4.14\\n\\x1b[38;2;103;108;116m◆ hidden reasoning\\x1b[0m\\n  Stage 1/3\\n◇ Calling tools (0s)\\n');",
+      "setInterval(() => { seconds++; process.stdout.write('\\x1b[1A\\r\\x1b[2K◇ Calling tools (' + seconds + 's)\\n'); }, 300);",
+    ].join(' ');
+    const started = await api(td.port, td.token, '/sessions', {
+      body: { command: process.execPath, args: ['-e', program], shell: false, agent: 'muse', cols: 100, rows: 20, hold: true },
+    });
+    expect(started.status).toBe(200);
+    const id = String(started.body['id']);
+    await eventually(async () => String((await api(td.port, td.token, `/sessions/${id}/snapshot`)).body['screen']).includes('Stage 1/3'), 30_000);
+
+    const waited = await api(td.port, td.token, `/sessions/${id}/wait?regex=Stage%201%2F3&debounce=1500&timeout=2600&hideReasoning=1`);
+    expect(waited.status).toBe(200);
+    expect(waited.body).toMatchObject({ matched: true, reason: 'regex' });
+    expect(Number(waited.body['waitedMs'])).toBeGreaterThanOrEqual(1_500);
+    expect(Number(waited.body['waitedMs'])).toBeLessThanOrEqual(2_500);
+    expect(String(waited.body['screen'])).toContain('Stage 1/3');
+    expect(String(waited.body['screen'])).not.toContain('hidden reasoning');
+  }, 60_000);
+
   it('matches text and regex only on the filtered screen', async () => {
     const id = await replay('qoder-answered-after-reasoning', 'qoder');
     const raw = await api(td.port, td.token, `/sessions/${id}/wait?text=Thinking&timeout=0`);
