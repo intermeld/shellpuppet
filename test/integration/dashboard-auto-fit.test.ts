@@ -7,6 +7,7 @@ import type { TestDaemon } from './helpers.js';
 
 let browser: string | null = null;
 let running: TestDaemon | null = null;
+const FIT_SETTLE_MS = 3000 + 250 + 100;
 beforeAll(async () => { browser = await findBrowser(); }, 60_000);
 afterEach(async () => { await running?.stop(); running = null; }, 120_000);
 
@@ -63,6 +64,7 @@ it('fits a settled layout once per free pane, keeps the floor, and stops when sw
         active: document.getElementById('focus').classList.contains('active'),
         resizes: window.__resizes.slice(),
       }), state => state.active && state.resizes.some(frame => frame.url.includes(${JSON.stringify(ids[0])}) && frame.frame.take));
+      await new Promise(resolve => setTimeout(resolve, ${FIT_SETTLE_MS}));
       const on = window.__resizes.slice();
       document.getElementById('auto-fit').click();
       window.__resizes.length = 0;
@@ -71,7 +73,7 @@ it('fits a settled layout once per free pane, keeps the floor, and stops when sw
         active: document.getElementById('grid').classList.contains('active'),
         panes: [...document.querySelectorAll('.pane')].map(pane => pane.getBoundingClientRect().width),
       }), state => state.active && state.panes.length === 2 && state.panes.every(width => width > 0));
-      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      await new Promise(resolve => setTimeout(resolve, ${FIT_SETTLE_MS}));
       return { initial, on, off: window.__resizes.slice(),
         saved: JSON.parse(localStorage.getItem('shellpuppet.dashboard')).autoFit };
     })()`),
@@ -200,6 +202,8 @@ it.each([true, false])('focus profile keeps one floor-sized fit with Auto fit %s
       const card = document.querySelector('.pane');
       if (!card || !card.querySelector('.pane-size')?.textContent.includes('×')) return null;
       if (window.__resizes.length === 0) return null;
+      if (!state.firstResizeAt) state.firstResizeAt = Date.now();
+      if (Date.now() - state.firstResizeAt < ${FIT_SETTLE_MS}) return null;
       const tile = card.querySelector('.pane-term');
       const host = document.createElement('div');
       host.style.cssText = 'position:absolute;left:0;top:0;visibility:hidden;width:' + tile.clientWidth +

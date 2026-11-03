@@ -29,9 +29,10 @@ version may change behaviour, and every such change is listed here.
   recognised, so they raise waiting alerts and resolve prompt waits.
 - Dashboard relayouts now settle session and window assignments before taking
   pane grids, avoiding intermediate resizes when sessions move between windows.
-- Dashboard windows return sessions promptly when a window closes. A late
-  roster from that closed window cannot reclaim them, while a returning
-  window or a reloaded dashboard can join the share again.
+- Dashboard windows return sessions promptly when a window or its session feed
+  closes. A late roster from a closed feed cannot reclaim them, while a
+  reconnected or reloaded dashboard joins the share again. Documents with the
+  same screen ID share sessions separately.
 - `terminal_wait` and `shellpuppet wait` with `hideReasoning` now match text and
   regex only on the filtered screen.
 - Filtered screenshots repair extra replay text left by terminal serialisation
