@@ -73,6 +73,42 @@ function horizontalDetail(png: Buffer, top: number, bottom: number): number {
 }
 
 describe('filtered screenshot in Chromium', () => {
+  it('covers every physical row of a soft-wrapped reasoning bar', async (context) => {
+    if (browser === null) { context.skip(); return; }
+    const fixture = path.join(td.home, 'wrapped-reasoning.ansi');
+    fs.writeFileSync(fixture, ` │ ${SECRET.repeat(5)}\r\n ▪ MANGO`);
+    const started = await api(td.port, td.token, '/sessions', {
+      body: {
+        command: process.execPath,
+        args: ['-e', `process.stdout.write(require('fs').readFileSync(${JSON.stringify(fixture)}, 'utf8')); setInterval(() => {}, 500)`],
+        shell: false, agent: 'qoder', cols: 30, rows: 20, hold: true,
+      },
+    });
+    expect(started.status).toBe(200);
+    const id = String(started.body['id']);
+    await eventually(async () => String((await api(td.port, td.token, `/sessions/${id}/snapshot`)).body['screen']).includes(SECRET), 30_000);
+    const plain = await captureViewer({
+      browser, viewerUrl: String(started.body['viewerUrl']), width: 1000, height: 900,
+      probe: `(() => Array.from(document.querySelectorAll('.xterm-rows > div')).filter(r => /VELVET|ZEPPELIN|_42/.test(r.textContent)).map(r => { const box = r.getBoundingClientRect(); return { top: box.top, bottom: box.bottom }; }))()`,
+    });
+    const boxes = plain.probe as { top: number; bottom: number }[];
+    expect(boxes.length).toBeGreaterThan(1);
+    const hidden = await api(td.port, td.token, `/sessions/${id}/screenshot`, {
+      body: { width: 1000, height: 900, hideReasoning: true }, method: 'POST',
+    });
+    expect(hidden.status, String(hidden.body['error'])).toBe(200);
+    const lines = hidden.body['lines'] as string[];
+    expect(lines.join('\n')).not.toMatch(/VELVET|ZEPPELIN|_42/);
+    expect(lines.join('\n')).toContain('MANGO');
+    const hiddenPng = Buffer.from(String(hidden.body['png']), 'base64');
+    for (const [index, box] of boxes.entries()) {
+      const detail = horizontalDetail(plain.png, box.top, box.bottom);
+      expect(detail).toBeGreaterThan(500);
+      // The first covered row carries the small 'reasoning hidden' label.
+      expect(horizontalDetail(hiddenPng, box.top, box.bottom)).toBeLessThan(detail * (index === 0 ? 0.25 : 0.01));
+    }
+  }, 120_000);
+
   it('covers reasoning on a screen that redraws while Chromium starts', async (context) => {
     if (browser === null) { context.skip(); return; }
     const original = fs.readFileSync(path.join(__dirname, '..', 'fixtures', 'reasoning', 'qoder-answered-after-reasoning.ansi'), 'utf8');

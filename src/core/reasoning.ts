@@ -695,6 +695,9 @@ function inkStyles(line: StyledLine): CellStyle[] {
 }
 
 function lineFits(line: StyledLine, test: CompiledLine): boolean {
+  // A continuation has no independent meaning, even when its text happens
+  // to look like a turn, question, composer, answer or reasoning start.
+  if (line.wrapped) return false;
   if (test.text !== undefined && !test.text.test(line.text)) return false;
   if (test.lead === undefined && test.body === undefined && test.word === undefined) return true;
   const ink = inkStyles(line);
@@ -726,9 +729,14 @@ function blockEnd(
   claimed?: ReadonlySet<number> | null,
 ): number {
   let end = at + 1;
-  if (block.continues === undefined) return end;
   let i = at + 1;
   while (i < limit) {
+    if (lines[i]!.wrapped) {
+      i++;
+      end = i;
+      continue;
+    }
+    if (block.continues === undefined) break;
     // A line a question on screen claims for itself is never part of a
     // block: the block ends before it rather than running over it.
     if (claimed?.has(i)) break;
@@ -842,6 +850,12 @@ function claimedRows(
     if (i > first && i < last && summary) continue;
     rows.add(i);
   }
+  // A question keeps its own wrapped continuation rows. A continuation
+  // cannot be claimed independently of the physical row above it.
+  for (let i = top; i <= bottom; i++) {
+    if (!rows.has(i)) continue;
+    for (let j = i + 1; j < lines.length && lines[j]!.wrapped; j++) rows.add(j);
+  }
   return rows;
 }
 
@@ -854,6 +868,12 @@ function reasoningRanges(
 ): [number, number][] {
   const ranges: [number, number][] = [];
   let i = 0;
+  // The parent may have left the retained scrollback. There is no safe way
+  // to classify a leading continuation, so hide it for reasoning signatures.
+  if (signature.reasoning.length > 0) {
+    while (i < limit && lines[i]!.wrapped) i++;
+    if (i > 0) ranges.push([0, i]);
+  }
   while (i < limit) {
     if (claimed?.has(i)) {
       i++;
@@ -905,7 +925,7 @@ export function hideReasoning(
   // signatures are the only patterns the detector times (`dialogs.ts`); its
   // own patterns are not.
   const detected =
-    signature.reasoning.length === 0 ? null : detectPrompt(lines.map((line) => line.text).join('\n'));
+    signature.reasoning.length === 0 ? null : detectPrompt(lines.map((line) => line.wrapped ? '' : line.text).join('\n'));
   return guarded(signature, () => {
     const claimed = claimedRows(lines, signature, detected);
     // Everything above the composer's own line, the chrome over it included:

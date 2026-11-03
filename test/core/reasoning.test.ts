@@ -141,6 +141,94 @@ describe('the generic engine', () => {
     },
   ]).signatures[0]!;
 
+  it('hides every physical row of a soft-wrapped Qoder bar and keeps the answer', async () => {
+    const renderer = new ScreenRenderer({ cols: 30, rows: 10 });
+    await renderer.write(` │ ${'SECRET_'.repeat(8)}\r\n ▪ MANGO`);
+    const view = renderer.styledLines();
+    expect(view.lines.some((line) => line.text.includes('SECRET_') && line.text.startsWith(' │ '))).toBe(true);
+    const filtered = hideReasoning(view.lines, builtIn('qoder'), view.firstVisible);
+    expect(filtered?.lines.join('\n')).not.toContain('SECRET_');
+    expect(filtered?.lines.join('\n')).toContain('MANGO');
+    renderer.dispose();
+  });
+
+  it('hides wrapped rows with an indent based reasoning continuation', async () => {
+    const signature = compileSignatures([{ name: 'wrapped', composer: { text: '^>' }, reasoning: [{ start: { text: '^Thinking' }, continues: { text: '^ {2}' } }], answer: { start: { text: '^Answer' } } }]).signatures[0]!;
+    const renderer = new ScreenRenderer({ cols: 30, rows: 10 });
+    await renderer.write(`Thinking ${'SECRET_'.repeat(8)}\r\nAnswer MANGO`);
+    const filtered = hideReasoning(renderer.styledLines().lines, signature);
+    expect(filtered?.lines.join('\n')).not.toContain('SECRET_');
+    expect(filtered?.lines.join('\n')).toContain('MANGO');
+    renderer.dispose();
+  });
+
+  it('hides wrapped rows when the reasoning block has no continuation rule', async () => {
+    const signature = compileSignatures([{ name: 'wrapped', composer: { text: '^>' }, reasoning: [{ start: { text: '^Thinking' } }], answer: { start: { text: '^Answer' } } }]).signatures[0]!;
+    const renderer = new ScreenRenderer({ cols: 30, rows: 10 });
+    await renderer.write(`Thinking ${'SECRET_'.repeat(8)}\r\nAnswer MANGO`);
+    const filtered = hideReasoning(renderer.styledLines().lines, signature);
+    expect(filtered?.lines.join('\n')).not.toContain('SECRET_');
+    expect(filtered?.lines.join('\n')).toContain('MANGO');
+    renderer.dispose();
+  });
+
+  it('keeps every row of a soft-wrapped answer in the result', async () => {
+    const signature = compileSignatures([{ name: 'wrapped', composer: { text: '^>' }, turn: { text: '^You: ' }, answer: { start: { text: '^Answer' } } }]).signatures[0]!;
+    const renderer = new ScreenRenderer({ cols: 30, rows: 10 });
+    await renderer.write(`You: prompt\r\nAnswer ${'MANGO_'.repeat(9)}\r\n> `);
+    const result = latestResult(renderer.styledLines().lines, signature);
+    expect(result.found).toBe(true);
+    if (result.found) expect(result.answer.join('')).toContain('MANGO_MANGO_MANGO_MANGO_MANGO_MANGO_MANGO_MANGO_MANGO_');
+    renderer.dispose();
+  });
+
+  it('hides a leading continuation when its parent is outside the read window', async () => {
+    const renderer = new ScreenRenderer({ cols: 30, rows: 10 });
+    await renderer.write(`Thinking ${'SECRET_'.repeat(8)}\r\nAnswer MANGO`);
+    const tail = renderer.styledLines({ last: 3 });
+    expect(tail.lines[0]?.wrapped).toBe(true);
+    const filtered = hideReasoning(tail.lines, compileSignatures([{
+      name: 'wrapped', composer: { text: '^>' }, reasoning: [{ start: { text: '^Thinking' } }],
+      answer: { start: { text: '^Answer' } },
+    }]).signatures[0]!);
+    expect(filtered?.lines.join('\n')).not.toContain('SECRET_');
+    expect(filtered?.lines.join('\n')).toContain('MANGO');
+    renderer.dispose();
+  });
+
+  it('does not take wrapped text for an independent answer or reasoning start', () => {
+    const signature = compileSignatures([{
+      name: 'wrapped', composer: { text: '^>' }, reasoning: [{ start: { text: '^Thinking' } }],
+      answer: { start: { text: '^Answer' } },
+    }]).signatures[0]!;
+    const rows: StyledLine[] = [
+      { text: 'ordinary output', spans: [] },
+      { text: 'Thinking fake start', spans: [], wrapped: true },
+      { text: 'Answer fake start', spans: [], wrapped: true },
+      { text: '>', spans: [] },
+    ];
+    expect(hideReasoning(rows, signature)?.hiddenBlocks).toBe(0);
+    expect(latestResult(rows, signature)).toMatchObject({ found: false, reason: 'no-answer' });
+  });
+
+  it('keeps a question and its soft-wrapped option out of reasoning', async () => {
+    const signature = compileSignatures([{
+      name: 'wrapped', composer: { text: '^>' },
+      reasoning: [{ start: { text: '^Thinking' }, continues: { text: '^\\S' } }],
+      answer: { start: { text: '^Answer' } },
+    }]).signatures[0]!;
+    const renderer = new ScreenRenderer({ cols: 30, rows: 12 });
+    await renderer.write('Thinking\r\nAllow this command to run?\r\n  1 (○) Allow once and keep the decision visible\r\n  2 (•) No\r\n> ');
+    const view = renderer.styledLines();
+    const wrapped = view.lines.find((line) => line.wrapped && line.text.includes('decision'));
+    expect(wrapped).toBeDefined();
+    const kept = hideReasoning(view.lines, signature)?.lines.join('\n') ?? '';
+    expect(kept).toContain('Allow this command to run?');
+    expect(kept).toContain('decision visible');
+    expect(kept).not.toMatch(/^Thinking$/m);
+    renderer.dispose();
+  });
+
   it('replaces each reasoning block with one marker line and keeps everything else', () => {
     const lines = [
       plain('You: question'),
