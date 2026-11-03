@@ -1038,10 +1038,31 @@ export function latestResult(lines: readonly StyledLine[], signature: CompiledSi
         }
       }
     }
-    // The latest turn and the chrome under it: a spinner can be drawn in
-    // either, and a stale copy in the scrollback above says nothing.
+    // A spinner can be drawn in the latest turn or the chrome under it;
+    // a stale copy in the scrollback above says nothing.
     const current = lines.slice(turnStart);
-    if (signature.busy.some((test) => current.some((line) => lineFits(line, test)))) {
+    if (signature.name !== 'muse' && signature.busy.some((test) => current.some((line) => lineFits(line, test)))) {
+      return { found: false, reason: 'busy', status };
+    }
+    let lastBusy = -1;
+    if (signature.name === 'muse') {
+      for (let i = lines.length - 1; i >= turnStart; i--) {
+        if (signature.busy.some((test) => lineFits(lines[i]!, test))) {
+          lastBusy = i;
+          break;
+        }
+      }
+    }
+    // Muse can retain an activity row above a finished answer. Only a later
+    // answer before the composer makes that row historical.
+    let museAnswerAfterBusy = false;
+    if (signature.name === 'muse' && lastBusy >= 0) {
+      const ranges = reasoningRanges(lines, signature, composer.chrome);
+      const inReasoning = (i: number): boolean => ranges.some(([from, to]) => i >= from && i < to);
+      museAnswerAfterBusy = lines.slice(lastBusy + 1, composer.chrome).some((line, offset) =>
+        !inReasoning(lastBusy + 1 + offset) && lineFits(line, signature.answer.start));
+    }
+    if (lastBusy >= 0 && !museAnswerAfterBusy) {
       return { found: false, reason: 'busy', status };
     }
     if (signature.typed !== undefined) {

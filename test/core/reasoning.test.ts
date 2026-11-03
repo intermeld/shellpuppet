@@ -575,6 +575,21 @@ describe('Muse Code (built in)', () => {
     if (withTrailer.found) expect(withTrailer.trailer[0]).toMatch(/^◆ Worked for /);
   });
 
+  it('returns a completed answer below a retained busy row and stage menu', async () => {
+    const menu = await screen('muse-8c-stage2of3');
+    const amber = await screen('muse-amber');
+    const answer = amber.find((line) => line.text.trimEnd() === '◆ AMBER');
+    const composer = amber.find((line) => line.text === '❯');
+    expect(answer).toBeDefined();
+    expect(composer).toBeDefined();
+    const blankLine: StyledLine = { text: '', spans: [] };
+    const withComposer = [...menu, blankLine, composer!];
+    expect(latestResult(withComposer, muse)).toMatchObject({ found: false, reason: 'busy' });
+    expect(latestResult([...menu, blankLine, answer!, blankLine, composer!], muse)).toMatchObject({
+      found: true, answer: ['◆ AMBER'],
+    });
+  });
+
   it('refuses while either busy glyph is drawn, even when an earlier answer is visible', async () => {
     for (const name of ['muse-busy-first', 'muse-busy-second', 'muse-busy-after-tool']) {
       expect(latestResult(await screen(name), muse), name).toMatchObject({ found: false, reason: 'busy' });

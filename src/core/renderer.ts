@@ -238,8 +238,8 @@ export class ScreenRenderer {
     while (lines.length > 0 && lines[lines.length - 1]?.trim() === '') {
       lines.pop();
     }
-    // Muse's staged menus also need the heading's cell styling to decide
-    // whether their keys are active during a repaint.
+    // Muse's staged menus use their visible text to identify the question;
+    // marking the selected option still needs the styled rows.
     const prompt = detectPrompt(lines.join('\n'));
     const museHeading = lines.some((line) => /^Would .+ like to run the following command\?$/.test(line));
     const marked = prompt?.optionRows === undefined && !museHeading
