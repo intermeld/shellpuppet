@@ -9,6 +9,24 @@ let daemon: TestDaemon | null = null;
 beforeAll(async () => { browser = await findBrowser(); }, 60_000);
 afterEach(async () => { await daemon?.stop(); daemon = null; }, 120_000);
 
+/**
+ * Wait until the page has sent no resize frame for `quietMs`, so a layout
+ * change's own fits are over before a test starts counting frames. A fixed
+ * delay is not enough on a slow runner.
+ */
+async function settleResizes(evaluate: (expression: string) => Promise<unknown>, quietMs = 700, limitMs = 15_000) {
+  const deadline = Date.now() + limitMs;
+  let seen = Number(await evaluate('window.__resizes.length'));
+  let quietSince = Date.now();
+  while (Date.now() < deadline) {
+    await new Promise(resolve => setTimeout(resolve, 100));
+    const now = Number(await evaluate('window.__resizes.length'));
+    if (now !== seen) { seen = now; quietSince = Date.now(); continue; }
+    if (Date.now() - quietSince >= quietMs) return;
+  }
+  throw new Error(`resize frames did not settle within ${String(limitMs)} ms (${String(seen)} sent)`);
+}
+
 async function exercise(count: number, interact: Parameters<typeof captureDashboard>[0]['interact']) {
   const urls: string[] = [];
   daemon = await startTestDaemon({
@@ -44,7 +62,7 @@ it('drags the Focus boundary, fits the grown pane on release, and retains its wi
   if (!browser) { context.skip(); return; }
   const shot = await exercise(2, async ({ evaluate, send }) => {
     await evaluate(`document.getElementById('focus').click()`);
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await settleResizes(evaluate);
     const before = await evaluate(`(() => {
       const divider = document.querySelector('.pane-divider[data-axis="focus"]');
       const main = document.getElementById('main-pane').getBoundingClientRect();
