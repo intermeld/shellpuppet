@@ -154,7 +154,7 @@ describe.skipIf(process.platform !== 'win32')('many sessions whose programs end 
         while (!sessions.every((session) => session.exited)) {
           for (const session of sessions) {
             try {
-              session.resize(60, 12);
+              await session.resize(60, 12);
             } catch {
               // The program has ended: nothing left to resize.
             }

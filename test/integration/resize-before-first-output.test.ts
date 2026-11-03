@@ -46,7 +46,7 @@ describe.skipIf(process.platform !== 'win32')('a resize made before the first ou
       const manager = new SessionManager(compilePolicy(undefined));
       managers.push(manager);
       const session = manager.create({ command: 'exit', args: ['3'] });
-      session.resize(100, 30);
+      await session.resize(100, 30);
       holdMainThread(500);
 
       // The exit event follows node-pty's first-output handler, so any error

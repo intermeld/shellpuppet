@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WaitConditionError, waitFor } from '../../src/core/waiter.js';
 import type { WaitTarget } from '../../src/core/waiter.js';
-import { StalePromptGuard } from '../../src/core/promptDetector.js';
+import { MUSE_MENU_SETTLE_MS, StalePromptGuard } from '../../src/core/promptDetector.js';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { ScreenRenderer } from '../../src/core/renderer.js';
@@ -163,11 +163,15 @@ describe('waitFor text/regex', () => {
     const target = new FakeTarget();
     target.screen = composer.plain;
     target.type('\r');
-    const wait = waitFor(target, { prompt: true }, { ...POLL, timeout: 600, matchAfterInput: afterInput });
+    const wait = waitFor(target, { prompt: true }, { ...POLL, timeout: MUSE_MENU_SETTLE_MS + 1_000, matchAfterInput: afterInput });
+    let resolved = false;
+    void wait.then(() => { resolved = true; });
     target.screen = submitted.plain;
     await vi.advanceTimersByTimeAsync(100);
     target.screen = menu.plain;
     await vi.advanceTimersByTimeAsync(100);
+    expect(resolved).toBe(false);
+    await vi.advanceTimersByTimeAsync(MUSE_MENU_SETTLE_MS);
     expect(await wait).toMatchObject({ matched: true, reason: 'prompt' });
   });
   it('uses the supplied screen for matching, the echo guard and the reply', async () => {

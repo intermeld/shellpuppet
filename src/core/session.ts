@@ -24,7 +24,7 @@ import { ensureSpawnHelperExecutable, explainSpawnFailure, loadNodePty } from '.
 import { ScreenRenderer } from './renderer.js';
 import type { SerializeOptions, StyledLine } from './renderer.js';
 import { commandLine } from './policy.js';
-import { detectPrompt, StalePromptGuard } from './promptDetector.js';
+import { detectPrompt, MusePromptSettler, StalePromptGuard } from './promptDetector.js';
 import { waitFor } from './waiter.js';
 import type { WaiterInternals } from './waiter.js';
 import type { WaitTarget } from './waiter.js';
@@ -160,6 +160,13 @@ const WRITE_CHUNK_CHARS = 1024;
 const WRITE_CHUNK_DELAY_MS = 8;
 /** Muse needs a short pause after text before its submitting Enter. */
 export const MUSE_SUBMIT_DELAY_MS = 400;
+
+function museSubmittingText(data: string): boolean {
+  if (!data.endsWith('\r')) return false;
+  const body = data.slice(0, -1);
+  return !/[\r\n]/.test(body) &&
+    Array.from(body).some((character) => character > ' ' && character !== '\x7f');
+}
 
 /**
  * Bracketed paste (DEC private mode 2004). A TUI that enables it is telling us
@@ -701,6 +708,8 @@ export class Session implements WaitTarget {
   private cursorHidden = false;
   /** Serialises write() so chunked writes cannot interleave. See write(). */
   private writeChain: Promise<void> = Promise.resolve();
+  private museSubmissionsQueued = 0;
+  private readonly musePromptSettler = new MusePromptSettler();
   /** Why the input pipe failed (Windows), once it has: input is refused from then on. */
   private inputFailure: Error | null = null;
   private lastChange = Date.now();
@@ -1095,18 +1104,21 @@ export class Session implements WaitTarget {
    * including for the rest of a chunked write it fails part-way through.
    */
   write(data: string): Promise<string> {
+    const museSubmit = this.agent === 'muse' && museSubmittingText(data);
+    if (museSubmit) this.museSubmissionsQueued++;
     const queued = this.writeChain.then(() => this.writeInput(data));
     // The chain must survive a failed write, or one rejection would wedge every
     // subsequent write on this session.
     this.writeChain = queued.then(
-      () => undefined,
-      () => undefined,
+      () => { if (museSubmit) this.museSubmissionsQueued--; },
+      () => { if (museSubmit) this.museSubmissionsQueued--; },
     );
     return queued;
   }
 
   private async writeInput(data: string): Promise<string> {
     this.refuseIfInputFailed();
+    this.refuseIfEnded();
     // Recorded BEFORE the bytes go in, when the screen still shows what this
     // input is answering: the waiter's stale-prompt guard needs that prompt,
     // and its echo guard needs the input itself.
@@ -1114,12 +1126,12 @@ export class Session implements WaitTarget {
     const { screen } = this.renderer.snapshot();
     this.stalePrompts.noteInput(screen);
 
-    const body = data.slice(0, -1);
-    if (this.agent === 'muse' && data.endsWith('\r') &&
-      Array.from(body).some((character) => character > ' ' && character !== '\x7f')) {
+    if (this.agent === 'muse' && museSubmittingText(data)) {
+      const body = data.slice(0, -1);
       await this.writeData(body);
       await new Promise((resolve) => setTimeout(resolve, MUSE_SUBMIT_DELAY_MS));
       this.refuseIfInputFailed();
+      this.refuseIfEnded();
       this.pty.write('\r');
       return screen;
     }
@@ -1176,6 +1188,10 @@ export class Session implements WaitTarget {
     if (this.inputFailure !== null) throw new SessionInputFailedError(this.id, this.inputFailure);
   }
 
+  private refuseIfEnded(): void {
+    if (this.exitedFlag || this.isKilled) throw new Error(`Session ${this.id} exited while input was being written.`);
+  }
+
   /**
    * Resize the PTY.
    *
@@ -1195,12 +1211,26 @@ export class Session implements WaitTarget {
    * by node-pty and run later; one that finds the program ended by then is
    * dropped (`windowsPtyStart.ts`).
    */
-  resize(cols: number, rows: number, options: { hold?: boolean } = {}): void {
+  resize(cols: number, rows: number, options: { hold?: boolean } = {}): void | Promise<void> {
+    if (this.agent === 'muse' && this.museSubmissionsQueued > 0) {
+      const queued = this.writeChain.then(() => this.resizeNow(cols, rows, options));
+      this.writeChain = queued.then(() => undefined, () => undefined);
+      return queued;
+    }
+    this.resizeNow(cols, rows, options);
+  }
+
+  private resizeNow(cols: number, rows: number, options: { hold?: boolean }): void {
     const ended = recordedExitCode(this.pty);
     if (ended !== undefined) throw new SessionProgramEndedError(this.id, ended);
     this.pty.resize(cols, rows);
     this.renderer.resize(cols, rows);
     if (options.hold !== undefined) this.geometryHeldFlag = options.hold;
+  }
+
+  answerablePrompt(screen: string, now = Date.now()): ReturnType<typeof detectPrompt> {
+    const styled = this.renderer.styledLines().lines;
+    return this.musePromptSettler.detect(screen, now, styled);
   }
 
   // ----------------------------------------------------------------- output

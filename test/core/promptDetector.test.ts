@@ -8,7 +8,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ScreenRenderer } from '../../src/core/renderer.js';
-import { detectPrompt } from '../../src/core/promptDetector.js';
+import { detectPrompt, MusePromptSettler, MUSE_MENU_SETTLE_MS } from '../../src/core/promptDetector.js';
 import { museWrappedScreen } from '../fixtures/museWrapped.js';
 
 async function museCapture(name: string): Promise<string> {
@@ -101,8 +101,35 @@ describe('detectPrompt: Muse Code', () => {
     expect(prompt?.signature).toContain(`Stage ${stage}`);
   });
 
-  it('offers the captured between-stages menu while it remains on screen', async () => {
-    expect(detectPrompt(await museCapture('muse-8b-between-stages'))?.signature).toContain('Stage 2/3');
+  it('holds the captured between-stages menu until its screen settles', async () => {
+    const screen = await museCapture('muse-8b-between-stages');
+    const settler = new MusePromptSettler();
+    expect(settler.detect(screen, 0)).toBeNull();
+    expect(settler.detect(screen, MUSE_MENU_SETTLE_MS - 1)).toBeNull();
+    expect(settler.detect(screen, MUSE_MENU_SETTLE_MS)?.signature).toContain('Stage 2/3');
+  });
+
+  it('restarts the settle clock when the menu changes', async () => {
+    const between = await museCapture('muse-8b-between-stages');
+    const active = await museCapture('muse-8d-stage3of3');
+    const settler = new MusePromptSettler();
+    expect(settler.detect(between, 0)).toBeNull();
+    expect(settler.detect(active, 1_000)).toBeNull();
+    expect(settler.detect(active, 1_000 + MUSE_MENU_SETTLE_MS - 1)).toBeNull();
+    expect(settler.detect(active, 1_000 + MUSE_MENU_SETTLE_MS)?.signature).toContain('Stage 3/3');
+  });
+
+  it('offers a bold Muse heading immediately', async () => {
+    const screen = await museCapture('muse-8b-between-stages');
+    const question = 'Would you like to run the following command?';
+    const lines = screen.split('\n').map((text) => ({ text, spans: [] as Array<{
+      from: number; to: number; bold: boolean; dim: boolean; italic: boolean;
+      inverse: boolean; fg: null; bg: null;
+    }> }));
+    const heading = lines.find((line) => line.text === question)!;
+    heading.spans.push({ from: 0, to: question.length, bold: true, dim: false,
+      italic: false, inverse: false, fg: null, bg: null });
+    expect(new MusePromptSettler().detect(screen, 0, lines)?.question).toBe(question);
   });
 
   it('recognises the active stage menu without an activity row', async () => {

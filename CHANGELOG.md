@@ -16,6 +16,8 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Staged approval menus now wait until their choices are ready, while quoted and completed menus no longer raise waiting alerts.
+- Resizing preserves the order of a submitted Enter and later input; input after a session ends is reported as failed, and text containing earlier Enters keeps its original timing.
 - Muse Code text submissions now send Enter after the text has reached the composer, so submitted prompts are no longer left unsent.
 - Muse Code two-option approvals now raise waiting alerts and resolve prompt waits, including when commands wrap across the screen.
 - Muse Code results now read answers above an empty composer hint and report typed, unsent text in the composer.
