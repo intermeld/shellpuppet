@@ -477,6 +477,16 @@ function overBudgetMessage(signature: CompiledSignature): string {
   );
 }
 
+/** Read one rendered frame for both a filtered wait predicate and its reply. */
+function filteredWaitScreen(session: Session, signature: CompiledSignature): {
+  screen: string; filtered: FilteredLines;
+} {
+  const view = session.styledScreenNow(REASONING_CONTEXT_LINES);
+  const filtered = hideReasoning(view.lines, signature, view.firstVisible);
+  if (filtered === null) throw new WaitConditionError(overBudgetMessage(signature));
+  return { screen: markFilteredSelectedOption(filtered.lines, view.lines).join('\n'), filtered };
+}
+
 /**
  * A query flag: absent, `0` or `false` is off, `1` or `true` is on, and
  * anything else is null, a mistake the caller is refused for. A flag that
@@ -1407,6 +1417,10 @@ export class Daemon {
   private async waitAcrossSessions(res: http.ServerResponse, url: URL): Promise<void> {
     const hide = queryFlag(url, 'hideReasoning');
     const now = queryFlag(url, 'now');
+    if (url.searchParams.has('text') || url.searchParams.has('regex')) {
+      await this.waitAcrossScreens(res, url, hide, now);
+      return;
+    }
     const timeoutText = url.searchParams.get('timeout');
     const timeout = timeoutText === null ? DEFAULT_WAIT_TIMEOUT_MS : Number(timeoutText);
     if (hide === null || now === null || url.searchParams.get('prompt') !== 'true' ||
@@ -1429,6 +1443,78 @@ export class Daemon {
         const waitedMs = Date.now() - started;
         if (sessions.length > 0 || now || waitedMs >= timeout) {
           json(res, 200, { matched: sessions.length > 0, reason: sessions.length > 0 ? 'prompt' : 'timeout', waitedMs, sessions });
+          return;
+        }
+        await new Promise((resolve) => setTimeout(resolve, Math.min(WAIT_POLL_INTERVAL_MS, timeout - waitedMs)));
+      }
+    } finally {
+      this.waitsInFlight -= 1;
+    }
+  }
+
+  /** Evaluate each named screen once per poll, returning the first visible match. */
+  private async waitAcrossScreens(res: http.ServerResponse, url: URL, hide: boolean | null, now: boolean | null): Promise<void> {
+    const text = url.searchParams.get('text');
+    const regex = url.searchParams.get('regex');
+    const timeout = Number(url.searchParams.get('timeout') ?? DEFAULT_WAIT_TIMEOUT_MS);
+    const debounce = Number(url.searchParams.get('debounce') ?? 0);
+    const ids = url.searchParams.getAll('session');
+    if (hide === null || now === null || (text === null) === (regex === null) || ids.length === 0 ||
+        url.searchParams.has('prompt') || url.searchParams.has('quiet') ||
+        !Number.isFinite(timeout) || timeout < 0 || timeout > MAX_WAIT_TIMEOUT_MS ||
+        !Number.isFinite(debounce) || debounce < 0) {
+      json(res, 400, { error: 'A multi-session text or regex wait needs named sessions and a valid timeout and debounce.' });
+      return;
+    }
+    const sessions: Session[] = [];
+    const readers = new Map<string, CompiledSignature>();
+    for (const id of ids) {
+      const session = this.manager.get(id);
+      if (session === undefined) {
+        json(res, 404, { error: 'No such session in session list.' });
+        return;
+      }
+      sessions.push(session);
+      if (hide) {
+        const reader = this.readerFor(session, res);
+        if (reader === null) return;
+        readers.set(id, reader);
+      }
+    }
+    const condition: WaitCondition = text !== null ? { text } : { regex: regex! };
+    const afterInput = url.searchParams.get('matchAfterInput');
+    const started = Date.now();
+    this.waitsInFlight += 1;
+    try {
+      while (!res.destroyed) {
+        for (const session of sessions) {
+          const reader = readers.get(session.id);
+          let view: ReturnType<typeof filteredWaitScreen> | undefined;
+          const result = await session.waitFor(condition, {
+            timeout: 0,
+            ...(afterInput === null ? {} : { matchAfterInput: afterInput !== 'false' && afterInput !== '0' }),
+            ...(reader === undefined ? {} : { screenForMatch: () => {
+              view = filteredWaitScreen(session, reader);
+              return view.screen;
+            } }),
+          });
+          if (result.matched && Date.now() - session.lastChangeAt() >= debounce) {
+            json(res, 200, {
+              ...result,
+              waitedMs: Date.now() - started,
+              id: session.id,
+              exited: session.exited,
+              exitCode: session.exitCode,
+              ...(reader === undefined || view === undefined ? {} : {
+                reasoning: { agent: reader.name, hiddenLines: view.filtered.hiddenLines, hiddenBlocks: view.filtered.hiddenBlocks },
+              }),
+            });
+            return;
+          }
+        }
+        const waitedMs = Date.now() - started;
+        if (now || waitedMs >= timeout) {
+          json(res, 200, { matched: false, reason: 'timeout', waitedMs, sessions: [] });
           return;
         }
         await new Promise((resolve) => setTimeout(resolve, Math.min(WAIT_POLL_INTERVAL_MS, timeout - waitedMs)));
@@ -2714,6 +2800,8 @@ export class Daemon {
         // become a prompt wait, and the waiter's exactly-one check counts
         // `prompt === true` only.
         if (prompt !== null) condition.prompt = prompt !== 'false' && prompt !== '0';
+        const filteredMatch = reader !== null && (condition.text !== undefined || condition.regex !== undefined);
+        let matchView: ReturnType<typeof filteredWaitScreen> | undefined;
         const timeoutParam = url.searchParams.get('timeout');
         const debounceParam = url.searchParams.get('debounce');
         const afterInputParam = url.searchParams.get('matchAfterInput');
@@ -2738,6 +2826,10 @@ export class Daemon {
             ...(afterInputParam !== null
               ? { matchAfterInput: afterInputParam !== 'false' && afterInputParam !== '0' }
               : {}),
+            ...(filteredMatch ? { screenForMatch: () => {
+              matchView = filteredWaitScreen(session, reader);
+              return matchView.screen;
+            } } : {}),
             signal: abort.signal,
           });
         } finally {
@@ -2747,6 +2839,16 @@ export class Daemon {
         // Nobody to answer, and writing to a closed response throws.
         if (abort.signal.aborted) return;
         if (reader !== null) {
+          if (filteredMatch && matchView !== undefined) {
+            json(res, 200, {
+              ...result,
+              reasoning: { agent: reader.name, hiddenLines: matchView.filtered.hiddenLines, hiddenBlocks: matchView.filtered.hiddenBlocks },
+              id: session.id,
+              exited: session.exited,
+              exitCode: session.exitCode,
+            });
+            return;
+          }
           // The screen as it stands now, a moment after the wait resolved,
           // with the reasoning left out.
           const view = await session.styledScreen(REASONING_CONTEXT_LINES);

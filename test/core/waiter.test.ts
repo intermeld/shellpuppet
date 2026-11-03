@@ -57,6 +57,23 @@ afterEach(() => {
 });
 
 describe('waitFor text/regex', () => {
+  it('uses the supplied screen for matching, the echo guard and the reply', async () => {
+    const target = new FakeTarget();
+    target.type('GO\r');
+    target.emit('> GO\nreasoning GO\nanswer GO');
+    const visible = '> GO\n[reasoning hidden]\nanswer GO';
+    const matched = await waitFor(target, { text: 'GO' }, {
+      ...POLL, matchAfterInput: true, screenForMatch: () => visible,
+    });
+    expect(matched).toMatchObject({ matched: true, reason: 'text', screen: visible });
+
+    const hidden = waitFor(target, { regex: 'reasoning GO' }, {
+      ...POLL, timeout: 100, matchAfterInput: true, screenForMatch: () => visible,
+    });
+    await vi.advanceTimersByTimeAsync(150);
+    expect(await hidden).toMatchObject({ matched: false, reason: 'timeout', screen: visible });
+  });
+
   it('resolves when the text appears in later output', async () => {
     const target = new FakeTarget();
     const wait = waitFor(target, { text: 'Ready' }, POLL);

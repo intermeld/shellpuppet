@@ -230,6 +230,46 @@ describe('the hideReasoning flag', () => {
 });
 
 describe('waiting without the reasoning', () => {
+  it('matches text and regex only on the filtered screen', async () => {
+    const id = await replay('qoder-answered-after-reasoning', 'qoder');
+    const raw = await api(td.port, td.token, `/sessions/${id}/wait?text=Thinking&timeout=0`);
+    expect(raw.body).toMatchObject({ matched: true, reason: 'text' });
+    for (const condition of ['text=Thinking', 'regex=%5E%20Thinking']) {
+      const hidden = await api(td.port, td.token, `/sessions/${id}/wait?${condition}&timeout=250&hideReasoning=1`);
+      expect(hidden.status).toBe(200);
+      expect(hidden.body).toMatchObject({ matched: false, reason: 'timeout' });
+      expect(String(hidden.body['screen'])).not.toContain('Thinking');
+    }
+    const answer = await api(td.port, td.token, `/sessions/${id}/wait?text=MANGO&timeout=1000&hideReasoning=1`);
+    expect(answer.body).toMatchObject({ matched: true, reason: 'text' });
+    expect(String(answer.body['screen'])).toContain('MANGO');
+  });
+
+  it('does not match a wrapped reasoning continuation', async () => {
+    const id = await longWrappedLine('wait-wrapped-reasoning', ` │ ${'S'.repeat(30 * 410)}`);
+    const raw = await api(td.port, td.token, `/sessions/${id}/wait?text=SSSS&timeout=0`);
+    expect(raw.body['matched']).toBe(true);
+    const hidden = await api(td.port, td.token, `/sessions/${id}/wait?regex=SSSS&timeout=250&hideReasoning=1`);
+    expect(hidden.body).toMatchObject({ matched: false, reason: 'timeout' });
+    expect(String(hidden.body['screen'])).not.toContain('SSSS');
+  }, 60_000);
+
+  it('matches only visible text across named sessions', async () => {
+    const hiddenId = await longWrappedLine('multi-hidden', ` │ ${'S'.repeat(30 * 410)}`);
+    const answerId = await longWrappedLine('multi-answer', ` ▪ ${'M'.repeat(30 * 410)}`);
+    const ids = `session=${hiddenId}&session=${answerId}`;
+    const raw = await api(td.port, td.token, `/sessions/wait?${ids}&text=SSSS&timeout=0`);
+    expect(raw.body).toMatchObject({ matched: true, reason: 'text', id: hiddenId });
+    const hidden = await api(td.port, td.token, `/sessions/wait?${ids}&text=SSSS&timeout=250&hideReasoning=1`);
+    expect(hidden.body).toMatchObject({ matched: false, reason: 'timeout' });
+    const hiddenRegex = await api(td.port, td.token, `/sessions/wait?${ids}&regex=SSSS&timeout=250&hideReasoning=1`);
+    expect(hiddenRegex.body).toMatchObject({ matched: false, reason: 'timeout' });
+    const answer = await api(td.port, td.token, `/sessions/wait?${ids}&regex=MMMM&timeout=1000&matchAfterInput=1&hideReasoning=1`);
+    expect(answer.body).toMatchObject({ matched: true, reason: 'regex' });
+    expect(answer.body['id']).toBe(answerId);
+    expect(String(answer.body['screen'])).toContain('MMMM');
+  }, 60_000);
+
   it('returns the screen it waited for with the reasoning left out', async () => {
     const id = await replay('qoder-answered-after-reasoning', 'qoder');
     const waited = await api(td.port, td.token, `/sessions/${id}/wait?quiet=300&timeout=20000&hideReasoning=1`);

@@ -90,6 +90,8 @@ Usage:
                                                     Wait for any listed session's prompt,
                                                     or every live session if no ids are given;
                                                     --now polls once without waiting
+  shellpuppet wait <id> <id>... [--text <s>|--regex <r>] [--hide-reasoning]
+                                                    Wait for the first matching named screen
   shellpuppet find <id> <pattern> [--hide-reasoning]
                                                     Regex-search the screen, with line numbers
       Prints each matching line as <row>: <text>. Nothing matching prints
@@ -519,21 +521,28 @@ async function main(): Promise<void> {
     }
 
     case 'wait': {
-      const multi = parsed.flags.get('prompt') === true && (parsed.positionals.length !== 1 || parsed.flags.get('now') === true);
+      const multi = (parsed.flags.get('prompt') === true && (parsed.positionals.length !== 1 || parsed.flags.get('now') === true)) ||
+        (parsed.positionals.length > 1 && (parsed.flags.has('text') || parsed.flags.has('regex')));
       if (multi) {
-        const params = new URLSearchParams({ prompt: 'true' });
+        const params = new URLSearchParams();
+        for (const name of ['text', 'regex', 'prompt', 'timeout', 'debounce'] as const) {
+          const value = parsed.flags.get(name);
+          if (value !== undefined) params.set(name, String(value));
+        }
         for (const id of parsed.positionals) params.append('session', id);
         if (parsed.flags.get('now') === true) params.set('now', 'true');
-        if (parsed.flags.has('timeout')) params.set('timeout', String(parsed.flags.get('timeout')));
+        if (parsed.flags.has('match-after-input')) params.set('matchAfterInput', String(parsed.flags.get('match-after-input')));
         if (parsed.flags.get('hide-reasoning') === true) params.set('hideReasoning', '1');
         const result = await call(connection, 'GET', `/sessions/wait?${params.toString()}`);
         if (wantJson) printJson(result);
         else {
-          for (const waiting of result['sessions'] as { id: string; label: string; question?: string; options?: string[]; selectedOption?: number; waitingMs: number }[]) {
+          for (const waiting of (result['sessions'] ?? []) as { id: string; label: string; question?: string; options?: string[]; selectedOption?: number; waitingMs: number }[]) {
             console.log(`${waiting.id}  ${waiting.label}  WAITING ${String(Math.round(waiting.waitingMs / 1000))}s` + (waiting.question === undefined ? '' : `: ${waiting.question}`));
             for (const [index, option] of (waiting.options ?? []).entries()) console.log(`    ${index === waiting.selectedOption ? '* ' : '  '}${option}`);
           }
-          console.error(`${result['matched'] === true ? 'matched' : 'NOT matched'} (${String(result['reason'])}, ${String(result['waitedMs'])} ms)`);
+          if (typeof result['screen'] === 'string') console.log(result['screen']);
+          const where = typeof result['id'] === 'string' ? ` in ${result['id']}` : '';
+          console.error(`${result['matched'] === true ? 'matched' : 'NOT matched'}${where} (${String(result['reason'])}, ${String(result['waitedMs'])} ms)`);
         }
         if (result['matched'] !== true && parsed.flags.get('now') !== true) process.exit(3);
         break;

@@ -734,6 +734,31 @@ describe('shellpuppet CLI', () => {
     }
   }, 120_000);
 
+  it('wait --hide-reasoning matches only the visible answer', async () => {
+    const fixtures = path.join(repoRoot, 'test', 'fixtures', 'reasoning');
+    const meta = JSON.parse(fs.readFileSync(path.join(fixtures, 'qoder-answered-after-reasoning.json'), 'utf8')) as { cols: number; rows: number };
+    const file = path.join(fixtures, 'qoder-answered-after-reasoning.ansi');
+    const script = `process.stdout.write(require('fs').readFileSync(${JSON.stringify(file)}, 'utf8')); setInterval(() => {}, 500)`;
+    const started = await cli('start', '--no-shell', '--hold', '--agent', 'qoder', '--cols', String(meta.cols), '--rows', String(meta.rows), process.execPath, '-e', script);
+    expect(started.code, whatHappened(started)).toBe(0);
+    const id = /^(s\d+)/m.exec(started.stdout)?.[1] ?? '';
+    try {
+      await eventually(async () => (await cli('snap', id)).stdout.includes('Type your message'), 30_000);
+      const raw = await cli('wait', id, '--text', 'Thinking', '--timeout', '0', '--json');
+      expect(raw.code, whatHappened(raw)).toBe(0);
+      const hidden = await cli('wait', id, '--text', 'Thinking', '--timeout', '250', '--hide-reasoning', '--json');
+      expect(hidden.code, whatHappened(hidden)).toBe(3);
+      expect(JSON.parse(hidden.stdout) as { matched: boolean }).toMatchObject({ matched: false });
+      const answer = await cli('wait', id, '--text', 'MANGO', '--timeout', '1000', '--hide-reasoning', '--json');
+      expect(answer.code, whatHappened(answer)).toBe(0);
+      const answerBody = JSON.parse(answer.stdout) as { matched: boolean; screen: string };
+      expect(answerBody.matched).toBe(true);
+      expect(answerBody.screen).toContain('MANGO');
+    } finally {
+      await cli('kill', id);
+    }
+  }, 120_000);
+
   it('daemon status names what passthrough hands every session, never the values (ADR-008)', async () => {
     // The daemon inherits the environment of the CLI that starts it, so a
     // credential-shaped variable set here is one passthrough would pass on.

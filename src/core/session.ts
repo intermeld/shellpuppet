@@ -26,6 +26,7 @@ import type { SerializeOptions, StyledLine } from './renderer.js';
 import { commandLine } from './policy.js';
 import { detectPrompt, StalePromptGuard } from './promptDetector.js';
 import { waitFor } from './waiter.js';
+import type { WaiterInternals } from './waiter.js';
 import type { WaitTarget } from './waiter.js';
 import {
   canReadExitCode,
@@ -1276,6 +1277,11 @@ export class Session implements WaitTarget {
     return this.renderer.styledLines({ above });
   }
 
+  /** Current rendered rows for a waiter evaluation, which already reads synchronously. */
+  styledScreenNow(above = 0): { lines: StyledLine[]; firstVisible: number } {
+    return this.renderer.styledLines({ above });
+  }
+
   /**
    * The last `count` lines, scrollback included, as drawn, with up to
    * `context` more lines over them; `firstVisible` is where the `count` begin.
@@ -1286,7 +1292,7 @@ export class Session implements WaitTarget {
     return { lines, firstVisible: Math.max(0, lines.length - count) };
   }
 
-  waitFor(condition: WaitCondition, options?: WaitOptions): Promise<WaitResult> {
+  waitFor(condition: WaitCondition, options?: WaitOptions & WaiterInternals): Promise<WaitResult> {
     return waitFor(this, condition, options);
   }
 

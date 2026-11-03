@@ -62,6 +62,8 @@ export interface WaitTarget {
 export interface WaiterInternals {
   /** Poll interval override, for tests only. */
   pollIntervalMs?: number;
+  /** Screen used for text and regex evaluation and returned with their result. */
+  screenForMatch?: () => string;
 }
 
 /** Thrown for caller mistakes: bad condition shape or an unparsable regex. */
@@ -256,7 +258,7 @@ export function waitFor(
       return undefined;
     };
     let settled = false;
-    const finish = (matched: boolean, reason: WaitResult['reason']): void => {
+    const finish = (matched: boolean, reason: WaitResult['reason'], screen = target.getScreen()): void => {
       if (settled) return;
       settled = true;
       options.signal?.removeEventListener('abort', onAbort);
@@ -265,7 +267,7 @@ export function waitFor(
         matched,
         reason,
         waitedMs: Date.now() - startedAt,
-        screen: target.getScreen(),
+        screen,
         ...(matchedPrompt !== null ? { prompt: promptForCaller(matchedPrompt) } : {}),
         ...(detail !== undefined ? { detail } : {}),
       });
@@ -273,7 +275,9 @@ export function waitFor(
 
     const step = (): void => {
       const now = Date.now();
-      const screen = target.getScreen();
+      const screen = pattern !== null && options.screenForMatch !== undefined
+        ? options.screenForMatch()
+        : target.getScreen();
 
       if (matchedAt === null) {
         if (pattern !== null) {
@@ -308,7 +312,7 @@ export function waitFor(
           }
         }
         if (matchedAt !== null && debounceMs === 0) {
-          finish(true, matchedReason ?? 'text');
+          finish(true, matchedReason ?? 'text', screen);
           return;
         }
       } else if (matchedReason === 'prompt') {
@@ -334,8 +338,15 @@ export function waitFor(
         // An exited process's screen is final and so trivially settled, and the
         // match must not be lost to the exit check below.
         if (now - target.lastChangeAt() >= debounceMs || target.isExited()) {
-          finish(true, matchedReason ?? 'text');
-          return;
+          if (pattern !== null && options.screenForMatch !== undefined) {
+            const from = afterInput ? (echoEnd(screen, target.lastInput() ?? '') ?? 0) : 0;
+            if (matchAt(screen, from) === -1) {
+              matchedAt = null;
+              matchedReason = null;
+            }
+          }
+          if (matchedAt !== null) finish(true, matchedReason ?? 'text', screen);
+          if (matchedAt !== null) return;
         }
       } else if (
         condition.quiet !== undefined &&
@@ -344,16 +355,16 @@ export function waitFor(
         target.hasPainted() &&
         now - target.lastChangeAt() >= condition.quiet
       ) {
-        finish(true, 'quiet');
+        finish(true, 'quiet', screen);
         return;
       }
 
       if (target.isExited()) {
-        finish(false, 'exited');
+        finish(false, 'exited', screen);
         return;
       }
       if (now - startedAt >= timeoutMs) {
-        finish(false, 'timeout');
+        finish(false, 'timeout', screen);
         return;
       }
       pollTimer = setTimeout(tick, pollMs);
