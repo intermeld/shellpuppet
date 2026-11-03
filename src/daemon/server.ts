@@ -2754,7 +2754,7 @@ export class Daemon {
         // become a prompt wait, and the waiter's exactly-one check counts
         // `prompt === true` only.
         if (prompt !== null) condition.prompt = prompt !== 'false' && prompt !== '0';
-        const filteredMatch = reader !== null && (condition.text !== undefined || condition.regex !== undefined);
+        const filteredMatch = reader !== null && (condition.text !== undefined || condition.regex !== undefined || condition.prompt === true);
         const muse = signatureFor(session.agent, session.command);
         let matchView: ReturnType<typeof filteredWaitScreen> | undefined;
         const timeoutParam = url.searchParams.get('timeout');

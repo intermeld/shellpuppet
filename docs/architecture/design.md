@@ -383,8 +383,10 @@ For `text`, `regex` and a single-session `prompt: true` wait, `debounce: <ms>`
 resolves after the condition has held on every poll for that long. A poll where
 the condition does not hold restarts the interval, so a mid-paint screen must
 settle. Output elsewhere on the screen, including an elapsed-time counter,
-does not restart it. With `hideReasoning`, text and regex are checked on the
-filtered screen at each poll. The reply reports the screen at settlement.
+does not restart it. With `hideReasoning`, text, regex and prompt are checked on
+the filtered screen at each poll. The reply reports that screen and its prompt
+at settlement. If the program exits, a match on its final screen settles at
+once, even before the debounce interval.
 `quiet` still means no output for its own interval.
 
 **`terminal_type` must warn about the echo trap in its own description.** Typing `foo` and
