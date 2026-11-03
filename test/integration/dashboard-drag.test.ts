@@ -572,7 +572,17 @@ it('ends a drag when sessions arrive or move to another window', async (context)
       command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], shell: false, openViewer: false,
     } });
     expect(added.status).toBe(200);
-    await new Promise(resolve => setTimeout(resolve, 650));
+    const waitFor = async (step: string, expression: string, ready: (value: unknown) => boolean) => {
+      let last: unknown;
+      const started = Date.now();
+      while (Date.now() - started < 10_000) {
+        last = await evaluate(expression);
+        if (ready(last)) return;
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      throw new Error(`${step} did not settle; last observed: ${JSON.stringify(last)}`);
+    };
+    await waitFor('the arriving third pane', "document.querySelectorAll('.pane').length", value => value === 3);
     const arrival = await evaluate(`(() => ({ count: document.querySelectorAll('.pane').length,
       same: document.querySelector('.pane-divider[data-axis="focus"]') === window.__arriveDivider,
       dragging: document.querySelector('.pane-divider[data-axis="focus"]').classList.contains('dragging'),
@@ -582,28 +592,42 @@ it('ends a drag when sessions arrive or move to another window', async (context)
     await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: current.x + current.width / 2, y, button: 'left', clickCount: 1 });
     await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: current.x + current.width / 2 - 110, y, button: 'left', buttons: 1 });
     const moved = await evaluate(`(async () => { const channel = new BroadcastChannel('shellpuppet.dashboard');
-      const id = await new Promise(resolve => { channel.onmessage = e => {
-        if (e.data?.type === 'window-roster' && e.data.window?.rank === 0) resolve(e.data.window.id);
-      }; });
-      channel.postMessage({ type: 'window-roster', token: 'test-other', window:
-        { id: 'test-other', rank: -1, openedAt: 1, width: 1300, height: 900 } });
-      await new Promise(resolve => setTimeout(resolve, 80));
-      channel.postMessage({ type: 'window-assignment', token: 'test-other', owner: 'test-other',
-        byWindow: { [id]: [document.querySelector('.pane').dataset.session] } });
-      await new Promise(resolve => setTimeout(resolve, 150));
-      window.__resizes.length = 0;
-      document.getElementById('text-larger').click();
-      await new Promise(resolve => setTimeout(resolve, 400));
-      channel.close();
-      return { count: document.querySelectorAll('.pane').length,
-        oldDragging: document.querySelector('.pane-divider.dragging') !== null,
-        divider: document.querySelector('.pane-divider[data-axis="focus"]') !== null,
-        stored: sessionStorage.getItem('shellpuppet.dashboard.tracks'), frames: window.__resizes.length }; })()`);
+      const waitFor = async (step, read, ready) => {
+        let last;
+        const started = performance.now();
+        while (performance.now() - started < 5000) {
+          last = read();
+          if (ready(last)) return last;
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        throw Error('Timed out waiting for ' + step + '; last observed: ' + JSON.stringify(last));
+      };
+      try {
+        let id;
+        channel.onmessage = e => { if (e.data?.type === 'window-roster' && e.data.window?.rank === 0)
+          id = e.data.window.id; };
+        channel.postMessage({ type: 'window-roster', token: 'test-other', window:
+          { id: 'test-other', instance: 'i-test', rank: -1, openedAt: 1, width: 1300, height: 900 } });
+        await waitFor('the local roster response', () => id, value => typeof value === 'string');
+        await waitFor('the second window in the share count',
+          () => document.getElementById('share-count').textContent, value => value.includes('2 windows'));
+        channel.postMessage({ type: 'window-assignment', token: 'test-other', owner: 'test-other',
+          byWindow: { [id]: [document.querySelector('.pane').dataset.session] } });
+        await waitFor('one assigned pane', () => document.querySelectorAll('.pane').length, value => value === 1);
+        window.__resizes.length = 0;
+        document.getElementById('text-larger').click();
+        await waitFor('the text-size resize', () => window.__resizes.length, value => value > 0);
+        return { count: document.querySelectorAll('.pane').length,
+          oldDragging: document.querySelector('.pane-divider.dragging') !== null,
+          divider: document.querySelector('.pane-divider[data-axis="focus"]') !== null,
+          stored: sessionStorage.getItem('shellpuppet.dashboard.tracks'), frames: window.__resizes.length };
+      } catch (error) { return { error: String(error) }; } finally { channel.close(); } })()`);
     await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: -30, y: -30, button: 'left', clickCount: 1 });
     return { arrival, moved };
   });
   const result = shot.probe as { arrival: { count: number; same: boolean; dragging: boolean; stored: string | null };
     moved: { count: number; oldDragging: boolean; divider: boolean; stored: string | null; frames: number } };
+  expect((result.moved as { error?: string }).error).toBeUndefined();
   expect(result.arrival.count).toBe(3);
   expect(result.arrival.same).toBe(false);
   expect(result.arrival.dragging).toBe(false);
@@ -624,7 +648,7 @@ it('ends and rebuilds a Focus divider when the same-count assignment changes its
       const id = window.__localId = await new Promise(resolve => { channel.onmessage = e => {
         if (e.data?.type === 'window-roster' && e.data.window?.rank === 0) resolve(e.data.window.id);
       }; channel.postMessage({ type: 'window-roster', token: 'test-swap', window:
-        { id: 'test-swap', rank: -1, openedAt: 1, width: 1300, height: 900 } }); });
+        { id: 'test-swap', instance: 'i-test', rank: -1, openedAt: 1, width: 1300, height: 900 } }); });
       const ids = window.__allIds = [...document.querySelectorAll('.pane')].map(pane => pane.dataset.session);
       channel.postMessage({ type: 'window-assignment', token: 'test-swap', owner: 'test-swap',
         byWindow: { [id]: ids.slice(0, 2) } });
@@ -714,30 +738,42 @@ it('forgets saved tracks when the pane count passes through zero', async (contex
     await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: x - 180, y, button: 'left', clickCount: 1 });
     const saved = await evaluate(`sessionStorage.getItem('shellpuppet.dashboard.tracks')`);
     const interval = await evaluate(`(async () => { const channel = new BroadcastChannel('shellpuppet.dashboard');
-      const id = await new Promise(resolve => { channel.onmessage = e => {
-        if (e.data?.type === 'window-roster' && e.data.window?.rank === 0) resolve(e.data.window.id);
-      }; });
-      const ids = [...document.querySelectorAll('.pane')].map(x => x.dataset.session);
-      channel.postMessage({ type: 'window-roster', token: 'test-zero', window:
-        { id: 'test-zero', rank: -1, openedAt: 1, width: 1300, height: 900 } });
-      await new Promise(resolve => setTimeout(resolve, 80));
-      channel.postMessage({ type: 'window-assignment', token: 'test-zero', owner: 'test-zero', byWindow: { [id]: [] } });
-      await new Promise(resolve => setTimeout(resolve, 120));
-      const empty = { count: document.querySelectorAll('.pane').length,
-        stored: sessionStorage.getItem('shellpuppet.dashboard.tracks') };
-      channel.postMessage({ type: 'window-assignment', token: 'test-zero', owner: 'test-zero', byWindow: { [id]: ids } });
-      await new Promise((resolve, reject) => { const deadline = setTimeout(() => reject(Error('panes did not return')), 5000);
-        const check = () => { if (document.querySelectorAll('.pane').length === ids.length) {
-          clearTimeout(deadline); resolve();
-        } else requestAnimationFrame(check); };
-        check(); });
-      const refilled = { count: document.querySelectorAll('.pane').length,
-        width: document.getElementById('strip').getBoundingClientRect().width };
-      channel.close(); return { empty, refilled }; })()`);
+      const waitFor = async (step, read, ready) => {
+        let last;
+        const started = performance.now();
+        while (performance.now() - started < 5000) {
+          last = read();
+          if (ready(last)) return last;
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        throw Error('Timed out waiting for ' + step + '; last observed: ' + JSON.stringify(last));
+      };
+      try {
+        let id;
+        channel.onmessage = e => { if (e.data?.type === 'window-roster' && e.data.window?.rank === 0)
+          id = e.data.window.id; };
+        const ids = [...document.querySelectorAll('.pane')].map(x => x.dataset.session);
+        channel.postMessage({ type: 'window-roster', token: 'test-zero', window:
+          { id: 'test-zero', instance: 'i-test', rank: -1, openedAt: 1, width: 1300, height: 900 } });
+        await waitFor('the local roster response', () => id, value => typeof value === 'string');
+        await waitFor('the second window in the share count',
+          () => document.getElementById('share-count').textContent, value => value.includes('2 windows'));
+        channel.postMessage({ type: 'window-assignment', token: 'test-zero', owner: 'test-zero', byWindow: { [id]: [] } });
+        await waitFor('all panes leaving', () => document.querySelectorAll('.pane').length, value => value === 0);
+        const empty = { count: document.querySelectorAll('.pane').length,
+          stored: sessionStorage.getItem('shellpuppet.dashboard.tracks') };
+        channel.postMessage({ type: 'window-assignment', token: 'test-zero', owner: 'test-zero', byWindow: { [id]: ids } });
+        await waitFor('the panes returning', () => document.querySelectorAll('.pane').length,
+          value => value === ids.length);
+        const refilled = { count: document.querySelectorAll('.pane').length,
+          width: document.getElementById('strip').getBoundingClientRect().width };
+        return { empty, refilled };
+      } catch (error) { return { error: String(error) }; } finally { channel.close(); } })()`);
     return { saved, ...(interval as object) };
   });
   const result = shot.probe as { saved: string | null; empty: { count: number; stored: string | null };
     refilled: { count: number; width: number } };
+  expect((result as { error?: string }).error).toBeUndefined();
   expect(result.saved).toContain('focusStrip');
   expect(result.empty.count).toBe(0);
   expect(result.empty.stored).toBeNull();

@@ -39,10 +39,10 @@ beforeAll(async () => {
 });
 afterAll(async () => {
   // This file starts about thirty sessions, and the harness drains them in
-  // batches of four at teardown (see startTestDaemon); under a full-suite
-  // load that outgrows the default hook budget.
+  // batches of four at teardown (see startTestDaemon). Eight batches can
+  // each take up to 30 seconds under load, followed by daemon shutdown.
   await td.stop();
-}, 180_000);
+}, 360_000);
 
 async function startNodeSession(marker: string): Promise<{ id: string; viewerUrl: string }> {
   const started = await api(td.port, td.token, '/sessions', {

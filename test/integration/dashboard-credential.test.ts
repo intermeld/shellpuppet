@@ -940,6 +940,43 @@ describe('the cookie does not open the routes outside the dashboard', () => {
 });
 
 describe('/dashboard/events', () => {
+  it('reports the exact closed document instance and never broadcasts a live claim', async () => {
+    const daemon = await startDash();
+    const { grant } = await openDashboard(daemon);
+    const page = await redeem(daemon, grant);
+    const cookie = cookiePair(page.headers);
+    const proof = csrfMeta(page.body) ?? '';
+    const observer = await connectFeed(daemon.port, cookie, proof);
+    const registrations = () => (daemon.daemon as unknown as {
+      dashboardWindowIds: Map<unknown, { id: string; instance: string }>
+    }).dashboardWindowIds;
+    const original = await connectFeed(daemon.port, cookie, proof);
+    try {
+      original.send(JSON.stringify({ type: 'window-register', id: 'test-window', instance: 'bad' }));
+      original.send(JSON.stringify({ type: 'window-register', id: 'test-window', instance: `i-${'x'.repeat(100)}` }));
+      original.send(JSON.stringify({ type: 'window-register', id: 'test-window', instance: 'i-old' }));
+      await eventually(() => [...registrations().values()].some(value =>
+        value.id === 'test-window' && value.instance === 'i-old'),
+      5_000, 50, 'the first document registration', () => [...registrations().values()]);
+      original.close();
+      await eventually(() => observer.frames.some(frame => frame.type === 'window-gone' &&
+        frame.id === 'test-window' && frame.instance === 'i-old'),
+      5_000, 50, 'the exact first document closure', () => observer.frames);
+      const replacement = await connectFeed(daemon.port, cookie, proof);
+      try {
+        replacement.send(JSON.stringify({ type: 'window-register', id: 'test-window', instance: 'i-new' }));
+        await eventually(() => [...registrations().values()].some(value =>
+          value.id === 'test-window' && value.instance === 'i-new'),
+        5_000, 50, 'the replacement document registration', () => [...registrations().values()]);
+        replacement.close();
+        await eventually(() => observer.frames.some(frame => frame.type === 'window-gone' &&
+          frame.id === 'test-window' && frame.instance === 'i-new'),
+        5_000, 50, 'the exact replacement document closure', () => observer.frames);
+        expect(observer.frames.some(frame => frame.type === 'window-live')).toBe(false);
+      } finally { replacement.close(); }
+    } finally { original.close(); observer.close(); }
+  });
+
   it('expires a dashboard socket that stops answering pings, allowing desktop to reopen', async () => {
     const daemon = await startDash({ dashboardHeartbeatIntervalMs: 30, dashboardHeartbeatTimeoutMs: 20 });
     const { grant } = await openDashboard(daemon);

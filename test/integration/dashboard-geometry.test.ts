@@ -318,12 +318,19 @@ it('keeps plain alternate-screen wheel input in the app and scrolls overflow wit
     expect(held.status).toBe(200);
     const geometry = await evaluate(`(async () => {
       document.querySelector('.pane').click(); document.getElementById('focus').click();
+      let lastGeometry;
       for (let attempt = 0; attempt < 100; attempt++) {
         const wrap = document.querySelector('#strip .pane-wrap');
+        lastGeometry = { overflow: wrap?.classList.contains('grid-overflow'),
+          width: wrap?.scrollWidth, clientWidth: wrap?.clientWidth,
+          height: wrap?.scrollHeight, clientHeight: wrap?.clientHeight };
         if (wrap?.classList.contains('grid-overflow') &&
             wrap.scrollWidth > wrap.clientWidth && wrap.scrollHeight > wrap.clientHeight) break;
         await new Promise(resolve => setTimeout(resolve, 100));
       }
+      if (!lastGeometry?.overflow || lastGeometry.width <= lastGeometry.clientWidth ||
+          lastGeometry.height <= lastGeometry.clientHeight)
+        throw new Error('Timed out waiting for Focus overflow geometry; last observed: ' + JSON.stringify(lastGeometry));
       const card = document.querySelector('#strip .pane');
       const wrap = card.querySelector('.pane-wrap');
       const rect = wrap.getBoundingClientRect();
@@ -331,22 +338,32 @@ it('keeps plain alternate-screen wheel input in the app and scrolls overflow wit
       return { x: rect.left + 45, y: rect.top + 45,
         maxX: wrap.scrollWidth - wrap.clientWidth, maxY: wrap.scrollHeight - wrap.clientHeight };
     })()`) as { x: number; y: number; maxX: number; maxY: number };
-    await eventually(async () => Boolean(await evaluate(`document.querySelector('#strip .xterm-rows')?.textContent.includes('READY')`)), 10_000);
+    let readyText: unknown;
+    await eventually(async () => {
+      readyText = await evaluate(`document.querySelector('#strip .xterm-rows')?.textContent`);
+      return String(readyText).includes('READY');
+    }, 10_000, 100, 'READY in the alternate screen', () => readyText);
     const wheel = async (deltaX: number, deltaY: number, modifiers = 0) => send('Input.dispatchMouseEvent', {
       type: 'mouseWheel', x: geometry.x, y: geometry.y, deltaX, deltaY, modifiers,
     });
     await wheel(0, 100);
-    await eventually(async () => Number(await evaluate('window.__inputs.length')) > 0, 5_000);
+    let inputCount = 0;
+    await eventually(async () => (inputCount = Number(await evaluate('window.__inputs.length'))) > 0,
+      5_000, 100, 'plain wheel input', () => inputCount);
     const plain = await evaluate(`(() => {
       const wrap = document.querySelector('#strip .pane-wrap');
       return { x: wrap.scrollLeft, y: wrap.scrollTop, inputs: window.__inputs.slice() }; })()`);
     await wheel(0, 100, 8);
-    await eventually(async () => Number(await evaluate("document.querySelector('#strip .pane-wrap')?.scrollTop")) > 0, 5_000);
+    let scrollTop = 0;
+    await eventually(async () => (scrollTop = Number(await evaluate("document.querySelector('#strip .pane-wrap')?.scrollTop"))) > 0,
+      5_000, 100, 'Shift wheel vertical overflow', () => scrollTop);
     const shifted = await evaluate(`(() => {
       const wrap = document.querySelector('#strip .pane-wrap');
       return { x: wrap.scrollLeft, y: wrap.scrollTop, inputs: window.__inputs.slice() }; })()`);
     await wheel(100, 0);
-    await eventually(async () => Number(await evaluate("document.querySelector('#strip .pane-wrap')?.scrollLeft")) > 0, 5_000);
+    let scrollLeft = 0;
+    await eventually(async () => (scrollLeft = Number(await evaluate("document.querySelector('#strip .pane-wrap')?.scrollLeft"))) > 0,
+      5_000, 100, 'horizontal wheel overflow', () => scrollLeft);
     const horizontal = await evaluate(`(() => {
       const wrap = document.querySelector('#strip .pane-wrap');
       return { x: wrap.scrollLeft, y: wrap.scrollTop, inputs: window.__inputs.slice() }; })()`);

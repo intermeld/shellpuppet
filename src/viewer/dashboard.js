@@ -45,6 +45,7 @@
       : Number.isInteger(configuredFont) && configuredFont >= 8 && configuredFont <= 32 ? configuredFont : null;
   let autoFitTimer = null;
   let assignmentSettleUntil = 0;
+  let assignmentSettleStartedAt = 0;
   if (!window.name) window.name = `shellpuppet-dashboard-${Date.now()}-${Math.random()}`;
   let tracks = { count: 0, focusStrip: null, columns: null, rows: null };
   try {
@@ -76,6 +77,8 @@
   const pendingOpen = new Map();
   const popWatches = new Map();
   const windowToken = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  const windowInstance = `i-${[...window.crypto.getRandomValues(new Uint8Array(16))]
+    .map((byte) => byte.toString(16).padStart(2, '0')).join('')}`;
   const openedAt = window.performance.timeOrigin + window.performance.now();
   const screenParams = new URLSearchParams(location.hash.slice(1));
   const windowId = screenParams.get('screen') || windowToken;
@@ -83,7 +86,9 @@
   const screenKey = screenParams.get('key');
   let currentScreenKey = screenKey;
   const windows = new Map();
-  const goneWindows = new Set();
+  const goneWindows = new Map();
+  const validWindowId = (id) => typeof id === 'string' && id.length <= 100 &&
+    /^[a-z0-9]+-[a-z0-9]+(?:-[1-9][0-9]*)?$/.test(id);
   const lastSeen = new Map();
   const childWatches = new Map();
   let rosterTimer = null;
@@ -107,7 +112,7 @@
   let lastLayout = null;
   let lastStructure = null;
   let lastVisibilityGeometry = null;
-  if (popSelf === null) windows.set(windowId, { id: windowId, rank: windowRank, openedAt, key: screenKey,
+  if (popSelf === null) windows.set(windowId, { id: windowId, instance: windowInstance, rank: windowRank, openedAt, key: screenKey,
     width: window.innerWidth - 12, height: window.innerHeight - 54 });
   let channel = null;
   try { channel = new BroadcastChannel('shellpuppet.dashboard'); } catch { /* This window still tracks a pop-out it opened. */ }
@@ -235,16 +240,20 @@
     autoFitTimer = setTimeout(() => {
       autoFitTimer = null;
       if (window.performance.now() < assignmentSettleUntil) { scheduleAutoFit(); return; }
+      assignmentSettleStartedAt = 0;
       for (const item of shown()) {
         if (!visible(item)) continue;
         item.client?.autoFitGrid(80, 24, focusOpenFits.has(item.id) || incomingFits.has(item.id));
       }
-    }, Math.max(250, assignmentSettleUntil - window.performance.now()));
+    }, assignmentSettleUntil > window.performance.now()
+      ? Math.max(0, assignmentSettleUntil - window.performance.now()) : 250);
   }
   function settleAssignmentFits() {
     // A feed change and its window assignment can arrive in separate tasks.
     // Wait for the last change before taking a pane's grid.
-    assignmentSettleUntil = window.performance.now() + 900;
+    const now = window.performance.now();
+    if (assignmentSettleStartedAt === 0) assignmentSettleStartedAt = now;
+    assignmentSettleUntil = Math.min(now + 900, assignmentSettleStartedAt + 3000);
     scheduleAutoFit();
   }
   function broadcastPreferences() {
@@ -252,6 +261,7 @@
   }
   function setFontSize(value, broadcast = true) {
     assignmentSettleUntil = 0;
+    assignmentSettleStartedAt = 0;
     fontSize = value;
     for (const item of panes.values()) item.client?.setFontOverride(value);
     renderPreferences(); persist(); scheduleAutoFit();
@@ -270,7 +280,7 @@
     screen.availWidth, screen.availHeight].join(',');
   const orderedWindows = () => [...windows.values()].filter((entry) => entry.ready !== false)
     .sort((a, b) => a.rank - b.rank || a.openedAt - b.openedAt || a.id.localeCompare(b.id));
-  const ownWindow = () => ({ id: windowId, rank: windowRank, openedAt, key: currentScreenKey,
+  const ownWindow = () => ({ id: windowId, instance: windowInstance, rank: windowRank, openedAt, key: currentScreenKey,
     width: Math.max(1, root.clientWidth - 12), height: Math.max(1, root.clientHeight - 12) });
   function advertise() {
     if (popSelf !== null || channel === null) return;
@@ -300,8 +310,8 @@
     channel.postMessage({ type: 'window-assignment', owner: windowId, byWindow, token: windowToken });
     applyAssignment(byWindow[windowId] || []);
   }
-  function removeWindow(id) {
-    goneWindows.add(id);
+  function removeWindow(id, instance) {
+    if (instance && windows.get(id)?.instance && windows.get(id).instance !== instance) return;
     if (!windows.delete(id)) return;
     settleAssignmentFits();
     lastSeen.delete(id);
@@ -834,7 +844,10 @@
     positionDividers();
   }
   function arrange(trigger = 'unspecified') {
-    if (trigger === 'enlarge' || trigger === 'restore' || trigger === 'window resize') assignmentSettleUntil = 0;
+    if (trigger === 'enlarge' || trigger === 'restore' || trigger === 'window resize') {
+      assignmentSettleUntil = 0;
+      assignmentSettleStartedAt = 0;
+    }
     traceArrange(trigger);
     if (arranging || syncingVisibility) {
       pendingArrange = true;
@@ -945,8 +958,17 @@
   }
   function receive(frame) {
     if (!frame || typeof frame.type !== 'string') return;
-    if (frame.type === 'window-live' && typeof frame.id === 'string') { goneWindows.delete(frame.id); return; }
-    if (frame.type === 'window-gone' && typeof frame.id === 'string') { removeWindow(frame.id); return; }
+    if (frame.type === 'window-gone' && validWindowId(frame.id) && validWindowId(frame.instance)) {
+      if (popSelf !== null) return;
+      const now = Date.now();
+      for (const [pair, closedAt] of goneWindows) if (now - closedAt > 600_000) goneWindows.delete(pair);
+      const pair = JSON.stringify([frame.id, frame.instance]);
+      goneWindows.delete(pair);
+      goneWindows.set(pair, now);
+      while (goneWindows.size > 64) goneWindows.delete(goneWindows.keys().next().value);
+      removeWindow(frame.id, frame.instance);
+      return;
+    }
     if (frame.type === 'snapshot' && Array.isArray(frame.sessions)) reconcile(frame.sessions, true);
     else if (frame.type === 'session-added' && frame.session?.id) {
       if (!panes.has(frame.session.id) && !dismissed.has(frame.session.id)) {
@@ -966,7 +988,7 @@
     feed = new WebSocket(`ws://${location.host}/dashboard/events`, [`sp-csrf.${proof}`]);
     feed.onopen = () => {
       connection.textContent = 'Connected'; error.hidden = true;
-      if (popSelf === null) feed.send(JSON.stringify({ type: 'window-register', id: windowId }));
+      if (popSelf === null) feed.send(JSON.stringify({ type: 'window-register', id: windowId, instance: windowInstance }));
     };
     feed.onmessage = (event) => {
       try { receive(JSON.parse(event.data)); } catch { showError('The session feed sent an unreadable update.'); }
@@ -1259,10 +1281,13 @@
       return;
     }
     if (data.type === 'window-roster' && popSelf === null && data.window &&
-        typeof data.window.id === 'string' && Number.isFinite(data.window.rank) &&
+        validWindowId(data.window.id) && validWindowId(data.window.instance) &&
+        Number.isFinite(data.window.rank) &&
         Number.isFinite(data.window.openedAt) &&
         Number.isFinite(data.window.width) && Number.isFinite(data.window.height)) {
-      if (goneWindows.has(data.window.id)) return;
+      const now = Date.now();
+      for (const [pair, closedAt] of goneWindows) if (now - closedAt > 600_000) goneWindows.delete(pair);
+      if (goneWindows.has(JSON.stringify([data.window.id, data.window.instance]))) return;
       const fresh = !windows.has(data.window.id);
       const previous = windows.get(data.window.id);
       windows.set(data.window.id, data.window);
@@ -1273,8 +1298,8 @@
       renderShareCount();
       return;
     }
-    if (data.type === 'window-leave' && typeof data.id === 'string') {
-      removeWindow(data.id);
+    if (data.type === 'window-leave' && validWindowId(data.id) && validWindowId(data.instance)) {
+      removeWindow(data.id, data.instance);
       return;
     }
     if (data.type === 'window-assignment' && popSelf === null && windows.size > 1 &&
@@ -1295,6 +1320,8 @@
 
   for (const name of ['auto', 'grid', 'focus']) {
     document.getElementById(name).addEventListener('click', () => {
+      assignmentSettleUntil = 0;
+      assignmentSettleStartedAt = 0;
       if (name === 'focus') focusId = selected;
       if (name === 'auto' || name === 'grid') resetTracks();
       mode = name; enlarged = null; persist(); arrange('mode');
@@ -1308,6 +1335,7 @@
   strip.addEventListener('scroll', syncVisibility);
   document.getElementById('auto-fit').addEventListener('click', () => {
     assignmentSettleUntil = 0;
+    assignmentSettleStartedAt = 0;
     autoFit = !autoFit;
     renderPreferences(); persist(); scheduleAutoFit(); broadcastPreferences();
   });
@@ -1357,7 +1385,7 @@
   function leaveWindow() {
     if (popSelf !== null || windowLeft) return;
     windowLeft = true;
-    channel?.postMessage({ type: 'window-leave', id: windowId, token: windowToken });
+    channel?.postMessage({ type: 'window-leave', id: windowId, instance: windowInstance, token: windowToken });
   }
   document.addEventListener('keydown', (event) => {
     if (choosingPrefix) {

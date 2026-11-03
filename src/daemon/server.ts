@@ -646,7 +646,7 @@ export class Daemon {
    */
   private readonly dashboardEventSockets = new Set<WebSocket>();
   /** Opaque roster ids carried by dashboard feed sockets, never used for authorisation. */
-  private readonly dashboardWindowIds = new Map<WebSocket, string>();
+  private readonly dashboardWindowIds = new Map<WebSocket, { id: string; instance: string }>();
 
   private readonly liveDashboardEventSockets = new Set<WebSocket>();
   /** A launched dashboard has 30 seconds to connect before a start may retry. */
@@ -3746,23 +3746,23 @@ export class Daemon {
         frame = JSON.parse(bytes.toString('utf8'));
       } catch { return; }
       if (typeof frame !== 'object' || frame === null) return;
-      const claim = frame as { type?: unknown; id?: unknown };
+      const claim = frame as { type?: unknown; id?: unknown; instance?: unknown };
       if (claim.type !== 'window-register' || typeof claim.id !== 'string' ||
-          !/^[a-z0-9]+-[a-z0-9]+(?:-[1-9][0-9]*)?$/.test(claim.id) || claim.id.length > 100) return;
-      this.dashboardWindowIds.set(ws, claim.id);
-      const notice = JSON.stringify({ type: 'window-live', id: claim.id });
-      for (const peer of this.dashboardEventSockets) {
-        if (peer.readyState === peer.OPEN) peer.send(notice);
-      }
+          !/^[a-z0-9]+-[a-z0-9]+(?:-[1-9][0-9]*)?$/.test(claim.id) || claim.id.length > 100 ||
+          typeof claim.instance !== 'string' ||
+          !/^[a-z0-9]+-[a-z0-9]+(?:-[1-9][0-9]*)?$/.test(claim.instance) ||
+          claim.instance.length > 100) return;
+      this.dashboardWindowIds.set(ws, { id: claim.id, instance: claim.instance });
     });
     ws.on('close', () => {
-      const windowId = this.dashboardWindowIds.get(ws);
+      const windowClaim = this.dashboardWindowIds.get(ws);
       this.dashboardWindowIds.delete(ws);
       unsubscribe();
       this.sockets.delete(ws);
       this.dashboardEventSockets.delete(ws);
-      if (windowId !== undefined && ![...this.dashboardWindowIds.values()].includes(windowId)) {
-        const notice = JSON.stringify({ type: 'window-gone', id: windowId });
+      if (windowClaim !== undefined && ![...this.dashboardWindowIds.values()].some((other) =>
+        other.id === windowClaim.id && other.instance === windowClaim.instance)) {
+        const notice = JSON.stringify({ type: 'window-gone', ...windowClaim });
         for (const peer of this.dashboardEventSockets) {
           if (peer.readyState === peer.OPEN) peer.send(notice);
         }

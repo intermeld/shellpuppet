@@ -41,6 +41,54 @@ async function browserProbe(beforeNavigateScript: string, probe: string): Promis
   return JSON.parse(String(shot.probe)) as Record<string, unknown>;
 }
 
+async function rosterProbe(script: string): Promise<Record<string, unknown>> {
+  const shot = await captureDashboard({ browser: browser!, viewerUrl: await freshUrl(), width: 1280,
+    height: 720, drive: true, timeoutMs: 30_000,
+    beforeNavigateScript: `(() => {
+      const send = WebSocket.prototype.send;
+      WebSocket.prototype.send = function(data) {
+        if (typeof data === 'string' && data.includes('"type":"window-register"')) window.__rosterFeed = this;
+        return send.call(this, data);
+      };
+    })()`,
+    probe: `(() => document.getElementById('connection')?.textContent === 'Connected' && window.__rosterFeed ? true : null)()`,
+    interact: async ({ evaluate }) => evaluate(script),
+  });
+  return shot.probe as Record<string, unknown>;
+}
+
+async function rosterSteps(steps: string): Promise<Record<string, unknown>> {
+  return rosterProbe(`(async () => {
+    const share = () => document.getElementById('share-count')?.textContent || '';
+    const waitFor = async (step, ready) => {
+      let last;
+      const started = performance.now();
+      while (performance.now() - started < 5000) {
+        last = share();
+        if (ready(last)) return last;
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      throw new Error('Timed out waiting for ' + step + '; last observed: ' + JSON.stringify(last));
+    };
+    const channel = new BroadcastChannel('shellpuppet.dashboard');
+    const roster = (id, instance) => ({ type: 'window-roster', token: 'test-roster',
+      window: { id, instance, rank: 1000, openedAt: Date.now(), key: null, width: 1280, height: 720 } });
+    const notice = (id, instance) => window.__rosterFeed.onmessage({
+      data: JSON.stringify({ type: 'window-gone', id, instance }) });
+    const barrier = () => new Promise(resolve => {
+      const marker = 'test-barrier-' + Math.random();
+      const observer = new BroadcastChannel('shellpuppet.dashboard');
+      observer.onmessage = event => {
+        if (event.data?.type !== marker) return;
+        observer.close(); resolve();
+      };
+      channel.postMessage({ type: marker, token: 'test-roster' });
+    });
+    try { ${steps} } catch (error) { return { error: String(error) }; }
+    finally { channel.close(); }
+  })()`);
+}
+
 async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', dragCheck = false, held = false): Promise<{
   before: { primary: string[]; other: string[]; childConnected: string };
   after: string[];
@@ -305,6 +353,78 @@ describe('dashboard screen assignment', () => {
 });
 
 describe('dashboard screen controls in Chromium', () => {
+  it('accepts a still-connected window when it advertises after roster silence', async (context) => {
+    if (!browser) { context.skip(); return; }
+    const result = await rosterSteps(`
+      channel.postMessage(roster('silent-window', 'i-old'));
+      const before = await waitFor('the second window roster', value => value.includes('2 windows'));
+      const nativeNow = Date.now;
+      Date.now = () => nativeNow() + 181000;
+      let removed;
+      try { removed = await waitFor('the 180 second roster timeout', value => value.includes('1 window')); }
+      finally { Date.now = nativeNow; }
+      channel.postMessage(roster('silent-window', 'i-old'));
+      const returned = await waitFor('the returning window roster', value => value.includes('2 windows'));
+      return { before, removed, returned };
+    `);
+    expect(result.error).toBeUndefined();
+    expect(result.before, JSON.stringify(result)).toContain('2 windows');
+    expect(result.removed).toContain('1 window');
+    expect(result.returned).toContain('2 windows');
+  }, 60_000);
+
+  it('keeps a closed instance out when another socket claims its window id, then accepts a reload', async (context) => {
+    if (!browser) { context.skip(); return; }
+    const result = await rosterSteps(`
+      channel.postMessage(roster('closed-window', 'i-old'));
+      await waitFor('the original window roster', value => value.includes('2 windows'));
+      notice('closed-window', 'i-old');
+      await waitFor('the closed window removal', value => value.includes('1 window'));
+      window.__rosterFeed.onmessage({ data: JSON.stringify({ type: 'window-live', id: 'closed-window' }) });
+      channel.postMessage(roster('closed-window', 'i-old'));
+      await barrier();
+      const afterLate = share();
+      channel.postMessage(roster('closed-window', 'i-new'));
+      const afterReload = await waitFor('the new document instance', value => value.includes('2 windows'));
+      return { afterLate, afterReload };
+    `);
+    expect(result.error).toBeUndefined();
+    expect(result.afterLate).toContain('1 window');
+    expect(result.afterReload).toContain('2 windows');
+  }, 60_000);
+
+  it('retains only the 64 most recent closed window instances', async (context) => {
+    if (!browser) { context.skip(); return; }
+    const result = await rosterSteps(`
+      for (let index = 1; index <= 100; index++) notice('closed-' + index, 'i-instance');
+      channel.postMessage(roster('closed-37', 'i-instance'));
+      await barrier();
+      const retained = share();
+      channel.postMessage(roster('closed-36', 'i-instance'));
+      const evicted = await waitFor('the oldest evicted tombstone roster', value => value.includes('2 windows'));
+      return { retained, evicted };
+    `);
+    expect(result.error).toBeUndefined();
+    expect(result.retained, JSON.stringify(result)).toContain('1 window');
+    expect(result.evicted).toContain('2 windows');
+  }, 60_000);
+
+  it('forgets closed window instances after ten minutes', async (context) => {
+    if (!browser) { context.skip(); return; }
+    const result = await rosterSteps(`
+      notice('expired-window', 'i-instance');
+      const nativeNow = Date.now;
+      Date.now = () => nativeNow() + 601000;
+      try {
+        channel.postMessage(roster('expired-window', 'i-instance'));
+        const returned = await waitFor('the expired tombstone roster', value => value.includes('2 windows'));
+        return { returned };
+      } finally { Date.now = nativeNow; }
+    `);
+    expect(result.error).toBeUndefined();
+    expect(result.returned, JSON.stringify(result)).toContain('2 windows');
+  }, 60_000);
+
   const screenA = { availLeft: 0, availTop: 0, availWidth: 1280, availHeight: 720, isPrimary: true };
   const screenB = { availLeft: 1280, availTop: 20, availWidth: 1900, availHeight: 1000 };
   const screenC = { availLeft: -1600, availTop: 40, availWidth: 1600, availHeight: 900 };
