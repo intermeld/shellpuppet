@@ -235,7 +235,6 @@ export class ScreenRenderer {
     if (options.last === undefined) {
       end = buffer.baseY + this.term.rows - 1;
       start = Math.max(0, buffer.baseY - Math.max(0, options.above ?? 0));
-      firstVisible = buffer.baseY - start;
     } else {
       end = buffer.length - 1;
       while (end >= 0) {
@@ -245,6 +244,13 @@ export class ScreenRenderer {
       }
       start = Math.max(0, end - options.last + 1);
     }
+    // A read can begin in the middle of a soft-wrapped logical line. Include
+    // its parent as context so the reasoning filter can classify the visible
+    // continuation. The walk stops at the finite buffer boundary.
+    if (options.above !== undefined || options.last !== undefined) {
+      while (start > 0 && buffer.getLine(start)?.isWrapped) start--;
+    }
+    if (options.last === undefined) firstVisible = buffer.baseY - start;
     const lines: StyledLine[] = [];
     const cell = buffer.getNullCell();
     for (let y = start; y <= end; y++) {

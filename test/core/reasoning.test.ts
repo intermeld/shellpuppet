@@ -182,17 +182,43 @@ describe('the generic engine', () => {
     renderer.dispose();
   });
 
-  it('hides a leading continuation when its parent is outside the read window', async () => {
+  it('hides a leading continuation by reading its parent above the window', async () => {
     const renderer = new ScreenRenderer({ cols: 30, rows: 10 });
     await renderer.write(`Thinking ${'SECRET_'.repeat(8)}\r\nAnswer MANGO`);
     const tail = renderer.styledLines({ last: 3 });
-    expect(tail.lines[0]?.wrapped).toBe(true);
+    expect(tail.lines[0]?.wrapped).not.toBe(true);
     const filtered = hideReasoning(tail.lines, compileSignatures([{
       name: 'wrapped', composer: { text: '^>' }, reasoning: [{ start: { text: '^Thinking' } }],
       answer: { start: { text: '^Answer' } },
     }]).signatures[0]!);
     expect(filtered?.lines.join('\n')).not.toContain('SECRET_');
     expect(filtered?.lines.join('\n')).toContain('MANGO');
+    renderer.dispose();
+  });
+
+  it('reads beyond the context window to keep a wrapped answer', async () => {
+    const renderer = new ScreenRenderer({ cols: 30, rows: 10 });
+    await renderer.write(` ▪ ${'M'.repeat(30 * 410)}\r\n> `);
+    const signature = builtIn('qoder');
+    const view = renderer.styledLines({ above: 400 });
+    expect(view.lines[0]?.wrapped).not.toBe(true);
+    expect(view.firstVisible).toBeGreaterThan(400);
+    expect(hideReasoning(view.lines, signature, view.firstVisible)?.lines.join('\n')).toContain('MMMM');
+    const tail = renderer.styledLines({ last: 403 });
+    const firstVisible = Math.max(0, tail.lines.length - 3);
+    expect(tail.lines[0]?.wrapped).not.toBe(true);
+    expect(hideReasoning(tail.lines, signature, firstVisible)?.lines.join('\n')).toContain('MMMM');
+    renderer.dispose();
+  });
+
+  it('keeps hiding a continuation whose parent has left the buffer', async () => {
+    const renderer = new ScreenRenderer({ cols: 30, rows: 10, scrollback: 5 });
+    await renderer.write(` │ ${'S'.repeat(30 * 25)}\r\n> `);
+    const view = renderer.styledLines({ above: 400 });
+    expect(view.lines[0]?.wrapped).toBe(true);
+    const filtered = hideReasoning(view.lines, builtIn('qoder'), view.firstVisible);
+    expect(filtered?.lines.join('\n')).not.toContain('SSSS');
+    expect(filtered?.hiddenLines).toBeGreaterThan(0);
     renderer.dispose();
   });
 
