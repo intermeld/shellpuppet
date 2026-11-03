@@ -184,6 +184,64 @@ it('debounces a changing-width drag into one resize after settling', async (cont
   expect(result.frames[0]).toMatchObject({ take: true });
 }, 150_000);
 
+it('clears a same-size Fit request and sends no repeat take across three relayouts', async (context) => {
+  if (!browser) { context.skip(); return; }
+  const urls: string[] = [];
+  const daemon = running = await startTestDaemon({
+    launcher: (url) => { urls.push(url); return Promise.resolve({ launched: true, mode: 'isolated-app', browser: 'mock' }); },
+    idleCheckIntervalMs: 600_000,
+  });
+  const started = await api(daemon.port, daemon.token, '/sessions', { body: {
+    command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], shell: false,
+    openViewer: false, cols: 100, rows: 30,
+  } });
+  expect(started.status).toBe(200);
+  expect((await api(daemon.port, daemon.token, '/dashboard/open', { method: 'POST', body: {} })).status).toBe(200);
+  const shot = await captureDashboard({ browser, viewerUrl: urls.at(-1)!, width: 1400, height: 900,
+    drive: true, timeoutMs: 120_000,
+    probe: `(() => document.querySelector('.pane-size')?.textContent.includes('×') ? true : null)()`,
+    interact: async ({ evaluate }) => evaluate(`(async () => {
+      const socket = window.__dashboardDiagnostics.streams.find(entry =>
+        entry.url.includes('/stream') && entry.socket.readyState === 1)?.socket;
+      if (!socket) return { error: 'no pane socket' };
+      const takes = [];
+      const geometry = [];
+      const send = socket.send.bind(socket);
+      socket.send = data => {
+        if (typeof data === 'string' && data.includes('"take":true')) takes.push(JSON.parse(data));
+        return send(data);
+      };
+      socket.addEventListener('message', event => {
+        if (typeof event.data !== 'string') return;
+        try { const frame = JSON.parse(event.data); if (frame.type === 'geometry') geometry.push(frame); } catch {}
+      });
+      const waitForGeometry = async count => {
+        for (let attempt = 0; attempt < 100; attempt++) {
+          if (geometry.length >= count) return true;
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        return false;
+      };
+      const fit = () => document.querySelector('.pane button[aria-label="Fit"]').click();
+      fit();
+      if (!await waitForGeometry(1)) return { error: 'first Fit was not acknowledged', takes, geometry };
+      takes.length = 0;
+      geometry.length = 0;
+      fit();
+      const acknowledged = await waitForGeometry(1);
+      const sameSize = takes.length === 1 && geometry[0]?.cols === takes[0]?.cols &&
+        geometry[0]?.rows === takes[0]?.rows && geometry[0]?.control === 'yours';
+      takes.length = 0;
+      for (let index = 0; index < 3; index++) {
+        window.dispatchEvent(new Event('resize'));
+        await new Promise(resolve => setTimeout(resolve, 400));
+      }
+      return { acknowledged, sameSize, repeats: takes.length };
+    })()`),
+  });
+  expect(shot.probe).toMatchObject({ acknowledged: true, sameSize: true, repeats: 0 });
+}, 150_000);
+
 it('keeps pane control through Enlarge, a closed session, and Restore in two windows', async (context) => {
   if (!browser) { context.skip(); return; }
   const urls: string[] = [];
@@ -192,7 +250,7 @@ it('keeps pane control through Enlarge, a closed session, and Restore in two win
     idleCheckIntervalMs: 600_000,
   });
   const ids: string[] = [];
-  for (let index = 0; index < 5; index++) {
+  for (let index = 0; index < 6; index++) {
     const started = await api(daemon.port, daemon.token, '/sessions', { body: {
       command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], shell: false,
       openViewer: false, cols: 129, rows: 49,
@@ -213,27 +271,55 @@ it('keeps pane control through Enlarge, a closed session, and Restore in two win
       };
     })()`,
     probe: `(() => document.getElementById('connection')?.textContent === 'Connected' &&
-      document.querySelectorAll('.pane-size').length === 5 &&
+      document.querySelectorAll('.pane-size').length === 6 &&
       [...document.querySelectorAll('.pane-size')].every(node => node.textContent.includes('×')) ? true : null)()`,
     interact: async ({ evaluate, send }) => {
-      await send('Target.createTarget', { url: `${new URL(urls.at(-1)!).origin}/dashboard` });
+      const target = await send('Target.createTarget', { url: 'about:blank' }, true) as { targetId: string };
+      const attached = await send('Target.attachToTarget', { targetId: target.targetId, flatten: true }, true) as { sessionId: string };
+      const evaluateSecond = async (expression: string): Promise<unknown> => {
+        const response = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true },
+          attached.sessionId) as { result: { value?: unknown } };
+        return response.result.value;
+      };
+      await send('Page.enable', {}, attached.sessionId);
+      await send('Emulation.setDeviceMetricsOverride',
+        { width: 1920, height: 1080, deviceScaleFactor: 1, mobile: false }, attached.sessionId);
+      await send('Page.navigate', { url: `${new URL(urls.at(-1)!).origin}/dashboard` }, attached.sessionId);
       const shared = await evaluate(`(async () => {
         for (let attempt = 0; attempt < 100; attempt++) {
-          if (document.getElementById('share-count')?.textContent === '4 of 5 here, 2 windows') return true;
+          if (document.getElementById('share-count')?.textContent === '4 of 6 here, 2 windows') return true;
           await new Promise(resolve => setTimeout(resolve, 100));
         }
         return document.getElementById('share-count')?.textContent;
       })()`);
       expect(shared).toBe(true);
+      const secondReady = await evaluateSecond(`(async () => {
+        for (let attempt = 0; attempt < 100; attempt++) {
+          if (document.getElementById('share-count')?.textContent === '2 of 6 here, 2 windows') return true;
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        return document.getElementById('share-count')?.textContent;
+      })()`);
+      expect(secondReady).toBe(true);
+      await evaluateSecond(`(() => {
+        window.__resizes = [];
+        const secondSend = WebSocket.prototype.send;
+        WebSocket.prototype.send = function(data) {
+          if (typeof data === 'string' && data.includes('"type":"resize"'))
+            window.__resizes.push({ url: this.url, ...JSON.parse(data) });
+          return secondSend.call(this, data);
+        };
+      })()`);
       await evaluate(`(async () => {
         await new Promise(resolve => setTimeout(resolve, 700));
         document.querySelector('.pane[data-session="${ids[1]}"] button[aria-label="Enlarge"]').click();
         await new Promise(resolve => setTimeout(resolve, 600));
       })()`);
       expect((await api(daemon.port, daemon.token, `/sessions/${ids[0]}`, { method: 'DELETE' })).status).toBe(200);
-      return evaluate(`(async () => {
+      await evaluateSecond(`window.__resizes.length = 0`);
+      const first = await evaluate(`(async () => {
         for (let attempt = 0; attempt < 100; attempt++) {
-          if (document.getElementById('share-count')?.textContent === '4 of 4 here, 2 windows') break;
+          if (document.getElementById('share-count')?.textContent === '4 of 5 here, 2 windows') break;
           await new Promise(resolve => setTimeout(resolve, 100));
         }
         window.__resizes.length = 0;
@@ -244,15 +330,29 @@ it('keeps pane control through Enlarge, a closed session, and Restore in two win
             size: card.querySelector('.pane-size')?.textContent })),
           resizes: window.__resizes.slice() };
       })()`);
+      const second = await evaluateSecond(`(() => ({
+        share: document.getElementById('share-count')?.textContent,
+        panes: [...document.querySelectorAll('.pane')].map(card => ({ id: card.dataset.session,
+          size: card.querySelector('.pane-size')?.textContent })),
+        resizes: window.__resizes.slice(),
+      }))()`);
+      return { ...first as object, second };
     },
   });
   const result = shot.probe as { share: string; panes: { id: string; size: string }[];
-    resizes: { url: string; cols: number; rows: number; take: boolean }[] };
-  expect(result.share).toBe('4 of 4 here, 2 windows');
-  expect(result.panes.map((pane) => pane.id)).toEqual(ids.slice(1));
+    resizes: { url: string; cols: number; rows: number; take: boolean }[];
+    second: { share: string; panes: { id: string; size: string }[];
+      resizes: { url: string; cols: number; rows: number; take: boolean }[] } };
+  expect(result.share).toBe('4 of 5 here, 2 windows');
+  expect(result.panes.map((pane) => pane.id)).toEqual(ids.slice(1, 5));
   expect(result.panes.every((pane) => !pane.size.includes('following')), JSON.stringify(result)).toBe(true);
-  for (const id of ids.slice(1)) {
+  expect(result.second.share).toBe('1 of 5 here, 2 windows');
+  expect(result.second.panes.map((pane) => pane.id)).toEqual(ids.slice(5));
+  expect(result.second.panes.every((pane) => !pane.size.includes('following')), JSON.stringify(result)).toBe(true);
+  for (const id of ids.slice(1, 5)) {
     expect(result.resizes.filter((frame) => frame.url.includes(`/sessions/${id}/stream`)).length,
       JSON.stringify(result)).toBeLessThanOrEqual(1);
   }
+  expect(result.second.resizes.filter((frame) => frame.url.includes(`/sessions/${ids[5]}/stream`)).length,
+    JSON.stringify(result)).toBeLessThanOrEqual(1);
 }, 180_000);

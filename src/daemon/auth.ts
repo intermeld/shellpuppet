@@ -87,7 +87,7 @@ export function generateToken(): string {
 }
 
 /** Constant-time comparison over sha256 digests, so length never leaks. */
-function tokensEqual(a: string, b: string): boolean {
+export function tokensEqual(a: string, b: string): boolean {
   const da = createHash('sha256').update(a).digest();
   const db = createHash('sha256').update(b).digest();
   return timingSafeEqual(da, db);

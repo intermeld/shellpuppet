@@ -1,7 +1,7 @@
 import { afterEach, beforeAll, expect, it } from 'vitest';
 import { captureDashboard } from './dashboardCapture.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
-import { api, startTestDaemon } from './helpers.js';
+import { api, eventually, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 
 let browser: string | null = null;
@@ -41,7 +41,7 @@ async function openDashboard(width: number, height: number, interact: Parameters
   return { id, daemon, result: shot.probe };
 }
 
-it('shows a short coloured TUI field inside the same grid and canvas as a full field', async (context) => {
+it('shows the short coloured TUI text boundary inside the same grid and canvas as a full field', async (context) => {
   if (!browser) { context.skip(); return; }
   const urls: string[] = [];
   const daemon = running = await startTestDaemon({
@@ -65,7 +65,11 @@ it('shows a short coloured TUI field inside the same grid and canvas as a full f
     probe: `(() => [...document.querySelectorAll('.pane-size')].length === 2 &&
       [...document.querySelectorAll('.pane-size')].every(node => node.textContent.includes('129×49')) ? true : null)()`,
     interact: async ({ evaluate }) => evaluate(`(async () => {
-      await new Promise(resolve => setTimeout(resolve, 500));
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if ([...document.querySelectorAll('.pane')].length === 2 &&
+            [...document.querySelectorAll('.pane')].every(card => card.querySelector('.xterm-rows > div')?.textContent.includes('|'))) break;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
       return [...document.querySelectorAll('.pane')].map(card => ({
         id: card.dataset.session,
         size: card.querySelector('.pane-size').textContent,
@@ -96,20 +100,46 @@ it('repaints an idle full-screen program from the daemon after narrowing and wid
   const { result } = await openDashboard(1400, 900, async ({ evaluate }) => {
     const id = String(await evaluate(`document.querySelector('.pane').dataset.session`));
     await evaluate(`document.getElementById('auto-fit').click()`);
+    await eventually(async () => {
+      const snapshot = await api(running!.port, running!.token, `/sessions/${id}/snapshot`);
+      return String(snapshot.body['screen']).includes('ROW00:') && String(snapshot.body['screen']).includes('ROW24:');
+    });
     const before = await api(running!.port, running!.token, `/sessions/${id}/snapshot`);
     expect(before.status).toBe(200);
     expect((await api(running!.port, running!.token, `/sessions/${id}/resize`,
       { body: { cols: 80, rows: 24 } })).status).toBe(200);
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    await eventually(async () => {
+      const snapshot = await api(running!.port, running!.token, `/sessions/${id}/snapshot`);
+      return snapshot.body['cols'] === 80 && snapshot.body['rows'] === 24 &&
+        snapshot.body['screen'] !== before.body['screen'];
+    });
     expect((await api(running!.port, running!.token, `/sessions/${id}/resize`,
       { body: { cols: 100, rows: 30 } })).status).toBe(200);
-    await new Promise((resolve) => setTimeout(resolve, 500));
+    await eventually(async () => {
+      const snapshot = await api(running!.port, running!.token, `/sessions/${id}/snapshot`);
+      return snapshot.body['cols'] === 100 && snapshot.body['rows'] === 30;
+    });
+    await evaluate(`(async () => {
+      for (let attempt = 0; attempt < 100; attempt++) {
+        if (document.querySelector('.pane-size')?.textContent.includes('100×30')) return true;
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      return false;
+    })()`);
     const after = await api(running!.port, running!.token, `/sessions/${id}/snapshot`);
     expect(after.status).toBe(200);
-    const pane = await evaluate(`(() => ({
-      size: document.querySelector('.pane-size').textContent,
-      rows: [...document.querySelectorAll('.xterm-rows > div')].map(row => row.textContent.trimEnd()),
-    }))()`);
+    const expectedRows = String(after.body['screen']).split('\n').map((row) => row.trimEnd());
+    const pane = await evaluate(`(async () => {
+      const expected = ${JSON.stringify(expectedRows)};
+      for (let attempt = 0; attempt < 100; attempt++) {
+        const rows = [...document.querySelectorAll('.xterm-rows > div')].map(row => row.textContent.trimEnd());
+        if (rows.slice(0, expected.length).every((row, index) => row === expected[index]))
+          return { size: document.querySelector('.pane-size').textContent, rows };
+        await new Promise(resolve => setTimeout(resolve, 100));
+      }
+      return { size: document.querySelector('.pane-size').textContent,
+        rows: [...document.querySelectorAll('.xterm-rows > div')].map(row => row.textContent.trimEnd()) };
+    })()`);
     return { before: String(before.body['screen']), after: String(after.body['screen']), pane };
   }, script);
   const measured = result as { before: string; after: string;
