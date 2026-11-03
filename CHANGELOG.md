@@ -27,6 +27,8 @@ version may change behaviour, and every such change is listed here.
   condition holds continuously, even when a busy timer keeps repainting.
 - Muse Code approval menus whose command wraps over many rows are now
   recognised, so they raise waiting alerts and resolve prompt waits.
+- When a dashboard window closes, a late roster message from it no longer
+  takes its sessions back from the windows that received them.
 - `terminal_wait` and `shellpuppet wait` with `hideReasoning` now match text and
   regex only on the filtered screen.
 - Filtered screenshots repair extra replay text left by terminal serialisation
