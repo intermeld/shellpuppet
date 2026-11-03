@@ -773,6 +773,7 @@
       if (event.key !== 'Home' && !Object.hasOwn(steps, event.key)) return;
       event.preventDefault(); event.stopPropagation();
       if (event.key === 'Home') {
+        endActiveDivider?.();
         const before = paneSizes();
         if (axis === 'focus') tracks.focusStrip = null;
         else tracks[axis === 'column' ? 'columns' : 'rows'] = null;

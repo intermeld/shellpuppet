@@ -210,10 +210,98 @@ it('keeps a Focus drag alive through relayout and announces its pixel value', as
   expect(result.key.text).toMatch(/Focus pane \d+ pixels wide/);
 }, 150_000);
 
+it('ends a held Focus drag before Home resets its width', async (context) => {
+  if (!browser) { context.skip(); return; }
+  const shot = await exercise(2, async ({ evaluate, send }) => {
+    const first = await evaluate(`(() => {
+      document.getElementById('focus').click();
+      const d = document.querySelector('.pane-divider[data-axis="focus"]');
+      const box = d.getBoundingClientRect();
+      const listeners = new Map();
+      const add = document.addEventListener;
+      const remove = document.removeEventListener;
+      document.addEventListener = function(type, listener, options) {
+        if (['pointermove', 'pointerup', 'pointercancel'].includes(type))
+          listeners.set(listener, type);
+        return add.call(this, type, listener, options);
+      };
+      document.removeEventListener = function(type, listener, options) {
+        if (listeners.get(listener) === type) listeners.delete(listener);
+        return remove.call(this, type, listener, options);
+      };
+      window.__dragListeners = listeners;
+      window.__trackSaves = 0;
+      const save = Storage.prototype.setItem;
+      Storage.prototype.setItem = function(key, value) {
+        if (key === 'shellpuppet.dashboard.tracks') window.__trackSaves++;
+        return save.call(this, key, value);
+      };
+      document.addEventListener('pointerdown', e => window.__dragPointer = e.pointerId, true);
+      return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+    })()`) as { x: number; y: number };
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: first.x, y: first.y, button: 'left', clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: first.x - 180, y: first.y, button: 'left', buttons: 1 });
+    const during = await evaluate(`(() => { const d = document.querySelector('.pane-divider[data-axis="focus"]');
+      return { width: document.getElementById('strip').getBoundingClientRect().width,
+        dragging: d.classList.contains('dragging'), listeners: window.__dragListeners.size,
+        captured: d.hasPointerCapture(window.__dragPointer) }; })()`);
+    const home = await evaluate(`(() => { const d = document.querySelector('.pane-divider[data-axis="focus"]');
+      d.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true, cancelable: true }));
+      return { width: document.getElementById('strip').getBoundingClientRect().width,
+        dragging: d.classList.contains('dragging'), listeners: window.__dragListeners.size,
+        captured: d.hasPointerCapture(window.__dragPointer), saves: window.__trackSaves }; })()`);
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: first.x - 250, y: first.y, button: 'left', buttons: 1 });
+    const afterMove = await evaluate(`(() => ({ width: document.getElementById('strip').getBoundingClientRect().width,
+      listeners: window.__dragListeners.size, saves: window.__trackSaves }))()`);
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: first.x - 250, y: first.y, button: 'left', clickCount: 1 });
+    const next = await evaluate(`document.querySelector('.pane-divider[data-axis="focus"]').getBoundingClientRect().toJSON()`) as { x: number; y: number; width: number; height: number };
+    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: next.x + next.width / 2, y: first.y, button: 'left', clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: next.x + next.width / 2 - 120, y: first.y, button: 'left', buttons: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: next.x + next.width / 2 - 120, y: first.y, button: 'left', clickCount: 1 });
+    const second = await evaluate(`(() => { const d = document.querySelector('.pane-divider[data-axis="focus"]');
+      return { width: document.getElementById('strip').getBoundingClientRect().width,
+        dragging: d.classList.contains('dragging'), listeners: window.__dragListeners.size,
+        captured: d.hasPointerCapture(window.__dragPointer), saves: window.__trackSaves }; })()`);
+    return { during, home, afterMove, second };
+  });
+  const result = shot.probe as { during: { width: number; dragging: boolean; listeners: number; captured: boolean };
+    home: { width: number; dragging: boolean; listeners: number; captured: boolean; saves: number };
+    afterMove: { width: number; listeners: number; saves: number };
+    second: { width: number; dragging: boolean; listeners: number; captured: boolean; saves: number } };
+  expect(result.during.width).toBeGreaterThan(300);
+  expect(result.during.dragging).toBe(true);
+  expect(result.during.listeners).toBe(3);
+  expect(result.during.captured).toBe(true);
+  expect(result.home.width).toBeCloseTo(300, 0);
+  expect(result.home.dragging).toBe(false);
+  expect(result.home.listeners).toBe(0);
+  expect(result.home.captured).toBe(false);
+  expect(result.afterMove.width).toBeCloseTo(result.home.width, 0);
+  expect(result.afterMove.listeners).toBe(0);
+  expect(result.afterMove.saves).toBe(result.home.saves);
+  expect(result.second.width).toBeGreaterThan(result.home.width + 50);
+  expect(result.second.dragging).toBe(false);
+  expect(result.second.listeners).toBe(0);
+  expect(result.second.captured).toBe(false);
+  expect(result.second.saves).toBe(result.home.saves + 1);
+}, 150_000);
+
 it('commits a cancelled drag and a release outside the window', async (context) => {
   if (!browser) { context.skip(); return; }
   const shot = await exercise(2, async ({ evaluate, send }) => {
     await evaluate(`(() => { document.getElementById('focus').click(); window.__resizes.length = 0;
+      const listeners = new Map();
+      const add = document.addEventListener;
+      const remove = document.removeEventListener;
+      document.addEventListener = function(type, listener, options) {
+        if (['pointermove', 'pointerup', 'pointercancel'].includes(type)) listeners.set(listener, type);
+        return add.call(this, type, listener, options);
+      };
+      document.removeEventListener = function(type, listener, options) {
+        if (listeners.get(listener) === type) listeners.delete(listener);
+        return remove.call(this, type, listener, options);
+      };
+      window.__dragListeners = listeners;
       document.addEventListener('pointerdown', e => window.__dragPointer = e.pointerId, true); })()`);
     const box = await evaluate(`document.querySelector('.pane-divider[data-axis="focus"]').getBoundingClientRect().toJSON()`) as { x: number; y: number; width: number; height: number };
     const x = box.x + box.width / 2;
@@ -236,27 +324,38 @@ it('commits a cancelled drag and a release outside the window', async (context) 
     const final = await evaluate(`document.querySelector('.pane-divider[data-axis="focus"]').getBoundingClientRect().toJSON()`) as { x: number; y: number; width: number; height: number };
     await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: final.x + final.width / 2, y, button: 'left', clickCount: 1 });
     await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: final.x + final.width / 2 - 80, y, button: 'left', buttons: 1 });
-    const lost = await evaluate(`(async () => { const d = document.querySelector('.pane-divider[data-axis="focus"]');
+    await evaluate(`(() => { const d = document.querySelector('.pane-divider[data-axis="focus"]');
       const width = document.getElementById('strip').getBoundingClientRect().width;
       const events = [];
       const observe = target => event => events.push({ type: event.type, at: performance.now(), target,
         actualTarget: event.target === d ? 'divider' : 'other', captured: d.hasPointerCapture(window.__dragPointer) });
       for (const type of ['lostpointercapture', 'pointermove', 'pointerup']) {
         d.addEventListener(type, observe('divider'), true);
-        document.addEventListener(type, observe('document'), true);
+        window.addEventListener(type, observe('window'), true);
       }
       const capturedBefore = d.hasPointerCapture(window.__dragPointer);
       const releasedAt = performance.now();
+      window.__lostSaves = 0;
+      const save = Storage.prototype.setItem;
+      Storage.prototype.setItem = function(key, value) {
+        if (key === 'shellpuppet.dashboard.tracks') window.__lostSaves++;
+        return save.call(this, key, value);
+      };
       d.releasePointerCapture(window.__dragPointer);
       const immediately = d.classList.contains('dragging');
-      await new Promise(resolve => { document.addEventListener('pointermove', resolve, { capture: true, once: true });
-        d.dispatchEvent(new PointerEvent('pointermove', { pointerId: window.__dragPointer, bubbles: true })); });
+      window.__lostCapture = { width, events, capturedBefore, releasedAt, immediately };
+      return { capturedBefore, immediately }; })()`);
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 30, y: 30, button: 'left', buttons: 1 });
+    const lost = await evaluate(`(() => { const d = document.querySelector('.pane-divider[data-axis="focus"]');
+      const { width, events, capturedBefore, releasedAt, immediately } = window.__lostCapture;
       const afterMove = d.classList.contains('dragging');
       return { width, after: document.getElementById('strip').getBoundingClientRect().width,
         dragging: d.classList.contains('dragging'), stored: sessionStorage.getItem('shellpuppet.dashboard.tracks'),
         capturedBefore, capturedAfter: d.hasPointerCapture(window.__dragPointer), immediately, afterMove,
+        listeners: window.__dragListeners.size, saves: window.__lostSaves,
         releasedAt, events }; })()`);
     await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: -30, y: -30, button: 'left', clickCount: 1 });
+    const lostAfterUp = await evaluate(`window.__lostSaves`);
     const last = await evaluate(`document.querySelector('.pane-divider[data-axis="focus"]').getBoundingClientRect().toJSON()`) as { x: number; y: number; width: number; height: number };
     await evaluate(`(() => { window.__trackSaves = 0;
       const save = Storage.prototype.setItem;
@@ -272,13 +371,15 @@ it('commits a cancelled drag and a release outside the window', async (context) 
       d.dispatchEvent(new PointerEvent('lostpointercapture', { pointerId: window.__dragPointer, bubbles: true }));
       return { first, after: { saves: window.__trackSaves, frames: window.__resizes.length },
         dragging: d.classList.contains('dragging') }; })()`);
-    return { during, cancelled, outside, lost, doubleEnd };
+    return { during, cancelled, outside, lost, lostAfterUp, doubleEnd };
   });
   const result = shot.probe as { during: number; cancelled: { stored: string | null; dragging: boolean; width: number; frames: number };
     outside: { stored: string | null; dragging: boolean };
     lost: { width: number; after: number; dragging: boolean; stored: string | null;
       capturedBefore: boolean; capturedAfter: boolean; immediately: boolean; afterMove: boolean;
+      listeners: number; saves: number;
       releasedAt: number; events: { type: string; at: number; target: string; actualTarget: string; captured: boolean }[] };
+    lostAfterUp: number;
     doubleEnd: { first: { saves: number; frames: number }; after: { saves: number; frames: number }; dragging: boolean } };
   expect(result.cancelled.width).toBeCloseTo(result.during, 0);
   expect(result.cancelled.stored).toContain('focusStrip');
@@ -289,9 +390,13 @@ it('commits a cancelled drag and a release outside the window', async (context) 
   expect(result.lost.after).toBeCloseTo(result.lost.width, 0);
   expect(result.lost.capturedBefore, JSON.stringify(result)).toBe(true);
   expect(result.lost.afterMove, JSON.stringify(result)).toBe(false);
-  expect(result.lost.events.some(event => event.type === 'pointermove' && event.target === 'document'), JSON.stringify(result)).toBe(true);
+  expect(result.lost.events.some(event => event.type === 'pointermove' && event.target === 'window' &&
+    event.actualTarget === 'other' && !event.captured && event.at >= result.lost.releasedAt), JSON.stringify(result)).toBe(true);
   expect(result.lost.dragging, JSON.stringify(result)).toBe(false);
   expect(result.lost.stored).toContain('focusStrip');
+  expect(result.lost.listeners).toBe(0);
+  expect(result.lost.saves).toBe(1);
+  expect(result.lostAfterUp).toBe(1);
   expect(result.doubleEnd.first.saves).toBe(1);
   expect(result.doubleEnd.after).toEqual(result.doubleEnd.first);
   expect(result.doubleEnd.dragging).toBe(false);
