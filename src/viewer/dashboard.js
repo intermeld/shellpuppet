@@ -82,6 +82,7 @@
   const screenKey = screenParams.get('key');
   let currentScreenKey = screenKey;
   const windows = new Map();
+  const goneWindows = new Set();
   const lastSeen = new Map();
   const childWatches = new Map();
   let rosterTimer = null;
@@ -290,6 +291,7 @@
     applyAssignment(byWindow[windowId] || []);
   }
   function removeWindow(id) {
+    goneWindows.add(id);
     if (!windows.delete(id)) return;
     lastSeen.delete(id);
     const watch = childWatches.get(id);
@@ -929,6 +931,7 @@
   }
   function receive(frame) {
     if (!frame || typeof frame.type !== 'string') return;
+    if (frame.type === 'window-live' && typeof frame.id === 'string') { goneWindows.delete(frame.id); return; }
     if (frame.type === 'window-gone' && typeof frame.id === 'string') { removeWindow(frame.id); return; }
     if (frame.type === 'snapshot' && Array.isArray(frame.sessions)) reconcile(frame.sessions, true);
     else if (frame.type === 'session-added' && frame.session?.id) {
@@ -1245,6 +1248,7 @@
         typeof data.window.id === 'string' && Number.isFinite(data.window.rank) &&
         Number.isFinite(data.window.openedAt) &&
         Number.isFinite(data.window.width) && Number.isFinite(data.window.height)) {
+      if (goneWindows.has(data.window.id)) return;
       const fresh = !windows.has(data.window.id);
       const previous = windows.get(data.window.id);
       windows.set(data.window.id, data.window);

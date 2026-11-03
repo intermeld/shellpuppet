@@ -59,7 +59,7 @@ async function longWrappedLine(name: string, line: string): Promise<string> {
   const started = await api(td.port, td.token, '/sessions', {
     body: {
       command: process.execPath,
-      args: ['-e', `process.stdout.write(require('fs').readFileSync(${JSON.stringify(file)}, 'utf8')); setInterval(() => {}, 500)`],
+      args: ['-e', `const value = require('fs').readFileSync(${JSON.stringify(file)}, 'utf8'); if (${JSON.stringify(name === 'long-answer')}) { const end = value.lastIndexOf('\\x1b[38;2;149;149;143m'); process.stdout.write(value.slice(0, end)); setTimeout(() => process.stdout.write(value.slice(end)), 1500); } else process.stdout.write(value); setInterval(() => {}, 500)`],
       shell: false, agent: 'qoder', cols: 30, rows: 10, hold: true,
     },
   });
@@ -80,8 +80,11 @@ describe('wrapped lines longer than the reasoning context', () => {
     expect((hidden.body['lastLines'] as string[]).join('\n')).toContain('MMMM');
     const found = await api(td.port, td.token, `/sessions/${id}/find?pattern=MMMM&hideReasoning=1`);
     expect((found.body['matches'] as unknown[]).length).toBeGreaterThan(0);
+    // The answer can span many PTY writes. Its first visible row does not mean
+    // the trailing composer has arrived, and the prompt echo is still on screen.
+    await eventually(async () => String((await api(td.port, td.token, `/sessions/${id}/snapshot`)).body['screen']).includes('>  Type'), 30_000);
     const result = await api(td.port, td.token, `/sessions/${id}/result`);
-    expect(result.body['found'], JSON.stringify(result.body)).toBe(true);
+    expect(result.body['found'], `result after trailing composer: ${String(result.body['reason'])}`).toBe(true);
     expect((result.body['answer'] as string[]).join('')).toContain('MMMM');
   }, 60_000);
 

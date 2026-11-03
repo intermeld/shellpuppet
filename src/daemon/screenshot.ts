@@ -57,6 +57,8 @@ export interface CaptureOptions {
   cpuThrottlingRate?: number;
   /** A test-only expression read after a capture times out. */
   timeoutProbe?: string;
+  /** Browser integration tests can finish at the probe after closing their page. */
+  probeOnly?: boolean;
   /** Test-only DevTools interaction after the readiness probe succeeds. */
   interact?: (page: {
     evaluate: (expression: string) => Promise<unknown>;
@@ -463,6 +465,10 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
           activeCdp.send(method, params, typeof browserWideOrSession === 'string'
             ? browserWideOrSession : browserWideOrSession ? undefined : activeSessionId),
       });
+    }
+    if (options.probeOnly) {
+      return { png: Buffer.alloc(0), width: 0, height: 0, rows: [],
+        ...(probed === undefined ? {} : { probe: probed }) };
     }
 
     const rows = await cdp.send<{ result: { value?: unknown } }>(

@@ -265,8 +265,14 @@ it('keeps pane control through Enlarge, a closed session, and Restore in two win
       window.__resizes = [];
       const send = WebSocket.prototype.send;
       WebSocket.prototype.send = function(data) {
-        if (typeof data === 'string' && data.includes('"type":"resize"'))
-          window.__resizes.push({ url: this.url, ...JSON.parse(data) });
+         if (typeof data === 'string' && data.includes('"type":"resize"')) {
+           const frame = { url: this.url, ...JSON.parse(data) };
+           if (window.__delayRestoredTake && frame.take) {
+             setTimeout(() => { window.__resizes.push(frame); send.call(this, data); }, 4500);
+             return;
+           }
+           window.__resizes.push(frame);
+         }
         return send.call(this, data);
       };
     })()`,
@@ -285,22 +291,19 @@ it('keeps pane control through Enlarge, a closed session, and Restore in two win
       await send('Emulation.setDeviceMetricsOverride',
         { width: 1920, height: 1080, deviceScaleFactor: 1, mobile: false }, attached.sessionId);
       await send('Page.navigate', { url: `${new URL(urls.at(-1)!).origin}/dashboard` }, attached.sessionId);
-      const shared = await evaluate(`(async () => {
-        for (let attempt = 0; attempt < 100; attempt++) {
-          if (document.getElementById('share-count')?.textContent === '4 of 6 here, 2 windows') return true;
+      const waitFor = async (step: string, read: () => Promise<unknown>, ready: (value: unknown) => boolean) => {
+        let last: unknown;
+        const started = Date.now();
+        while (Date.now() - started < 20_000) {
+          try { last = await read(); if (ready(last)) return; }
+          catch (error) { last = String(error); }
           await new Promise(resolve => setTimeout(resolve, 100));
         }
-        return document.getElementById('share-count')?.textContent;
-      })()`);
-      expect(shared).toBe(true);
-      const secondReady = await evaluateSecond(`(async () => {
-        for (let attempt = 0; attempt < 100; attempt++) {
-          if (document.getElementById('share-count')?.textContent === '2 of 6 here, 2 windows') return true;
-          await new Promise(resolve => setTimeout(resolve, 100));
-        }
-        return document.getElementById('share-count')?.textContent;
-      })()`);
-      expect(secondReady).toBe(true);
+        throw new Error(`${step} did not settle after ${String(Date.now() - started)} ms: ${JSON.stringify(last)}`);
+      };
+      const share = (read: (expression: string) => Promise<unknown>) => read("document.getElementById('share-count')?.textContent");
+      await waitFor('primary sharing six sessions', () => share(evaluate), value => value === '4 of 6 here, 2 windows');
+      await waitFor('second window sharing six sessions', () => share(evaluateSecond), value => value === '2 of 6 here, 2 windows');
       await evaluateSecond(`(() => {
         window.__resizes = [];
         const secondSend = WebSocket.prototype.send;
@@ -310,32 +313,36 @@ it('keeps pane control through Enlarge, a closed session, and Restore in two win
           return secondSend.call(this, data);
         };
       })()`);
-      await evaluate(`(async () => {
-        await new Promise(resolve => setTimeout(resolve, 700));
-        document.querySelector('.pane[data-session="${ids[1]}"] button[aria-label="Enlarge"]').click();
-        await new Promise(resolve => setTimeout(resolve, 600));
-      })()`);
+      await evaluate(`document.querySelector('.pane[data-session="${ids[1]}"] button[aria-label="Enlarge"]').click()`);
+      await waitFor('Enlarge', () => evaluate(`({ count: document.querySelectorAll('.pane').length,
+        restore: !!document.querySelector('.pane button[aria-label="Restore"]') })`),
+      value => (value as { count: number; restore: boolean })?.count === 1 && (value as { restore: boolean }).restore);
       expect((await api(daemon.port, daemon.token, `/sessions/${ids[0]}`, { method: 'DELETE' })).status).toBe(200);
       await evaluateSecond(`window.__resizes.length = 0`);
-      const first = await evaluate(`(async () => {
-        for (let attempt = 0; attempt < 100; attempt++) {
-          if (document.getElementById('share-count')?.textContent === '4 of 5 here, 2 windows') break;
-          await new Promise(resolve => setTimeout(resolve, 100));
-        }
-        window.__resizes.length = 0;
-        document.querySelector('.pane button[aria-label="Restore"]').click();
-        await new Promise(resolve => setTimeout(resolve, 3000));
-        return { share: document.getElementById('share-count')?.textContent,
+      await waitFor('primary sharing five sessions', () => share(evaluate), value => value === '4 of 5 here, 2 windows');
+      await evaluate(`(() => { window.__resizes.length = 0; window.__delayRestoredTake = true;
+        document.querySelector('.pane button[aria-label="Restore"]').click(); })()`);
+      const readFirst = () => evaluate(`(() => ({ share: document.getElementById('share-count')?.textContent,
           panes: [...document.querySelectorAll('.pane')].map(card => ({ id: card.dataset.session,
             size: card.querySelector('.pane-size')?.textContent })),
-          resizes: window.__resizes.slice() };
-      })()`);
-      const second = await evaluateSecond(`(() => ({
+          resizes: window.__resizes.slice() }))()`);
+      const readSecond = () => evaluateSecond(`(() => ({
         share: document.getElementById('share-count')?.textContent,
         panes: [...document.querySelectorAll('.pane')].map(card => ({ id: card.dataset.session,
           size: card.querySelector('.pane-size')?.textContent })),
         resizes: window.__resizes.slice(),
       }))()`);
+      await waitFor('Restore and primary pane takes', readFirst, value => {
+        const state = value as { panes?: { id: string; size: string }[] };
+        return state?.panes?.length === 4 && state.panes.every(pane => !pane.size.includes('following'));
+      });
+      await waitFor('second window pane take', readSecond, value => {
+        const state = value as { share?: string; panes?: { size: string }[] };
+        return state?.share === '1 of 5 here, 2 windows' && state.panes?.length === 1 &&
+          !state.panes[0]?.size.includes('following');
+      });
+      const first = await readFirst();
+      const second = await readSecond();
       return { ...first as object, second };
     },
   });

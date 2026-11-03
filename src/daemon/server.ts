@@ -3743,6 +3743,10 @@ export class Daemon {
       if (claim.type !== 'window-register' || typeof claim.id !== 'string' ||
           !/^[a-z0-9]+-[a-z0-9]+(?:-[1-9][0-9]*)?$/.test(claim.id) || claim.id.length > 100) return;
       this.dashboardWindowIds.set(ws, claim.id);
+      const notice = JSON.stringify({ type: 'window-live', id: claim.id });
+      for (const peer of this.dashboardEventSockets) {
+        if (peer.readyState === peer.OPEN) peer.send(notice);
+      }
     });
     ws.on('close', () => {
       const windowId = this.dashboardWindowIds.get(ws);
