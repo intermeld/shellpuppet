@@ -39,7 +39,7 @@ async function settleFocusGrid(evaluate: (expression: string) => Promise<unknown
   throw new Error(`Focus pane grids did not settle within ${String(limitMs)} ms: ${previous}`);
 }
 
-async function exercise(count: number, interact: Parameters<typeof captureDashboard>[0]['interact']) {
+async function exercise(count: number, interact: Parameters<typeof captureDashboard>[0]['interact'], probeOnly = false) {
   const urls: string[] = [];
   daemon = await startTestDaemon({
     launcher: (url) => { urls.push(url); return Promise.resolve({ launched: true, mode: 'isolated-app', browser: 'mock' }); },
@@ -53,7 +53,7 @@ async function exercise(count: number, interact: Parameters<typeof captureDashbo
   }
   expect((await api(daemon.port, daemon.token, '/dashboard/open', { method: 'POST', body: {} })).status).toBe(200);
   return captureDashboard({ browser: browser!, viewerUrl: urls.at(-1)!, width: 2200, height: 1300,
-    drive: true, timeoutMs: 120_000,
+    drive: true, timeoutMs: 120_000, probeOnly,
     beforeNavigateScript: `(() => {
       window.__resizes = [];
       window.__delayFocusMainTake = false;
@@ -69,6 +69,15 @@ async function exercise(count: number, interact: Parameters<typeof captureDashbo
               window.__resizes.push({ url: this.url, frame });
               send.call(this, data);
             }, 1100);
+            return;
+          }
+          if (window.__delayDragTake && frame.take &&
+              this.url.includes('/sessions/' + encodeURIComponent(window.__delayDragTake) + '/stream')) {
+            window.__delayDragTake = null;
+            setTimeout(() => {
+              window.__resizes.push({ url: this.url, frame });
+              send.call(this, data);
+            }, 1200);
             return;
           }
           window.__resizes.push({ url: this.url, frame });
@@ -98,19 +107,35 @@ it('drags the Focus boundary, fits the grown pane on release, and retains its wi
       return { divider: divider?.getBoundingClientRect().toJSON(), main: main.toJSON(), strip: strip.toJSON(),
         mainSize: document.querySelector('#main-pane .pane-size')?.textContent,
         stripId: document.querySelector('#strip .pane')?.dataset.session };
-    })()`) as { divider?: { x: number; y: number; width: number; height: number }; main: { width: number }; strip: { width: number } };
+    })()`) as { divider?: { x: number; y: number; width: number; height: number }; main: { width: number }; strip: { width: number }; stripId: string };
     expect(before.divider).toBeTruthy();
     const x = before.divider!.x + before.divider!.width / 2;
     const y = before.divider!.y + before.divider!.height / 2;
     await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 });
     await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: x - 500, y, button: 'left', buttons: 1 });
     const during = await evaluate(`({ width: document.getElementById('strip').getBoundingClientRect().width, frames: window.__resizes.length, sizes: [...document.querySelectorAll('.pane-size')].map(x => x.textContent) })`);
+    await evaluate(`window.__delayDragTake = ${JSON.stringify(before.stripId)}`);
     await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: x - 500, y, button: 'left', clickCount: 1 });
-    await new Promise(resolve => setTimeout(resolve, 500));
-    const after = await evaluate(`(() => ({ width: document.getElementById('strip').getBoundingClientRect().width,
+    const readAfter = () => evaluate(`(() => ({ width: document.getElementById('strip').getBoundingClientRect().width,
       frames: window.__resizes.slice(), stored: sessionStorage.getItem('shellpuppet.dashboard.tracks'),
       mainSize: document.querySelector('#main-pane .pane-size')?.textContent,
       sizes: [...document.querySelectorAll('.pane-size')].map(x => x.textContent) }))()`);
+    let after: unknown;
+    let quietSince = Date.now();
+    let previous = '';
+    const takeDeadline = Date.now() + 20_000;
+    while (Date.now() < takeDeadline) {
+      after = await readAfter();
+      const state = after as { frames: { url: string; frame: { cols: number; rows: number; take: boolean } }[];
+        sizes: string[]; stored: string | null };
+      const signature = JSON.stringify(state);
+      if (signature !== previous) { previous = signature; quietSince = Date.now(); }
+      const take = state.frames.find(entry => entry.frame.take && entry.url.includes(`/sessions/${before.stripId}/stream`));
+      if (take && state.stored && state.sizes.includes(`${take.frame.cols}×${take.frame.rows}`) &&
+          Date.now() - quietSince >= 500) break;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    if (Date.now() >= takeDeadline) throw new Error(`Focus drag take did not settle: ${JSON.stringify(after)}`);
     await evaluate(`window.__focusBeforeReload = true; location.reload()`);
     let reloaded: unknown;
     const reloadDeadline = Date.now() + 20_000;
@@ -392,8 +417,14 @@ for (const eventType of ['pagehide', 'beforeunload'] as const) {
         window.dispatchEvent(new Event('${eventType === 'pagehide' ? 'beforeunload' : 'pagehide'}'));
         return { saves: window.__trackSaves, listeners: window.__dragListeners.size };
       })()`);
+      if (eventType === 'beforeunload') {
+        const targets = await send('Target.getTargets', {}, true) as { targetInfos: { targetId: string; url: string }[] };
+        const targetId = targets.targetInfos.find(target => target.url.includes('/dashboard'))?.targetId;
+        if (!targetId) throw new Error('The dashboard target was not found after beforeunload');
+        await send('Target.closeTarget', { targetId }, true);
+      }
       return { during, ended, repeated };
-    });
+    }, eventType === 'beforeunload');
     const result = shot.probe as { during: { width: number; listeners: number; saves: number };
       ended: { width: number; stored: number | null; dragging: boolean; listeners: number; captured: boolean; saves: number };
       repeated: { saves: number; listeners: number } };
