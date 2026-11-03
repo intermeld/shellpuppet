@@ -587,6 +587,10 @@ window.ShellPuppetPane = (() => {
             const firstGeometry = !geometryDecided;
             geometryDecided = true;
             controlMode = captureMode ? 'adopt' : control.control || 'adopt';
+            if (dashboardProof !== null && firstGeometry && controlMode === 'yours') {
+              pendingTakeGrid = false;
+              onGridTaken();
+            }
             if (dashboardProof !== null && !firstGeometry) {
               if (controlMode === 'yours' && pendingTakeGrid) {
                 pendingTakeGrid = false;

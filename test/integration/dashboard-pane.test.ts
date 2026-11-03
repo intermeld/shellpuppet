@@ -426,6 +426,41 @@ describe('a dashboard stream is passive without drive=0', () => {
     other.close();
     restored.close();
   });
+
+  it('forgets a dashboard controller when its programme exits naturally', async () => {
+    const daemon = await startPane();
+    const started = await api(daemon.port, daemon.token, '/sessions', { body: {
+      command: process.execPath, args: ['-e', "setTimeout(() => process.exit(0), 1500)"],
+      shell: false, openViewer: false, cols: 120, rows: 34,
+    } });
+    expect(started.status).toBe(200);
+    const id = String(started.body['id']);
+    const { cookie, proof } = await openDashboard(daemon);
+    const first = await connectDash(daemon.port, id, cookie, proof);
+    await first.waitForControl((frame) => frame['type'] === 'geometry');
+    first.send(JSON.stringify({ type: 'resize', cols: 100, rows: 40, take: true }));
+    await first.waitForControl((frame) => frame['type'] === 'geometry' && frame['control'] === 'yours');
+    first.close();
+    await eventually(async () => (await api(daemon.port, daemon.token, `/sessions/${id}/snapshot`)).body['exited'] === true);
+    const reconnect = await connectDash(daemon.port, id, cookie, proof);
+    expect((await reconnect.waitForControl((frame) => frame['type'] === 'geometry'))['control']).toBe('adopt');
+    reconnect.close();
+  });
+
+  it('acknowledges a current controller taking its existing grid', async () => {
+    const daemon = await startPane();
+    const id = await startGrid(daemon, 'same-size-take');
+    const { cookie, proof } = await openDashboard(daemon);
+    const pane = await connectDash(daemon.port, id, cookie, proof);
+    await pane.waitForControl((frame) => frame['type'] === 'geometry');
+    pane.send(JSON.stringify({ type: 'resize', cols: 120, rows: 34, take: true }));
+    await pane.waitForControl((frame) => frame['type'] === 'geometry' && frame['control'] === 'yours');
+    pane.send(JSON.stringify({ type: 'resize', cols: 120, rows: 34, take: true }));
+    await pane.waitForControl((frame) => frame['type'] === 'geometry' && frame['control'] === 'yours' &&
+      pane.controls().filter((item) => item['type'] === 'geometry').length === 3);
+    expect(resizes(daemon.home, id)).toEqual([]);
+    pane.close();
+  });
 });
 
 describe('the echoed subprotocol names the dashboard credential', () => {

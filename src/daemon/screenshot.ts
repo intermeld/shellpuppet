@@ -60,7 +60,7 @@ export interface CaptureOptions {
   /** Test-only DevTools interaction after the readiness probe succeeds. */
   interact?: (page: {
     evaluate: (expression: string) => Promise<unknown>;
-    send: (method: string, params?: Record<string, unknown>, browserWide?: boolean) => Promise<unknown>;
+    send: (method: string, params?: Record<string, unknown>, browserWideOrSession?: boolean | string) => Promise<unknown>;
   }) => Promise<unknown>;
   /**
    * The folder the capture's own browser profile is made in, created when
@@ -459,8 +459,9 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
     if (options.interact !== undefined) {
       probed = await options.interact({
         evaluate,
-        send: (method, params = {}, browserWide = false) =>
-          activeCdp.send(method, params, browserWide ? undefined : activeSessionId),
+        send: (method, params = {}, browserWideOrSession = false) =>
+          activeCdp.send(method, params, typeof browserWideOrSession === 'string'
+            ? browserWideOrSession : browserWideOrSession ? undefined : activeSessionId),
       });
     }
 
