@@ -35,6 +35,7 @@ import {
 } from '../daemon/paths.js';
 import { daemonRunning } from '../daemon/liveness.js';
 import { packageVersion } from '../daemon/meta.js';
+import { readRestartHold, restartHoldError } from '../daemon/restartHold.js';
 import { NULL_LOGGER } from '../core/types.js';
 import { taskkillTrees } from '../core/session.js';
 import type { Logger } from '../core/types.js';
@@ -368,12 +369,42 @@ function startWaitBound(home: string): number {
   return readDaemonConfig(home).config.daemon?.startWith === undefined ? AUTO_START_TIMEOUT_MS : WRAPPED_START_TIMEOUT_MS;
 }
 
+/** Hold the start endpoint while a daemon verb stops and replaces a daemon. */
+export async function withDaemonStartLock<T>(options: ClientOptions, action: (lock: Exclude<StartLockClaim, null>) => Promise<T>): Promise<T> {
+  const home = options.home ?? shellpuppetHome();
+  const homeResult = await ensureHome(home);
+  if (homeResult.warning !== undefined) (options.logger ?? NULL_LOGGER).warn(homeResult.warning);
+  const deadline = Date.now() + startWaitBound(home);
+  let lock: StartLockClaim = null;
+  while (Date.now() < deadline) {
+    lock = await claimStartLock(home, options.logger ?? NULL_LOGGER);
+    if (lock !== null) break;
+    await new Promise((resolve) => setTimeout(resolve, AUTO_START_POLL_MS));
+  }
+  if (lock === null) throw new Error('A pending daemon start did not settle within its health bound.');
+  try { return await action(lock); }
+  finally { if (lock !== UNCOORDINATED_START) await releaseStartLock(lock); }
+}
+
+async function waitForHeldDaemon(options: ClientOptions, deadline: number, hold: NonNullable<ReturnType<typeof readRestartHold>>): Promise<DaemonConnection> {
+  while (Date.now() < deadline) {
+    const existing = await discoverDaemon(options);
+    if (existing !== null) return existing;
+    await new Promise((resolve) => setTimeout(resolve, AUTO_START_POLL_MS));
+  }
+  throw restartHoldError(hold);
+}
+
 /** Let daemon stop and restart wait for a pending start without starting one. */
 export async function waitForPendingDaemon(options: ClientOptions = {}): Promise<DaemonConnection | null> {
   const home = options.home ?? shellpuppetHome();
   if (!fs.existsSync(home)) return discoverDaemon(options);
   const deadline = Date.now() + startWaitBound(home);
+  const hold = readRestartHold(home, options.logger ?? NULL_LOGGER);
+  if (hold !== null) return waitForHeldDaemon(options, deadline, hold);
   while (Date.now() < deadline) {
+    const pendingHold = readRestartHold(home, options.logger ?? NULL_LOGGER);
+    if (pendingHold !== null) return waitForHeldDaemon(options, deadline, pendingHold);
     const lock = await claimStartLock(home, options.logger ?? NULL_LOGGER);
     if (lock !== null) {
       try { return await discoverDaemon(options); }
@@ -443,7 +474,7 @@ export async function discoverDaemon(options: ClientOptions = {}): Promise<Daemo
  * only: a running daemon that does not answer (`DaemonNotAnsweringError`), and
  * a started daemon that does not become healthy within the polling cap.
  */
-export async function ensureDaemon(options: ClientOptions = {}): Promise<DaemonConnection> {
+export async function ensureDaemon(options: ClientOptions = {}, heldLock?: Exclude<StartLockClaim, null>): Promise<DaemonConnection> {
   const logger = options.logger ?? NULL_LOGGER;
   const home = options.home ?? shellpuppetHome();
   const directValue = process.env['SHELLPUPPET_DAEMON_DIRECT'];
@@ -455,10 +486,12 @@ export async function ensureDaemon(options: ClientOptions = {}): Promise<DaemonC
   const homeResult = await ensureHome(home);
   if (homeResult.warning !== undefined) logger.warn(homeResult.warning);
   const waitDeadline = Date.now() + startWaitBound(home);
-  let lock: StartLockClaim = null;
-  while (Date.now() < waitDeadline) {
+  let lock: StartLockClaim = heldLock ?? null;
+  while (heldLock === undefined && Date.now() < waitDeadline) {
     const existing = await discoverDaemon(options);
     if (existing !== null) return existing;
+    const hold = readRestartHold(home, logger);
+    if (hold !== null) return waitForHeldDaemon(options, waitDeadline, hold);
     lock = await claimStartLock(home, logger);
     if (lock !== null) break;
     await new Promise((resolve) => setTimeout(resolve, AUTO_START_POLL_MS));
@@ -467,6 +500,10 @@ export async function ensureDaemon(options: ClientOptions = {}): Promise<DaemonC
   try {
     const wonWhileClaiming = await discoverDaemon(options);
     if (wonWhileClaiming !== null) return wonWhileClaiming;
+    if (heldLock === undefined) {
+      const hold = readRestartHold(home, logger);
+      if (hold !== null) return waitForHeldDaemon(options, waitDeadline, hold);
+    }
 
   const entry = options.daemonEntry ?? defaultDaemonEntry();
   const cwd = daemonWorkingDirectory();
@@ -558,7 +595,7 @@ export async function ensureDaemon(options: ClientOptions = {}): Promise<DaemonC
   }
   throw new Error(`The ShellPuppet daemon did not become healthy within ${String(timeoutMs / 1_000)} s. Check ${home}/daemon.log.`);
   } finally {
-    if (lock !== UNCOORDINATED_START) await releaseStartLock(lock);
+    if (heldLock === undefined && lock !== UNCOORDINATED_START) await releaseStartLock(lock);
   }
 }
 
