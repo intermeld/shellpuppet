@@ -21,6 +21,15 @@ version may change behaviour, and every such change is listed here.
 - Dashboard windows retain their session share through slowed browser timers,
   hand sessions back on close, spread overflow by readable capacity and refit
   panes in the window that receives them.
+- `terminal_screenshot` and `shellpuppet screenshot` with `hideReasoning` now
+  work on screens that keep changing, such as an agent's running timer or an
+  idle animation: the picture is taken of the same frozen screen the filter
+  read, instead of failing with "The screen changed". The CLI help lists
+  `--hide-reasoning` for `screenshot`.
+- `hideReasoning` now hides reasoning lines that the terminal wrapped onto
+  further rows, on every reader (snapshot, last lines, find, wait, result and
+  screenshots). A wrapped row always belongs to the line it continues, so a
+  long answer keeps all of its rows.
 
 ### Changed
 
