@@ -340,7 +340,9 @@ shellpuppet mcp
 ### Restarting a shared daemon
 
 Build first, then run `shellpuppet daemon restart` so other clients wait for
-the replacement. To stop before rebuilding, run `shellpuppet daemon stop
+the replacement, including while the old daemon is stopping. A peer can wait
+about 20 seconds for a direct restart or about 130 seconds when `startWith` is
+configured. To stop before rebuilding, run `shellpuppet daemon stop
 --hold`, rebuild, then run `shellpuppet daemon start`. The hold lasts 120
 seconds by default (1 to 600 seconds with an explicit value), and `daemon
 status` shows the time remaining.

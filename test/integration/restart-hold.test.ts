@@ -7,9 +7,9 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
-import { ensureDaemon, waitForPendingDaemon } from '../../src/client/http.js';
+import { ensureDaemon, waitForPendingDaemon, withDaemonStartLock } from '../../src/client/http.js';
 import { daemonLogPath, daemonStatePath, readDaemonState } from '../../src/daemon/paths.js';
-import { readRestartHold, restartHoldPath } from '../../src/daemon/restartHold.js';
+import { readRestartHold, restartHoldPath, writeRestartHold } from '../../src/daemon/restartHold.js';
 import type { Logger } from '../../src/core/types.js';
 import { api, distDaemonEntry, makeTempHome, removeTempHome, repoRoot } from './helpers.js';
 
@@ -94,12 +94,18 @@ describe('planned daemon restart hold', () => {
     const closed = new Promise<void>((resolve) => server.once('close', resolve));
     const restart = cli(value, 'daemon', 'restart');
     await stopping;
-    const occupied = await startEndpointOccupied(value).finally(() => finishStop());
-    await closed;
     const previous = process.env['SP_TEST_SPAWN_MARKER'];
     process.env['SP_TEST_SPAWN_MARKER'] = marker;
     try {
-      const peer = await ensureDaemon({ home: value, daemonEntry: markerEntry });
+      const occupied = await startEndpointOccupied(value);
+      const peerPromise = ensureDaemon({ home: value, daemonEntry: markerEntry });
+      let settled = false;
+      void peerPromise.then(() => { settled = true; }, () => { settled = true; });
+      await new Promise((resolve) => setTimeout(resolve, 350));
+      expect(settled).toBe(false);
+      finishStop();
+      await closed;
+      const peer = await peerPromise;
       started.set(value, peer.pid);
       const result = await restart;
       expect(result.code).toBe(0);
@@ -109,22 +115,145 @@ describe('planned daemon restart hold', () => {
       const log = fs.readFileSync(daemonLogPath(value), 'utf8');
       expect(log.split('\n').filter((line) => line.includes('"message":"daemon started"'))).toHaveLength(1);
     } finally {
+      finishStop();
+      await restart;
+      const state = readDaemonState(value);
+      if (state !== null) started.set(value, state.pid);
       if (previous === undefined) delete process.env['SP_TEST_SPAWN_MARKER'];
       else process.env['SP_TEST_SPAWN_MARKER'] = previous;
     }
   }, 60_000);
 
-  it('prevents auto-start within the health bound, then expires', async () => {
+  it('starts in the same call when a one-second hold expires', async () => {
+    const value = home();
+    writeRestartHold(value, 1);
+    const connection = await ensureDaemon({ home: value, daemonEntry: distDaemonEntry });
+    started.set(value, connection.pid);
+    expect(connection.pid).toBe(readDaemonState(value)?.pid);
+    expect(fs.existsSync(restartHoldPath(value))).toBe(false);
+  }, 20_000);
+
+  it('starts in the same call when a hold is removed early', async () => {
+    const value = home();
+    writeRestartHold(value, 30);
+    const pending = ensureDaemon({ home: value, daemonEntry: distDaemonEntry });
+    setTimeout(() => fs.unlinkSync(restartHoldPath(value)), 350);
+    const connection = await pending;
+    started.set(value, connection.pid);
+    expect(connection.pid).toBe(readDaemonState(value)?.pid);
+  }, 20_000);
+
+  it('lets a pending-start waiter finish when its hold expires', async () => {
+    const value = home();
+    writeRestartHold(value, 1);
+    await expect(waitForPendingDaemon({ home: value })).resolves.toBeNull();
+    expect(fs.existsSync(restartHoldPath(value))).toBe(false);
+  }, 20_000);
+
+  it('does not follow a linked hold record', ({ skip }) => {
+    const value = home();
+    const target = path.join(value, 'linked-target.json');
+    fs.writeFileSync(target, JSON.stringify({ expiresAt: Date.now() + 30_000, pid: process.pid }));
+    try { fs.symlinkSync(target, restartHoldPath(value), 'file'); }
+    catch (error) {
+      if (['EPERM', 'EACCES', 'ENOTSUP'].includes((error as NodeJS.ErrnoException).code ?? '')) {
+        skip('Creating symbolic links is unavailable on this platform');
+        return;
+      }
+      throw error;
+    }
+    const warnings: string[] = [];
+    const logger: Logger = { debug: () => undefined, info: () => undefined, warn: (message) => { warnings.push(message); }, error: () => undefined };
+    expect(readRestartHold(value, logger)).toBeNull();
+    expect(readRestartHold(value, logger)).toBeNull();
+    expect(warnings).toHaveLength(1);
+  });
+
+  it('treats a directory hold record as malformed and warns once', () => {
+    const value = home();
+    fs.mkdirSync(restartHoldPath(value));
+    const warnings: string[] = [];
+    const logger: Logger = { debug: () => undefined, info: () => undefined, warn: (message) => { warnings.push(message); }, error: () => undefined };
+    expect(readRestartHold(value, logger)).toBeNull();
+    expect(readRestartHold(value, logger)).toBeNull();
+    expect(warnings).toEqual(['ignoring invalid restart hold record']);
+  });
+
+  it('does not overwrite a hard-linked temporary pathname', () => {
+    const value = home();
+    const sentinel = path.join(value, 'sentinel');
+    fs.writeFileSync(sentinel, 'unchanged');
+    fs.linkSync(sentinel, path.join(value, `.restart-hold-${String(process.pid)}.tmp`));
+    writeRestartHold(value, 5);
+    expect(fs.readFileSync(sentinel, 'utf8')).toBe('unchanged');
+  });
+
+  it('waits through a slow stop and a slow direct start', async () => {
+    const value = home();
+    let stopRequested: () => void = () => undefined;
+    const stopping = new Promise<void>((resolve) => { stopRequested = resolve; });
+    const oldServer = http.createServer((request, response) => {
+      if (request.url === '/health') {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end(JSON.stringify({ ok: true, version: '0.0.0-old', pid: process.pid }));
+      } else if (request.url === '/daemon/shutdown') {
+        stopRequested();
+        response.writeHead(200);
+        response.end('{}');
+      }
+    });
+    await new Promise<void>((resolve) => oldServer.listen(0, '127.0.0.1', resolve));
+    const oldAddress = oldServer.address();
+    if (oldAddress === null || typeof oldAddress === 'string') throw new Error('missing old port');
+    const startedAt = new Date().toISOString();
+    fs.writeFileSync(daemonStatePath(value), JSON.stringify({ port: oldAddress.port, token: 'old-token',
+      pid: process.pid, version: '0.0.0-old', startedAt }));
+    let replacement: http.Server | undefined;
+    let replacementPort = -1;
+    try {
+      const coordinator = withDaemonStartLock({ home: value }, async () => {
+        writeRestartHold(value, 30, { pid: process.pid, startedAt });
+        const shutdown = fetch(`http://127.0.0.1:${String(oldAddress.port)}/daemon/shutdown`, { method: 'POST' });
+        await stopping;
+        await new Promise((resolve) => setTimeout(resolve, 5_500));
+        fs.unlinkSync(daemonStatePath(value));
+        await new Promise<void>((resolve) => oldServer.close(() => resolve()));
+        await shutdown;
+        await new Promise((resolve) => setTimeout(resolve, 5_500));
+        replacement = http.createServer((request, response) => {
+          if (request.url === '/health') {
+            response.writeHead(200, { 'content-type': 'application/json' });
+            response.end(JSON.stringify({ ok: true, version: '0.0.0-new', pid: process.pid + 1 }));
+          }
+        });
+        await new Promise<void>((resolve) => replacement?.listen(0, '127.0.0.1', resolve));
+        const address = replacement.address();
+        if (address === null || typeof address === 'string') throw new Error('missing replacement port');
+        replacementPort = address.port;
+        fs.writeFileSync(daemonStatePath(value), JSON.stringify({ port: address.port, token: 'new-token',
+          pid: process.pid + 1, version: '0.0.0-new', startedAt: new Date().toISOString() }));
+      });
+      await stopping;
+      const connection = await ensureDaemon({ home: value, daemonEntry: markerEntry });
+      await coordinator;
+      expect(connection.port).toBe(replacementPort);
+      expect(connection.pid).toBe(process.pid + 1);
+    } finally {
+      await new Promise<void>((resolve) => oldServer.close(() => resolve()));
+      if (replacement !== undefined) await new Promise<void>((resolve) => replacement?.close(() => resolve()));
+    }
+  }, 30_000);
+
+  it('prevents auto-start during a hold, then starts when it expires', async () => {
     const value = home();
     const stop = await cli(value, 'daemon', 'stop', '--hold', '5');
     expect(stop.code).toBe(0);
     expect(fs.existsSync(restartHoldPath(value))).toBe(true);
     const began = Date.now();
     const attempt = await cli(value, 'list');
-    expect(attempt.code).toBe(1);
-    expect(attempt.stderr).toContain('stopped for a restart');
+    expect(attempt.code).toBe(0);
+    expect(Date.now() - began).toBeGreaterThanOrEqual(4_000);
     expect(Date.now() - began).toBeLessThan(15_000);
-    expect(readDaemonState(value)).toBeNull();
     const connection = await ensureDaemon({ home: value, daemonEntry: distDaemonEntry });
     started.set(value, connection.pid);
     expect(connection.pid).toBeGreaterThan(0);
