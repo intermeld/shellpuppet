@@ -9,22 +9,34 @@ let daemon: TestDaemon | null = null;
 beforeAll(async () => { browser = await findBrowser(); }, 60_000);
 afterEach(async () => { await daemon?.stop(); daemon = null; }, 120_000);
 
-/**
- * Wait until the page has sent no resize frame for `quietMs`, so a layout
- * change's own fits are over before a test starts counting frames. A fixed
- * delay is not enough on a slow runner.
- */
-async function settleResizes(evaluate: (expression: string) => Promise<unknown>, quietMs = 700, limitMs = 15_000) {
+/** Wait for both Focus panes to acknowledge their takes and for resize traffic to go quiet. */
+async function settleFocusGrid(evaluate: (expression: string) => Promise<unknown>, quietMs = 700, limitMs = 20_000) {
   const deadline = Date.now() + limitMs;
-  let seen = Number(await evaluate('window.__resizes.length'));
+  let previous = '';
   let quietSince = Date.now();
   while (Date.now() < deadline) {
+    const state = await evaluate(`(() => {
+      const panes = [...document.querySelectorAll('#panes .pane')].map(pane => ({
+        id: pane.dataset.session, label: pane.querySelector('.pane-size')?.textContent,
+      }));
+      const frames = window.__resizes.map(({ url, frame }) => ({ url, frame }));
+      return { layout: document.getElementById('panes').dataset.layout,
+        mainId: document.querySelector('#main-pane .pane')?.dataset.session, panes, frames };
+    })()`) as { layout: string; mainId?: string; panes: { id: string; label?: string }[];
+      frames: { url: string; frame: { cols: number; rows: number; take?: boolean } }[] };
+    const signature = JSON.stringify(state);
+    if (signature !== previous) { previous = signature; quietSince = Date.now(); }
+    const settled = state.layout === 'focus' && state.panes.length === 2 &&
+      state.panes.some(pane => pane.id === state.mainId) &&
+      state.panes.every(pane => {
+        const latest = state.frames.filter(({ url, frame }) => frame.take === true &&
+          url.includes(`/sessions/${encodeURIComponent(pane.id)}/stream`)).at(-1);
+        return latest !== undefined && pane.label === `${latest.frame.cols}×${latest.frame.rows}`;
+      });
+    if (settled && Date.now() - quietSince >= quietMs) return;
     await new Promise(resolve => setTimeout(resolve, 100));
-    const now = Number(await evaluate('window.__resizes.length'));
-    if (now !== seen) { seen = now; quietSince = Date.now(); continue; }
-    if (Date.now() - quietSince >= quietMs) return;
   }
-  throw new Error(`resize frames did not settle within ${String(limitMs)} ms (${String(seen)} sent)`);
+  throw new Error(`Focus pane grids did not settle within ${String(limitMs)} ms: ${previous}`);
 }
 
 async function exercise(count: number, interact: Parameters<typeof captureDashboard>[0]['interact']) {
@@ -44,10 +56,23 @@ async function exercise(count: number, interact: Parameters<typeof captureDashbo
     drive: true, timeoutMs: 120_000,
     beforeNavigateScript: `(() => {
       window.__resizes = [];
+      window.__delayFocusMainTake = false;
       const send = WebSocket.prototype.send;
       WebSocket.prototype.send = function(data) {
-        if (typeof data === 'string' && data.includes('"type":"resize"'))
-          window.__resizes.push({ url: this.url, frame: JSON.parse(data) });
+        if (typeof data === 'string' && data.includes('"type":"resize"')) {
+          const frame = JSON.parse(data);
+          const mainId = document.querySelector('#main-pane .pane')?.dataset.session;
+          if (window.__delayFocusMainTake && frame.take && mainId &&
+              this.url.includes('/sessions/' + encodeURIComponent(mainId) + '/stream')) {
+            window.__delayFocusMainTake = false;
+            setTimeout(() => {
+              window.__resizes.push({ url: this.url, frame });
+              send.call(this, data);
+            }, 1100);
+            return;
+          }
+          window.__resizes.push({ url: this.url, frame });
+        }
         return send.call(this, data);
       };
     })()`,
@@ -61,8 +86,10 @@ async function exercise(count: number, interact: Parameters<typeof captureDashbo
 it('drags the Focus boundary, fits the grown pane on release, and retains its width until Auto', async (context) => {
   if (!browser) { context.skip(); return; }
   const shot = await exercise(2, async ({ evaluate, send }) => {
-    await evaluate(`document.getElementById('focus').click()`);
-    await settleResizes(evaluate);
+    // Delay the main take past the old quiet interval to exercise a late resize.
+    await evaluate(`(() => { window.__resizes.length = 0; window.__delayFocusMainTake = true;
+      document.getElementById('focus').click(); })()`);
+    await settleFocusGrid(evaluate);
     const before = await evaluate(`(() => {
       const divider = document.querySelector('.pane-divider[data-axis="focus"]');
       const main = document.getElementById('main-pane').getBoundingClientRect();
