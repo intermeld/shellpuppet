@@ -52,6 +52,8 @@ export interface StyleTest {
   fg?: string[];
   /** Foreground colours that rule the line out. */
   notFg?: string[];
+  /** Accepted background colours. */
+  bg?: string[];
 }
 
 /** A test one line must pass. Every condition given must hold. */
@@ -365,14 +367,16 @@ export const BUILT_IN_SIGNATURES: readonly AgentSignature[] = [
   {
     // Muse Code 1.4.14. A completed answer is a bold ◆ block. Tool calls
     // use a green ◆, and the live reasoning summary uses a grey ◆. The
-    // composer is the bare ❯ below the voice input rule; sent turns use ❯
-    // with text. The Muse Code banner sits above the transcript, and the
-    // status line ending in Launch overrides sits below the composer. A
+    // composer is ❯ below the voice input rule, with or without typed text.
+    // Submitted turns have a highlighted background. The Muse Code banner
+    // sits above the transcript, and the status line ending in Launch overrides
+    // sits below the composer. A
     // finished turn may have no Worked for line.
     name: 'muse',
     programs: ['muse', 'muse-bin-*'],
     measured: 'Muse Code 1.4.14',
-    composer: { text: '^❯\\s*$' },
+    composer: { text: '^❯(?:\\s*$| \\S)', lead: { bg: ['default'] } },
+    typed: { text: '^❯ \\S', lead: { bg: ['default'] } },
     chrome: [{ text: '^── Voice input \\(Alt\\+V to start\\)' }, { text: RULE }],
     frame: { text: RULE },
     busy: [
@@ -401,6 +405,7 @@ interface CompiledStyle {
   italic?: boolean;
   fg?: Set<string>;
   notFg?: Set<string>;
+  bg?: Set<string>;
 }
 
 interface CompiledLine {
@@ -473,7 +478,7 @@ function compileStyle(value: unknown, at: string): CompiledStyle {
     if (key === 'bold' || key === 'dim' || key === 'italic') {
       if (typeof v !== 'boolean') throw new Error(`${at}.${key} must be true or false`);
       style[key] = v;
-    } else if (key === 'fg' || key === 'notFg') {
+    } else if (key === 'fg' || key === 'notFg' || key === 'bg') {
       if (!Array.isArray(v) || v.length === 0 || !v.every((c) => typeof c === 'string' && /^(default|p\d{1,3}|#[0-9a-f]{6})$/.test(c))) {
         throw new Error(`${at}.${key} must list colours as "default", "p<n>" or "#rrggbb"`);
       }
@@ -680,6 +685,7 @@ function styleFits(style: CellStyle, test: CompiledStyle): boolean {
   const fg = style.fg ?? 'default';
   if (test.fg !== undefined && !test.fg.has(fg)) return false;
   if (test.notFg !== undefined && test.notFg.has(fg)) return false;
+  if (test.bg !== undefined && !test.bg.has(style.bg ?? 'default')) return false;
   return true;
 }
 

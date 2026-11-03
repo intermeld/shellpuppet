@@ -16,6 +16,8 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Muse Code waits now report unsent composer text, and its stage approvals are
+  recognised only after the active menu has finished drawing.
 - `terminal_wait` and `shellpuppet wait` with `hideReasoning` now match text and
   regex only on the filtered screen.
 - Filtered screenshots repair extra replay text left by terminal serialisation

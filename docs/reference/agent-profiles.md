@@ -37,7 +37,7 @@ recorded.
 |---|---|---|---|
 | Claude Code 2.1.312 | **1.8 to 3.3 s** | ready at **2.1 to 2.8 s** | Loads the MCP servers configured for it as it starts. Its footer reads `? for shortcuts` in the default mode and names the mode otherwise. |
 | Codex 0.165.0 | **0.5 to 0.6 s** | ready at **0.5 to 0.6 s** | The fastest to a usable composer. |
-| Muse Code 1.4.14 | not measured | ready in about **5 to 25 s** | Wait for its composer below `Voice input (Alt+V to start)`. The first Enter after startup can leave typed text in the composer; inspect it and submit again if needed. |
+| Muse Code 1.4.14 | not measured | ready in about **5 to 25 s** | Wait for its composer below `Voice input (Alt+V to start)`. The submitting Enter can be swallowed on every turn; if the prompt remains in the composer, press Enter again. |
 | Antigravity 1.4.10 | **1.4 s** | trust question at **1.4 to 3.6 s** | Asks for trust on first use in a folder. |
 | Qoder CLI 1.1.81 | **22 to 23 s** | ready at **24 s** | Paints nothing for over 20 seconds while it loads the MCP servers configured for it, and input typed while it settles is **silently discarded**. In-TUI suggestion panels can steal focus after tasks; `escape` resets. |
 | OpenCode 2.0.26 | **0.6 to 5.7 s** | ready at **7 to 12 s** | Showed an update notice beside its composer on both runs. |
@@ -266,11 +266,16 @@ shellpuppet type <id> "your prompt" --verify      # retry after `key <id> escape
   `escape`, wait, retry".
 - **Muse Code:** it can think for minutes before its first tool call. Wait for
   the busy line to clear before reading `terminal_result`; a `◆ Worked for`
-  line is optional. After startup, check whether the first Enter submitted
-  the prompt, and press Enter again only if the text remains in the composer.
+  line is optional. The submitting Enter was swallowed on every observed turn,
+  including `/exit`; a second Enter submitted. `terminal_result` reports
+  `prompt-typed`, and a wait returns `prompt-typed`, while text remains in the
+  composer. Press Enter again in that state. Once submitted, the prompt appears
+  as a highlighted transcript row.
   Answer shell approvals one stage at a time with `Allow this stage once`.
   Wait past `Approval request · keys active in a moment` for the next menu,
   and never choose `Always allow in this workspace`.
+  A client passes `agents.passEnv.muse` only if its build knows Muse; restart an
+  MCP server session started before the Muse signature was added.
 - **Expect the human's window to set the grid.** The viewport watching a
   session drives its size, so `cols`/`rows` at `start` say where to *begin*
   and a browser window of a different shape will reshape it (design §5). This

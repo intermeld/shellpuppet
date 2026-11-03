@@ -123,6 +123,31 @@ describe('starting a session as an agent', () => {
   });
 });
 
+describe('Muse captured turn replay', () => {
+  it('reports the swallowed composer and recognises the approval after submission', async () => {
+    const names = ['muse-7a-composer-swallowed', 'muse-7b-after-second-enter', 'muse-8a-stage1of3'];
+    const files = names.map((name) => path.join(FIXTURES, `${name}.ansi`));
+    const script = `const fs = require('fs'); const files = ${JSON.stringify(files)}; const draw = (i) => process.stdout.write('\\x1b[2J\\x1b[H' + fs.readFileSync(files[i], 'utf8')); draw(0); setTimeout(() => draw(1), 5000); setTimeout(() => draw(2), 10000); setInterval(() => {}, 500);`;
+    const started = await api(td.port, td.token, '/sessions', {
+      body: { command: process.execPath, args: ['-e', script], shell: false, agent: 'muse', cols: 120, rows: 34, hold: true },
+    });
+    expect(started.status).toBe(200);
+    const id = String(started.body['id']);
+    await eventually(async () => String((await api(td.port, td.token, `/sessions/${id}/snapshot`)).body['screen']).includes('Voice input'), 5000);
+    const result = await api(td.port, td.token, `/sessions/${id}/result`);
+    expect(result.body).toMatchObject({ found: false, reason: 'prompt-typed' });
+    const pending = await api(td.port, td.token, `/sessions/${id}/wait?prompt=1&timeout=5000`);
+    expect(pending.body).toMatchObject({ matched: false, reason: 'prompt-typed' });
+    await eventually(async () => String((await api(td.port, td.token, `/sessions/${id}/snapshot`)).body['screen']).includes('Stage 1/3'), 12000);
+    const waits = await Promise.all([
+      api(td.port, td.token, `/sessions/${id}/wait?regex=Stage%201%2F3&timeout=5000&matchAfterInput=1`),
+      api(td.port, td.token, `/sessions/${id}/wait?regex=Stage%201%2F3&timeout=5000&matchAfterInput=1&hideReasoning=1`),
+      api(td.port, td.token, `/sessions/${id}/wait?prompt=1&timeout=5000`),
+    ]);
+    for (const response of waits) expect(response.body).toMatchObject({ matched: true });
+  }, 25_000);
+});
+
 describe('fail closed', () => {
   it('refuses hideReasoning, a filtered find and a result for a program with no signature', async () => {
     const started = await api(td.port, td.token, '/sessions', {

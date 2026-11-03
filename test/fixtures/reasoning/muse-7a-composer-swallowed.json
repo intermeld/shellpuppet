@@ -1,0 +1,13 @@
+{
+ "program": "pwsh",
+ "cols": 120,
+ "rows": 34,
+ "baseY": 0,
+ "lines": 8,
+ "cursor": {
+  "x": 2,
+  "y": 5
+ },
+ "captured": "2026-11-03T10:21:24.829Z",
+ "mode": "masked"
+}

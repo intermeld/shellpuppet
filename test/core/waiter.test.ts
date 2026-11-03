@@ -2,6 +2,27 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { WaitConditionError, waitFor } from '../../src/core/waiter.js';
 import type { WaitTarget } from '../../src/core/waiter.js';
 import { StalePromptGuard } from '../../src/core/promptDetector.js';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
+import { ScreenRenderer } from '../../src/core/renderer.js';
+import { BUILT_IN_SIGNATURES, compileSignatures, hideReasoning, latestResult } from '../../src/core/reasoning.js';
+import { echoEnd } from '../../src/core/echo.js';
+
+async function museFrame(name: string): Promise<{ plain: string; filtered: string; pending: boolean }> {
+  const root = path.join(__dirname, '..', 'fixtures', 'reasoning', name);
+  const size = JSON.parse(fs.readFileSync(`${root}.json`, 'utf8')) as { cols: number; rows: number };
+  const renderer = new ScreenRenderer({ cols: size.cols, rows: size.rows });
+  await renderer.write(fs.readFileSync(`${root}.ansi`, 'utf8'));
+  const lines = renderer.styledLines({ last: 2000 }).lines;
+  renderer.dispose();
+  const muse = compileSignatures(BUILT_IN_SIGNATURES, 'built-in').signatures.find((entry) => entry.name === 'muse')!;
+  const result = latestResult(lines, muse);
+  return {
+    plain: lines.map((line) => line.text).join('\n'),
+    filtered: hideReasoning(lines, muse)!.lines.join('\n'),
+    pending: !result.found && result.reason === 'prompt-typed',
+  };
+}
 
 /** Scriptable stand-in for a live session. */
 class FakeTarget implements WaitTarget {
@@ -57,6 +78,63 @@ afterEach(() => {
 });
 
 describe('waitFor text/regex', () => {
+  it.each([false, true])('finds a Muse menu after a wait starts before it, hideReasoning=%s', async (filtered) => {
+    vi.useRealTimers();
+    const typed = 'Xxx xxx xxxxx xxxxxxx Xxx-Xxxx | Xxxxxx-Xxxxxx -Xxxxxxxx Xxxx | Xxxxxx-Xxxx xxx xxxxxx xxx xxxx xx xxx xxxx.';
+    const composer = await museFrame('muse-7a-composer-swallowed');
+    const submitted = await museFrame('muse-7b-after-second-enter');
+    const menu = await museFrame('muse-8a-stage1of3');
+    vi.useFakeTimers();
+    const target = new FakeTarget();
+    target.screen = composer.plain;
+    target.type(`${typed}\r`);
+    let current = composer.filtered;
+    const wait = waitFor(target, { regex: 'Stage 1/3' }, {
+      ...POLL, timeout: 600, matchAfterInput: true,
+      ...(filtered ? { screenForMatch: () => current } : {}),
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    target.screen = submitted.plain;
+    current = submitted.filtered;
+    await vi.advanceTimersByTimeAsync(100);
+    target.screen = menu.plain;
+    current = menu.filtered;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(echoEnd(filtered ? current : target.screen, target.lastInput()!)).toBeLessThan((filtered ? current : target.screen).indexOf('Stage 1/3'));
+    expect(await wait).toMatchObject({ matched: true, reason: 'regex' });
+  });
+
+  it.each([{ prompt: true }, { regex: 'Stage 1/3' }])('reports Muse text left in the composer for %o waits', async (condition) => {
+    vi.useRealTimers();
+    const composer = await museFrame('muse-7a-composer-swallowed');
+    vi.useFakeTimers();
+    const target = new FakeTarget();
+    target.screen = composer.plain;
+    target.type('\r');
+    const result = await waitFor(target, condition, {
+      ...POLL, composerPending: () => composer.pending,
+    });
+    expect(result).toMatchObject({ matched: false, reason: 'prompt-typed' });
+    expect(result.detail).toContain('still in the composer');
+    expect(result.waitedMs).toBe(0);
+  });
+
+  it.each([false, true])('finds the Muse prompt after a wait starts before it, matchAfterInput=%s', async (afterInput) => {
+    vi.useRealTimers();
+    const composer = await museFrame('muse-7a-composer-swallowed');
+    const submitted = await museFrame('muse-7b-after-second-enter');
+    const menu = await museFrame('muse-8a-stage1of3');
+    vi.useFakeTimers();
+    const target = new FakeTarget();
+    target.screen = composer.plain;
+    target.type('\r');
+    const wait = waitFor(target, { prompt: true }, { ...POLL, timeout: 600, matchAfterInput: afterInput });
+    target.screen = submitted.plain;
+    await vi.advanceTimersByTimeAsync(100);
+    target.screen = menu.plain;
+    await vi.advanceTimersByTimeAsync(100);
+    expect(await wait).toMatchObject({ matched: true, reason: 'prompt' });
+  });
   it('uses the supplied screen for matching, the echo guard and the reply', async () => {
     const target = new FakeTarget();
     target.type('GO\r');
