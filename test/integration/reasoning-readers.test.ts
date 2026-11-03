@@ -338,21 +338,44 @@ describe('waiting without the reasoning', () => {
     const hidden = await api(td.port, td.token, `/sessions/${id}/snapshot?hideReasoning=1`);
     expect(String(hidden.body['screen'])).not.toContain(question);
 
-    // Supply a waiter result that carries a question from the raw screen.
-    // The HTTP route must derive what it reports from the filtered screen.
-    const daemon = td.daemon as unknown as { manager: { get(id: string): { waitFor: (condition: unknown, options: unknown) => Promise<unknown> } } };
+    // Exercise the screen callback passed by the HTTP route to the waiter.
+    // The question hidden by that callback cannot satisfy a prompt wait.
+    const daemon = td.daemon as unknown as { manager: { get(id: string): { waitFor: (condition: unknown, options: { screenForMatch?: () => string }) => Promise<unknown> } } };
     const session = daemon.manager.get(id);
     const originalWait = session.waitFor;
-    session.waitFor = () => Promise.resolve({ matched: true, reason: 'prompt', waitedMs: 0, screen: question, prompt: { question, options: ['1. Reveal secret'], signature: question } });
+    session.waitFor = (_condition, options) => {
+      const screen = options.screenForMatch?.();
+      if (screen === undefined) return Promise.resolve({ matched: true, reason: 'prompt', waitedMs: 0, screen: question });
+      return Promise.resolve({ matched: false, reason: 'timeout', waitedMs: 0, screen });
+    };
     try {
       const waited = await api(td.port, td.token, `/sessions/${id}/wait?prompt=1&hideReasoning=1`);
       expect(waited.status).toBe(200);
+      expect(waited.body['matched']).toBe(false);
       expect(String(waited.body['screen'])).not.toContain(question);
       expect(waited.body['prompt']).toBeUndefined();
     } finally {
       session.waitFor = originalWait;
     }
   });
+
+  it('returns a visible filtered prompt on the screen that satisfied the wait', async () => {
+    const file = path.join(__dirname, '..', 'fixtures', 'dialogs', 'mimo-question-menu.txt');
+    const started = await api(td.port, td.token, '/sessions', {
+      body: {
+        command: process.execPath,
+        args: ['-e', `process.stdout.write(require('fs').readFileSync(${JSON.stringify(file)}, 'utf8')); setInterval(() => {}, 500)`],
+        shell: false, agent: 'mimo', cols: 100, rows: 30, hold: true,
+      },
+    });
+    expect(started.status).toBe(200);
+    const id = String(started.body['id']);
+    const waited = await api(td.port, td.token, `/sessions/${id}/wait?prompt=1&debounce=200&timeout=15000&hideReasoning=1`);
+    expect(waited.status).toBe(200);
+    expect(waited.body).toMatchObject({ matched: true, reason: 'prompt' });
+    expect(String(waited.body['screen'])).toContain('Which of these should the build use for the');
+    expect((waited.body['prompt'] as { question: string }).question).toContain('Which of these should the build use for the');
+  }, 30_000);
 
   it('refuses before waiting when the program has no signature', async () => {
     const started = await api(td.port, td.token, '/sessions', {

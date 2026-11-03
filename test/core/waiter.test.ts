@@ -341,30 +341,24 @@ describe('waitFor debounce (settle after match)', () => {
   it('restarts settling after a mid-paint poll loses the match', async () => {
     const target = new FakeTarget();
     target.emit('Stage 1/3\n◇ Calling tools (0s)');
-    const wait = waitFor(target, { text: 'Stage 1/3' }, { ...POLL, debounce: 1_500, timeout: 2_800 });
+    // Use the production poll interval. Keep the incomplete paint for more
+    // than two polls so the waiter is certain to observe it.
+    const wait = waitFor(target, { text: 'Stage 1/3' }, { debounce: 1_500, timeout: 2_800 });
     let settled = false;
     void wait.then(() => { settled = true; });
     await vi.advanceTimersByTimeAsync(500);
     target.screen = '◇ Calling tools (1s)';
     target.emit('');
-    await vi.advanceTimersByTimeAsync(50); // one poll sees the incomplete paint
+    await vi.advanceTimersByTimeAsync(200);
     target.screen = 'Stage 1/3\n◇ Calling tools (1s)';
     target.emit('');
-    for (let second = 2; second <= 5; second++) {
-      await vi.advanceTimersByTimeAsync(300);
-      target.screen = `Stage 1/3\n◇ Calling tools (${second}s)`;
-      target.emit('');
-    }
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(1_460);
     expect(settled).toBe(false);
-    await vi.advanceTimersByTimeAsync(300);
-    target.screen = 'Stage 1/3\n◇ Calling tools (6s)';
-    target.emit('');
-    await vi.advanceTimersByTimeAsync(800);
+    await vi.advanceTimersByTimeAsync(160);
     const result = await wait;
     expect(result).toMatchObject({ matched: true, reason: 'text' });
-    expect(result.waitedMs).toBeGreaterThanOrEqual(2_050);
-    expect(result.waitedMs).toBeLessThanOrEqual(2_500);
+    expect(result.waitedMs).toBeGreaterThanOrEqual(2_200);
+    expect(result.waitedMs).toBeLessThanOrEqual(2_300);
   });
 
   it('does not lose the match when the process exits mid-settle', async () => {
@@ -718,6 +712,46 @@ describe('waitFor prompt: debounce retraction', () => {
   ❯ 1. Allow once
     2. No
 `;
+
+  it('does not match a question omitted from the filtered screen', async () => {
+    const target = new FakeTarget();
+    target.emit(PROMPT);
+    const filtered = '[reasoning hidden]';
+    const wait = waitFor(target, { prompt: true }, {
+      ...POLL, debounce: 200, timeout: 300, screenForMatch: () => filtered,
+    });
+    await vi.advanceTimersByTimeAsync(350);
+    expect(await wait).toMatchObject({ matched: false, reason: 'timeout', screen: filtered });
+  });
+
+  it('returns the filtered screen and question seen at settlement', async () => {
+    const target = new FakeTarget();
+    target.emit(`reasoning before prompt\n${PROMPT}`);
+    const filtered = (): string => target.screen.replace('reasoning before prompt', '[reasoning hidden]');
+    const wait = waitFor(target, { prompt: true }, {
+      ...POLL, debounce: 200, timeout: 500, screenForMatch: filtered,
+    });
+    await vi.advanceTimersByTimeAsync(250);
+    const result = await wait;
+    target.screen = 'Working now';
+    expect(result).toMatchObject({ matched: true, reason: 'prompt' });
+    expect(result.screen).toContain('Allow this command to run?');
+    expect(result.screen).toContain('[reasoning hidden]');
+    expect(result.prompt?.question).toContain('Allow this command to run?');
+  });
+
+  it('restarts settling when filtering removes a prompt mid-wait', async () => {
+    const target = new FakeTarget();
+    target.emit(PROMPT);
+    let filtered = PROMPT;
+    const wait = waitFor(target, { prompt: true }, {
+      ...POLL, debounce: 200, timeout: 350, screenForMatch: () => filtered,
+    });
+    await vi.advanceTimersByTimeAsync(100);
+    filtered = '[reasoning hidden]';
+    await vi.advanceTimersByTimeAsync(300);
+    expect(await wait).toMatchObject({ matched: false, reason: 'timeout', screen: filtered });
+  });
 
   it('does not report a prompt that vanished while the screen was settling', async () => {
     // With a debounce, the match is made on one tick and resolved on a later

@@ -88,7 +88,8 @@ Usage:
                         before the echo of what you last typed
                         --debounce waits for the condition to hold on every poll
                         for this many ms; a missed poll restarts it, while other
-                        output such as a ticking timer does not
+                        output such as a ticking timer does not; a match on the
+                        final screen settles at once if the program exits
   shellpuppet wait --prompt [id ...] [--now] [--timeout <ms>] [--hide-reasoning]
                                                     Wait for any listed session's prompt,
                                                     or every live session if no ids are given;

@@ -62,7 +62,7 @@ export interface WaitTarget {
 export interface WaiterInternals {
   /** Poll interval override, for tests only. */
   pollIntervalMs?: number;
-  /** Screen used for text and regex evaluation and returned with their result. */
+  /** Screen used for text, regex and prompt evaluation and returned with their result. */
   screenForMatch?: () => string;
   /** The agent signature has found unsent text in its composer. */
   composerPending?: () => boolean;
@@ -280,7 +280,7 @@ export function waitFor(
 
     const step = (): void => {
       const now = Date.now();
-      const screen = pattern !== null && options.screenForMatch !== undefined
+      const screen = (pattern !== null || condition.prompt === true) && options.screenForMatch !== undefined
         ? options.screenForMatch()
         : target.getScreen();
 
