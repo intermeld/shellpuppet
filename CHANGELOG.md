@@ -30,6 +30,11 @@ version may change behaviour, and every such change is listed here.
   further rows, on every reader (snapshot, last lines, find, wait, result and
   screenshots). A wrapped row always belongs to the line it continues, so a
   long answer keeps all of its rows.
+- A dashboard window keeps driving its sessions' grids when a pane briefly
+  reconnects after a relayout, such as Enlarge and Restore or another session
+  closing, instead of falling back to following. Every grid take is
+  acknowledged, so a pane never repeats a take, and a session that exits on
+  its own releases its grid owner.
 
 ### Changed
 
