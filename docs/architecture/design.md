@@ -429,12 +429,6 @@ returns the same compact rows. The CLI spells these forms `shellpuppet wait
 Both paths read the daemon's prompt state and omit ended sessions. With
 `hideReasoning`, they leave out questions and options, as a filtered full
 session list does. A single string `session` keeps the existing screen wait.
-An array of named sessions with `text` or `regex` waits for the first matching
-screen and returns its id and screen. With `hideReasoning`, each predicate reads
-the filtered screen that the reply returns. `matchAfterInput` uses that same
-screen for its echo guard. The CLI spells this form `shellpuppet wait id1 id2
---text word` or `--regex pattern`; `--hide-reasoning` applies to every named
-session. `quiet` and prompt matching retain their existing rules.
 The HTTP response from `GET /sessions/wait?prompt=true` has this wire shape:
 
 ```json
