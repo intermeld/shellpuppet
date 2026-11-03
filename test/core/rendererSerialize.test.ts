@@ -25,6 +25,18 @@ afterEach(() => {
 });
 
 describe('ScreenRenderer.serialize', () => {
+  it('corrects an extra replay cell after a synchronised wrapped-row deletion', async () => {
+    const r = makeRenderer(129, 31);
+    await r.write('\x1b[5;20H\x1b[?2026h' + ' a'.repeat(140) + '\x1b[5;20H\x1b[1M\x1b[?2026l');
+    const { view, state } = await r.capture({ above: 2000, scrollback: 2000 });
+    const twin = await rebuild('\x1bc\x1b[3J' + state, 129, 31);
+    expect(twin.styledLines().lines.map((line) => line.text)).toEqual(
+      view.lines.slice(view.firstVisible).map((line) => line.text),
+    );
+    expect(twin.snapshot().screen).toBe(r.snapshot().screen);
+    expect(twin.snapshot().cursor).toEqual(r.snapshot().cursor);
+  });
+
   it('rebuilds text, attributes, a wrapped line and the cursor in a fresh renderer', async () => {
     const r = makeRenderer();
     await r.write('one\r\n\x1b[31mred\x1b[0m two\r\n' + 'x'.repeat(50) + '\r\nend');
