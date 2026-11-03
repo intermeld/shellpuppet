@@ -286,6 +286,70 @@ it('ends a held Focus drag before Home resets its width', async (context) => {
   expect(result.second.saves).toBe(result.home.saves + 1);
 }, 150_000);
 
+for (const eventType of ['pagehide', 'beforeunload'] as const) {
+  it(`commits a held Focus drag on ${eventType} exactly once`, async (context) => {
+    if (!browser) { context.skip(); return; }
+    const shot = await exercise(2, async ({ evaluate, send }) => {
+      const start = await evaluate(`(() => {
+        document.getElementById('focus').click();
+        const divider = document.querySelector('.pane-divider[data-axis="focus"]');
+        const box = divider.getBoundingClientRect();
+        const listeners = new Map();
+        const add = document.addEventListener;
+        const remove = document.removeEventListener;
+        document.addEventListener = function(type, listener, options) {
+          if (['pointermove', 'pointerup', 'pointercancel'].includes(type)) listeners.set(listener, type);
+          return add.call(this, type, listener, options);
+        };
+        document.removeEventListener = function(type, listener, options) {
+          if (listeners.get(listener) === type) listeners.delete(listener);
+          return remove.call(this, type, listener, options);
+        };
+        window.__dragListeners = listeners;
+        window.__trackSaves = 0;
+        const save = Storage.prototype.setItem;
+        Storage.prototype.setItem = function(key, value) {
+          if (key === 'shellpuppet.dashboard.tracks') window.__trackSaves++;
+          return save.call(this, key, value);
+        };
+        document.addEventListener('pointerdown', event => window.__dragPointer = event.pointerId, true);
+        return { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+      })()`) as { x: number; y: number };
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: start.x, y: start.y, button: 'left', clickCount: 1 });
+      await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: start.x - 180, y: start.y, button: 'left', buttons: 1 });
+      const during = await evaluate(`(() => ({ width: document.getElementById('strip').getBoundingClientRect().width,
+        listeners: window.__dragListeners.size, saves: window.__trackSaves }))()`);
+      const ended = await evaluate(`(() => {
+        window.dispatchEvent(new Event('${eventType}'));
+        const divider = document.querySelector('.pane-divider[data-axis="focus"]');
+        return { width: document.getElementById('strip').getBoundingClientRect().width,
+          stored: JSON.parse(sessionStorage.getItem('shellpuppet.dashboard.tracks') || 'null')?.focusStrip,
+          dragging: divider.classList.contains('dragging'), listeners: window.__dragListeners.size,
+          captured: divider.hasPointerCapture(window.__dragPointer), saves: window.__trackSaves };
+      })()`);
+      const repeated = await evaluate(`(() => {
+        window.dispatchEvent(new Event('${eventType === 'pagehide' ? 'beforeunload' : 'pagehide'}'));
+        return { saves: window.__trackSaves, listeners: window.__dragListeners.size };
+      })()`);
+      return { during, ended, repeated };
+    });
+    const result = shot.probe as { during: { width: number; listeners: number; saves: number };
+      ended: { width: number; stored: number | null; dragging: boolean; listeners: number; captured: boolean; saves: number };
+      repeated: { saves: number; listeners: number } };
+    expect(result.during.width).toBeGreaterThan(300);
+    expect(result.during.listeners).toBe(3);
+    expect(result.during.saves).toBe(0);
+    expect(result.ended.width).toBeCloseTo(result.during.width, 0);
+    expect(result.ended.stored).toBeCloseTo(result.during.width, 0);
+    expect(result.ended.dragging).toBe(false);
+    expect(result.ended.listeners).toBe(0);
+    expect(result.ended.captured).toBe(false);
+    expect(result.ended.saves).toBe(1);
+    expect(result.repeated.saves).toBe(1);
+    expect(result.repeated.listeners).toBe(0);
+  }, 150_000);
+}
+
 it('commits a cancelled drag and a release outside the window', async (context) => {
   if (!browser) { context.skip(); return; }
   const shot = await exercise(2, async ({ evaluate, send }) => {
