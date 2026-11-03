@@ -188,12 +188,15 @@ two minutes for a person to unlock the tool. Starts are serialised per
 ShellPuppet home by a local listening endpoint. Another client waits for the
 pending start, including when it requested `--direct`. `daemon stop` waits for
 a pending start. `daemon restart` holds the start endpoint from before stopping
-until the replacement is healthy, so other clients wait for it. These verbs
-wait for up to the same bound (ten seconds, or two minutes with a wrapper);
-if a pending start has not settled by then, they stop with an error. You can
-run them again once the wrapper or its cleanup has finished. A failed start
-ends the wrapper's process tree
-only while the wrapper is still running. If Windows tree cleanup times out,
+until the replacement is healthy. It marks the old daemon as being replaced
+before stopping it, so new clients wait even while its health endpoint still
+answers. A peer waits for up to about 20 seconds for a direct restart (ten
+seconds to stop, then ten to start), or about 130 seconds with `startWith`
+(ten to stop, then two minutes to start). Other pending starts use the normal
+ten-second or two-minute bound. If a pending start has not settled by then,
+they stop with an error. You can run them again once the wrapper or its cleanup
+has finished. A failed start ends the wrapper's process tree only while the
+wrapper is still running. If Windows tree cleanup times out,
 ShellPuppet ends the wrapper itself and warns that programs it started may
 remain. If a wrapper launches a detached process and exits before the daemon
 is healthy, that wrapper is responsible
@@ -206,9 +209,11 @@ by the client that started the daemon. It does not reveal the command.
 `shellpuppet daemon stop --hold [seconds]` stops the daemon and holds off
 automatic starts for 120 seconds by default, or for 1 to 600 seconds when a
 value is given. `--force` can be used with `--hold`. Waiting clients connect
-if a daemon appears; otherwise they receive a restart hold message within the
-normal start wait bound. `shellpuppet daemon start` and `daemon restart` end
-the hold. `daemon status` reports its remaining seconds in text and JSON.
+if a daemon appears. If the hold expires or is removed while they wait, they
+resume normal start coordination in the same call; otherwise they receive a
+restart hold message within the normal start wait bound. `shellpuppet daemon
+start` and `daemon restart` end the hold. `daemon status` reports its remaining
+seconds in text and JSON.
 
 ### Restarting a shared daemon
 
