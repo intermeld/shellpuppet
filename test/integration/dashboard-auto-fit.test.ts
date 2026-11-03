@@ -46,16 +46,32 @@ it('fits a settled layout once per free pane, keeps the floor, and stops when sw
       return true;
     })()`,
     interact: async ({ evaluate }) => evaluate(`(async () => {
-      await new Promise(resolve => setTimeout(resolve, 400));
       const initial = document.getElementById('auto-fit').getAttribute('aria-pressed');
       window.__resizes.length = 0;
       document.getElementById('focus').click();
-      await new Promise(resolve => setTimeout(resolve, 450));
+      const waitFor = async (step, read, ready) => {
+        let last;
+        const started = Date.now();
+        while (Date.now() - started < 5000) {
+          last = read();
+          if (ready(last)) return;
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        throw new Error('Timed out waiting for ' + step + '; last observed: ' + JSON.stringify(last));
+      };
+      await waitFor('the Focus pane take', () => ({
+        active: document.getElementById('focus').classList.contains('active'),
+        resizes: window.__resizes.slice(),
+      }), state => state.active && state.resizes.some(frame => frame.url.includes(${JSON.stringify(ids[0])}) && frame.frame.take));
       const on = window.__resizes.slice();
       document.getElementById('auto-fit').click();
       window.__resizes.length = 0;
       document.getElementById('grid').click();
-      await new Promise(resolve => setTimeout(resolve, 450));
+      await waitFor('the settled Grid layout', () => ({
+        active: document.getElementById('grid').classList.contains('active'),
+        panes: [...document.querySelectorAll('.pane')].map(pane => pane.getBoundingClientRect().width),
+      }), state => state.active && state.panes.length === 2 && state.panes.every(width => width > 0));
+      await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
       return { initial, on, off: window.__resizes.slice(),
         saved: JSON.parse(localStorage.getItem('shellpuppet.dashboard')).autoFit };
     })()`),
@@ -68,6 +84,75 @@ it('fits a settled layout once per free pane, keeps the floor, and stops when sw
   expect(result.on.every(x => x.frame.cols >= 80 && x.frame.rows >= 24)).toBe(true);
   expect(result.off).toEqual([]);
   expect(result.saved).toBe(false);
+}, 150_000);
+
+it('takes a newly arrived pane within three seconds during ten seconds of session churn', async (context) => {
+  if (!browser) { context.skip(); return; }
+  const urls: string[] = [];
+  const daemon = running = await startTestDaemon({
+    launcher: (url) => { urls.push(url); return Promise.resolve({ launched: true, mode: 'isolated-app', browser: 'mock' }); },
+    idleCheckIntervalMs: 600_000,
+  });
+  expect((await api(daemon.port, daemon.token, '/dashboard/open', { method: 'POST', body: {} })).status).toBe(200);
+  const shot = await captureDashboard({ browser, viewerUrl: urls.at(-1)!, width: 1280, height: 720,
+    drive: true, timeoutMs: 120_000,
+    beforeNavigateScript: `(() => {
+      window.__takes = [];
+      const send = WebSocket.prototype.send;
+      WebSocket.prototype.send = function(data) {
+        if (typeof data === 'string' && data.includes('"type":"window-register"')) window.__feed = this;
+        if (typeof data === 'string' && data.includes('"type":"resize"'))
+          window.__takes.push({ at: performance.now(), url: this.url, ...JSON.parse(data) });
+        return send.call(this, data);
+      };
+    })()`,
+    probe: `(() => document.getElementById('connection')?.textContent === 'Connected' && window.__feed ? true : null)()`,
+    interact: async ({ evaluate }) => {
+      await evaluate(`(() => {
+        window.__churnChanges = 0;
+        const change = () => {
+          const index = ++window.__churnChanges;
+          const id = 'churn-' + Math.ceil(index / 2);
+          const frame = index % 2 === 1
+            ? { type: 'session-added', session: { id, label: id } }
+            : { type: 'session-removed', session: id };
+          window.__feed.onmessage({ data: JSON.stringify(frame) });
+        };
+        change();
+        window.__churnTimer = setInterval(change, 800);
+      })()`);
+      const started = await api(daemon.port, daemon.token, '/sessions', { body: {
+        command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], shell: false,
+        openViewer: false, cols: 100, rows: 30,
+      } });
+      expect(started.status).toBe(200);
+      const id = String(started.body['id']);
+      const measured = await evaluate(`(async () => {
+        const waitFor = async (step, read, ready) => {
+          let last;
+          const started = performance.now();
+          while (performance.now() - started < 15000) {
+            last = read();
+            if (ready(last)) return last;
+            await new Promise(resolve => setTimeout(resolve, 50));
+          }
+          throw new Error('Timed out waiting for ' + step + '; last observed: ' + JSON.stringify(last));
+        };
+        await waitFor('the arriving pane', () => document.querySelectorAll('.pane[data-session=${JSON.stringify(id)}]').length,
+          count => count === 1);
+        const arrivedAt = performance.now();
+        await waitFor('13 churn changes over ten seconds', () => window.__churnChanges, count => count >= 13);
+        clearInterval(window.__churnTimer);
+        return { arrivedAt, changes: window.__churnChanges,
+          takes: window.__takes.filter(frame => frame.url.includes(${JSON.stringify(id)}) && frame.take) };
+      })()`) as { arrivedAt: number; changes: number; takes: { at: number }[] };
+      return measured;
+    },
+  });
+  const result = shot.probe as { arrivedAt: number; changes: number; takes: { at: number }[] };
+  expect(result.changes).toBeGreaterThanOrEqual(13);
+  expect(result.takes.length, JSON.stringify(result)).toBeGreaterThan(0);
+  expect(result.takes[0]!.at - result.arrivedAt, JSON.stringify(result)).toBeLessThanOrEqual(3300);
 }, 150_000);
 
 it.each([true, false])('focus profile keeps one floor-sized fit with Auto fit %s', async (enabled) => {
@@ -99,6 +184,8 @@ it.each([true, false])('focus profile keeps one floor-sized fit with Auto fit %s
       if (Date.now() - state.started > 20000) return JSON.stringify({ timeout: true, phase: state.phase,
         connection: document.getElementById('connection')?.textContent,
         error: document.getElementById('error-message')?.textContent,
+        paneSize: document.querySelector('.pane-size')?.textContent,
+        layout: document.getElementById('panes')?.dataset.layout,
         frames: window.__resizes });
       if (state.phase === 0) {
         const profile = document.getElementById('profile');
@@ -112,8 +199,7 @@ it.each([true, false])('focus profile keeps one floor-sized fit with Auto fit %s
       }
       const card = document.querySelector('.pane');
       if (!card || !card.querySelector('.pane-size')?.textContent.includes('×')) return null;
-      state.paneReady ||= Date.now();
-      if (Date.now() - state.paneReady < 700) return null;
+      if (window.__resizes.length === 0) return null;
       const tile = card.querySelector('.pane-term');
       const host = document.createElement('div');
       host.style.cssText = 'position:absolute;left:0;top:0;visibility:hidden;width:' + tile.clientWidth +

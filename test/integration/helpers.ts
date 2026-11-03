@@ -331,12 +331,17 @@ export async function eventually(
   predicate: () => boolean | Promise<boolean>,
   timeoutMs = 15_000,
   intervalMs = 100,
+  description = 'condition',
+  observed?: () => unknown,
 ): Promise<void> {
   const startedAt = Date.now();
+  let last: unknown;
   for (;;) {
-    if (await predicate()) return;
+    const matched = await predicate();
+    last = observed ? await observed() : matched;
+    if (matched) return;
     if (Date.now() - startedAt > timeoutMs) {
-      throw new Error(`Condition not met within ${String(timeoutMs)} ms`);
+      throw new Error(`Timed out waiting for ${description} after ${String(timeoutMs)} ms; last observed: ${JSON.stringify(last)}`);
     }
     await new Promise((resolve) => setTimeout(resolve, intervalMs));
   }

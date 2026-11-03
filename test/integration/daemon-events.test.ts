@@ -542,7 +542,8 @@ describe('prompt-clear reaches BOTH channels', () => {
           '-e',
           `console.log(' Permission Required'); console.log(' Allow this command to run?'); ` +
             `console.log('  \u276F 1. Allow once'); console.log('    2. No'); ` +
-            `setTimeout(() => { console.log(' Generating... (esc to cancel)'); }, 1200); ` +
+            `process.stdin.setRawMode?.(true); process.stdin.resume(); ` +
+            `process.stdin.once('data', () => console.log(' Generating... (esc to cancel)')); ` +
             `setInterval(() => {}, 200);`,
         ],
         shell: false,
@@ -571,14 +572,17 @@ describe('prompt-clear reaches BOTH channels', () => {
     });
 
     // Up…
-    await eventually(() => frames.some((f) => f.type === 'prompt-stall'), 10_000);
+    await eventually(() => frames.some((f) => f.type === 'prompt-stall'), 10_000, 100,
+      'the viewer prompt-stall frame', () => frames);
     const stall = frames.find((f) => f.type === 'prompt-stall')!;
     // …carrying the options, not just the question: the badge lists the
     // choices.
     expect(stall.options).toEqual(['1. Allow once', '2. No']);
 
     // …and down again.
-    await eventually(() => frames.some((f) => f.type === 'prompt-clear'), 10_000);
+    expect((await api(td.port, td.token, `/sessions/${id}/input`, { body: { data: 'x' } })).status).toBe(200);
+    await eventually(() => frames.some((f) => f.type === 'prompt-clear'), 10_000, 100,
+      'the viewer prompt-clear frame after input', () => frames);
 
     ws.close();
     await api(td.port, td.token, `/sessions/${id}`, { method: 'DELETE' });

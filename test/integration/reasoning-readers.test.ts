@@ -46,10 +46,12 @@ async function replay(name: string, agent?: string): Promise<string> {
   expect(started.status).toBe(200);
   const id = String(started.body['id']);
   // The replay is drawn once it is on screen: wait for its composer.
+  let composerScreen = '';
   await eventually(async () => {
     const snap = await api(td.port, td.token, `/sessions/${id}/snapshot`);
-    return /Type your message|\? for shortcuts|Ask Codex/.test(String(snap.body['screen']));
-  }, 30_000);
+    composerScreen = String(snap.body['screen']);
+    return /Type your message|\? for shortcuts|Ask Codex/.test(composerScreen);
+  }, 30_000, 100, 'the replay composer', () => composerScreen.slice(-500));
   return id;
 }
 
@@ -65,7 +67,11 @@ async function longWrappedLine(name: string, line: string): Promise<string> {
   });
   expect(started.status).toBe(200);
   const id = String(started.body['id']);
-  await eventually(async () => String((await api(td.port, td.token, `/sessions/${id}/snapshot`)).body['screen']).includes(line[3]!.repeat(4)), 30_000);
+  let visibleScreen = '';
+  await eventually(async () => {
+    visibleScreen = String((await api(td.port, td.token, `/sessions/${id}/snapshot`)).body['screen']);
+    return visibleScreen.includes(line[3]!.repeat(4));
+  }, 30_000, 100, 'the wrapped line in the snapshot', () => visibleScreen.slice(-500));
   return id;
 }
 
@@ -82,7 +88,11 @@ describe('wrapped lines longer than the reasoning context', () => {
     expect((found.body['matches'] as unknown[]).length).toBeGreaterThan(0);
     // The answer can span many PTY writes. Its first visible row does not mean
     // the trailing composer has arrived, and the prompt echo is still on screen.
-    await eventually(async () => String((await api(td.port, td.token, `/sessions/${id}/snapshot`)).body['screen']).includes('>  Type'), 30_000);
+    let trailingScreen = '';
+    await eventually(async () => {
+      trailingScreen = String((await api(td.port, td.token, `/sessions/${id}/snapshot`)).body['screen']);
+      return trailingScreen.includes('>  Type');
+    }, 30_000, 100, 'the trailing composer', () => trailingScreen.slice(-500));
     const result = await api(td.port, td.token, `/sessions/${id}/result`);
     expect(result.body['found'], `result after trailing composer: ${String(result.body['reason'])}`).toBe(true);
     expect((result.body['answer'] as string[]).join('')).toContain('MMMM');
