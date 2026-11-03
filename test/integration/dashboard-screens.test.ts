@@ -89,13 +89,16 @@ async function rosterSteps(steps: string): Promise<Record<string, unknown>> {
   })()`);
 }
 
-async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', dragCheck = false, held = false): Promise<{
+async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', dragCheck = false, held = false,
+  sameScreen = false, reconnect = false): Promise<{
   before: { primary: string[]; other: string[]; childConnected: string };
   after: string[];
   paused: { primary: string[]; other: string[]; toolbar: string[] };
   closeMs: number;
   failureMs?: number;
   survivor?: string[];
+  recovered?: { primary: string[]; other: string[]; oldInstance: string; newInstance: string;
+    peers: string[]; afterLate: { primary: string[]; other: string[]; peers: string[] } };
   oversized: { note: string; horizontal: number; vertical: number; left: number; top: number };
   movedFit: { before: string; after: string; resizes: { cols: number; rows: number; take: boolean }[];
     donorStreams: string[] };
@@ -207,14 +210,18 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
       }));
       throw new Error(`The dashboard windows did not settle after ${String(Date.now() - started)} ms; diagnostics: ${JSON.stringify(details)}`);
     };
-    const primary = await makePage(url);
+    const sharedPage = new URL(url);
+    sharedPage.hash = 'screen=shared-screen&rank=1000';
+    const sharedUrl = sharedPage.toString();
+    const primary = await makePage(sameScreen ? sharedUrl : url);
     pages.push(primary.sessionId);
     await waitFor(async () => (await ids(primary.sessionId) as string[] | undefined)?.length === 3);
     await waitFor(async () => String(await evaluate(primary.sessionId,
       "document.querySelector('.pane[data-session=s3] .pane-size')?.textContent")).includes('×'));
     const initialSize = String(await evaluate(primary.sessionId,
       "document.querySelector('.pane[data-session=s3] .pane-size')?.textContent"));
-    const second = await makePage(`${new URL(url).origin}/dashboard`, 1600);
+    const second = await makePage(sameScreen ? `${new URL(url).origin}/dashboard#screen=shared-screen&rank=1000`
+      : `${new URL(url).origin}/dashboard`, 1600);
     pages.push(second.sessionId);
     await waitFor(async () => {
       const a = await ids(primary.sessionId) as string[] | undefined;
@@ -283,6 +290,13 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
         horizontal: wrap.scrollWidth - wrap.clientWidth, vertical: wrap.scrollHeight - wrap.clientHeight,
         left: wrap.scrollLeft, top: wrap.scrollTop };
     })()`) as { note: string; horizontal: number; vertical: number; left: number; top: number };
+    const extra = reconnect ? await makePage(`${new URL(url).origin}/dashboard`, 1920) : null;
+    if (extra) {
+      pages.push(extra.sessionId);
+      await waitFor(async () => (await Promise.all(pages.map((page) => evaluate(page,
+        "document.getElementById('share-count')?.textContent")))).every((count) =>
+        String(count).includes('3 windows')));
+    }
     if (lostSocket) {
       const victim = lostSocket === 'primary' ? primary : second;
       const survivor = lostSocket === 'primary' ? second : primary;
@@ -290,13 +304,44 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
         window.__pauseRoster = true;
         const socket = window.__dashboardDiagnostics.streams.find(entry => entry.url.endsWith('/dashboard/events'))?.socket;
         if (!socket) throw new Error('No dashboard socket');
-        socket.onclose = null;
+        if (!${reconnect}) socket.onclose = null;
         socket.close();
       })()`);
       const failedAt = Date.now();
-      await waitFor(async () => (await ids(survivor.sessionId) as string[] | undefined)?.length === 3);
+      if (reconnect) await waitFor(async () => String(await evaluate(survivor.sessionId,
+        "document.getElementById('share-count')?.textContent")).includes('2 windows'));
+      else await waitFor(async () => (await ids(survivor.sessionId) as string[] | undefined)?.length === 3);
       const failureMs = Date.now() - failedAt;
       const stale = await evaluate(victim.sessionId, 'window.__lastRoster');
+      if (reconnect) {
+        const oldInstance = (stale as { window: { instance: string } }).window.instance;
+        await waitFor(async () => {
+          const latest = await evaluate(victim.sessionId, 'window.__lastRoster') as { window?: { instance?: string } };
+          const a = await ids(primary.sessionId) as string[] | undefined;
+          const b = await ids(second.sessionId) as string[] | undefined;
+          const peers = await Promise.all([primary.sessionId, extra!.sessionId].map((page) => evaluate(page,
+            "document.getElementById('share-count')?.textContent")));
+          return latest?.window?.instance !== oldInstance && a?.length === 1 && b?.length === 2 &&
+            peers.every((count) => String(count).includes('3 windows'));
+        });
+        const newInstance = ((await evaluate(victim.sessionId, 'window.__lastRoster')) as
+          { window: { instance: string } }).window.instance;
+        const recovered = { primary: await ids(primary.sessionId) as string[],
+          other: await ids(second.sessionId) as string[], oldInstance, newInstance,
+          peers: await Promise.all([primary.sessionId, extra!.sessionId].map((page) => evaluate(page,
+            "document.getElementById('share-count')?.textContent"))) as string[],
+          afterLate: { primary: [] as string[], other: [] as string[], peers: [] as string[] } };
+        await evaluate(victim.sessionId, `(() => { const channel = new BroadcastChannel('shellpuppet.dashboard');
+          channel.postMessage(${JSON.stringify(stale)});
+          channel.postMessage({ type: 'test-roster-barrier' }); channel.close(); })()`);
+        await waitFor(async () => await evaluate(survivor.sessionId, 'window.__staleBarrier') === true);
+        recovered.afterLate = { primary: await ids(primary.sessionId) as string[],
+          other: await ids(second.sessionId) as string[],
+          peers: await Promise.all([primary.sessionId, extra!.sessionId].map((page) => evaluate(page,
+            "document.getElementById('share-count')?.textContent"))) as string[] };
+        return { before, movedFit, oversized, after: [], paused: { primary: [], other: [], toolbar: [] },
+          closeMs: 0, failureMs, recovered };
+      }
       await evaluate(victim.sessionId, `(() => { const channel = new BroadcastChannel('shellpuppet.dashboard');
         channel.postMessage(${JSON.stringify(stale)});
         channel.postMessage({ type: 'test-roster-barrier' }); channel.close(); })()`);
@@ -558,6 +603,30 @@ describe('dashboard screen controls in Chromium', () => {
     expect(result.movedFit.donorStreams).toEqual([]);
     expect(result.closeMs).toBeLessThan(2000);
     expect(result.after).toEqual(sessions);
+  }, 180_000);
+
+  it('shares sessions between live documents with the same screen id and returns them on close', async (context) => {
+    if (!browser) { context.skip(); return; }
+    await ensureSessions();
+    const result = await multiWindowProbe(await freshUrl(), undefined, false, false, true);
+    expect(result.before.primary).toHaveLength(1);
+    expect(result.before.other).toHaveLength(2);
+    expect(new Set([...result.before.primary, ...result.before.other])).toEqual(new Set(sessions));
+    expect(result.after).toEqual(sessions);
+  }, 180_000);
+
+  it('restores a live document after its feed reconnects and rejects its old roster', async (context) => {
+    if (!browser) { context.skip(); return; }
+    await ensureSessions();
+    const result = await multiWindowProbe(await freshUrl(), 'other', false, false, false, true);
+    expect(result.failureMs).toBeLessThan(2000);
+    expect(result.recovered?.newInstance).not.toBe(result.recovered?.oldInstance);
+    expect(result.recovered?.primary).toEqual([sessions[0]]);
+    expect(result.recovered?.other).toEqual(sessions.slice(1));
+    expect(result.recovered?.peers).toHaveLength(2);
+    expect(result.recovered?.peers.every((count) => count.includes('3 windows'))).toBe(true);
+    expect(result.recovered?.afterLate).toEqual({ primary: result.recovered?.primary,
+      other: result.recovered?.other, peers: result.recovered?.peers });
   }, 180_000);
 
   it('keeps a drag in the window where it happened', async (context) => {

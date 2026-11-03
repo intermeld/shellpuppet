@@ -605,13 +605,13 @@ it('ends a drag when sessions arrive or move to another window', async (context)
       try {
         let id;
         channel.onmessage = e => { if (e.data?.type === 'window-roster' && e.data.window?.rank === 0)
-          id = e.data.window.id; };
+          id = JSON.stringify([e.data.window.id, e.data.window.instance]); };
         channel.postMessage({ type: 'window-roster', token: 'test-other', window:
           { id: 'test-other', instance: 'i-test', rank: -1, openedAt: 1, width: 1300, height: 900 } });
         await waitFor('the local roster response', () => id, value => typeof value === 'string');
         await waitFor('the second window in the share count',
           () => document.getElementById('share-count').textContent, value => value.includes('2 windows'));
-        channel.postMessage({ type: 'window-assignment', token: 'test-other', owner: 'test-other',
+        channel.postMessage({ type: 'window-assignment', token: 'test-other', owner: JSON.stringify(['test-other', 'i-test']),
           byWindow: { [id]: [document.querySelector('.pane').dataset.session] } });
         await waitFor('one assigned pane', () => document.querySelectorAll('.pane').length, value => value === 1);
         window.__resizes.length = 0;
@@ -646,11 +646,12 @@ it('ends and rebuilds a Focus divider when the same-count assignment changes its
     const assigned = await evaluate(`(async () => {
       const channel = window.__swapChannel = new BroadcastChannel('shellpuppet.dashboard');
       const id = window.__localId = await new Promise(resolve => { channel.onmessage = e => {
-        if (e.data?.type === 'window-roster' && e.data.window?.rank === 0) resolve(e.data.window.id);
+        if (e.data?.type === 'window-roster' && e.data.window?.rank === 0)
+          resolve(JSON.stringify([e.data.window.id, e.data.window.instance]));
       }; channel.postMessage({ type: 'window-roster', token: 'test-swap', window:
         { id: 'test-swap', instance: 'i-test', rank: -1, openedAt: 1, width: 1300, height: 900 } }); });
       const ids = window.__allIds = [...document.querySelectorAll('.pane')].map(pane => pane.dataset.session);
-      channel.postMessage({ type: 'window-assignment', token: 'test-swap', owner: 'test-swap',
+      channel.postMessage({ type: 'window-assignment', token: 'test-swap', owner: JSON.stringify(['test-swap', 'i-test']),
         byWindow: { [id]: ids.slice(0, 2) } });
       await new Promise((resolve, reject) => { const deadline = setTimeout(() => reject(Error('first assignment missing')), 3000);
         const check = () => { const found = [...document.querySelectorAll('.pane')].map(pane => pane.dataset.session);
@@ -670,7 +671,7 @@ it('ends and rebuilds a Focus divider when the same-count assignment changes its
     const swapped = await evaluate(`(async () => {
       const ids = window.__allIds;
       window.__resizes.length = 0;
-      window.__swapChannel.postMessage({ type: 'window-assignment', token: 'test-swap', owner: 'test-swap',
+      window.__swapChannel.postMessage({ type: 'window-assignment', token: 'test-swap', owner: JSON.stringify(['test-swap', 'i-test']),
         byWindow: { [window.__localId]: ids.slice(1) } });
       await new Promise((resolve, reject) => { const deadline = setTimeout(() => reject(Error('second assignment missing')), 3000);
         const check = () => { const found = [...document.querySelectorAll('.pane')].map(pane => pane.dataset.session);
@@ -751,18 +752,18 @@ it('forgets saved tracks when the pane count passes through zero', async (contex
       try {
         let id;
         channel.onmessage = e => { if (e.data?.type === 'window-roster' && e.data.window?.rank === 0)
-          id = e.data.window.id; };
+          id = JSON.stringify([e.data.window.id, e.data.window.instance]); };
         const ids = [...document.querySelectorAll('.pane')].map(x => x.dataset.session);
         channel.postMessage({ type: 'window-roster', token: 'test-zero', window:
           { id: 'test-zero', instance: 'i-test', rank: -1, openedAt: 1, width: 1300, height: 900 } });
         await waitFor('the local roster response', () => id, value => typeof value === 'string');
         await waitFor('the second window in the share count',
           () => document.getElementById('share-count').textContent, value => value.includes('2 windows'));
-        channel.postMessage({ type: 'window-assignment', token: 'test-zero', owner: 'test-zero', byWindow: { [id]: [] } });
+        channel.postMessage({ type: 'window-assignment', token: 'test-zero', owner: JSON.stringify(['test-zero', 'i-test']), byWindow: { [id]: [] } });
         await waitFor('all panes leaving', () => document.querySelectorAll('.pane').length, value => value === 0);
         const empty = { count: document.querySelectorAll('.pane').length,
           stored: sessionStorage.getItem('shellpuppet.dashboard.tracks') };
-        channel.postMessage({ type: 'window-assignment', token: 'test-zero', owner: 'test-zero', byWindow: { [id]: ids } });
+        channel.postMessage({ type: 'window-assignment', token: 'test-zero', owner: JSON.stringify(['test-zero', 'i-test']), byWindow: { [id]: ids } });
         await waitFor('the panes returning', () => document.querySelectorAll('.pane').length,
           value => value === ids.length);
         const refilled = { count: document.querySelectorAll('.pane').length,

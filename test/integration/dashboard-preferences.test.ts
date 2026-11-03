@@ -6,6 +6,7 @@ import type { TestDaemon } from './helpers.js';
 
 const running: TestDaemon[] = [];
 let browser: string | null = null;
+const FIT_SETTLE_MS = 3000 + 250 + 100;
 
 beforeAll(async () => { browser = await findBrowser(); }, 60_000);
 afterEach(async () => { for (const daemon of running.splice(0)) await daemon.stop(); }, 120_000);
@@ -96,17 +97,34 @@ describe('dashboard preferences and errors', () => {
       { body: { cols: 100, rows: 30, hold: true } });
     expect(held.status).toBe(200);
     const script = `${sentScript}; window.__dashboardTest = async () => {
-      const pause = () => new Promise(resolve => setTimeout(resolve, 450));
+      const waitFor = async (step, read, ready) => {
+        let last;
+        const started = Date.now();
+        while (Date.now() - started < 5000) {
+          last = read();
+          if (ready(last)) return;
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        throw new Error('Timed out waiting for ' + step + '; last observed: ' + JSON.stringify(last));
+      };
       const toggle = document.getElementById('auto-fit');
       const initial = toggle?.getAttribute('aria-pressed');
       window.__resizes.length = 0;
       document.getElementById('focus').click();
-      await pause();
+      await waitFor('the Focus pane take', () => ({
+        active: document.getElementById('focus').classList.contains('active'),
+        resizes: window.__resizes.slice(),
+      }), state => state.active && state.resizes.some(frame => frame.url.includes(${JSON.stringify(ids[0])}) && frame.frame.take));
+      await new Promise(resolve => setTimeout(resolve, ${FIT_SETTLE_MS}));
       const on = window.__resizes.slice();
       toggle.click();
       window.__resizes.length = 0;
       document.getElementById('grid').click();
-      await pause();
+      await waitFor('the settled Grid layout', () => ({
+        active: document.getElementById('grid').classList.contains('active'),
+        panes: [...document.querySelectorAll('.pane')].map(pane => pane.getBoundingClientRect().width),
+      }), state => state.active && state.panes.length === 2 && state.panes.every(width => width > 0));
+      await new Promise(resolve => setTimeout(resolve, ${FIT_SETTLE_MS}));
       const off = window.__resizes.slice();
       return { initial, on, off, saved: JSON.parse(localStorage.getItem('shellpuppet.dashboard')).autoFit };
     };`;

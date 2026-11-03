@@ -77,8 +77,10 @@
   const pendingOpen = new Map();
   const popWatches = new Map();
   const windowToken = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-  const windowInstance = `i-${[...window.crypto.getRandomValues(new Uint8Array(16))]
+  const newInstance = () => `i-${[...window.crypto.getRandomValues(new Uint8Array(16))]
     .map((byte) => byte.toString(16).padStart(2, '0')).join('')}`;
+  let windowInstance = newInstance();
+  let registered = false;
   const openedAt = window.performance.timeOrigin + window.performance.now();
   const screenParams = new URLSearchParams(location.hash.slice(1));
   const windowId = screenParams.get('screen') || windowToken;
@@ -86,6 +88,8 @@
   const screenKey = screenParams.get('key');
   let currentScreenKey = screenKey;
   const windows = new Map();
+  const windowPair = (id, instance) => JSON.stringify([id, instance]);
+  const ownPair = () => windowPair(windowId, windowInstance);
   const goneWindows = new Map();
   const validWindowId = (id) => typeof id === 'string' && id.length <= 100 &&
     /^[a-z0-9]+-[a-z0-9]+(?:-[1-9][0-9]*)?$/.test(id);
@@ -112,7 +116,7 @@
   let lastLayout = null;
   let lastStructure = null;
   let lastVisibilityGeometry = null;
-  if (popSelf === null) windows.set(windowId, { id: windowId, instance: windowInstance, rank: windowRank, openedAt, key: screenKey,
+  if (popSelf === null) windows.set(ownPair(), { id: windowId, instance: windowInstance, rank: windowRank, openedAt, key: screenKey,
     width: window.innerWidth - 12, height: window.innerHeight - 54 });
   let channel = null;
   try { channel = new BroadcastChannel('shellpuppet.dashboard'); } catch { /* This window still tracks a pop-out it opened. */ }
@@ -279,13 +283,14 @@
   const screenIdentity = (screen) => [screen.availLeft, screen.availTop,
     screen.availWidth, screen.availHeight].join(',');
   const orderedWindows = () => [...windows.values()].filter((entry) => entry.ready !== false)
-    .sort((a, b) => a.rank - b.rank || a.openedAt - b.openedAt || a.id.localeCompare(b.id));
+    .sort((a, b) => a.rank - b.rank || a.openedAt - b.openedAt || a.id.localeCompare(b.id) ||
+      a.instance.localeCompare(b.instance));
   const ownWindow = () => ({ id: windowId, instance: windowInstance, rank: windowRank, openedAt, key: currentScreenKey,
     width: Math.max(1, root.clientWidth - 12), height: Math.max(1, root.clientHeight - 12) });
   function advertise() {
     if (popSelf !== null || channel === null) return;
-    windows.set(windowId, ownWindow());
-    lastSeen.set(windowId, Date.now());
+    windows.set(ownPair(), ownWindow());
+    lastSeen.set(ownPair(), Date.now());
     channel.postMessage({ type: 'window-roster', window: ownWindow(), token: windowToken });
   }
   function applyAssignment(ids) {
@@ -300,21 +305,28 @@
   }
   function publishAssignment() {
     if (popSelf !== null) return;
-    windows.set(windowId, ownWindow());
+    windows.set(ownPair(), ownWindow());
     const roster = orderedWindows();
-    if (roster[0]?.id !== windowId) return;
+    if (windowPair(roster[0]?.id, roster[0]?.instance) !== ownPair()) return;
     const ids = sorted().map((item) => item.id).filter((id) => !popped.has(id));
     if (roster.length === 1) { assigned = null; renderShareCount(); return; }
     if (channel === null) return;
-    const byWindow = ShellPuppetDashboardLayout.assign(ids, roster);
-    channel.postMessage({ type: 'window-assignment', owner: windowId, byWindow, token: windowToken });
-    applyAssignment(byWindow[windowId] || []);
+    const byWindow = ShellPuppetDashboardLayout.assign(ids, roster.map((entry) => ({
+      ...entry, id: windowPair(entry.id, entry.instance),
+    })));
+    channel.postMessage({ type: 'window-assignment', owner: ownPair(), byWindow, token: windowToken });
+    applyAssignment(byWindow[ownPair()] || []);
   }
   function removeWindow(id, instance) {
-    if (instance && windows.get(id)?.instance && windows.get(id).instance !== instance) return;
-    if (!windows.delete(id)) return;
+    let removed = false;
+    for (const [pair, entry] of windows) {
+      if (entry.id !== id || (instance && entry.instance !== instance)) continue;
+      windows.delete(pair);
+      lastSeen.delete(pair);
+      removed = true;
+    }
+    if (!removed) return;
     settleAssignmentFits();
-    lastSeen.delete(id);
     const watch = childWatches.get(id);
     if (watch !== undefined) { clearInterval(watch); childWatches.delete(id); }
     renderScreens();
@@ -337,8 +349,8 @@
       `popup,left=${screen.availLeft},top=${screen.availTop},width=${screen.availWidth},height=${screen.availHeight}`;
     const child = openDashboard(`#${hash}`, `shellpuppet-screen-${id}`, features);
     if (child === null) return;
-    windows.set(id, { id, rank, openedAt: Date.now(), key, ready: false });
-    lastSeen.set(id, Date.now());
+    windows.set(windowPair(id, null), { id, rank, openedAt: Date.now(), key, ready: false });
+    lastSeen.set(windowPair(id, null), Date.now());
     renderScreens();
     publishAssignment();
     childWatches.set(id, setInterval(() => { if (child.closed) removeWindow(id); }, 500));
@@ -988,7 +1000,17 @@
     feed = new WebSocket(`ws://${location.host}/dashboard/events`, [`sp-csrf.${proof}`]);
     feed.onopen = () => {
       connection.textContent = 'Connected'; error.hidden = true;
-      if (popSelf === null) feed.send(JSON.stringify({ type: 'window-register', id: windowId, instance: windowInstance }));
+      if (popSelf === null) {
+        if (registered) {
+          windows.delete(ownPair());
+          lastSeen.delete(ownPair());
+          windowInstance = newInstance();
+        }
+        registered = true;
+        feed.send(JSON.stringify({ type: 'window-register', id: windowId, instance: windowInstance }));
+        advertise();
+        publishAssignment();
+      }
     };
     feed.onmessage = (event) => {
       try { receive(JSON.parse(event.data)); } catch { showError('The session feed sent an unreadable update.'); }
@@ -1288,10 +1310,13 @@
       const now = Date.now();
       for (const [pair, closedAt] of goneWindows) if (now - closedAt > 600_000) goneWindows.delete(pair);
       if (goneWindows.has(JSON.stringify([data.window.id, data.window.instance]))) return;
-      const fresh = !windows.has(data.window.id);
-      const previous = windows.get(data.window.id);
-      windows.set(data.window.id, data.window);
-      lastSeen.set(data.window.id, Date.now());
+      const pair = windowPair(data.window.id, data.window.instance);
+      const fresh = !windows.has(pair);
+      const previous = windows.get(pair);
+      windows.delete(windowPair(data.window.id, null));
+      lastSeen.delete(windowPair(data.window.id, null));
+      windows.set(pair, data.window);
+      lastSeen.set(pair, Date.now());
       if (fresh) advertise();
       if (fresh || previous.key !== data.window.key) renderScreens();
       publishAssignment();
@@ -1303,8 +1328,9 @@
       return;
     }
     if (data.type === 'window-assignment' && popSelf === null && windows.size > 1 &&
-        data.owner === orderedWindows()[0]?.id && Array.isArray(data.byWindow?.[windowId])) {
-      applyAssignment(data.byWindow[windowId]);
+        data.owner === windowPair(orderedWindows()[0]?.id, orderedWindows()[0]?.instance) &&
+        Array.isArray(data.byWindow?.[ownPair()])) {
+      applyAssignment(data.byWindow[ownPair()]);
       return;
     }
     if (typeof data.id !== 'string') return;
@@ -1441,8 +1467,11 @@
     advertise();
     rosterTimer = setInterval(() => {
       advertise();
-      for (const [id, seen] of lastSeen) {
-        if (id !== windowId && Date.now() - seen > 180_000) removeWindow(id);
+      for (const [pair, seen] of lastSeen) {
+        if (pair !== ownPair() && Date.now() - seen > 180_000) {
+          const entry = windows.get(pair);
+          if (entry) removeWindow(entry.id, entry.instance);
+        }
       }
     }, 1000);
     renderScreens();
