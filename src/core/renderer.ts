@@ -175,9 +175,9 @@ export class ScreenRenderer {
             line.getCell(x, cell);
             if (cell.getWidth() === 0) continue;
             length += (cell.getChars() || ' ').length;
-            if (length >= row.text.length) return x + cell.getWidth() + 1;
+            if (length >= row.text.length) return Math.min(x + cell.getWidth() + 1, this.term.cols);
           }
-          return line.length + 1;
+          return Math.min(line.length + 1, this.term.cols);
         });
         resolve({ view, state, cols: this.term.cols, rows: this.term.rows, eraseColumns });
       });
@@ -198,10 +198,29 @@ export class ScreenRenderer {
         const source = expected[row]?.text ?? '';
         const shown = actual[row]?.text ?? '';
         if (shown !== source && shown.startsWith(source)) {
-          repairs.push(`\x1b[${String(row + 1)};${String(captured.eraseColumns[row] ?? 1)}H\x1b[K`);
+          const column = captured.eraseColumns[row] ?? 1;
+          const line = replay.term.buffer.active.getLine(replay.term.buffer.active.baseY + row);
+          // A combining mark can extend the last source cell without using a
+          // new column. Only erase when every cell before the erase is intact.
+          if (line?.translateToString(false, 0, column - 1) === source) {
+            repairs.push(`\x1b[${String(row + 1)};${String(column)}H\x1b[K`);
+          }
         }
       }
-      if (repairs.length > 0) state += '\x1b7\x1b[?6l' + repairs.join('') + '\x1b8';
+      if (repairs.length > 0) {
+        const repaired = state + '\x1b7\x1b[?6l' + repairs.join('') + '\x1b8';
+        const check = new ScreenRenderer({ cols: captured.cols, rows: captured.rows,
+          scrollback: options.scrollback });
+        try {
+          await check.write('\x1bc\x1b[3J' + repaired);
+          const checked = check.styledLines().lines;
+          if (checked.length === expected.length && checked.every((line, row) => line.text === expected[row]?.text)) {
+            state = repaired;
+          }
+        } finally {
+          check.dispose();
+        }
+      }
     } finally {
       replay.dispose();
     }

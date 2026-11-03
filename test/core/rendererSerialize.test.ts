@@ -3,7 +3,7 @@
  * a fresh renderer of the same size, which is what a viewer receives (design §5).
  */
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ScreenRenderer } from '../../src/core/renderer.js';
 
 const renderers: ScreenRenderer[] = [];
@@ -25,6 +25,42 @@ afterEach(() => {
 });
 
 describe('ScreenRenderer.serialize', () => {
+  it('keeps the final source cell when replay adds a combining mark at full width', async () => {
+    const r = makeRenderer(3, 2);
+    await r.write('abc');
+    const rawState = 'abc\u0301';
+    vi.spyOn((r as unknown as { serializer: { serialize: () => string } }).serializer, 'serialize')
+      .mockReturnValue(rawState);
+
+    const { state } = await r.capture({ above: 0, scrollback: 0 });
+    const twin = await rebuild('\x1bc\x1b[3J' + state, 3, 2);
+    expect(state).toBe(rawState);
+    expect(state).not.toContain('\x1b[1;4H');
+    expect(twin.styledLines().lines[0]?.text).toContain('c');
+  });
+
+  it('falls back to the raw state if a suffix erase cannot match every source row', async () => {
+    const r = makeRenderer(3, 2);
+    await r.write('ab');
+    const rawState = 'ab\u0301';
+    vi.spyOn((r as unknown as { serializer: { serialize: () => string } }).serializer, 'serialize')
+      .mockReturnValue(rawState);
+
+    const { state } = await r.capture({ above: 0, scrollback: 0 });
+    expect(state).toBe(rawState);
+  });
+
+  it('discards a valid suffix erase when another replay row still differs', async () => {
+    const r = makeRenderer(4, 3);
+    await r.write('ab\r\nok');
+    const rawState = 'abc\r\nxy';
+    vi.spyOn((r as unknown as { serializer: { serialize: () => string } }).serializer, 'serialize')
+      .mockReturnValue(rawState);
+
+    const { state } = await r.capture({ above: 0, scrollback: 0 });
+    expect(state).toBe(rawState);
+  });
+
   it('corrects an extra replay cell after a synchronised wrapped-row deletion', async () => {
     const r = makeRenderer(129, 31);
     await r.write('\x1b[5;20H\x1b[?2026h' + ' a'.repeat(140) + '\x1b[5;20H\x1b[1M\x1b[?2026l');
