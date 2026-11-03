@@ -158,6 +158,8 @@ export const taskkillTrees: TreeKiller = (pids) =>
  */
 const WRITE_CHUNK_CHARS = 1024;
 const WRITE_CHUNK_DELAY_MS = 8;
+/** Muse needs a short pause after text before its submitting Enter. */
+export const MUSE_SUBMIT_DELAY_MS = 400;
 
 /**
  * Bracketed paste (DEC private mode 2004). A TUI that enables it is telling us
@@ -1112,9 +1114,24 @@ export class Session implements WaitTarget {
     const { screen } = this.renderer.snapshot();
     this.stalePrompts.noteInput(screen);
 
+    const body = data.slice(0, -1);
+    if (this.agent === 'muse' && data.endsWith('\r') &&
+      Array.from(body).some((character) => character > ' ' && character !== '\x7f')) {
+      await this.writeData(body);
+      await new Promise((resolve) => setTimeout(resolve, MUSE_SUBMIT_DELAY_MS));
+      this.refuseIfInputFailed();
+      this.pty.write('\r');
+      return screen;
+    }
+
+    await this.writeData(data);
+    return screen;
+  }
+
+  private async writeData(data: string): Promise<void> {
     if (data.length <= WRITE_CHUNK_CHARS) {
       this.pty.write(data);
-      return screen;
+      return;
     }
 
     // Bracketed paste: ONE write, no chunking, exactly as a terminal delivers a
@@ -1128,7 +1145,7 @@ export class Session implements WaitTarget {
       const trailer = newlineAt === -1 ? '' : data.slice(newlineAt);
       this.lastWriteWrapped = true;
       this.pty.write(`${PASTE_START}${body}${PASTE_END}${trailer}`);
-      return screen;
+      return;
     }
     this.lastWriteWrapped = false;
 
@@ -1152,7 +1169,6 @@ export class Session implements WaitTarget {
         await new Promise((resolve) => setTimeout(resolve, WRITE_CHUNK_DELAY_MS));
       }
     }
-    return screen;
   }
 
   /** Input written after the input pipe has failed would be lost: refuse it. */

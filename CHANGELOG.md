@@ -16,6 +16,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Muse Code text submissions now send Enter after the text has reached the composer, so submitted prompts are no longer left unsent.
 - Muse Code two-option approvals now raise waiting alerts and resolve prompt waits, including when commands wrap across the screen.
 - Muse Code results now read answers above an empty composer hint and report typed, unsent text in the composer.
 - Muse Code results and waits now report a prompt left unsent in the composer,
