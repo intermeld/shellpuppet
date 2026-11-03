@@ -88,6 +88,18 @@ afterEach(() => {
 });
 
 describe('waitFor text/regex', () => {
+  it('reports the captured typed Muse composer on a prompt wait', async () => {
+    vi.useRealTimers();
+    const composer = await museFrame('live96-1-composer-typed');
+    vi.useFakeTimers();
+    const target = new FakeTarget();
+    target.screen = composer.plain;
+    target.type('\r');
+    const result = await waitFor(target, { prompt: true }, {
+      ...POLL, composerPending: () => composer.pending,
+    });
+    expect(result).toMatchObject({ matched: false, reason: 'prompt-typed' });
+  });
   it('keeps waiting while Muse is busy with text typed ahead', async () => {
     vi.useRealTimers();
     const busy = await museFrame('muse-busy-first', true);

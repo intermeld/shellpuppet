@@ -1,0 +1,13 @@
+{
+ "program": "program",
+ "cols": 96,
+ "rows": 30,
+ "baseY": 0,
+ "lines": 26,
+ "cursor": {
+  "x": 15,
+  "y": 8
+ },
+ "captured": "2026-11-03T18:35:12.208Z",
+ "mode": "masked"
+}

@@ -342,9 +342,12 @@ function musePrompt(raw: string[], tail: Line[]): DetectedPrompt | null {
   if (marker === null) return null;
   const selectedOption = Number(marker[1]) - 1;
   const approval = marker[2] === '. ';
-  const count = approval ? 3 : 2;
-  if (selectedOption >= count) return null;
   const first = selected.index - selectedOption;
+  // Muse omits the workspace-wide choice for script blocks and some commands.
+  // The second row identifies that form even when the heading stays plain.
+  const twoOptionApproval = approval && /^(?:⟩ | {2})2\. Abort the entire command\s*\(esc\)/.test(raw[first + 1] ?? '');
+  const count = approval && !twoOptionApproval ? 3 : 2;
+  if (selectedOption >= count) return null;
   const options: string[] = [];
   const optionRows: number[] = [];
   for (let offset = 0; offset < count; offset++) {

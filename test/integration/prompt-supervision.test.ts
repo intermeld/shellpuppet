@@ -3,6 +3,7 @@ import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { api, eventually, makeTempHome, repoRoot, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
+import { ScreenRenderer } from '../../src/core/renderer.js';
 
 const fixture = path.join(repoRoot, 'test', 'fixtures');
 const sink = path.join(fixture, 'dialog-sink.mjs');
@@ -31,6 +32,37 @@ beforeAll(async () => {
 afterAll(async () => { await td.stop(); }, 180_000);
 
 describe('prompt supervision across sessions', () => {
+  it.each(['live88-1-stage1of1-MISSED', 'live120-1-stage1of1-MISSED'])(
+    'flags the captured two-option %s menu and resolves a prompt wait', async (name) => {
+      const short = await startTestDaemon({
+        home: makeTempHome('shellpuppet-muse-menu-'),
+        promptScanIntervalMs: 50,
+        promptStallMs: 100,
+      });
+      try {
+        const root = path.join(fixture, 'reasoning', name);
+        const size = JSON.parse(fs.readFileSync(`${root}.json`, 'utf8')) as { cols: number; rows: number };
+        const renderer = new ScreenRenderer(size);
+        await renderer.write(fs.readFileSync(`${root}.ansi`, 'utf8'));
+        const screenFile = path.join(short.home, 'menu.txt');
+        fs.writeFileSync(screenFile, renderer.snapshot().screen);
+        renderer.dispose();
+        const started = await api(short.port, short.token, '/sessions', {
+          body: { command: process.execPath, args: [sink, screenFile, answered], shell: false, agent: 'muse', cols: size.cols, rows: size.rows },
+        });
+        expect(started.status, JSON.stringify(started.body)).toBe(200);
+        const id = String(started.body['id']);
+        await eventually(async () => {
+          const listed = await api(short.port, short.token, '/sessions?waitingOnly=true');
+          return (listed.body['sessions'] as { id: string }[]).some((session) => session.id === id);
+        }, 15_000);
+        const waited = await api(short.port, short.token, `/sessions/${id}/wait?prompt=true&timeout=10000`);
+        expect(waited.body).toMatchObject({ matched: true, prompt: { question: 'Would you like to run the following command?' } });
+        expect((waited.body['prompt'] as { options: string[] }).options).toHaveLength(2);
+      } finally {
+        await short.stop();
+      }
+    }, 120_000);
   it('returns when the second of several sessions is waiting, without a screen', async () => {
     const idle = await start(false, 'idle delegate');
     const second = await start(true, 'second delegate', 1500);

@@ -508,6 +508,18 @@ describe('Muse Code (built in)', () => {
   let muse: CompiledSignature;
   beforeEach(() => { muse = builtIn('muse'); });
 
+  it('recognises the captured typed composer', async () => {
+    expect(latestResult(await screen('live96-1-composer-typed'), muse)).toMatchObject({
+      found: false, reason: 'prompt-typed',
+    });
+  });
+
+  it('reads the answer above the captured empty composer hint', async () => {
+    const result = latestResult(await screen('live96-3-done-composer-hint'), muse);
+    expect(result).toMatchObject({ found: true });
+    if (result.found) expect(result.answer.join('\n')).toContain('workspace');
+  });
+
   it('reports typed text in the swallowed composer, then treats the highlighted row as submitted', async () => {
     expect(latestResult(await screen('muse-7a-composer-swallowed'), muse)).toMatchObject({
       found: false, reason: 'prompt-typed',
