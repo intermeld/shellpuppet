@@ -14,12 +14,13 @@
 import { writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import process from 'node:process';
-import { DaemonGoneError, discoverDaemon, ensureDaemon, request, waitForPendingDaemon } from '../client/http.js';
+import { DaemonGoneError, discoverDaemon, ensureDaemon, request, waitForPendingDaemon, withDaemonStartLock } from '../client/http.js';
 import type { DaemonConnection } from '../client/http.js';
 import { assertNodeVersion, packageVersion } from '../daemon/meta.js';
 import { NO_MATCHES } from '../core/find.js';
 import { resultRefusal } from '../core/reasoning.js';
 import { readDaemonState, shellpuppetHome } from '../daemon/paths.js';
+import { clearRestartHold, readRestartHold, writeRestartHold } from '../daemon/restartHold.js';
 import { planPassedEnv } from '../mcp/config.js';
 import { isEnvNamesProblem, readDaemonConfig } from '../daemon/config.js';
 import { agentNameFor } from '../core/reasoning.js';
@@ -124,6 +125,7 @@ Usage:
       start/restart: --direct starts without daemon.startWith.
       stop/restart: --force to kill live sessions. status and stop never
       start a daemon: one that has gone is reported as not running.
+      stop: --hold [seconds] prevents auto-start for 120 s by default (1 to 600).
   shellpuppet mcp                                   Run the MCP stdio server (long-running)
   shellpuppet --version | --help
 
@@ -195,6 +197,8 @@ function parseArgs(argv: string[], stopAtFirstPositional = false): ParsedArgs {
       const value = argv[++i];
       if (value === undefined) fail(2, `--${name} needs a value.`);
       lists.set(name, [...(lists.get(name) ?? []), value]);
+    } else if (name === 'hold' && argv[0] === 'stop' && argv[i + 1] !== undefined && !argv[i + 1]?.startsWith('--')) {
+      flags.set(name, argv[++i] ?? '');
     } else if (VALUE_FLAGS.has(name)) {
       const value = argv[++i];
       if (value === undefined) fail(2, `--${name} needs a value.`);
@@ -703,6 +707,12 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
   const force = parsed.flags.get('force') === true;
   const direct = parsed.flags.get('direct') === true;
   if (direct && sub !== 'start' && sub !== 'restart') fail(2, '--direct applies only to daemon start or restart.');
+  const holdFlag = parsed.flags.get('hold');
+  if (holdFlag !== undefined && sub !== 'stop') fail(2, '--hold applies only to daemon stop.');
+  const holdSeconds = holdFlag === undefined ? undefined : holdFlag === true ? 120 : Number(holdFlag);
+  if (holdSeconds !== undefined && (!Number.isInteger(holdSeconds) || holdSeconds < 1 || holdSeconds > 600)) {
+    fail(2, '--hold needs a whole number of seconds from 1 to 600.');
+  }
 
   // Every request here passes `autoStart: false`: asking about or stopping a
   // daemon must never start one, so a daemon that goes between being found
@@ -742,8 +752,11 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
 
   switch (sub) {
     case 'status': {
+      const hold = readRestartHold(shellpuppetHome(), stderrLogger);
+      const holdRemainingSeconds = hold === null ? undefined : Math.max(1, Math.ceil((hold.expiresAt - Date.now()) / 1000));
       const notRunning = (): void => {
-        console.log(wantJson ? JSON.stringify({ running: false }) : 'not running');
+        console.log(wantJson ? JSON.stringify({ running: false, ...(holdRemainingSeconds !== undefined ? { holdRemainingSeconds } : {}) }) :
+          `not running${holdRemainingSeconds === undefined ? '' : `; restart hold ends in ${String(holdRemainingSeconds)} s`}`);
       };
       const connection = await discoverDaemon({ logger: stderrLogger });
       if (connection === null) {
@@ -781,12 +794,14 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
           version: connection.version,
           sessions: list,
           startedWrapped,
+          ...(holdRemainingSeconds !== undefined ? { holdRemainingSeconds } : {}),
           ...(environment !== undefined ? { sessionEnv: environment } : {}),
         });
       } else {
         console.log(
           `running on port ${String(connection.port)}, version ${connection.version}, ` +
             `${String(list.length)} session(s), started wrapped: ${String(startedWrapped)}` +
+            (holdRemainingSeconds !== undefined ? `, restart hold ends in ${String(holdRemainingSeconds)} s` : '') +
             (environment !== undefined ? `, session environment ${environment.mode}` : ''),
         );
         if (environment !== undefined && environment.exposed.length > 0) {
@@ -802,15 +817,19 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
     // `--help` says every verb accepts --json, so these three answer in JSON
     // when asked, and a script driving the daemon need not parse English.
     case 'start': {
-      const existing = await discoverDaemon({ logger: stderrLogger });
-      if (existing !== null) {
-        surfaceWarnings(existing);
+      const { connection, alreadyRunning } = await withDaemonStartLock({ logger: stderrLogger }, async (lock) => {
+        clearRestartHold(shellpuppetHome());
+        const existing = await discoverDaemon({ logger: stderrLogger });
+        return existing !== null ? { connection: existing, alreadyRunning: true } :
+          { connection: await ensureDaemon({ logger: stderrLogger, direct }, lock), alreadyRunning: false };
+      });
+      if (alreadyRunning) {
+        surfaceWarnings(connection);
         if (wantJson) {
-          printJson({ running: true, port: existing.port, version: existing.version, startedWrapped: readDaemonState(shellpuppetHome())?.startedWrapped === true });
-        } else console.log(`already running on port ${String(existing.port)}`);
+          printJson({ running: true, port: connection.port, version: connection.version, startedWrapped: readDaemonState(shellpuppetHome())?.startedWrapped === true });
+        } else console.log(`already running on port ${String(connection.port)}`);
         return;
       }
-      const connection = await ensureDaemon({ logger: stderrLogger, direct });
       surfaceWarnings(connection);
       if (wantJson) {
         printJson({ running: true, port: connection.port, version: connection.version, startedWrapped: readDaemonState(shellpuppetHome())?.startedWrapped === true });
@@ -820,6 +839,18 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
       return;
     }
     case 'stop': {
+      if (holdSeconds !== undefined) {
+        const stopped = await withDaemonStartLock({ logger: stderrLogger }, async () => {
+          const existing = await discoverDaemon({ logger: stderrLogger });
+          const didStop = existing !== null && await stopRunning(existing);
+          writeRestartHold(shellpuppetHome(), holdSeconds);
+          return didStop;
+        });
+        if (wantJson) printJson({ running: false, stopped: true, holdRemainingSeconds: holdSeconds });
+        else console.log(stopped ? `stopped; restart hold ends in ${String(holdSeconds)} s` :
+          `not running; restart hold ends in ${String(holdSeconds)} s`);
+        return;
+      }
       const connection = await waitForPendingDaemon({ logger: stderrLogger });
       // A daemon that went before it could be told to stop was not running.
       if (connection === null || !(await stopRunning(connection))) {
@@ -834,10 +865,12 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
       return;
     }
     case 'restart': {
-      // Only the start half may start a daemon.
-      const existing = await waitForPendingDaemon({ logger: stderrLogger });
-      if (existing !== null) await stopRunning(existing);
-      const connection = await ensureDaemon({ logger: stderrLogger, direct });
+      const connection = await withDaemonStartLock({ logger: stderrLogger }, async (lock) => {
+        clearRestartHold(shellpuppetHome());
+        const existing = await discoverDaemon({ logger: stderrLogger });
+        if (existing !== null) await stopRunning(existing);
+        return ensureDaemon({ logger: stderrLogger, direct }, lock);
+      });
       surfaceWarnings(connection);
       if (wantJson) {
         printJson({ running: true, port: connection.port, version: connection.version, startedWrapped: readDaemonState(shellpuppetHome())?.startedWrapped === true });
@@ -847,7 +880,7 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
       return;
     }
     default:
-      fail(2, 'daemon needs one of: status, start, stop [--force], restart [--force]');
+      fail(2, 'daemon needs one of: status, start, stop [--force] [--hold [seconds]], restart [--force]');
   }
 }
 

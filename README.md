@@ -332,9 +332,18 @@ shellpuppet dashboard                             # the dashboard, in its own is
 shellpuppet desktop                               # start or reuse ShellPuppet's dashboard
 shellpuppet desktop --install                     # add or update your application shortcut
 shellpuppet desktop --uninstall                   # remove that shortcut
-shellpuppet daemon status|start|stop|restart     # status and stop never start one
+shellpuppet daemon status|start|stop|restart     # manage the shared daemon
+shellpuppet daemon stop --hold [seconds]         # pause automatic starts (default 120 s)
 shellpuppet mcp
 ```
+
+### Restarting a shared daemon
+
+Build first, then run `shellpuppet daemon restart` so other clients wait for
+the replacement. To stop before rebuilding, run `shellpuppet daemon stop
+--hold`, rebuild, then run `shellpuppet daemon start`. The hold lasts 120
+seconds by default (1 to 600 seconds with an explicit value), and `daemon
+status` shows the time remaining.
 
 On Windows, `start` uses `cmd.exe /d /s /c` by default. ShellPuppet joins the
 command and arguments with spaces; `cmd.exe` then parses that line. A value
