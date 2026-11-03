@@ -116,6 +116,17 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
         window.setInterval = (callback, delay, ...args) => nativeInterval(() => {
           if (delay !== 1000 || !window.__pauseRoster) callback(...args);
         }, delay);
+        const NativeChannel = window.BroadcastChannel;
+        window.BroadcastChannel = class extends NativeChannel {
+          postMessage(data) {
+            if (data.type === 'window-roster') window.__lastRoster = data;
+            return super.postMessage(data);
+          }
+        };
+        const witness = new NativeChannel('shellpuppet.dashboard');
+        witness.onmessage = event => {
+          if (event.data?.type === 'test-roster-barrier') window.__staleBarrier = true;
+        };
       })()` }, sessionId);
       const rate = Number(process.env['SP_DASHBOARD_CPU_RATE'] || '1');
       if (rate > 1) await send('Emulation.setCPUThrottlingRate', { rate }, sessionId);
@@ -224,8 +235,14 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
       })()`);
       const failedAt = Date.now();
       await waitFor(async () => (await ids(survivor.sessionId) as string[] | undefined)?.length === 3);
+      const failureMs = Date.now() - failedAt;
+      const stale = await evaluate(victim.sessionId, 'window.__lastRoster');
+      await evaluate(victim.sessionId, `(() => { const channel = new BroadcastChannel('shellpuppet.dashboard');
+        channel.postMessage(${JSON.stringify(stale)});
+        channel.postMessage({ type: 'test-roster-barrier' }); channel.close(); })()`);
+      await waitFor(async () => await evaluate(survivor.sessionId, 'window.__staleBarrier') === true);
       return { before, movedFit, oversized, after: [], paused: { primary: [], other: [], toolbar: [] }, closeMs: 0,
-        failureMs: Date.now() - failedAt, survivor: await ids(survivor.sessionId) as string[] };
+        failureMs, survivor: await ids(survivor.sessionId) as string[] };
     }
     await evaluate(second.sessionId, 'window.__pauseRoster = true');
     await new Promise((resolve) => setTimeout(resolve, 5400));
