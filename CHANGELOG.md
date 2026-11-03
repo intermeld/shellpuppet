@@ -16,6 +16,8 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- `terminal_wait` and `shellpuppet wait` with `hideReasoning` now match text and
+  regex only on the filtered screen, including named multi-session waits.
 - Direct Windows starts (`--no-shell` or `shell: false`) now preserve literal
   arguments which begin and end with double quotes and contain spaces.
 - Dashboard windows retain their session share through slowed browser timers,
