@@ -77,6 +77,18 @@ Releases carry npm provenance through trusted publishing from the first.
 - **More ways to install.** winget, Homebrew and signed Windows binaries.
 - **Remote access through Intermeld**, end-to-end encrypted, with the client
   half open here.
+- **Sessions that stall, noticed and nudged.** An agent CLI can end its turn
+  on an error from its provider, such as a model at capacity, a dropped stream
+  or a usage limit, rather than on a question, and then sit idle. Such a
+  session gets a state of its own beside waiting, in the session list, the
+  dashboard and as a wait condition, and whoever supervises it, an agent or
+  you, is told. Nudging it to carry on is a setting, off until you switch it
+  on, and each nudge is recorded as the daemon's own input. Further off: a
+  supervisor, a model you choose that watches the sessions you put it on,
+  nudges the ones that have stalled and, given a goal for a session, checks
+  that it is still heading there; on a machine registered to Intermeld, one
+  that Intermeld provides
+  ([ADR-007](docs/decisions/ADR-007-connected-features.md)).
 - **A public module interface**, once the internal modules have settled. The
   project's own modules stay in this repository, and a module loaded from
   outside it is data the core interprets, never code
