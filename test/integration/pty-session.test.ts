@@ -236,7 +236,7 @@ describe('PTY sessions', () => {
     const session = manager.create(interactiveShell());
     await session.waitFor({ quiet: 700 }, { timeout: 20_000 });
 
-    session.resize(100, 30);
+    await session.resize(100, 30);
     expect(session.cols).toBe(100);
     expect(session.rows).toBe(30);
 
@@ -337,7 +337,7 @@ describe('PTY sessions', () => {
     expect(session.summary().readyReason).toBe('not-tracked');
   });
 
-  it('start geometry says where to begin; only hold keeps it there', () => {
+  it('start geometry says where to begin; only hold keeps it there', async () => {
     const manager = makeManager();
     // A size at start is a starting size: freezing the grid would leave a
     // viewer unable to fill a window of a different shape.
@@ -353,7 +353,7 @@ describe('PTY sessions', () => {
 
     // A resize that says nothing about holding leaves the setting alone, so a
     // viewport following a window cannot release a hold a run depends on.
-    sized.resize(90, 28);
+    await sized.resize(90, 28);
     expect(sized.geometryHeld).toBe(false);
     expect(sized.cols).toBe(90);
 
@@ -369,9 +369,9 @@ describe('PTY sessions', () => {
     expect(held.summary().geometryHeld).toBe(true);
 
     // And holding can be asked for, or given up, on a running session.
-    sized.resize(110, 32, { hold: true });
+    await sized.resize(110, 32, { hold: true });
     expect(sized.geometryHeld).toBe(true);
-    sized.resize(110, 32, { hold: false });
+    await sized.resize(110, 32, { hold: false });
     expect(sized.geometryHeld).toBe(false);
   });
 

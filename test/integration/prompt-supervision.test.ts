@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { api, eventually, makeTempHome, repoRoot, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 import { ScreenRenderer } from '../../src/core/renderer.js';
+import { MUSE_MENU_SETTLE_MS } from '../../src/core/promptDetector.js';
 
 const fixture = path.join(repoRoot, 'test', 'fixtures');
 const sink = path.join(fixture, 'dialog-sink.mjs');
@@ -32,6 +33,37 @@ beforeAll(async () => {
 afterAll(async () => { await td.stop(); }, 180_000);
 
 describe('prompt supervision across sessions', () => {
+  it('waits for a plain staged menu to settle before offering it', async () => {
+    const short = await startTestDaemon({
+      home: makeTempHome('shellpuppet-muse-stage-'),
+      promptScanIntervalMs: 50,
+      promptStallMs: 100,
+    });
+    try {
+      const root = path.join(fixture, 'reasoning', 'muse-8b-between-stages');
+      const size = JSON.parse(fs.readFileSync(`${root}.json`, 'utf8')) as { cols: number; rows: number };
+      const screenFile = path.join(short.home, 'menu.ansi');
+      fs.copyFileSync(`${root}.ansi`, screenFile);
+      const started = await api(short.port, short.token, '/sessions', {
+        body: { command: process.execPath, args: ['-e', `process.stdout.write(require('fs').readFileSync(${JSON.stringify(screenFile)}, 'utf8')); setInterval(() => {}, 500)`], shell: false, agent: 'muse', cols: size.cols, rows: size.rows },
+      });
+      expect(started.status).toBe(200);
+      const id = String(started.body['id']);
+      await eventually(async () => String((await api(short.port, short.token, `/sessions/${id}/snapshot`)).body['screen']).includes('Stage 2/3'), 10_000);
+      const early = await api(short.port, short.token, `/sessions/${id}/wait?prompt=true&timeout=300`);
+      expect(early.body).toMatchObject({ matched: false, reason: 'timeout' });
+      const listed = await api(short.port, short.token, '/sessions?waitingOnly=true');
+      expect((listed.body['sessions'] as { id: string }[]).some((entry) => entry.id === id)).toBe(false);
+      const settled = await api(short.port, short.token, `/sessions/${id}/wait?prompt=true&timeout=${MUSE_MENU_SETTLE_MS + 2_000}`);
+      expect(settled.body).toMatchObject({ matched: true, prompt: { question: 'Would you like to run the following command?' } });
+      await eventually(async () => {
+        const waiting = await api(short.port, short.token, '/sessions?waitingOnly=true');
+        return (waiting.body['sessions'] as { id: string }[]).some((entry) => entry.id === id);
+      }, 5_000);
+    } finally {
+      await short.stop();
+    }
+  }, 120_000);
   it.each(['live88-1-stage1of1-MISSED', 'live120-1-stage1of1-MISSED'])(
     'flags the captured two-option %s menu and resolves a prompt wait', async (name) => {
       const short = await startTestDaemon({

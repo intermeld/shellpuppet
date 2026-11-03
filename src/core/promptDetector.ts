@@ -35,6 +35,10 @@
  */
 
 import { dialogPrompt } from './dialogs.js';
+import type { StyledLine } from './renderer.js';
+
+/** A plain Muse heading can precede the moment its keys become active. */
+export const MUSE_MENU_SETTLE_MS = 1_500;
 
 export interface DetectedPrompt {
   /** Best-effort headline for the prompt (e.g. "Permission Required"). */
@@ -372,11 +376,23 @@ function musePrompt(raw: string[], tail: Line[]): DetectedPrompt | null {
   }
   if (question === undefined) return null;
   if (approval !== question.text.startsWith('Would ')) return null;
+  // A quoted menu inside an answer has no new Muse input border before it.
+  const before = raw.slice(0, question.index);
+  let border = -1;
+  for (let index = before.length - 1; index >= 0; index--) {
+    if (/^\s*── .*Voice input/.test(before[index]!)) { border = index; break; }
+  }
+  if (before.slice(border + 1).some((line) => /^\s*◆/.test(line))) return null;
   const stage = approval ? raw.slice(question.index, first).find((line) => /^ {2}Stage \d+\/\d+$/.test(line.trimEnd())) : undefined;
-  // A menu retained in the transcript is no longer answerable once Muse has
-  // printed an answer or returned to a new composer below its choices.
-  if (raw.slice(optionRows[optionRows.length - 1]! + 1).some((line) =>
-    /^◆ (?!Worked for )/.test(line) || /^❯(?:\s|$)/.test(line))) return null;
+  // Only this menu's hint and footer, blank rows and Muse's status footer
+  // belong below its options. Other output means the menu is historical.
+  if (raw.slice(optionRows[optionRows.length - 1]! + 1).some((line) => {
+    const text = line.trimEnd();
+    return text.trim() !== '' && !/^Change approval defaults in \/permissions$/.test(text) &&
+      (approval || !/^Use Up\/Down or 1\/2, then Enter\. Esc quits\.$/.test(text)) &&
+      !/^\s*[─━═]{2,}$/.test(text) &&
+      !/^ {2}muse-wonder-full-1\.0 · .* · .* · .*$/i.test(text);
+  })) return null;
   return {
     question: question.text,
     options,
@@ -386,6 +402,40 @@ function musePrompt(raw: string[], tail: Line[]): DetectedPrompt | null {
     rows: [question.index, optionRows[optionRows.length - 1]!],
     basis: 'marker',
   };
+}
+
+/** Tracks the visible menu block, independently of activity above it. */
+export class MusePromptSettler {
+  private menu: string | null = null;
+  private since = 0;
+
+  detect(screen: string, now = Date.now(), styled?: readonly StyledLine[]): DetectedPrompt | null {
+    const prompt = detectPrompt(screen);
+    if (prompt === null) {
+      this.menu = null;
+      return null;
+    }
+    if (!prompt.question.startsWith('Would ') || !prompt.signature.includes('Stage ') ||
+      prompt.optionRows === undefined) {
+      this.menu = null;
+      return prompt;
+    }
+    const atRow = styled?.[prompt.rows[0]];
+    const heading = atRow?.text === prompt.question ? atRow :
+      [...(styled ?? [])].reverse().find((line) => line.text === prompt.question);
+    const bold = heading !== undefined && heading.spans.some((span) =>
+      span.bold && span.to - span.from >= prompt.question.length / 2);
+    if (bold) {
+      this.menu = null;
+      return prompt;
+    }
+    const block = screen.split('\n').slice(prompt.rows[0]).join('\n');
+    if (block !== this.menu) {
+      this.menu = block;
+      this.since = now;
+    }
+    return now - this.since >= MUSE_MENU_SETTLE_MS ? prompt : null;
+  }
 }
 
 /** A live left-ruled question menu with its fixed footer and custom-answer choice. */

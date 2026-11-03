@@ -2917,7 +2917,7 @@ export class Daemon {
         }
         const hold = body['hold'] === true;
         try {
-          session.resize(cols, rows, { hold });
+          await session.resize(cols, rows, { hold });
         } catch (error) {
           if (!(error instanceof SessionProgramEndedError)) throw error;
           json(res, 409, { error: endedRefusal(id, error.exitCode) });
@@ -3412,7 +3412,7 @@ export class Daemon {
       let detected: DetectedPrompt | null;
       try {
         const snapshot = await session.snapshot();
-        detected = detectPrompt(snapshot.screen);
+        detected = session.answerablePrompt(snapshot.screen);
       } catch (error) {
         // One session's render fault must not blind the scan for every
         // session after it in list order, so skip it and keep scanning; its
@@ -4029,7 +4029,7 @@ export class Daemon {
 
     /** Whether this socket has been told that the session's input has failed. */
     let toldInputFailed = false;
-    ws.on('message', (message: Buffer | string) => {
+    const onViewerMessage = async (message: Buffer | string): Promise<void> => {
       this.lastActivity = Date.now();
       const text = typeof message === 'string' ? message : message.toString('utf8');
       try {
@@ -4072,7 +4072,7 @@ export class Daemon {
             const changed = wanted.cols !== session.cols || wanted.rows !== session.rows;
             let applied = false;
             try {
-              session.resize(wanted.cols, wanted.rows);
+              await session.resize(wanted.cols, wanted.rows);
               applied = true;
             } catch (error) {
               // The program has ended (a viewer fitting its window while
@@ -4193,6 +4193,11 @@ export class Daemon {
         ...(this.audit.captureContent ? { data: text } : {}),
       });
       this.broadcastControl(session.id, { type: 'input-source', source: 'human' });
+    };
+    ws.on('message', (message: Buffer | string) => {
+      void onViewerMessage(message).catch((error: unknown) => {
+        this.logger.warn('viewer message failed', { id: session.id, error: String(error) });
+      });
     });
 
     ws.on('close', () => {
