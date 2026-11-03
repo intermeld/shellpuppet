@@ -9,6 +9,7 @@ import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { ScreenRenderer } from '../../src/core/renderer.js';
 import { detectPrompt } from '../../src/core/promptDetector.js';
+import { museWrappedScreen } from '../fixtures/museWrapped.js';
 
 async function museCapture(name: string): Promise<string> {
   const root = path.join(__dirname, '..', 'fixtures', 'reasoning', name);
@@ -21,6 +22,46 @@ async function museCapture(name: string): Promise<string> {
 }
 
 describe('detectPrompt: Muse Code', () => {
+  it.each([
+    ['muse-8a-stage1of3', 6, 96, 30],
+    ['muse-8a-stage1of3', 21, 96, 30],
+    ['muse-9a-stage1of3-88col', 6, 120, 34],
+    ['muse-9a-stage1of3-88col', 21, 120, 34],
+  ] as const)('finds %s with %i wrapped rows at %ix%i', async (name, extra, cols, rows) => {
+    const screen = await museWrappedScreen(name, extra, cols, rows);
+    const prompt = detectPrompt(screen);
+    expect(prompt?.question).toBe('Would you like to run the following command?');
+    expect(prompt?.signature).toContain('Stage 1/3');
+    expect(prompt?.options).toHaveLength(3);
+    expect(prompt?.options[0]).toContain('Allow this stage once');
+  });
+
+  it.each(['2/3', '3/3'])('finds a long wrapped Stage %s menu', async (stage) => {
+    const screen = (await museWrappedScreen('muse-8a-stage1of3', 21, 96, 30))
+      .replace('Stage 1/3', `Stage ${stage}`);
+    expect(detectPrompt(screen)?.signature).toContain(`Stage ${stage}`);
+  });
+
+  it('finds a long wrapped one-stage approval', async () => {
+    const screen = await museWrappedScreen('muse-approval', 21, 96, 30);
+    expect(detectPrompt(screen)?.question).toBe('Would xxx like to run the following command?');
+    expect(detectPrompt(screen)?.signature).toContain('Stage 1/1');
+    expect(detectPrompt(screen)?.options).toHaveLength(3);
+  });
+
+  it('ignores an answered menu above a fresh composer', async () => {
+    const old = await museWrappedScreen('muse-8a-stage1of3', 21, 96, 30);
+    expect(detectPrompt(`${old}\n◆ Answer complete\n❯ `)).toBeNull();
+  });
+
+  it.each(['◆ Answer complete', '◇ Calling tools', '◈ Calling tools', '❯ submitted prompt', '────────'])(
+    'does not borrow an old question across %s', async (boundary) => {
+      const old = await museWrappedScreen('muse-8a-stage1of3', 6, 96, 30);
+      const options = old.split('\n').slice(-3).join('\n');
+      const screen = `${old}\n${boundary}\n  Stage 2/3\n  Current argv: ["Xxx-Xxxx"]\n${options}`;
+      expect(detectPrompt(screen)).toBeNull();
+    });
+
   it.each([
     ['muse-8a-stage1of3', '1/3'],
     ['muse-8c-stage2of3', '2/3'],
