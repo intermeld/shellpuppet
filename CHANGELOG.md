@@ -16,6 +16,8 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Muse Code two-option approvals now raise waiting alerts and resolve prompt waits, including when commands wrap across the screen.
+- Muse Code results now read answers above an empty composer hint and report typed, unsent text in the composer.
 - Muse Code results and waits now report a prompt left unsent in the composer,
   and its staged approvals (stage 1/3 to 3/3) are recognised at any width.
 - `terminal_wait` and `shellpuppet wait` with `debounce` now settle once the

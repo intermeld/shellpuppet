@@ -376,7 +376,7 @@ export const BUILT_IN_SIGNATURES: readonly AgentSignature[] = [
     programs: ['muse', 'muse-bin-*'],
     measured: 'Muse Code 1.4.14',
     composer: { text: '^❯(?:\\s*$| \\S)' },
-    typed: { text: '^❯ \\S', body: { dim: false } },
+    typed: { text: '^❯ \\S', body: { dim: false, fg: ['#ccd3db'] } },
     chrome: [{ text: '^── Voice input \\(Alt\\+V to start\\)' }, { text: RULE }],
     frame: { text: RULE },
     busy: [
@@ -784,8 +784,22 @@ function guarded<T>(signature: CompiledSignature, body: () => T): T | null {
 function composerAt(lines: readonly StyledLine[], signature: CompiledSignature): { line: number; chrome: number } | null {
   for (let i = lines.length - 1; i >= 0; i--) {
     if (!lineFits(lines[i]!, signature.composer)) continue;
-    if (signature.name === 'muse' && !lines.slice(i + 1).every((line) =>
-      line.text.trim() === '' || /^[─━]{10,}$/.test(line.text) || /· Launch overrides\s*$/.test(line.text))) continue;
+    if (signature.name === 'muse') {
+      let inComposerBody = true;
+      const tailIsChrome = lines.slice(i + 1).every((line) => {
+        if (line.text.trim() === '') return true;
+        if (/^[─━]{10,}$/.test(line.text)) {
+          inComposerBody = false;
+          return true;
+        }
+        if (/· Launch overrides\s*$/.test(line.text)) return true;
+        // Muse indents later rows of a typed composer. Their text keeps the
+        // ordinary foreground, unlike the grey hint or status line.
+        return inComposerBody && /^ {2}\S/.test(line.text) &&
+          inkStyles(line).every((style) => style.fg === '#ccd3db');
+      });
+      if (!tailIsChrome) continue;
+    }
     // Reasoning is never drawn below the composer. A line with reasoning under
     // it is the echo of the person's prompt, taken for the composer while a
     // dialog stands in its place: no composer is found, so the filter reads

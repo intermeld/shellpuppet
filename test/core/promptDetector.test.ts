@@ -22,6 +22,33 @@ async function museCapture(name: string): Promise<string> {
 }
 
 describe('detectPrompt: Muse Code', () => {
+  it.each(['live88-1-stage1of1-MISSED', 'live120-1-stage1of1-MISSED'])(
+    'detects the captured two-option %s menu', async (name) => {
+      const prompt = detectPrompt(await museCapture(name));
+      expect(prompt?.question).toBe('Would you like to run the following command?');
+      expect(prompt?.signature).toContain('Stage 1/1');
+      expect(prompt?.options).toEqual([
+        '1. Allow this stage once (y)',
+        '2. Abort the entire command (esc)',
+      ]);
+    });
+
+  it('detects a two-option menu at 96 columns', async () => {
+    const screen = await museWrappedScreen('live120-1-stage1of1-MISSED', 8, 96, 40);
+    expect(detectPrompt(screen)?.options).toHaveLength(2);
+  });
+
+  it('tracks a changed selection in the two-option menu', async () => {
+    const screen = (await museCapture('live88-1-stage1of1-MISSED'))
+      .replace(/^⟩ 1\. /m, '  1. ')
+      .replace(/^ {2}2\. /m, '⟩ 2. ');
+    expect(detectPrompt(screen)?.selectedOption).toBe(1);
+    expect(detectPrompt(screen)?.options).toHaveLength(2);
+  });
+
+  it('detects the captured three-option menu at 96 columns', async () => {
+    expect(detectPrompt(await museCapture('live96-2-stage1of3-batch'))?.options).toHaveLength(3);
+  });
   it.each([
     ['muse-8a-stage1of3', 6, 96, 30],
     ['muse-8a-stage1of3', 21, 96, 30],
