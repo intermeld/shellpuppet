@@ -66,10 +66,26 @@ it('drags the Focus boundary, fits the grown pane on release, and retains its wi
       frames: window.__resizes.slice(), stored: sessionStorage.getItem('shellpuppet.dashboard.tracks'),
       mainSize: document.querySelector('#main-pane .pane-size')?.textContent,
       sizes: [...document.querySelectorAll('.pane-size')].map(x => x.textContent) }))()`);
-    await evaluate(`location.reload()`);
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    const reloaded = await evaluate(`(() => ({ width: document.getElementById('strip').getBoundingClientRect().width,
-      divider: !!document.querySelector('.pane-divider[data-axis="focus"]') }))()`);
+    await evaluate(`window.__focusBeforeReload = true; location.reload()`);
+    let reloaded: unknown;
+    const reloadDeadline = Date.now() + 20_000;
+    while (!reloaded && Date.now() < reloadDeadline) {
+      try {
+        reloaded = await evaluate(`(() => {
+          const strip = document.getElementById('strip');
+          const divider = document.querySelector('.pane-divider[data-axis="focus"]');
+          if (window.__focusBeforeReload || document.readyState !== 'complete' ||
+              document.getElementById('connection')?.textContent !== 'Connected' ||
+              document.querySelectorAll('.pane-size').length !== 2 || !strip || !divider) return null;
+          const width = strip.getBoundingClientRect().width;
+          return width > 0 ? { width, divider: true } : null;
+        })()`);
+      } catch (error) {
+        if (!/Execution context was destroyed|Cannot find context|Inspected target navigated or closed/i.test(String(error))) throw error;
+      }
+      if (!reloaded) await new Promise(resolve => setTimeout(resolve, 50));
+    }
+    expect(reloaded, 'the reloaded Focus dashboard did not become ready').toBeTruthy();
     const narrowed = await evaluate(`(() => { const root = document.getElementById('panes');
       root.style.width = '1300px'; window.dispatchEvent(new Event('resize'));
       return { main: document.getElementById('main-pane').getBoundingClientRect().width,

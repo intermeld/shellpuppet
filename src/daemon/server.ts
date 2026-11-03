@@ -4014,7 +4014,7 @@ export class Daemon {
             // driver goes on believing it is theirs.
             if (changed) this.announceGeometry(session.id, session);
             else if (handedOver) this.announceGeometry(session.id, session, { resync: false });
-            else ws.send(JSON.stringify(this.geometryFrame(session, ws)));
+            else if (take === true) ws.send(JSON.stringify(this.geometryFrame(session, ws)));
           }
           return;
         }
