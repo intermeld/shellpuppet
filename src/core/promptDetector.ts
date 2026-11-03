@@ -265,20 +265,23 @@ function isYesNo(text: string): boolean {
  * Returns null when the screen looks busy or shows no prompt shape.
  */
 export const SELECTED_OPTION_MARKER = '⟦SP:selected⟧ ';
+export const MUSE_ACTIVE_HEADING_MARKER = '⟦SP:muse-active⟧ ';
 
 export function detectPrompt(screen: string): DetectedPrompt | null {
   const original = screen.split('\n');
-  const plain = original.map((line) => line.startsWith(SELECTED_OPTION_MARKER)
-    ? line.slice(SELECTED_OPTION_MARKER.length)
-    : line);
-  const prompt = detectPlainPrompt(plain.join('\n'));
+  const activeMuseRows = new Set(original.flatMap((line, index) =>
+    line.startsWith(MUSE_ACTIVE_HEADING_MARKER) ? [index] : []));
+  const plain = original.map((line) => line
+    .replace(/^⟦SP:selected⟧ /, '')
+    .replace(/^⟦SP:muse-active⟧ /, ''));
+  const prompt = detectPlainPrompt(plain.join('\n'), activeMuseRows);
   if (prompt?.optionRows === undefined) return prompt;
   const selected = prompt.optionRows.flatMap((row, index) =>
     original[row]?.startsWith(SELECTED_OPTION_MARKER) ? [index] : []);
   return selected.length === 1 ? { ...prompt, selectedOption: selected[0] } : prompt;
 }
 
-function detectPlainPrompt(screen: string): DetectedPrompt | null {
+function detectPlainPrompt(screen: string, activeMuseRows: ReadonlySet<number>): DetectedPrompt | null {
   const raw = screen.split('\n');
   const lines = contentLines(raw);
   if (lines.length === 0) return null;
@@ -290,7 +293,7 @@ function detectPlainPrompt(screen: string): DetectedPrompt | null {
   const museTitle = [...tail].reverse().find((line) => museQuestion(line.text));
   if (museHeader !== undefined && (museTitle === undefined || museHeader.index > museTitle.index)) return null;
 
-  const muse = musePrompt(raw, tail);
+  const muse = musePrompt(raw, tail, activeMuseRows);
   if (muse !== null) return muse;
 
   const questionMenu = openCodeQuestionMenu(raw, lines);
@@ -343,7 +346,7 @@ function museQuestion(text: string): boolean {
 }
 
 /** Muse's approval and trust menus use ⟩ with numbered rows and no composer. */
-function musePrompt(raw: string[], tail: Line[]): DetectedPrompt | null {
+function musePrompt(raw: string[], tail: Line[], activeMuseRows: ReadonlySet<number>): DetectedPrompt | null {
   const selected = [...tail].reverse().find((line) => /^⟩ [1-3](?:\. | {2})/.test(line.text));
   if (selected === undefined) return null;
   const marker = /^⟩ ([1-3])(\. | {2})/.exec(selected.text);
@@ -368,10 +371,11 @@ function musePrompt(raw: string[], tail: Line[]): DetectedPrompt | null {
   if (question === undefined) return null;
   if (approval !== question.text.startsWith('Would ')) return null;
   const stage = approval ? raw.slice(question.index, first).find((line) => /^ {2}Stage \d+\/\d+$/.test(line.trimEnd())) : undefined;
-  // During a stage transition Muse draws the next menu before its activity
-  // detail line has returned. The choices are visible then, but keys are not
-  // active. A complete approval has that detail just above the voice rule.
-  if (stage !== undefined && !raw.slice(Math.max(0, question.index - 5), question.index).some((line) => /^└ /.test(line))) return null;
+  if (stage !== undefined && !activeMuseRows.has(question.index)) return null;
+  // A menu retained in the transcript is no longer answerable once Muse has
+  // printed an answer or returned to a new composer below its choices.
+  if (raw.slice(optionRows[optionRows.length - 1]! + 1).some((line) =>
+    /^◆ (?!Worked for )/.test(line) || /^❯(?:\s|$)/.test(line))) return null;
   return {
     question: question.text,
     options,

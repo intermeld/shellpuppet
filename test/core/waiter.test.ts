@@ -7,19 +7,29 @@ import * as path from 'node:path';
 import { ScreenRenderer } from '../../src/core/renderer.js';
 import { BUILT_IN_SIGNATURES, compileSignatures, hideReasoning, latestResult } from '../../src/core/reasoning.js';
 import { echoEnd } from '../../src/core/echo.js';
+import { markFilteredSelectedOption, markSelectedOption } from '../../src/core/selection.js';
 
-async function museFrame(name: string): Promise<{ plain: string; filtered: string; pending: boolean }> {
+async function museFrame(name: string, typedAhead = false): Promise<{ plain: string; filtered: string; pending: boolean }> {
   const root = path.join(__dirname, '..', 'fixtures', 'reasoning', name);
   const size = JSON.parse(fs.readFileSync(`${root}.json`, 'utf8')) as { cols: number; rows: number };
   const renderer = new ScreenRenderer({ cols: size.cols, rows: size.rows });
   await renderer.write(fs.readFileSync(`${root}.ansi`, 'utf8'));
   const lines = renderer.styledLines({ last: 2000 }).lines;
   renderer.dispose();
+  if (typedAhead) {
+    const composer = lines.find((line) => line.text === '❯');
+    if (composer === undefined) throw new Error('Muse composer missing');
+    composer.text = '❯ next';
+    composer.spans = [
+      { ...composer.spans[0]!, from: 0, to: 1 },
+      { ...composer.spans[0]!, from: 1, to: composer.text.length },
+    ];
+  }
   const muse = compileSignatures(BUILT_IN_SIGNATURES, 'built-in').signatures.find((entry) => entry.name === 'muse')!;
   const result = latestResult(lines, muse);
   return {
-    plain: lines.map((line) => line.text).join('\n'),
-    filtered: hideReasoning(lines, muse)!.lines.join('\n'),
+    plain: markSelectedOption(lines).join('\n'),
+    filtered: markFilteredSelectedOption(hideReasoning(lines, muse)!.lines, lines).join('\n'),
     pending: !result.found && result.reason === 'prompt-typed',
   };
 }
@@ -78,6 +88,19 @@ afterEach(() => {
 });
 
 describe('waitFor text/regex', () => {
+  it('keeps waiting while Muse is busy with text typed ahead', async () => {
+    vi.useRealTimers();
+    const busy = await museFrame('muse-busy-first', true);
+    vi.useFakeTimers();
+    const target = new FakeTarget();
+    target.screen = busy.plain;
+    const wait = waitFor(target, { text: 'future answer' }, {
+      ...POLL, timeout: 120, composerPending: () => busy.pending,
+    });
+    await vi.advanceTimersByTimeAsync(200);
+    expect(await wait).toMatchObject({ matched: false, reason: 'timeout' });
+  });
+
   it.each([false, true])('finds a Muse menu after a wait starts before it, hideReasoning=%s', async (filtered) => {
     vi.useRealTimers();
     const typed = 'Xxx xxx xxxxx xxxxxxx Xxx-Xxxx | Xxxxxx-Xxxxxx -Xxxxxxxx Xxxx | Xxxxxx-Xxxx xxx xxxxxx xxx xxxx xx xxx xxxx.';

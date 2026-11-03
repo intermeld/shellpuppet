@@ -517,6 +517,38 @@ describe('Muse Code (built in)', () => {
     });
   });
 
+  it('keeps a running turn busy when text is typed ahead', async () => {
+    const lines = await screen('muse-busy-first');
+    const composer = lines.find((line) => line.text === '❯');
+    expect(composer).toBeDefined();
+    composer!.text = '❯ next';
+    composer!.spans = [
+      { ...composer!.spans[0]!, from: 0, to: 1 },
+      { ...composer!.spans[0]!, from: 1, to: composer!.text.length },
+    ];
+    expect(latestResult(lines, muse)).toMatchObject({ found: false, reason: 'busy' });
+  });
+
+  it('recognises a themed composer', async () => {
+    const themed = await screen('muse-7a-composer-swallowed');
+    const composer = themed.find((line) => line.text.startsWith('❯ '));
+    expect(composer).toBeDefined();
+    composer!.spans = composer!.spans.map((span) => ({ ...span, bg: '#123456' }));
+    expect(latestResult(themed, muse)).toMatchObject({ found: false, reason: 'prompt-typed' });
+  });
+
+  it('ignores a dim placeholder', async () => {
+    const placeholder = await screen('muse-violet');
+    const empty = placeholder.find((line) => line.text === '❯');
+    expect(empty).toBeDefined();
+    empty!.text = '❯ Type your message';
+    empty!.spans = [
+      { ...empty!.spans[0]!, from: 0, to: 2 },
+      { ...empty!.spans[0]!, from: 2, to: empty!.text.length, dim: true },
+    ];
+    expect(latestResult(placeholder, muse)).not.toMatchObject({ reason: 'prompt-typed' });
+  });
+
   it('returns VIOLET and AMBER from the latest turn without requiring a trailer', async () => {
     const violet = latestResult(await screen('muse-violet'), muse);
     expect(violet).toMatchObject({ found: true, answer: ['◆ VIOLET'] });
