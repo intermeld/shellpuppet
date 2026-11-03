@@ -517,6 +517,17 @@ describe('Muse Code (built in)', () => {
     });
   });
 
+  it.each([
+    ['the voice rule', true, false],
+    ['the lower rule', false, true],
+    ['both rules', true, true],
+  ])('recognises the swallowed composer without %s', async (_name, noVoice, noLower) => {
+    const lines = (await screen('muse-7a-composer-swallowed')).filter((line) =>
+      !(noVoice && line.text.startsWith('── Voice input')) &&
+      !(noLower && /^─{10,}$/.test(line.text)));
+    expect(latestResult(lines, muse)).toMatchObject({ found: false, reason: 'prompt-typed' });
+  });
+
   it('keeps a running turn busy when text is typed ahead', async () => {
     const lines = await screen('muse-busy-first');
     const composer = lines.find((line) => line.text === '❯');

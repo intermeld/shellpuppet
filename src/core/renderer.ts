@@ -64,8 +64,6 @@ export interface StyleSpan extends CellStyle {
 export interface StyledLine {
   text: string;
   spans: StyleSpan[];
-  /** The first cell after visible text, for TUIs that style heading padding. */
-  trailingStyle?: CellStyle;
   /** xterm says this row continues the physical row above it. */
   wrapped?: boolean;
 }
@@ -346,9 +344,7 @@ export class ScreenRenderer {
         if (span.from >= trimmed.length) break;
         kept.push({ ...span, to: Math.min(span.to, trimmed.length) });
       }
-      const trailingStyle = spans.find((span) => span.to > trimmed.length);
       lines.push({ text: trimmed, spans: kept,
-        ...(trailingStyle === undefined ? {} : { trailingStyle: styleOfSpan(trailingStyle) }),
         ...(line.isWrapped ? { wrapped: true } : {}) });
     }
     if (options.last === undefined) {
@@ -390,8 +386,4 @@ function sameStyle(a: CellStyle, b: CellStyle): boolean {
     a.fg === b.fg &&
     a.bg === b.bg
   );
-}
-
-function styleOfSpan(span: StyleSpan): CellStyle {
-  return { bold: span.bold, dim: span.dim, italic: span.italic, inverse: span.inverse, fg: span.fg, bg: span.bg };
 }
