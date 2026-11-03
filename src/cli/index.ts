@@ -866,10 +866,23 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
     }
     case 'restart': {
       const connection = await withDaemonStartLock({ logger: stderrLogger }, async (lock) => {
-        clearRestartHold(shellpuppetHome());
+        const home = shellpuppetHome();
+        clearRestartHold(home);
         const existing = await discoverDaemon({ logger: stderrLogger });
-        if (existing !== null) await stopRunning(existing);
-        return ensureDaemon({ logger: stderrLogger, direct }, lock);
+        if (existing === null) return ensureDaemon({ logger: stderrLogger, direct }, lock);
+        const state = readDaemonState(home);
+        if (state === null || state.pid !== existing.pid || typeof state.startedAt !== 'string') {
+          throw new Error('The daemon changed while preparing its restart. Try again.');
+        }
+        // Publish the daemon being replaced before the shutdown request. Peers
+        // can still see its healthy port until the stop completes.
+        writeRestartHold(home, 140, { pid: state.pid, startedAt: state.startedAt });
+        try {
+          await stopRunning(existing);
+          return await ensureDaemon({ logger: stderrLogger, direct }, lock);
+        } finally {
+          clearRestartHold(home);
+        }
       });
       surfaceWarnings(connection);
       if (wantJson) {
