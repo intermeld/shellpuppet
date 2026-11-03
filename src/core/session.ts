@@ -1222,6 +1222,18 @@ export class Session implements WaitTarget {
     return hidden ? state + CURSOR_HIDE : state;
   }
 
+  /** The filter's styled rows and the viewer replay from one rendered frame. */
+  async captureViewerScreen(above: number, scrollback: number): Promise<{
+    view: { lines: StyledLine[]; firstVisible: number };
+    state: string;
+    cols: number;
+    rows: number;
+  }> {
+    const hidden = this.cursorHidden;
+    const captured = await this.renderer.capture({ above, scrollback });
+    return { ...captured, state: captured.state + (hidden ? CURSOR_HIDE : '') };
+  }
+
   async snapshot(): Promise<ScreenSnapshot> {
     await this.renderer.flush();
     const rendered = this.renderer.snapshot();

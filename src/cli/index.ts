@@ -95,8 +95,8 @@ Usage:
       Prints each matching line as <row>: <text>. Nothing matching prints
       "No matches." on stderr, never the pattern, and exits 3 (with --json
       too, after printing the empty result).
-  shellpuppet screenshot <id> [--out <f>] [--width <n>] [--height <n>]
-                             [--timeout <ms>] [--hide-reasoning]
+  shellpuppet screenshot <id> [--out <f>] [--hide-reasoning]
+                             [--width <n>] [--height <n>] [--timeout <ms>]
                                                     Photograph the viewer as a browser draws it
       Defaults to shellpuppet-<id>.png at 1400x900, with 45 s for the whole
       capture (--timeout, 1000 to 120000, for a slow or a hurried machine).

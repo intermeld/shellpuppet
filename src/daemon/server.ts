@@ -580,6 +580,13 @@ export class Daemon {
   private readonly sockets = new Set<WebSocket>();
   /** Every watcher of a session, with the gate that orders its stream across snapshots. */
   private readonly sessionSockets = new Map<string, Map<WebSocket, ViewerSync>>();
+  /** Frozen replay bytes belong only to the screenshot's one-use viewer grant. */
+  private readonly captureSnapshots = new Map<string, {
+    bytes: string;
+    cols: number;
+    rows: number;
+    streamToken?: string;
+  }>();
   /**
    * The viewport currently driving each session's grid (§5).
    *
@@ -2084,7 +2091,7 @@ export class Daemon {
     url: URL,
     sessionId: string,
   ):
-    | { ok: true; credential: { kind: 'client' | 'viewer' | 'dashboard'; readOnly: boolean } }
+    | { ok: true; credential: { kind: 'client' | 'viewer' | 'dashboard'; readOnly: boolean }; frozen?: { bytes: string; cols: number; rows: number } }
     | { ok: false; code: number; reason: string; audit: string | null } {
     const client = this.tokens.verify(url.searchParams.get('token'));
     if (client?.kind === 'client') {
@@ -2100,13 +2107,19 @@ export class Daemon {
     }
 
     const viewer = cookieValues(req.headers.cookie, VIEWER_COOKIE)
-      .map((value) => this.tokens.verifyStreamToken(value))
-      .find((found) => found?.kind === 'viewer' && found.sessionId === sessionId);
-    if (viewer?.kind === 'viewer') {
+      .map((value) => ({ value, credential: this.tokens.verifyStreamToken(value) }))
+      .find((found) => found.credential?.kind === 'viewer' && found.credential.sessionId === sessionId);
+    if (viewer?.credential?.kind === 'viewer') {
       if (!this.originAllowed(req.headers.origin)) {
         return { ok: false, code: 403, reason: 'Forbidden', audit: null };
       }
-      return { ok: true, credential: { kind: 'viewer', readOnly: viewer.readOnly } };
+      const frozen = [...this.captureSnapshots.values()]
+        .find((snapshot) => snapshot.streamToken === viewer.value);
+      return {
+        ok: true,
+        credential: { kind: 'viewer', readOnly: viewer.credential.readOnly },
+        ...(frozen === undefined ? {} : { frozen }),
+      };
     }
 
     // The dashboard cookie was offered and did not authenticate. Say why,
@@ -2166,6 +2179,8 @@ export class Daemon {
       };
       const redeemed = this.tokens.redeemViewerGrant(url.searchParams.get('vt'));
       if (redeemed !== null) {
+        const frozen = this.captureSnapshots.get(url.searchParams.get('vt') ?? '');
+        if (frozen !== undefined) frozen.streamToken = redeemed.streamToken;
         headers['set-cookie'] = viewerCookie(redeemed.sessionId, redeemed.streamToken);
         this.audit.record('viewer', 'grant-redeem', redeemed.sessionId, {
           readOnly: redeemed.readOnly,
@@ -2428,10 +2443,14 @@ export class Daemon {
           });
           return;
         }
+        const capturedScreen = await session.captureViewerScreen(
+          signature === null ? 0 : REASONING_CONTEXT_LINES,
+          VIEWER_SNAPSHOT_SCROLLBACK_LINES,
+        );
         let redactedRows: Map<number, string> | undefined;
         let expectedRows: string[] | undefined;
         if (signature !== null) {
-          const view = await session.styledScreen(REASONING_CONTEXT_LINES);
+          const view = capturedScreen.view;
           const filtered = hideReasoning(view.lines, signature, view.firstVisible);
           if (filtered === null) {
             json(res, 400, { error: overBudgetMessage(signature) });
@@ -2451,6 +2470,11 @@ export class Daemon {
         // Read-only, because a photograph must not be able to type into the
         // thing it is photographing.
         const grant = this.tokens.mintViewerGrant(id, { readOnly: true });
+        this.captureSnapshots.set(grant, {
+          bytes: VIEWER_WIPE + capturedScreen.state,
+          cols: capturedScreen.cols,
+          rows: capturedScreen.rows,
+        });
         try {
           const capture = await (this.options.capture ?? captureViewer)({
             browser,
@@ -2462,7 +2486,7 @@ export class Daemon {
             ...(redactedRows === undefined ? {} : { hiddenRows: [...redactedRows.keys()] }),
             logger: this.logger,
           });
-          if (expectedRows !== undefined && this.options.capture === undefined &&
+          if (expectedRows !== undefined &&
               JSON.stringify(capture.rows) !== JSON.stringify(expectedRows)) {
             json(res, 409, { error: 'The screen changed before its filtered picture could be taken. Try again.' });
             return;
@@ -2473,8 +2497,8 @@ export class Daemon {
             // The picture's own dimensions, read from it rather than the request.
             width: capture.width,
             height: capture.height,
-            cols: session.cols,
-            rows: session.rows,
+            cols: capturedScreen.cols,
+            rows: capturedScreen.rows,
             lines: redactedRows === undefined
               ? capture.rows
               : capture.rows.map((line, row) => redactedRows.get(row) ?? line),
@@ -2492,6 +2516,7 @@ export class Daemon {
           // capture that failed leaves the same credential behind as one that
           // worked.
           this.tokens.revokeViewerGrant(grant);
+          this.captureSnapshots.delete(grant);
         }
         return;
       }
@@ -3581,7 +3606,7 @@ export class Daemon {
       // names that credential rather than assuming a browser: `client` for
       // the client token on the query, `viewer` for a viewer cookie,
       // `dashboard` for the dashboard cookie.
-      this.attachSocket(ws, session, decision.credential, { passive });
+      this.attachSocket(ws, session, decision.credential, { passive, frozen: decision.frozen });
     });
   }
 
@@ -3763,7 +3788,7 @@ export class Daemon {
     ws: WebSocket,
     session: Session,
     credential: { kind: 'client' | 'viewer' | 'dashboard'; readOnly: boolean },
-    options: { passive?: boolean } = {},
+    options: { passive?: boolean; frozen?: { bytes: string; cols: number; rows: number } } = {},
   ): void {
     const { readOnly } = credential;
     // A dashboard credential is always passive, whatever the query says.
@@ -3791,7 +3816,7 @@ export class Daemon {
       },
       () => this.snapshotForViewer(session),
     );
-    watchers.set(ws, sync);
+    if (options.frozen === undefined) watchers.set(ws, sync);
     this.lastActivity = Date.now();
     this.audit.record(actor, 'ws-connect', session.id);
 
@@ -3845,7 +3870,9 @@ export class Daemon {
     ) {
       this.geometryController.set(session.id, ws);
     }
-    ws.send(JSON.stringify(this.geometryFrame(session, ws)));
+    ws.send(JSON.stringify(options.frozen === undefined
+      ? this.geometryFrame(session, ws)
+      : { ...this.geometryFrame(session, ws), cols: options.frozen.cols, rows: options.frozen.rows }));
 
     // What the daemon renders, as the bytes that rebuild it (design §5). Not
     // a slice of the raw stream: a slice starts mid-frame, and a program that
@@ -3853,6 +3880,20 @@ export class Daemon {
     // agent CLI repaints that way once its chrome is up, and on Windows every
     // program does as ConPTY relays it. Live bytes queue behind the
     // snapshot in the gate.
+    if (options.frozen !== undefined) {
+      ws.send(Buffer.from(options.frozen.bytes, 'utf8'));
+      ws.on('message', () => { this.lastActivity = Date.now(); });
+      ws.on('close', () => {
+        this.sockets.delete(ws);
+        this.lastActivity = Date.now();
+        this.audit.record(actor, 'ws-disconnect', session.id);
+      });
+      ws.on('error', (error) => {
+        this.logger.warn('viewer socket error', { id: session.id, error: String(error) });
+        ws.close();
+      });
+      return;
+    }
     sync.resync();
 
     // Whoever was watching when the process exited got this notice on the

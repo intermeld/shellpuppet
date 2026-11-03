@@ -145,6 +145,22 @@ export class ScreenRenderer {
     });
   }
 
+  /** Read styled rows and replay bytes at the same parser boundary. */
+  capture(options: { above: number; scrollback: number }): Promise<{
+    view: { lines: StyledLine[]; firstVisible: number };
+    state: string;
+    cols: number;
+    rows: number;
+  }> {
+    return new Promise((resolve) => {
+      this.term.write('', () => {
+        const view = this.styledLines({ above: options.above });
+        const state = this.serializer.serialize({ scrollback: options.scrollback });
+        resolve({ view, state, cols: this.term.cols, rows: this.term.rows });
+      });
+    });
+  }
+
   /** Render the visible viewport (the bottom page when scrolled fully down). */
   snapshot(): RenderedScreen {
     const buffer = this.term.buffer.active;
