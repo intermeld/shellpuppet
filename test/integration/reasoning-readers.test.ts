@@ -254,21 +254,15 @@ describe('waiting without the reasoning', () => {
     expect(String(hidden.body['screen'])).not.toContain('SSSS');
   }, 60_000);
 
-  it('matches only visible text across named sessions', async () => {
-    const hiddenId = await longWrappedLine('multi-hidden', ` │ ${'S'.repeat(30 * 410)}`);
-    const answerId = await longWrappedLine('multi-answer', ` ▪ ${'M'.repeat(30 * 410)}`);
-    const ids = `session=${hiddenId}&session=${answerId}`;
-    const raw = await api(td.port, td.token, `/sessions/wait?${ids}&text=SSSS&timeout=0`);
-    expect(raw.body).toMatchObject({ matched: true, reason: 'text', id: hiddenId });
-    const hidden = await api(td.port, td.token, `/sessions/wait?${ids}&text=SSSS&timeout=250&hideReasoning=1`);
-    expect(hidden.body).toMatchObject({ matched: false, reason: 'timeout' });
-    const hiddenRegex = await api(td.port, td.token, `/sessions/wait?${ids}&regex=SSSS&timeout=250&hideReasoning=1`);
-    expect(hiddenRegex.body).toMatchObject({ matched: false, reason: 'timeout' });
-    const answer = await api(td.port, td.token, `/sessions/wait?${ids}&regex=MMMM&timeout=1000&matchAfterInput=1&hideReasoning=1`);
-    expect(answer.body).toMatchObject({ matched: true, reason: 'regex' });
-    expect(answer.body['id']).toBe(answerId);
-    expect(String(answer.body['screen'])).toContain('MMMM');
-  }, 60_000);
+  it('refuses text and regex conditions on a multi-session wait', async () => {
+    const id = await replay('qoder-answered-after-reasoning', 'qoder');
+    for (const condition of ['text=Thinking', 'regex=MANGO']) {
+      const response = await api(td.port, td.token, `/sessions/wait?session=${id}&${condition}&timeout=0&hideReasoning=1`);
+      expect(response.status).toBe(400);
+      expect(String(response.body['error'])).toContain('A multi-session wait needs prompt=true');
+      expect(response.body['screen']).toBeUndefined();
+    }
+  });
 
   it('returns the screen it waited for with the reasoning left out', async () => {
     const id = await replay('qoder-answered-after-reasoning', 'qoder');
