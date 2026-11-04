@@ -90,10 +90,10 @@ describe('auth and loopback defences', () => {
     }
   });
 
-  it('answers /health without a token, revealing only ok/version/pid', async () => {
+  it('answers /health without a token, revealing only ok/version/pid/instanceId', async () => {
     const result = await api(td.port, null, '/health');
     expect(result.status).toBe(200);
-    expect(Object.keys(result.body).sort()).toEqual(['ok', 'pid', 'version']);
+    expect(Object.keys(result.body).sort()).toEqual(['instanceId', 'ok', 'pid', 'version']);
   });
 
   it('rejects API requests without a token', async () => {

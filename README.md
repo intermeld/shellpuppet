@@ -441,7 +441,8 @@ still opens a new isolated window on every call.
 
 One per-user **daemon** owns every PTY and serves the browser viewer, on
 loopback only, with a token on every request bar `/health`, the viewer page
-and its static assets. The MCP server and the CLI start the daemon if it isn't
+and its static assets. `/health` reveals only ok, version, pid and the daemon
+instance id. The MCP server and the CLI start the daemon if it isn't
 running. Every CLI verb is a one-shot HTTP client that returns promptly,
 except `mcp`, which stays up for the stdio transport, and `wait`, which blocks
 until its condition holds or its timeout runs out (300 s at most). Because
