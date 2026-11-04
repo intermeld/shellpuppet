@@ -193,7 +193,11 @@ before stopping it, so new clients wait even while its health endpoint still
 answers. A peer waits for up to about 20 seconds for a direct restart (ten
 seconds to stop, then ten to start), or about 130 seconds with `startWith`
 (ten to stop, then two minutes to start). Other pending starts use the normal
-ten-second or two-minute bound. The restart uses the two-minute allowance only
+ten-second or two-minute bound. A failed wrapped start may add up to 15 seconds
+for cleanup while the start endpoint remains claimed. The caller's worst case
+is its fixed deadline plus 15 seconds when wrapper cleanup is needed: up to
+135 seconds for an ordinary wrapped start or 145 seconds for a wrapped restart.
+The restart uses the two-minute allowance only
 when it actually starts through `startWith`; `--direct` and
 `SHELLPUPPET_DAEMON_DIRECT=1` use the direct bound. Each client's wait has one
 deadline, even if the hold changes while it waits. If a pending start has not settled by then,
@@ -225,8 +229,8 @@ Build first, then run `shellpuppet daemon restart` so clients wait for the new
 daemon. To stop before rebuilding, run `shellpuppet daemon stop --hold`,
 rebuild, then run `shellpuppet daemon start`.
 If the daemon record is missing or unreadable, wait about 15 seconds and run
-`daemon restart` again. If the record is still missing, no daemon is running
-and `daemon start` is safe.
+`daemon restart` again. If the record is still missing, the daemon is usually
+stopped. Check that no ShellPuppet daemon process is running before `daemon start`.
 
 On POSIX, the start endpoint is a socket in `SHELLPUPPET_HOME` when its path
 fits the platform limit. For a longer home path it is a socket named from a

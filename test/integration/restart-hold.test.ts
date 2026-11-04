@@ -11,11 +11,12 @@ import { ensureDaemon, waitForPendingDaemon, withDaemonStartLock } from '../../s
 import { daemonLogPath, daemonStatePath, readDaemonState } from '../../src/daemon/paths.js';
 import { readRestartHold, restartHoldPath, writeRestartHold } from '../../src/daemon/restartHold.js';
 import type { Logger } from '../../src/core/types.js';
-import { api, distDaemonEntry, makeTempHome, removeTempHome, repoRoot } from './helpers.js';
+import { api, distDaemonEntry, makeTempHome, processAlive, removeTempHome, repoRoot } from './helpers.js';
 
 const execFileAsync = promisify(execFile);
 const cliEntry = path.join(repoRoot, 'dist', 'cli', 'index.js');
 const markerEntry = path.join(repoRoot, 'test', 'integration', 'fixtures', 'daemon-entry-marker.mjs');
+const failureWrapper = path.join(repoRoot, 'test', 'fixtures', 'daemon-start-failure.mjs');
 const homes: string[] = [];
 const started = new Map<string, number>();
 
@@ -161,6 +162,8 @@ describe('planned daemon restart hold', () => {
     expect(result.stderr).toContain('Wait about 15 seconds');
     expect(result.stderr).toContain('daemon restart');
     expect(result.stderr).toContain('daemon start');
+    expect(result.stderr).toContain('usually');
+    expect(result.stderr).toContain('check that no ShellPuppet daemon process is running');
     expect(result.stderr).not.toContain('daemon stop');
     expect(readDaemonState(value)).toBeNull();
   }, 20_000);
@@ -172,6 +175,8 @@ describe('planned daemon restart hold', () => {
     expect(result.stderr).toContain('Wait about 15 seconds');
     expect(result.stderr).toContain('daemon restart');
     expect(result.stderr).toContain('daemon start');
+    expect(result.stderr).toContain('usually');
+    expect(result.stderr).toContain('check that no ShellPuppet daemon process is running');
     expect(result.stderr).not.toContain('daemon stop');
     expect(readDaemonState(value)).toBeNull();
   }, 20_000);
@@ -266,6 +271,51 @@ describe('planned daemon restart hold', () => {
     expect(Date.now() - began).toBeLessThan(12_000);
     expect(readDaemonState(value)).toBeNull();
   }, 30_000);
+
+  it('keeps busy discovery inside the deadline when state appears late in a hold', async () => {
+    const value = home();
+    writeRestartHold(value, 8);
+    const busy = http.createServer(() => undefined);
+    await new Promise<void>((resolve) => busy.listen(0, '127.0.0.1', resolve));
+    const address = busy.address();
+    if (address === null || typeof address === 'string') throw new Error('missing busy port');
+    const publish = setTimeout(() => fs.writeFileSync(daemonStatePath(value), JSON.stringify({
+      port: address.port, token: 'busy-token', pid: process.pid, version: '0.0.0-busy',
+      startedAt: new Date().toISOString(), instanceId: 'busy-instance',
+    })), 7_200);
+    try {
+      const began = Date.now();
+      await expect(ensureDaemon({ home: value })).rejects.toThrow('running but did not answer in time');
+      expect(Date.now() - began).toBeLessThan(12_000);
+    } finally {
+      clearTimeout(publish);
+      busy.closeAllConnections();
+      await new Promise<void>((resolve) => busy.close(() => resolve()));
+    }
+  }, 25_000);
+
+  it('ends a live wrapper before a held call rejects at its deadline', async () => {
+    const value = home();
+    const marker = path.join(value, 'wrapper-pid');
+    fs.writeFileSync(path.join(value, 'config.json'), JSON.stringify({
+      daemon: { startWith: [process.execPath, failureWrapper, 'hang', marker] },
+    }));
+    writeRestartHold(value, 8, { instanceId: 'old-instance', pid: process.pid,
+      port: 1, startMode: 'direct' });
+    let pid: number | undefined;
+    try {
+      const began = Date.now();
+      await expect(ensureDaemon({ home: value })).rejects.toThrow('did not settle within its health bound');
+      const elapsed = Date.now() - began;
+      expect(fs.existsSync(marker)).toBe(true);
+      pid = Number(fs.readFileSync(marker, 'utf8'));
+      expect(processAlive(pid)).toBe(false);
+      expect(elapsed).toBeLessThan(36_000);
+      expect(await startEndpointOccupied(value)).toBe(false);
+    } finally {
+      if (pid !== undefined && processAlive(pid)) process.kill(pid, 'SIGKILL');
+    }
+  }, 40_000);
 
   it('starts in the same call when a hold is removed early', async () => {
     const value = home();
