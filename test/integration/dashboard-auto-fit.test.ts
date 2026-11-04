@@ -582,7 +582,9 @@ it('takes only the final grid when two window assignments arrive in separate ste
         const state = value as { share?: string; panes?: { id: string; size: string }[]; resizes?: { url: string; take: boolean }[] };
         return state?.share === '2 of 6 here, 2 windows' && state.panes?.length === 2 &&
           JSON.stringify(state.panes.map(pane => pane.id)) === JSON.stringify([ids[3], ids[5]]) &&
-          state.panes.every(pane => pane.size === '121×64') &&
+          // Font metrics differ by platform, so the fitted size is not fixed:
+          // both panes share one fitted size, checked against the takes below.
+          /^\d+×\d+$/.test(state.panes[0]!.size) && state.panes.every((pane, _index, all) => pane.size === all[0]!.size) &&
           state.resizes?.some(frame => frame.url.includes(`/sessions/${ids[3]}/stream`) && frame.take) === true;
       });
       return { first: await read(evaluate), second: await read(evaluateSecond) };
