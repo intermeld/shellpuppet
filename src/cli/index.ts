@@ -870,18 +870,18 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
         clearRestartHold(home);
         const record = inspectDaemonState(home);
         if (record.kind !== 'record') {
-          throw new Error('Cannot restart without a readable daemon record. Run `shellpuppet daemon stop`, then `shellpuppet daemon start`.');
+          throw new Error('Cannot restart without a readable daemon record. Wait about 15 seconds and run `shellpuppet daemon restart` again. If the record is still missing, no daemon is running and `shellpuppet daemon start` is safe.');
         }
         const existing = await discoverDaemon({ logger: stderrLogger });
         if (existing === null) return ensureDaemon({ logger: stderrLogger, direct }, lock);
         const state = readDaemonState(home);
-        if (state === null || state.pid !== existing.pid || state.instanceId !== existing.instanceId ||
-            typeof existing.instanceId !== 'string') {
+        if (state === null || state.pid !== existing.pid || state.instanceId !== existing.instanceId) {
           throw new Error('The daemon changed while preparing its restart. Try again.');
         }
         // Publish the daemon being replaced before the shutdown request. Peers
         // can still see its healthy port until the stop completes.
-        writeRestartHold(home, 140, { instanceId: existing.instanceId, startMode: daemonStartMode(home, direct) });
+        writeRestartHold(home, 140, { ...(existing.instanceId === undefined ? {} : { instanceId: existing.instanceId }),
+          pid: existing.pid, port: existing.port, startMode: daemonStartMode(home, direct) });
         try {
           await stopRunning(existing);
           return await ensureDaemon({ logger: stderrLogger, direct }, lock);

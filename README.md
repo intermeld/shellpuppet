@@ -347,7 +347,8 @@ if the process performing the restart has gone. To stop before rebuilding, run `
 --hold`, rebuild, then run `shellpuppet daemon start`. The hold lasts 120
 seconds by default (1 to 600 seconds with an explicit value), and `daemon
 status` shows the time remaining. If `daemon restart` cannot read the daemon
-record, use `daemon stop` followed by `daemon start`.
+record, wait about 15 seconds and run `daemon restart` again. If the record
+is still missing, no daemon is running and `daemon start` is safe.
 
 On Windows, `start` uses `cmd.exe /d /s /c` by default. ShellPuppet joins the
 command and arguments with spaces; `cmd.exe` then parses that line. A value

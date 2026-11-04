@@ -224,8 +224,9 @@ seconds in text and JSON.
 Build first, then run `shellpuppet daemon restart` so clients wait for the new
 daemon. To stop before rebuilding, run `shellpuppet daemon stop --hold`,
 rebuild, then run `shellpuppet daemon start`.
-If the daemon record is missing or unreadable, `daemon restart` asks you to
-run `daemon stop` and then `daemon start` instead of risking a second daemon.
+If the daemon record is missing or unreadable, wait about 15 seconds and run
+`daemon restart` again. If the record is still missing, no daemon is running
+and `daemon start` is safe.
 
 On POSIX, the start endpoint is a socket in `SHELLPUPPET_HOME` when its path
 fits the platform limit. For a longer home path it is a socket named from a
