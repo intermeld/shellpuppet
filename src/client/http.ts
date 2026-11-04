@@ -410,6 +410,8 @@ export async function withDaemonStartLock<T>(options: ClientOptions, action: (lo
 }
 
 function replacingDaemon(hold: RestartHold, connection: DaemonConnection): boolean {
+  // Older daemons have no identity. Any id-less health response is still the
+  // daemon being replaced; every new daemon has an id.
   return hold.replacing !== undefined &&
     (connection.instanceId === undefined || connection.instanceId === hold.replacing.instanceId);
 }
@@ -581,6 +583,9 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
     const wonWhileClaiming = await discoverDaemon(options);
     if (wonWhileClaiming !== null) return wonWhileClaiming;
 
+  if (heldLock === undefined && Date.now() >= waitDeadline) {
+    throw new Error('A pending daemon start did not settle within its health bound.');
+  }
   const entry = options.daemonEntry ?? defaultDaemonEntry();
   const cwd = daemonWorkingDirectory();
   const env: NodeJS.ProcessEnv = { ...process.env, SHELLPUPPET_HOME: home };
@@ -642,11 +647,11 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
   // A healthy /health response is success regardless of what happened to the
   // child we spawned (§2.2). Only the poll timing out is failure.
   const timeoutMs = wrapped ? (options.wrappedStartTimeoutMs ?? WRAPPED_START_TIMEOUT_MS) : AUTO_START_TIMEOUT_MS;
-  const deadline = Date.now() + timeoutMs;
+  const deadline = heldLock === undefined ? Math.min(Date.now() + timeoutMs, waitDeadline) : Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const state = readDaemonState(home);
     if (state !== null) {
-      const alive = await health(state.port);
+      const alive = await health(state.port, Math.min(HEALTH_TIMEOUT_MS, Math.max(1, deadline - Date.now())));
       if (alive !== null) {
         return {
           port: state.port,
@@ -659,7 +664,16 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
       }
     }
     if (wrapped && childExitAt !== null && Date.now() - childExitAt >= EARLY_WRAPPER_EXIT_GRACE_MS) break;
-    await new Promise((resolve) => setTimeout(resolve, AUTO_START_POLL_MS));
+    await new Promise((resolve) => setTimeout(resolve, Math.min(AUTO_START_POLL_MS, Math.max(1, deadline - Date.now()))));
+  }
+  if (heldLock === undefined && Date.now() >= waitDeadline) {
+    // This caller can no longer use its child. End a direct child now and
+    // begin wrapper-tree cleanup without extending the caller's deadline.
+    if (wrapped) void endSpawnedWrapper(child, logger).catch((error: unknown) => {
+      logger.warn('daemon.startWith process tree cleanup failed', { error: String(error) });
+    });
+    else if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    throw new Error('A pending daemon start did not settle within its health bound.');
   }
   if (programName !== undefined) {
     await endSpawnedWrapper(child, logger);

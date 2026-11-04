@@ -41,7 +41,7 @@ function home(): string {
 
 function replacementHold(homePath: string, instanceId: string, oldPid: number, startedAt: string): void {
   fs.writeFileSync(restartHoldPath(homePath), JSON.stringify({ expiresAt: Date.now() + 30_000,
-    pid: process.pid, replacing: { instanceId, startMode: 'direct', pid: oldPid, startedAt } }));
+    pid: process.pid, replacing: { instanceId, startMode: 'direct', pid: oldPid, port: 1, startedAt } }));
 }
 
 async function startEndpointOccupied(homePath: string): Promise<boolean> {
@@ -132,7 +132,7 @@ describe('planned daemon restart hold', () => {
     const value = home();
     fs.writeFileSync(restartHoldPath(value), JSON.stringify({ expiresAt: Date.now() + 120_000,
       pid: 99_999_999, replacing: { instanceId: 'old-instance', startMode: 'direct',
-        pid: process.pid, startedAt: 'same-time' } }));
+        pid: process.pid, port: 1, startedAt: 'same-time' } }));
     const startedAt = Date.now();
     const connection = await ensureDaemon({ home: value, daemonEntry: distDaemonEntry });
     started.set(value, connection.pid);
@@ -158,8 +158,10 @@ describe('planned daemon restart hold', () => {
     fs.writeFileSync(daemonStatePath(value), '{');
     const result = await cli(value, 'daemon', 'restart');
     expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('daemon stop');
+    expect(result.stderr).toContain('Wait about 15 seconds');
+    expect(result.stderr).toContain('daemon restart');
     expect(result.stderr).toContain('daemon start');
+    expect(result.stderr).not.toContain('daemon stop');
     expect(readDaemonState(value)).toBeNull();
   }, 20_000);
 
@@ -167,11 +169,13 @@ describe('planned daemon restart hold', () => {
     const value = home();
     const result = await cli(value, 'daemon', 'restart');
     expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('daemon stop');
+    expect(result.stderr).toContain('Wait about 15 seconds');
+    expect(result.stderr).toContain('daemon restart');
     expect(result.stderr).toContain('daemon start');
+    expect(result.stderr).not.toContain('daemon stop');
     expect(readDaemonState(value)).toBeNull();
   }, 20_000);
-  it('keeps a peer behind restart from the stop through the new healthy daemon', async () => {
+  it.each([true, false])('keeps a peer behind restart from the stop through the new healthy daemon (old id: %s)', async (oldHasId) => {
     const value = home();
     const marker = path.join(value, 'peer-started');
     let signalStopping: () => void = () => undefined;
@@ -181,7 +185,8 @@ describe('planned daemon restart hold', () => {
     const server = http.createServer((request, response) => {
       if (request.url === '/health') {
         response.writeHead(200, { 'content-type': 'application/json' });
-        response.end(JSON.stringify({ ok: true, version: '0.0.0-stand-in', pid: process.pid, instanceId: 'old-instance' }));
+        response.end(JSON.stringify({ ok: true, version: '0.0.0-stand-in', pid: process.pid,
+          ...(oldHasId ? { instanceId: 'old-instance' } : {}) }));
       } else if (request.url === '/daemon/shutdown') {
         signalStopping();
         void stopCanFinish.then(() => {
@@ -195,13 +200,24 @@ describe('planned daemon restart hold', () => {
     const address = server.address();
     if (address === null || typeof address === 'string') throw new Error('missing stand-in port');
     fs.writeFileSync(daemonStatePath(value), JSON.stringify({ port: address.port, token: 'stand-in-token',
-      pid: process.pid, version: '0.0.0-stand-in', startedAt: new Date().toISOString(), instanceId: 'old-instance' }));
+      pid: process.pid, version: '0.0.0-stand-in', startedAt: new Date().toISOString(),
+      ...(oldHasId ? { instanceId: 'old-instance' } : {}) }));
     fs.writeFileSync(path.join(value, 'config.json'), JSON.stringify({ daemon: { startWith: [process.execPath] } }));
     const closed = new Promise<void>((resolve) => server.once('close', resolve));
     const restart = cli(value, 'daemon', 'restart', '--direct');
-    await stopping;
+    const reachedStop = await Promise.race([stopping.then(() => true), restart.then(() => false)]);
+    if (!reachedStop) {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      expect(reachedStop).toBe(true);
+      return;
+    }
     expect(readRestartHold(value, { debug: () => undefined, info: () => undefined,
       warn: () => undefined, error: () => undefined })?.replacing?.startMode).toBe('direct');
+    const replaced = readRestartHold(value, { debug: () => undefined, info: () => undefined,
+      warn: () => undefined, error: () => undefined })?.replacing;
+    expect(replaced?.instanceId).toBe(oldHasId ? 'old-instance' : undefined);
+    expect(replaced?.pid).toBe(process.pid);
+    expect(replaced?.port).toBe(address.port);
     const previous = process.env['SP_TEST_SPAWN_MARKER'];
     process.env['SP_TEST_SPAWN_MARKER'] = marker;
     try {
@@ -240,6 +256,16 @@ describe('planned daemon restart hold', () => {
     expect(connection.pid).toBe(readDaemonState(value)?.pid);
     expect(fs.existsSync(restartHoldPath(value))).toBe(false);
   }, 20_000);
+
+  it('keeps the start poll inside the deadline after an eight-second hold', async () => {
+    const value = home();
+    writeRestartHold(value, 8);
+    const began = Date.now();
+    await expect(ensureDaemon({ home: value, daemonEntry: path.join(value, 'missing-daemon.mjs') }))
+      .rejects.toThrow('did not settle within its health bound');
+    expect(Date.now() - began).toBeLessThan(12_000);
+    expect(readDaemonState(value)).toBeNull();
+  }, 30_000);
 
   it('starts in the same call when a hold is removed early', async () => {
     const value = home();
@@ -333,7 +359,8 @@ describe('planned daemon restart hold', () => {
     let replacementPort = -1;
     try {
       const coordinator = withDaemonStartLock({ home: value }, async () => {
-        writeRestartHold(value, 30, { instanceId: 'old-instance', startMode: 'direct' });
+        writeRestartHold(value, 30, { instanceId: 'old-instance', pid: process.pid,
+          port: oldAddress.port, startMode: 'direct' });
         const shutdown = fetch(`http://127.0.0.1:${String(oldAddress.port)}/daemon/shutdown`, { method: 'POST' });
         await stopping;
         await new Promise((resolve) => setTimeout(resolve, 5_500));
