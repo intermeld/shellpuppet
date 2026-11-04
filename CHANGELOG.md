@@ -15,6 +15,12 @@ version may change behaviour, and every such change is listed here.
   Clients identify the replacement by its daemon instance id, use a fixed
   wait bound, and resume starts if the process performing a restart has gone.
 
+### Fixed
+
+- A dashboard window that has just closed can no longer claim its panes back
+  with a late roster. Its panes stay with the windows still open, while a
+  duplicate window for the same screen and a reloaded window stay eligible.
+
 ## [0.2.0] - 2026-11-04
 
 The dashboard: every session as a pane, across more than one screen, with

@@ -1246,6 +1246,12 @@ When every window is at its readable capacity, additional panes are spread
 in proportion to capacity. A page's own CSS viewport size determines its
 capacity, including on screens with different scaling. A page leaving sends
 a roster departure; a delayed heartbeat alone does not imply that it closed.
+Confirmed departures from a page, its watched child window or the daemon
+remember the exact closed instance for ten minutes, bounded to 64 entries,
+so a late roster cannot reclaim its panes. A duplicate with the same screen
+id and a reloaded page with a new instance remain eligible for assignment.
+The child watcher removes only the instance matched to its child's document;
+ordinary roster expiry does not mark a silent window as closed.
 
 Pop out uses this window support to put one pane in its own movable window,
 which may be made full screen. It leaves the grid until the window closes,

@@ -329,6 +329,17 @@
     arrange('window removed');
     renderShareCount();
   }
+  function markWindowGone(id, instance) {
+    if (validWindowId(instance)) {
+      const now = Date.now();
+      for (const [pair, closedAt] of goneWindows) if (now - closedAt > 600_000) goneWindows.delete(pair);
+      const pair = windowPair(id, instance);
+      goneWindows.delete(pair);
+      goneWindows.set(pair, now);
+      while (goneWindows.size > 64) goneWindows.delete(goneWindows.keys().next().value);
+    }
+    removeWindow(id, instance);
+  }
   function openDashboard(hash, name, features) {
     const child = window.open(`${location.origin}/dashboard${hash}`, name, features);
     if (child === null) showError('The browser blocked the window. Press the button again.');
@@ -349,14 +360,13 @@
     lastSeen.set(windowPair(id, null), Date.now());
     renderScreens();
     publishAssignment();
-    const watch = { id, child, pair: windowPair(id, null), closedAt: null, timer: null };
+    const watch = { id, child, instance: null, pair: windowPair(id, null), closedAt: null, timer: null };
     watch.timer = setInterval(() => {
       if (!child.closed) return;
       if (watch.closedAt === null) { watch.closedAt = Date.now(); return; }
       if (Date.now() - watch.closedAt < 1500) return;
-      for (const [pair, entry] of windows) {
-        if (entry.id === id && (lastSeen.get(pair) ?? 0) <= watch.closedAt) removeWindow(entry.id, entry.instance);
-      }
+      // A duplicate shares the screen id, but only this child's instance has closed.
+      markWindowGone(watch.id, watch.instance);
       clearInterval(watch.timer);
       childWatches.delete(watch.pair);
     }, 250);
@@ -979,13 +989,7 @@
     if (!frame || typeof frame.type !== 'string') return;
     if (frame.type === 'window-gone' && validWindowId(frame.id) && validWindowId(frame.instance)) {
       if (popSelf !== null) return;
-      const now = Date.now();
-      for (const [pair, closedAt] of goneWindows) if (now - closedAt > 600_000) goneWindows.delete(pair);
-      const pair = JSON.stringify([frame.id, frame.instance]);
-      goneWindows.delete(pair);
-      goneWindows.set(pair, now);
-      while (goneWindows.size > 64) goneWindows.delete(goneWindows.keys().next().value);
-      removeWindow(frame.id, frame.instance);
+      markWindowGone(frame.id, frame.instance);
       return;
     }
     if (frame.type === 'snapshot' && Array.isArray(frame.sessions)) reconcile(frame.sessions, true);
@@ -1340,6 +1344,7 @@
         } catch { continue; }
         childWatches.delete(watch.pair);
         watch.pair = pair;
+        watch.instance = data.window.instance;
         childWatches.set(pair, watch);
       }
       const fresh = !windows.has(pair);
@@ -1355,7 +1360,7 @@
       return;
     }
     if (data.type === 'window-leave' && validWindowId(data.id) && validWindowId(data.instance)) {
-      removeWindow(data.id, data.instance);
+      markWindowGone(data.id, data.instance);
       return;
     }
     if (data.type === 'window-assignment' && popSelf === null && windows.size > 1 &&
