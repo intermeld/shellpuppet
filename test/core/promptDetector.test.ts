@@ -119,6 +119,15 @@ describe('detectPrompt: Muse Code', () => {
     expect(settler.detect(active, 1_000 + MUSE_MENU_SETTLE_MS)?.signature).toContain('Stage 3/3');
   });
 
+  it('settles a menu whose status footer keeps changing', async () => {
+    const screen = await museCapture('muse-8b-between-stages');
+    const footer = screen.split(String.fromCharCode(10)).find((line) => line.startsWith('  muse-wonder-full-1.0 · '))!;
+    const ticking = (n: number): string => screen.replace(footer, footer.replace(/x{6}/, String(n).padStart(6, '0')));
+    const settler = new MusePromptSettler();
+    for (let now = 0; now < MUSE_MENU_SETTLE_MS; now += 250) expect(settler.detect(ticking(now), now)).toBeNull();
+    expect(settler.detect(ticking(MUSE_MENU_SETTLE_MS), MUSE_MENU_SETTLE_MS)?.signature).toContain('Stage 2/3');
+  });
+
   it('offers a bold Muse heading immediately', async () => {
     const screen = await museCapture('muse-8b-between-stages');
     const question = 'Would you like to run the following command?';

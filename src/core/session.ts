@@ -1229,6 +1229,7 @@ export class Session implements WaitTarget {
   }
 
   answerablePrompt(screen: string, now = Date.now()): ReturnType<typeof detectPrompt> {
+    if (this.agent !== 'muse') return detectPrompt(screen);
     const styled = this.renderer.styledLines().lines;
     return this.musePromptSettler.detect(screen, now, styled);
   }

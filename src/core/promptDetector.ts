@@ -429,7 +429,8 @@ export class MusePromptSettler {
       this.menu = null;
       return prompt;
     }
-    const block = screen.split('\n').slice(prompt.rows[0]).join('\n');
+    // The heading to the last option row: a status footer below may tick.
+    const block = screen.split('\n').slice(prompt.rows[0], prompt.rows[1] + 1).join('\n');
     if (block !== this.menu) {
       this.menu = block;
       this.since = now;
