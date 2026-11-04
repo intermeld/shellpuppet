@@ -687,7 +687,8 @@ Token-based, following the Jupyter / SSH-agent model, with **five credentials**:
   takes the dashboard cookie and the subprotocol, and a client token on the query is
   refused.
 - **`GET /health` is deliberately unauthenticated** and returns only `{ ok, version,
-  pid }`. Clients must be able to poll it before the token file settles (§2.2), and it
+  pid, instanceId }`, including the daemon instance id. Clients must be able to poll it
+  before the token file settles (§2.2), and it
   reveals nothing sensitive.
 
 **Windows file-permission reality:** `fs.chmod(0o600)` is a near-no-op on Windows. Harden

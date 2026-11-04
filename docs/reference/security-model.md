@@ -157,7 +157,8 @@ make a reachable terminal safe.
   is not its own, rejects WebSocket upgrades from foreign `Origin`s, sends no
   CORS headers and requires the bearer token everywhere but `/health`, the
   viewer page, the dashboard page and the static assets. None of those pages
-  returns a session. A client-token HTTP request does not consult `Origin`.
+  returns a session. `/health` reveals only ok, version, pid and the daemon
+  instance id. A client-token HTTP request does not consult `Origin`.
   A request that presents the dashboard cookie does. A document navigation
   and a same-origin read may omit `Origin`. Any other cookie-authenticated
   HTTP request requires `Sec-Fetch-Site: same-origin` and an `Origin` whose

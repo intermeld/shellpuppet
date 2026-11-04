@@ -309,7 +309,9 @@ describe('planned daemon restart hold', () => {
       const elapsed = Date.now() - began;
       expect(fs.existsSync(marker)).toBe(true);
       pid = Number(fs.readFileSync(marker, 'utf8'));
-      expect(processAlive(pid)).toBe(false);
+      const parentPid = Number(fs.readFileSync(`${marker}.parent`, 'utf8'));
+      expect(processAlive(pid), `wrapper pid=${String(pid)}, test child=${String(parentPid === process.pid)}, ` +
+        `parent pid=${String(parentPid)}, exit status=unknown, elapsed=${String(elapsed)} ms`).toBe(false);
       expect(elapsed).toBeLessThan(36_000);
       expect(await startEndpointOccupied(value)).toBe(false);
     } finally {

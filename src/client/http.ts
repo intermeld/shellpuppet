@@ -242,8 +242,18 @@ async function endSpawnedWrapper(child: ChildProcess, logger: Logger): Promise<v
       await new Promise((resolve) => setTimeout(resolve, Math.min(50, WRAPPER_CLEANUP_TIMEOUT_MS - (Date.now() - began))));
     }
   } else {
+    const began = Date.now();
     try { process.kill(-pid, 'SIGKILL'); } catch {
-      // The process group has already gone.
+      // The group may already be gone; still end the child if it is live.
+      if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+    }
+    // A signal only requests termination. Wait for Node to reap this child so
+    // callers do not observe its zombie pid as a live wrapper on POSIX.
+    while (child.exitCode === null && child.signalCode === null && Date.now() - began < WRAPPER_CLEANUP_TIMEOUT_MS) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(50, WRAPPER_CLEANUP_TIMEOUT_MS - (Date.now() - began))));
+    }
+    if (child.exitCode === null && child.signalCode === null) {
+      logger.warn('daemon.startWith wrapper cleanup did not complete', { pid, timedOut: true });
     }
   }
 }
