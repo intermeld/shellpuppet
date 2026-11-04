@@ -182,8 +182,8 @@ it.each([true, false])('focus profile keeps one floor-sized fit with Auto fit %s
       };
     })()`,
     probe: `(() => {
-      const state = (window.__focusProbe ||= { phase: 0, started: Date.now() });
-      if (Date.now() - state.started > 20000) return JSON.stringify({ timeout: true, phase: state.phase,
+      const state = (window.__focusProbe ||= { phase: 0 });
+      if (state.started && Date.now() - state.started > 20000 + ${FIT_SETTLE_MS}) return JSON.stringify({ timeout: true, phase: state.phase,
         connection: document.getElementById('connection')?.textContent,
         error: document.getElementById('error-message')?.textContent,
         paneSize: document.querySelector('.pane-size')?.textContent,
@@ -193,6 +193,7 @@ it.each([true, false])('focus profile keeps one floor-sized fit with Auto fit %s
         const profile = document.getElementById('profile');
         if (document.getElementById('connection')?.textContent !== 'Connected' ||
             !profile?.querySelector('option[value="focus-shell"]')) return null;
+        state.started = Date.now();
         if (!${String(enabled)}) document.getElementById('auto-fit').click();
         profile.value = 'focus-shell';
         document.getElementById('start').click();

@@ -77,11 +77,13 @@
   const pendingOpen = new Map();
   const popWatches = new Map();
   const windowToken = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+  window.__dashboardDocumentToken = windowToken;
   const newInstance = () => `i-${[...window.crypto.getRandomValues(new Uint8Array(16))]
     .map((byte) => byte.toString(16).padStart(2, '0')).join('')}`;
   let windowInstance = newInstance();
   let registered = false;
-  const openedAt = window.performance.timeOrigin + window.performance.now();
+  const loadAt = window.performance.timeOrigin + window.performance.now();
+  let openedAt = loadAt;
   const screenParams = new URLSearchParams(location.hash.slice(1));
   const windowId = screenParams.get('screen') || windowToken;
   const windowRank = screenParams.has('screen') ? Number(screenParams.get('rank')) || 1000 : 0;
@@ -116,7 +118,7 @@
   let lastLayout = null;
   let lastStructure = null;
   let lastVisibilityGeometry = null;
-  if (popSelf === null) windows.set(ownPair(), { id: windowId, instance: windowInstance, rank: windowRank, openedAt, key: screenKey,
+  if (popSelf === null) windows.set(ownPair(), { id: windowId, instance: windowInstance, rank: windowRank, openedAt, loadAt, key: screenKey,
     width: window.innerWidth - 12, height: window.innerHeight - 54 });
   let channel = null;
   try { channel = new BroadcastChannel('shellpuppet.dashboard'); } catch { /* This window still tracks a pop-out it opened. */ }
@@ -283,9 +285,10 @@
   const screenIdentity = (screen) => [screen.availLeft, screen.availTop,
     screen.availWidth, screen.availHeight].join(',');
   const orderedWindows = () => [...windows.values()].filter((entry) => entry.ready !== false)
-    .sort((a, b) => a.rank - b.rank || a.openedAt - b.openedAt || a.id.localeCompare(b.id) ||
+    .sort((a, b) => a.rank - b.rank || (a.loadAt ?? a.openedAt) - (b.loadAt ?? b.openedAt) || a.id.localeCompare(b.id) ||
       a.instance.localeCompare(b.instance));
-  const ownWindow = () => ({ id: windowId, instance: windowInstance, rank: windowRank, openedAt, key: currentScreenKey,
+  const ownWindow = () => ({ id: windowId, instance: windowInstance, document: windowToken,
+    rank: windowRank, openedAt, loadAt, key: currentScreenKey,
     width: Math.max(1, root.clientWidth - 12), height: Math.max(1, root.clientHeight - 12) });
   function advertise() {
     if (popSelf !== null || channel === null) return;
@@ -318,17 +321,10 @@
     applyAssignment(byWindow[ownPair()] || []);
   }
   function removeWindow(id, instance) {
-    let removed = false;
-    for (const [pair, entry] of windows) {
-      if (entry.id !== id || (instance && entry.instance !== instance)) continue;
-      windows.delete(pair);
-      lastSeen.delete(pair);
-      removed = true;
-    }
-    if (!removed) return;
+    const pair = windowPair(id, instance);
+    if (!windows.delete(pair)) return;
+    lastSeen.delete(pair);
     settleAssignmentFits();
-    const watch = childWatches.get(id);
-    if (watch !== undefined) { clearInterval(watch); childWatches.delete(id); }
     renderScreens();
     arrange('window removed');
     renderShareCount();
@@ -353,7 +349,18 @@
     lastSeen.set(windowPair(id, null), Date.now());
     renderScreens();
     publishAssignment();
-    childWatches.set(id, setInterval(() => { if (child.closed) removeWindow(id); }, 500));
+    const watch = { id, child, pair: windowPair(id, null), closedAt: null, timer: null };
+    watch.timer = setInterval(() => {
+      if (!child.closed) return;
+      if (watch.closedAt === null) { watch.closedAt = Date.now(); return; }
+      if (Date.now() - watch.closedAt < 1500) return;
+      for (const [pair, entry] of windows) {
+        if (entry.id === id && (lastSeen.get(pair) ?? 0) <= watch.closedAt) removeWindow(entry.id, entry.instance);
+      }
+      clearInterval(watch.timer);
+      childWatches.delete(watch.pair);
+    }, 250);
+    childWatches.set(watch.pair, watch);
   }
   function renderScreens() {
     const control = document.getElementById('screens');
@@ -1002,9 +1009,11 @@
       connection.textContent = 'Connected'; error.hidden = true;
       if (popSelf === null) {
         if (registered) {
+          channel?.postMessage({ type: 'window-leave', id: windowId, instance: windowInstance, token: windowToken });
           windows.delete(ownPair());
           lastSeen.delete(ownPair());
           windowInstance = newInstance();
+          openedAt = Math.max(openedAt + 1, window.performance.timeOrigin + window.performance.now());
         }
         registered = true;
         feed.send(JSON.stringify({ type: 'window-register', id: windowId, instance: windowInstance }));
@@ -1304,13 +1313,35 @@
     }
     if (data.type === 'window-roster' && popSelf === null && data.window &&
         validWindowId(data.window.id) && validWindowId(data.window.instance) &&
+        validWindowId(data.window.document) &&
         Number.isFinite(data.window.rank) &&
         Number.isFinite(data.window.openedAt) &&
+        (data.window.loadAt === undefined || Number.isFinite(data.window.loadAt)) &&
         Number.isFinite(data.window.width) && Number.isFinite(data.window.height)) {
       const now = Date.now();
       for (const [pair, closedAt] of goneWindows) if (now - closedAt > 600_000) goneWindows.delete(pair);
       if (goneWindows.has(JSON.stringify([data.window.id, data.window.instance]))) return;
       const pair = windowPair(data.window.id, data.window.instance);
+      for (const [existingPair, entry] of windows) {
+        if (existingPair !== pair && entry.id === data.window.id &&
+            entry.document === data.window.document && entry.openedAt > data.window.openedAt) return;
+      }
+      for (const [existingPair, entry] of windows) {
+        if (existingPair === pair || entry.id !== data.window.id || entry.document !== data.window.document) continue;
+        if (entry.openedAt < data.window.openedAt) {
+          windows.delete(existingPair);
+          lastSeen.delete(existingPair);
+        }
+      }
+      for (const watch of childWatches.values()) {
+        if (watch.id !== data.window.id || watch.child.closed || watch.pair === pair) continue;
+        try {
+          if (watch.child.__dashboardDocumentToken !== data.window.document) continue;
+        } catch { continue; }
+        childWatches.delete(watch.pair);
+        watch.pair = pair;
+        childWatches.set(pair, watch);
+      }
       const fresh = !windows.has(pair);
       const previous = windows.get(pair);
       windows.delete(windowPair(data.window.id, null));
@@ -1399,7 +1430,7 @@
     feed?.close();
     for (const item of panes.values()) deactivate(item);
     for (const watch of popWatches.values()) clearInterval(watch);
-    for (const watch of childWatches.values()) clearInterval(watch);
+    for (const watch of childWatches.values()) clearInterval(watch.timer);
     clearInterval(rosterTimer);
   });
   window.addEventListener('pagehide', () => {
