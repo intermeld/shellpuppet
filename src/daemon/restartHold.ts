@@ -6,7 +6,7 @@ import type { Logger } from '../core/types.js';
 export interface RestartHold {
   expiresAt: number;
   pid: number;
-  replacing?: { pid: number; startedAt: string };
+  replacing?: { instanceId: string; startMode: 'direct' | 'wrapped' };
 }
 const warnedRecords = new Set<string>();
 
@@ -27,6 +27,15 @@ export function clearRestartHold(home: string): void {
 }
 
 export function writeRestartHold(home: string, seconds: number, replacing?: RestartHold['replacing']): void {
+  const cutoff = Date.now() - 3_600_000;
+  for (const name of fs.readdirSync(home)) {
+    if (!/^\.restart-hold-.+\.tmp$/.test(name)) continue;
+    const candidate = path.join(home, name);
+    try {
+      const stat = fs.lstatSync(candidate);
+      if (stat.isFile() && !stat.isSymbolicLink() && stat.mtimeMs < cutoff) fs.unlinkSync(candidate);
+    } catch { /* Another writer may have removed it. */ }
+  }
   const target = restartHoldPath(home);
   const temporary = path.join(home, `.restart-hold-${randomUUID()}.tmp`);
   let created = false;
@@ -71,13 +80,22 @@ export function readRestartHold(home: string, logger: Logger): RestartHold | nul
         hold.expiresAt - Date.now() > 600_000) throw new Error('invalid');
     if (hold.replacing !== undefined &&
         (typeof hold.replacing !== 'object' || hold.replacing === null ||
-          !Number.isSafeInteger(hold.replacing.pid) || hold.replacing.pid <= 0 ||
-          typeof hold.replacing.startedAt !== 'string' || hold.replacing.startedAt.length === 0)) {
+          typeof hold.replacing.instanceId !== 'string' || hold.replacing.instanceId.length === 0 ||
+          !['direct', 'wrapped'].includes(hold.replacing.startMode))) {
       throw new Error('invalid');
     }
     if (hold.expiresAt <= Date.now()) {
       clearRestartHold(home);
       return null;
+    }
+    // A manual stop hold outlives its one-shot CLI by design. A restart hold
+    // belongs to the CLI still performing the replacement.
+    if (hold.replacing !== undefined) {
+      try { process.kill(hold.pid, 0); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ESRCH') return null;
+        // EPERM means the writer exists; all other errors are treated cautiously.
+      }
     }
     return hold;
   } catch {

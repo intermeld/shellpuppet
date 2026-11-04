@@ -193,7 +193,10 @@ before stopping it, so new clients wait even while its health endpoint still
 answers. A peer waits for up to about 20 seconds for a direct restart (ten
 seconds to stop, then ten to start), or about 130 seconds with `startWith`
 (ten to stop, then two minutes to start). Other pending starts use the normal
-ten-second or two-minute bound. If a pending start has not settled by then,
+ten-second or two-minute bound. The restart uses the two-minute allowance only
+when it actually starts through `startWith`; `--direct` and
+`SHELLPUPPET_DAEMON_DIRECT=1` use the direct bound. Each client's wait has one
+deadline, even if the hold changes while it waits. If a pending start has not settled by then,
 they stop with an error. You can run them again once the wrapper or its cleanup
 has finished. A failed start ends the wrapper's process tree only while the
 wrapper is still running. If Windows tree cleanup times out,
@@ -211,7 +214,8 @@ automatic starts for 120 seconds by default, or for 1 to 600 seconds when a
 value is given. `--force` can be used with `--hold`. Waiting clients connect
 if a daemon appears. If the hold expires or is removed while they wait, they
 resume normal start coordination in the same call; otherwise they receive a
-restart hold message within the normal start wait bound. `shellpuppet daemon
+restart hold message within the normal start wait bound. If the process
+performing a restart has gone, clients resume start coordination immediately. `shellpuppet daemon
 start` and `daemon restart` end the hold. `daemon status` reports its remaining
 seconds in text and JSON.
 
@@ -220,6 +224,8 @@ seconds in text and JSON.
 Build first, then run `shellpuppet daemon restart` so clients wait for the new
 daemon. To stop before rebuilding, run `shellpuppet daemon stop --hold`,
 rebuild, then run `shellpuppet daemon start`.
+If the daemon record is missing or unreadable, `daemon restart` asks you to
+run `daemon stop` and then `daemon start` instead of risking a second daemon.
 
 On POSIX, the start endpoint is a socket in `SHELLPUPPET_HOME` when its path
 fits the platform limit. For a longer home path it is a socket named from a

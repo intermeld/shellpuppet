@@ -7,6 +7,7 @@
  */
 
 import * as fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import * as http from 'node:http';
 import { createRequire } from 'node:module';
 import * as os from 'node:os';
@@ -681,6 +682,7 @@ export class Daemon {
   private statePublishRunning = false;
   /** What this daemon published in daemon.json, once it has claimed it. */
   private publishedState: DaemonState | null = null;
+  private readonly instanceId = randomUUID();
   /** The pid of another running daemon already reported as owning daemon.json. */
   private foreignOwnerReported: number | null = null;
   private promptScanTimer: NodeJS.Timeout | null = null;
@@ -835,6 +837,7 @@ export class Daemon {
       pid: process.pid,
       version: this.version,
       startedAt: new Date().toISOString(),
+      instanceId: this.instanceId,
       startedWrapped: this.options.startedWrapped ?? false,
     };
 
@@ -2190,9 +2193,9 @@ export class Daemon {
     const segments = url.pathname.split('/').filter((s) => s !== '');
 
     // Unauthenticated by design (§4.1): clients must be able to poll before
-    // the token file settles, and it reveals nothing sensitive.
+    // the token file settles. The instance id is an identity, not a secret.
     if (req.method === 'GET' && url.pathname === '/health') {
-      json(res, 200, { ok: true, version: this.version, pid: process.pid });
+      json(res, 200, { ok: true, version: this.version, pid: process.pid, instanceId: this.instanceId });
       return;
     }
 

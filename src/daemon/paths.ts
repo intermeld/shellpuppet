@@ -21,6 +21,8 @@ export interface DaemonState {
   pid: number;
   version: string;
   startedAt: string;
+  /** Random identity for this daemon process, independent of pid and wall time. */
+  instanceId?: string;
   /** Set by the daemon entry from the client's internal start marker. */
   startedWrapped?: boolean;
 }
