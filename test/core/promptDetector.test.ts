@@ -22,6 +22,22 @@ async function museCapture(name: string): Promise<string> {
 }
 
 describe('detectPrompt: Muse Code', () => {
+  it('detects the captured staged menu with a ticking activity line and a status footer', () => {
+    const screen = fs.readFileSync(path.join(__dirname, '..', 'fixtures', 'muse-live-129-menu.txt'), 'utf8');
+    const prompt = detectPrompt(screen);
+    expect(prompt?.question).toBe('Would you like to run the following command?');
+    expect(prompt?.options).toHaveLength(3);
+    expect(prompt?.signature).toContain('Stage 1/2');
+    const settler = new MusePromptSettler();
+    expect(settler.detect(screen, 0)).toBeNull();
+    expect(settler.detect(screen.replace('3m 01s', '3m 02s'), MUSE_MENU_SETTLE_MS)?.options).toHaveLength(3);
+  });
+
+  it('rejects a captured menu while Muse draws new output below it', () => {
+    const screen = fs.readFileSync(path.join(__dirname, '..', 'fixtures', 'muse-live-129-menu.txt'), 'utf8');
+    expect(detectPrompt(`${screen}\n◇ Calling tools (1s · esc to interrupt)`)).toBeNull();
+  });
+
   it.each(['live88-1-stage1of1-MISSED', 'live120-1-stage1of1-MISSED'])(
     'detects the captured two-option %s menu', async (name) => {
       const prompt = detectPrompt(await museCapture(name));

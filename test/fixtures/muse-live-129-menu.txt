@@ -1,0 +1,18 @@
+❯ Run this exact shell command and report the exit code: npm install left-pad@1.3.0 --no-save
+
+◇ Calling tools (3m 15s · esc to interrupt)
+└ last event 3m 01s ago
+
+── Voice input (Alt+V to start) ─────────────────────────────────────────────────────────────────────────────────────────────────
+Would you like to run the following command?
+
+  $ npm install left-pad@1.3.0 --no-save
+  Stage 1/2
+  Current argv: ["npm","install","left-pad@1.3.0","--no-save"]
+
+⟩ 1. Allow this stage once (y)
+  2. Always allow in this workspace: npm install ... (p)
+  3. Abort the entire command (esc)
+Change approval defaults in /permissions
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  profile · high · ~/scratchpad · Launch overrides

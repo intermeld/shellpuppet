@@ -391,7 +391,7 @@ function musePrompt(raw: string[], tail: Line[]): DetectedPrompt | null {
     return text.trim() !== '' && !/^Change approval defaults in \/permissions$/.test(text) &&
       (approval || !/^Use Up\/Down or 1\/2, then Enter\. Esc quits\.$/.test(text)) &&
       !/^\s*[─━═]{2,}$/.test(text) &&
-      !/^ {2}muse-wonder-full-1\.0 · .* · .* · .*$/i.test(text);
+      !/^ {2}\S[^·]* · [^·]+ · [^·]+ · Launch overrides$/u.test(text);
   })) return null;
   return {
     question: question.text,
