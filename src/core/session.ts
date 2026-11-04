@@ -1118,7 +1118,6 @@ export class Session implements WaitTarget {
 
   private async writeInput(data: string): Promise<string> {
     this.refuseIfInputFailed();
-    this.refuseIfEnded();
     // Recorded BEFORE the bytes go in, when the screen still shows what this
     // input is answering: the waiter's stale-prompt guard needs that prompt,
     // and its echo guard needs the input itself.

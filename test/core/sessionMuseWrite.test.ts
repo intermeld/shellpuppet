@@ -1,6 +1,6 @@
 import type { IPty } from 'node-pty';
 import { describe, expect, it } from 'vitest';
-import { Session } from '../../src/core/session.js';
+import { MUSE_SUBMIT_DELAY_MS, Session } from '../../src/core/session.js';
 
 class RecordingPty implements IPty {
   readonly pid = 0;
@@ -34,7 +34,8 @@ describe('Muse input submission', () => {
     const following = session.write('after');
     await Promise.all([submitting, following]);
     expect(pty.writes.map((entry) => entry.data)).toEqual(['hello', '\r', 'after']);
-    expect(pty.writes[1]!.at - pty.writes[0]!.at).toBeGreaterThanOrEqual(400);
+    // Timers and Date.now() on Windows can disagree by a millisecond or two.
+    expect(pty.writes[1]!.at - pty.writes[0]!.at).toBeGreaterThanOrEqual(MUSE_SUBMIT_DELAY_MS - 5);
   });
 
   it('keeps other agents and key or unfinished writes in one write', async () => {
