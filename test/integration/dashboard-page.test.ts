@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as path from 'node:path';
-import { captureDashboard } from './dashboardCapture.js';
+import { captureDashboard, dashboardTimeoutProbe } from './dashboardCapture.js';
 import { createAuditor } from '../../src/daemon/audit.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
 import { api, eventually, makeTempHome, repoRoot, startTestDaemon } from './helpers.js';
@@ -430,8 +430,11 @@ describe('passive dashboard page', () => {
         const feed = window.__dashSockets?.find(s => s.url.endsWith('/dashboard/events'))?.socket;
         if (!feed || document.getElementById('connection').textContent !== 'Connected') return null;
         if (state.phase === 0) {
-          feed.onmessage({ data: JSON.stringify({ type: 'snapshot', sessions: [
-            { id: ${JSON.stringify(id)}, label: 'double click pane', cols: 100, rows: 30 }] }) });
+          // Connected precedes the initial snapshot. Use the real session
+          // list and an explicit Grid layout, including in a whole-file run.
+          const snapshot = window.__dashboardDiagnostics.streams.find(s => s.socket === feed)?.snapshotIds;
+          if (!snapshot?.includes(${JSON.stringify(id)})) return null;
+          document.getElementById('grid').click();
           state.phase = 1;
         }
         const card = document.querySelector('[data-session=${JSON.stringify(id)}]');
@@ -447,38 +450,47 @@ describe('passive dashboard page', () => {
           doubleClick(head);
           state.enlarged = root.dataset.layout === 'enlarged' &&
             card.querySelector('button[aria-label="Restore"]') !== null;
-          if (!state.enlarged) return JSON.stringify({ error: 'title did not enlarge', ...state });
+          if (!state.enlarged) return JSON.stringify({ error: 'title did not enlarge', ...state,
+            diagnostics: ${dashboardTimeoutProbe} });
           state.phase = 2;
           return null;
         }
         const frames = window.__dashResizes;
         const size = card.querySelector('.pane-size')?.textContent || '';
+        const acknowledged = frame => {
+          const geometry = window.__dashboardDiagnostics.streams.filter(s =>
+            s.url.includes('/sessions/${id}/stream') && s.socket.readyState === 1).at(-1)?.geometry.at(-1);
+          return frame && geometry?.control === 'yours' && geometry.cols === frame.cols &&
+            geometry.rows === frame.rows && size === frame.cols + '×' + frame.rows;
+        };
         if (state.phase === 2) {
-          if (frames.length < 1 || !size.includes(frames[0].cols + '×' + frames[0].rows)) return null;
+          if (!acknowledged(frames[0])) return null;
           state.enlargedSize = size;
           doubleClick(head);
           state.restored = root.dataset.layout === 'grid';
-          if (!state.restored) return JSON.stringify({ error: 'second title click did not restore', ...state });
+          if (!state.restored) return JSON.stringify({ error: 'second title click did not restore', ...state,
+            diagnostics: ${dashboardTimeoutProbe} });
           state.phase = 3;
           return null;
         }
         if (state.phase === 3) {
-          if (frames.length < 2 || !size.includes('100×30')) return null;
+          if (!acknowledged(frames[1]) || size !== '100×30') return null;
           state.restoredSize = size;
           doubleClick(head);
           state.phase = 4;
           return null;
         }
         if (state.phase === 4) {
-          if (frames.length < 3 || !size.includes(frames[2].cols + '×' + frames[2].rows)) return null;
+          if (!acknowledged(frames[2])) return null;
           document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
           state.escapeRestored = root.dataset.layout === 'grid';
-          if (!state.escapeRestored) return JSON.stringify({ error: 'Escape did not restore', ...state });
+          if (!state.escapeRestored) return JSON.stringify({ error: 'Escape did not restore', ...state,
+            diagnostics: ${dashboardTimeoutProbe} });
           state.phase = 5;
           return null;
         }
-        if (frames.length < 4 || !size.includes('100×30')) return null;
-        return JSON.stringify({ ...state, finalSize: size, frames });
+        if (!acknowledged(frames[3]) || size !== '100×30') return null;
+        return JSON.stringify({ ...state, finalSize: size, frames, diagnostics: ${dashboardTimeoutProbe} });
       })()`,
     });
     await api(daemon.port, daemon.token, `/sessions/${id}`, { method: 'DELETE' });
@@ -488,12 +500,12 @@ describe('passive dashboard page', () => {
       escapeRestored: boolean; enlargedSize: string; restoredSize: string; finalSize: string;
       frames: { cols: number; rows: number; take: boolean }[];
     };
-    expect(result.error).toBeUndefined();
-    expect(result.terminalUntouched).toBe(true);
-    expect(result.enlarged).toBe(true);
-    expect(result.restored).toBe(true);
-    expect(result.escapeRestored).toBe(true);
-    expect(result.frames).toHaveLength(4);
+    expect(result.error, JSON.stringify(result)).toBeUndefined();
+    expect(result.terminalUntouched, JSON.stringify(result)).toBe(true);
+    expect(result.enlarged, JSON.stringify(result)).toBe(true);
+    expect(result.restored, JSON.stringify(result)).toBe(true);
+    expect(result.escapeRestored, JSON.stringify(result)).toBe(true);
+    expect(result.frames, JSON.stringify(result)).toHaveLength(4);
     expect(result.frames.every((frame) => frame.take)).toBe(true);
     expect(result.frames[0]!.cols).toBeGreaterThan(100);
     expect(result.frames[1]).toMatchObject({ cols: 100, rows: 30 });
@@ -670,57 +682,80 @@ describe('passive dashboard page', () => {
       drive: true, timeoutMs: 30_000, beforeNavigateScript: instrument,
       probe: `(() => {
         const state = (window.__restoreProbe ||= { phase: 0, started: Date.now() });
-        if (Date.now() - state.started > 8000) return JSON.stringify({ timeout: true, ...state });
         const cards = [...document.querySelectorAll('#panes .pane')];
-        const sockets = () => window.__dashSockets.filter(s => s.url.includes('/sessions/' + state.second + '/stream'));
+        const sockets = () => window.__dashboardDiagnostics.streams.filter(s =>
+          s.url.includes('/sessions/' + state.second + '/stream'));
+        const ready = entry => entry?.socket.readyState === 1 && entry.geometry.length > 0 && entry.binaryFrames > 0;
         if (state.phase === 0) {
-          if (cards.length !== 2 || !cards.every(c => c.querySelector('.pane-size')?.textContent)) return null;
+          if (cards.length !== 2 || !cards.every(c => c.querySelector('.pane-size')?.textContent.includes('×'))) return null;
           state.first = cards[0].dataset.session; state.second = cards[1].dataset.session;
+          if (!ready(sockets().at(-1))) return null;
           state.original = sockets().length;
           const assign = ShellPuppetDashboardLayout.assign;
           ShellPuppetDashboardLayout.assign = () => ({});
-          setTimeout(() => { ShellPuppetDashboardLayout.assign = assign; }, 4000);
           const frame = window.requestAnimationFrame;
-          window.requestAnimationFrame = (callback) => setTimeout(() => callback(performance.now()), 1500);
-          setTimeout(() => { window.requestAnimationFrame = frame; }, 4000);
+          const cancel = window.cancelAnimationFrame;
+          const held = new Map();
+          let serial = 0;
+          // Hold these until both reconnects complete. A slow handshake must
+          // not let the delayed work resume and accidentally satisfy the test.
+          state.framesHeld = true; state.heldFrames = 0;
+          window.requestAnimationFrame = callback => {
+            const id = --serial; held.set(id, callback); state.heldFrames = held.size; return id;
+          };
+          window.cancelAnimationFrame = id => {
+            if (!held.delete(id)) cancel.call(window, id);
+            state.heldFrames = held.size;
+          };
+          window.__releaseVisibilityFrames = () => {
+            ShellPuppetDashboardLayout.assign = assign;
+            window.requestAnimationFrame = frame; window.cancelAnimationFrame = cancel;
+            state.framesHeld = false;
+            for (const callback of held.values()) frame.call(window, callback);
+          };
           cards[0].querySelector('button[aria-label="Enlarge"]').click();
-          state.coveredClosed = sockets()[0]?.socket.readyState >= 2;
+          state.coveredClosed = sockets().at(-1)?.socket.readyState >= 2;
           state.phase = 1; return null;
         }
         if (state.phase === 1) {
-          if (sockets()[0]?.socket.readyState !== 3) return null;
+          if (sockets().at(-1)?.socket.readyState !== 3) return null;
+          cards[0].querySelector('button[aria-label="Restore"]').click();
+          state.returnStarted = sockets().length === state.original + 1 && sockets().at(-1)?.socket.readyState <= 1;
+          state.visible = document.querySelector('[data-session="' + state.second + '"]')?.isConnected === true;
           state.phase = 2; return null;
         }
         if (state.phase === 2) {
-          cards[0].querySelector('button[aria-label="Restore"]').click();
-          state.phase = 3; state.at = Date.now(); return null;
-        }
-        if (state.phase === 3 && Date.now() - state.at > 500) {
-          state.returned = sockets().length > state.original && sockets().at(-1)?.socket.readyState === 1;
-          state.visible = document.querySelector('[data-session="' + state.second + '"]')?.isConnected === true;
+          if (!ready(sockets().at(-1))) return null;
+          state.returned = true;
           document.getElementById('focus').click();
           const strip = document.getElementById('strip');
           strip.style.height = '80px'; strip.style.paddingTop = '180px';
           strip.dispatchEvent(new Event('scroll'));
           state.scrolledClosed = sockets().at(-1)?.socket.readyState >= 2;
+          state.beforeScrollReturn = sockets().length;
           strip.scrollTop = 180; strip.dispatchEvent(new Event('scroll'));
-          state.phase = 4; state.at = Date.now(); return null;
+          state.scrollReturnStarted = sockets().length === state.beforeScrollReturn + 1 && sockets().at(-1)?.socket.readyState <= 1;
+          state.phase = 3; return null;
         }
-        if (state.phase === 4 && Date.now() - state.at > 500) return JSON.stringify({
-          coveredClosed: state.coveredClosed, returned: state.returned, visible: state.visible,
-          scrolledClosed: state.scrolledClosed,
-          scrolledReturned: sockets().at(-1)?.socket.readyState === 1 });
+        if (state.phase === 3 && ready(sockets().at(-1))) {
+          const result = JSON.stringify({ ...state, scrolledReturned: true, diagnostics: ${dashboardTimeoutProbe} });
+          window.__releaseVisibilityFrames();
+          return result;
+        }
         return null;
       })()`,
     });
     const result = JSON.parse(String(shot.probe)) as {
       coveredClosed: boolean; returned: boolean; visible: boolean;
-      scrolledClosed: boolean; scrolledReturned: boolean;
+      scrolledClosed: boolean; scrolledReturned: boolean; returnStarted: boolean; scrollReturnStarted: boolean; framesHeld: boolean;
     };
     expect(result.coveredClosed, JSON.stringify(result)).toBe(true);
     expect(result.visible, JSON.stringify(result)).toBe(true);
     expect(result.returned, JSON.stringify(result)).toBe(true);
+    expect(result.returnStarted, JSON.stringify(result)).toBe(true);
     expect(result.scrolledClosed, JSON.stringify(result)).toBe(true);
     expect(result.scrolledReturned, JSON.stringify(result)).toBe(true);
+    expect(result.scrollReturnStarted, JSON.stringify(result)).toBe(true);
+    expect(result.framesHeld, JSON.stringify(result)).toBe(true);
   }, 60_000);
 });

@@ -33,10 +33,35 @@ export const dashboardDiagnosticsScript = `(() => {
     return nativeCancel(id);
   };
   const NativeSocket = window.WebSocket;
+  const nativeSend = NativeSocket.prototype.send;
+  NativeSocket.prototype.send = function(data) {
+    if (typeof data === 'string') {
+      try {
+        const frame = JSON.parse(data);
+        if (frame.type === 'resize') state.streams.find(entry => entry.socket === this)
+          ?.resizes.push({ at: performance.now(), ...frame });
+      } catch { /* Terminal input is not a control frame. */ }
+    }
+    return nativeSend.call(this, data);
+  };
   window.WebSocket = new Proxy(NativeSocket, {
     construct(Target, args) {
       const socket = new Target(...args);
-      state.streams.push({ url: String(args[0]), socket });
+      const entry = { url: String(args[0]), socket, createdAt: performance.now(),
+        openedAt: null, closedAt: null, geometry: [], resizes: [], binaryFrames: 0,
+        snapshotIds: null, gone: [] };
+      socket.addEventListener('open', () => { entry.openedAt = performance.now(); });
+      socket.addEventListener('close', () => { entry.closedAt = performance.now(); });
+      socket.addEventListener('message', event => {
+        if (typeof event.data !== 'string') { entry.binaryFrames++; return; }
+        try {
+          const frame = JSON.parse(event.data);
+          if (frame.type === 'geometry') entry.geometry.push({ at: performance.now(), ...frame });
+          if (frame.type === 'snapshot') entry.snapshotIds = frame.sessions.map(session => session.id);
+          if (frame.type === 'window-gone') entry.gone.push({ at: performance.now(), ...frame });
+        } catch { /* Only protocol frames contribute to these diagnostics. */ }
+      });
+      state.streams.push(entry);
       return socket;
     }
   });
@@ -55,6 +80,11 @@ export const dashboardTimeoutProbe = `(() => {
   if (!d) return { loaded: false };
   const cards = [...document.querySelectorAll('#panes .pane')];
   return {
+    layout: document.getElementById('panes')?.dataset.layout,
+    share: document.getElementById('share-count')?.textContent,
+    documentVisibility: document.visibilityState,
+    panes: cards.map(card => ({ id: card.dataset.session, size: card.querySelector('.pane-size')?.textContent,
+      box: card.getBoundingClientRect().toJSON() })),
     arrangements: d.arrangements, visibilityPasses: d.visibilityPasses,
     pendingFrames: d.pendingFrames, pendingAnimationFrames: d.pendingAnimationFrames,
     paneCount: cards.length,
@@ -71,9 +101,11 @@ export const dashboardTimeoutProbe = `(() => {
     openPaneStreams: d.streams.filter(entry => entry.socket.readyState === 1 && entry.url.includes('/stream'))
       .map(entry => entry.url),
     streamCount: d.streams.length, arrangeTriggers: d.arrangeTriggers,
+    streams: d.streams.map(({ socket, ...entry }) => ({ ...entry, readyState: socket.readyState })),
     longTasks: d.longTasks, longestTaskMs: d.longestTaskMs,
     trace: window.__dashboardTrace || null,
-    feedProbe: window.__feedProbe || null, loopProbe: window.__loopProbe || null
+    feedProbe: window.__feedProbe || null, loopProbe: window.__loopProbe || null,
+    restoreProbe: window.__restoreProbe || null, doubleClickProbe: window.__doubleClickProbe || null
   };
 })()`;
 

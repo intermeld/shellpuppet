@@ -9,7 +9,7 @@ import type * as http from 'node:http';
 import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { SessionManager } from '../../src/core/manager.js';
 import { VIEWER_GRANT_TTL_MS } from '../../src/daemon/auth.js';
 import { DEFAULT_CAPTURE_TIMEOUT_MS } from '../../src/daemon/screenshot.js';
@@ -32,15 +32,28 @@ import type { ApiResult, TestDaemon } from './helpers.js';
 let td: TestDaemon;
 
 beforeAll(async () => {
-  // This file starts about thirty sessions, more than ten of them live at
-  // once, under a policy that sets no session cap: there is none unless one
-  // is configured (the configured cap is tested separately below).
+  // No session cap unless configured; the configured cap is tested below.
   td = await startTestDaemon({ policy: { mode: 'allow-all' } });
 });
+afterEach(async () => {
+  // These sessions belong to individual tests. Keeping their idle programs
+  // alive until afterAll exhausts macOS PTYs when other files run alongside.
+  const listed = await api(td.port, td.token, '/sessions');
+  expect(listed.status, JSON.stringify(listed.body)).toBe(200);
+  const sessions = listed.body['sessions'] as { id: string; pid: number; exited: boolean }[];
+  for (let index = 0; index < sessions.length; index += 4) {
+    const removed = await Promise.all(sessions.slice(index, index + 4).map(async session => ({
+      session, response: await api(td.port, td.token, `/sessions/${session.id}`, { method: 'DELETE' }),
+    })));
+    for (const result of removed) expect(result.response.status, JSON.stringify(result)).toBe(200);
+  }
+  const remaining = await api(td.port, td.token, '/sessions');
+  expect(remaining.status, JSON.stringify(remaining.body)).toBe(200);
+  expect(remaining.body['sessions'], JSON.stringify({ before: sessions, after: remaining.body })).toEqual([]);
+}, 120_000);
+
 afterAll(async () => {
-  // This file starts about thirty sessions, and the harness drains them in
-  // batches of four at teardown (see startTestDaemon). Eight batches can
-  // each take up to 30 seconds under load, followed by daemon shutdown.
+  // Shutdown remains the fallback if a test or its cleanup failed.
   await td.stop();
 }, 360_000);
 
@@ -53,7 +66,11 @@ async function startNodeSession(marker: string): Promise<{ id: string; viewerUrl
       label: marker,
     },
   });
-  expect(started.status, JSON.stringify(started.body)).toBe(200);
+  if (started.status !== 200) {
+    const listed = await api(td.port, td.token, '/sessions');
+    expect(started.status, JSON.stringify({ response: started.body, sessions: listed.body['sessions'],
+      connectedSockets: td.daemon.connectedSockets })).toBe(200);
+  }
   return started.body as unknown as { id: string; viewerUrl: string };
 }
 
