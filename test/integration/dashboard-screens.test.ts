@@ -98,6 +98,7 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
   closeMs: number;
   failureMs?: number;
   survivor?: string[];
+  departure?: { victimClosed: boolean; noticeReceived: boolean; share: string };
   recovered?: { primary: string[]; other: string[]; oldInstance: string; newInstance: string;
     peers: string[]; afterLate: { primary: string[]; other: string[]; peers: string[] } };
   missed?: { before: string; after: string; oldInstance: string; newInstance: string };
@@ -199,7 +200,7 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
     const ids = (sessionId: string) => evaluate(sessionId,
       `[...document.querySelectorAll('#panes .pane')].map((pane) => pane.dataset.session)`);
     const pages: string[] = [];
-    const waitFor = async (condition: () => Promise<boolean>): Promise<void> => {
+    const waitFor = async (condition: () => Promise<boolean>, step = 'dashboard windows'): Promise<void> => {
       const started = Date.now();
       for (let attempt = 0; attempt < 160; attempt++) {
         try { if (await condition()) return; } catch (error) {
@@ -214,7 +215,7 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
         try { return await evaluate(page, dashboardTimeoutProbe); }
         catch { return 'page did not answer'; }
       }));
-      throw new Error(`The dashboard windows did not settle after ${String(Date.now() - started)} ms; diagnostics: ${JSON.stringify(details)}`);
+      throw new Error(`The ${step} did not settle after ${String(Date.now() - started)} ms; diagnostics: ${JSON.stringify(details)}`);
     };
     const sharedPage = new URL(url);
     sharedPage.hash = 'screen=shared-screen&rank=1000';
@@ -402,6 +403,7 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
     if (lostSocket) {
       const victim = lostSocket === 'primary' ? primary : second;
       const survivor = lostSocket === 'primary' ? second : primary;
+      const stale = await evaluate(victim.sessionId, 'window.__lastRoster') as { window: { id: string; instance: string } };
       await evaluate(victim.sessionId, `(() => {
         window.__pauseRoster = true;
         const socket = window.__dashboardDiagnostics.streams.find(entry => entry.url.endsWith('/dashboard/events'))?.socket;
@@ -410,11 +412,24 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
         socket.close();
       })()`);
       const failedAt = Date.now();
+      let departure: { victimClosed: boolean; noticeReceived: boolean; share: string } | undefined;
       if (reconnect) await waitFor(async () => String(await evaluate(survivor.sessionId,
         "document.getElementById('share-count')?.textContent")).includes('2 windows'));
-      else await waitFor(async () => (await ids(survivor.sessionId) as string[] | undefined)?.length === 3);
+      else await waitFor(async () => {
+        const victimClosed = await evaluate(victim.sessionId,
+          "window.__dashboardDiagnostics.streams.find(entry => entry.url.endsWith('/dashboard/events'))?.socket.readyState === 3") === true;
+        const observed = await evaluate(survivor.sessionId, `(() => ({
+          noticeReceived: window.__dashboardDiagnostics.streams.some(entry => entry.gone.some(frame =>
+            frame.id === ${JSON.stringify(stale.window.id)} && frame.instance === ${JSON.stringify(stale.window.instance)})),
+          share: document.getElementById('share-count')?.textContent,
+        }))()`) as { noticeReceived: boolean; share: string };
+        departure = { victimClosed, ...observed };
+        // Assert the close notice caused the return, rather than timing a
+        // browser/daemon/DevTools round trip on a loaded runner.
+        return victimClosed && observed.noticeReceived && observed.share === '3 of 3 here, 1 window' &&
+          JSON.stringify(await ids(survivor.sessionId)) === JSON.stringify(sessions);
+      }, 'socket departure notice and returned panes');
       const failureMs = Date.now() - failedAt;
-      const stale = await evaluate(victim.sessionId, 'window.__lastRoster');
       if (reconnect) {
         const oldInstance = (stale as { window: { instance: string } }).window.instance;
         await waitFor(async () => {
@@ -449,7 +464,7 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
         channel.postMessage({ type: 'test-roster-barrier' }); channel.close(); })()`);
       await waitFor(async () => await evaluate(survivor.sessionId, 'window.__staleBarrier') === true);
       return { before, movedFit, oversized, after: [], paused: { primary: [], other: [], toolbar: [] }, closeMs: 0,
-        failureMs, survivor: await ids(survivor.sessionId) as string[] };
+        failureMs, departure, survivor: await ids(survivor.sessionId) as string[] };
     }
     await evaluate(second.sessionId, 'window.__pauseRoster = true');
     await new Promise((resolve) => setTimeout(resolve, 5400));
@@ -808,8 +823,10 @@ describe('dashboard screen controls in Chromium', () => {
     if (!browser) { context.skip(); return; }
     await ensureSessions();
     const result = await multiWindowProbe(await freshUrl(), lost);
-    expect(result.failureMs).toBeLessThan(2000);
-    expect(result.survivor).toEqual(sessions);
+    expect(result.departure, JSON.stringify(result)).toEqual({
+      victimClosed: true, noticeReceived: true, share: '3 of 3 here, 1 window',
+    });
+    expect(result.survivor, JSON.stringify(result)).toEqual(sessions);
   }, 180_000);
 
   it('starts a moved held oversized pane at the receiver origin with its overflow controls', async (context) => {
