@@ -22,12 +22,14 @@ const cliEntry = path.join(repoRoot, 'dist', 'cli', 'index.js');
 
 const STAND_IN = `
 import * as http from 'node:http';
+import { randomUUID } from 'node:crypto';
 import process from 'node:process';
 import { setInterval } from 'node:timers';
+const instanceId = randomUUID();
 const server = http.createServer((req, res) => {
   if (req.url === '/health') {
     res.writeHead(200, { 'content-type': 'application/json' });
-    res.end(JSON.stringify({ ok: true, version: '0.0.0-stand-in', pid: process.pid }));
+    res.end(JSON.stringify({ ok: true, version: '0.0.0-stand-in', pid: process.pid, instanceId }));
     return;
   }
   if (req.url === '/sessions') {
@@ -42,7 +44,7 @@ const server = http.createServer((req, res) => {
 server.listen(0, '127.0.0.1', () => {
   const address = server.address();
   const port = address !== null && typeof address !== 'string' ? address.port : 0;
-  process.stdout.write(JSON.stringify({ port, pid: process.pid }) + '\\n');
+  process.stdout.write(JSON.stringify({ port, pid: process.pid, instanceId }) + '\\n');
 });
 `;
 
@@ -75,10 +77,10 @@ async function standIn(prefix: string): Promise<{ home: string; port: number; pi
     child.once('error', reject);
     child.stdout?.once('data', (chunk: Buffer) => resolve(chunk.toString('utf8')));
   });
-  const { port, pid } = JSON.parse(line) as { port: number; pid: number };
+  const { port, pid, instanceId } = JSON.parse(line) as { port: number; pid: number; instanceId: string };
   fs.writeFileSync(
     daemonStatePath(home),
-    JSON.stringify({ port, token: 't', pid, version: '0.0.0-stand-in', startedAt: new Date().toISOString() }),
+    JSON.stringify({ port, token: 't', pid, version: '0.0.0-stand-in', startedAt: new Date().toISOString(), instanceId }),
   );
   return { home, port, pid };
 }

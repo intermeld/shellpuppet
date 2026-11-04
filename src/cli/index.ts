@@ -14,12 +14,12 @@
 import { writeFile } from 'node:fs/promises';
 import { resolve } from 'node:path';
 import process from 'node:process';
-import { DaemonGoneError, discoverDaemon, ensureDaemon, request, waitForPendingDaemon, withDaemonStartLock } from '../client/http.js';
+import { DaemonGoneError, daemonStartMode, discoverDaemon, ensureDaemon, request, waitForPendingDaemon, withDaemonStartLock } from '../client/http.js';
 import type { DaemonConnection } from '../client/http.js';
 import { assertNodeVersion, packageVersion } from '../daemon/meta.js';
 import { NO_MATCHES } from '../core/find.js';
 import { resultRefusal } from '../core/reasoning.js';
-import { readDaemonState, shellpuppetHome } from '../daemon/paths.js';
+import { inspectDaemonState, readDaemonState, shellpuppetHome } from '../daemon/paths.js';
 import { clearRestartHold, readRestartHold, writeRestartHold } from '../daemon/restartHold.js';
 import { planPassedEnv } from '../mcp/config.js';
 import { isEnvNamesProblem, readDaemonConfig } from '../daemon/config.js';
@@ -868,15 +868,20 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
       const connection = await withDaemonStartLock({ logger: stderrLogger }, async (lock) => {
         const home = shellpuppetHome();
         clearRestartHold(home);
+        const record = inspectDaemonState(home);
+        if (record.kind !== 'record') {
+          throw new Error('Cannot restart without a readable daemon record. Run `shellpuppet daemon stop`, then `shellpuppet daemon start`.');
+        }
         const existing = await discoverDaemon({ logger: stderrLogger });
         if (existing === null) return ensureDaemon({ logger: stderrLogger, direct }, lock);
         const state = readDaemonState(home);
-        if (state === null || state.pid !== existing.pid || typeof state.startedAt !== 'string') {
+        if (state === null || state.pid !== existing.pid || state.instanceId !== existing.instanceId ||
+            typeof existing.instanceId !== 'string') {
           throw new Error('The daemon changed while preparing its restart. Try again.');
         }
         // Publish the daemon being replaced before the shutdown request. Peers
         // can still see its healthy port until the stop completes.
-        writeRestartHold(home, 140, { pid: state.pid, startedAt: state.startedAt });
+        writeRestartHold(home, 140, { instanceId: existing.instanceId, startMode: daemonStartMode(home, direct) });
         try {
           await stopRunning(existing);
           return await ensureDaemon({ logger: stderrLogger, direct }, lock);
