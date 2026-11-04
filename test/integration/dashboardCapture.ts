@@ -105,7 +105,8 @@ export const dashboardTimeoutProbe = `(() => {
     longTasks: d.longTasks, longestTaskMs: d.longestTaskMs,
     trace: window.__dashboardTrace || null,
     feedProbe: window.__feedProbe || null, loopProbe: window.__loopProbe || null,
-    restoreProbe: window.__restoreProbe || null, doubleClickProbe: window.__doubleClickProbe || null
+    restoreProbe: window.__restoreProbe || null, doubleClickProbe: window.__doubleClickProbe || null,
+    childCloseProbe: window.__childCloseProbe || null
   };
 })()`;
 

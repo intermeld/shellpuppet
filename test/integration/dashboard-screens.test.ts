@@ -58,7 +58,7 @@ async function rosterProbe(script: string, beforeNavigate = ''): Promise<Record<
   return shot.probe as Record<string, unknown>;
 }
 
-async function rosterSteps(steps: string): Promise<Record<string, unknown>> {
+async function rosterSteps(steps: string, beforeNavigate = ''): Promise<Record<string, unknown>> {
   return rosterProbe(`(async () => {
     const share = () => document.getElementById('share-count')?.textContent || '';
     const waitFor = async (step, ready) => {
@@ -85,9 +85,9 @@ async function rosterSteps(steps: string): Promise<Record<string, unknown>> {
       };
       channel.postMessage({ type: marker, token: 'test-roster' });
     });
-    try { ${steps} } catch (error) { return { error: String(error) }; }
+    try { ${steps} } catch (error) { return { error: String(error), share: share(), diagnostics: ${dashboardTimeoutProbe} }; }
     finally { channel.close(); }
-  })()`);
+  })()`, beforeNavigate);
 }
 
 async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', dragCheck = false, held = false,
@@ -109,7 +109,8 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
     firstStored: string | null; secondStored: string | null };
   watched?: { before: { primary: string[]; child: string[]; duplicate: string[] };
     left?: { primary: string[]; child: string[] }; returned?: { primary: string[]; child: string[]; duplicate: string[] };
-    after: { primary: string[]; duplicate: string[] }; observed: string[] };
+    after: { primary: string[]; duplicate: string[] }; afterLate: { primary: string[]; duplicate: string[] };
+    afterLateShare: string[]; childRoster: unknown; diagnostics: unknown[]; observed: string[] };
 }> {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-screen-cdp-'));
   const child = spawn(browser!, captureBrowserArgs(profile, 1280, 720), { stdio: 'ignore', windowsHide: true });
@@ -272,6 +273,37 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
         await waitFor(async () => JSON.stringify(await ownership()) === JSON.stringify(initial));
         returned = await ownership();
       }
+      const childRoster = await evaluate(childPage.sessionId, `(() => {
+        let roster;
+        const post = BroadcastChannel.prototype.postMessage;
+        BroadcastChannel.prototype.postMessage = function(data) {
+          if (data.type === 'window-roster') roster = data;
+          return post.call(this, data);
+        };
+        try { window.dispatchEvent(new Event('resize')); }
+        finally { BroadcastChannel.prototype.postMessage = post; }
+        return roster;
+      })()`) as { window: { id: string; instance: string } };
+      expect(childRoster?.window, JSON.stringify(await ownership())).toBeTruthy();
+      for (const page of [primary, duplicate]) {
+        await evaluate(page.sessionId, `(() => {
+          const feed = window.__dashboardDiagnostics.streams.find(entry => entry.url.endsWith('/dashboard/events')).socket;
+          const receive = feed.onmessage;
+          window.__childCloseProbe = { phase: 'closing', child: ${JSON.stringify(childRoster.window)}, heldGone: [] };
+          feed.onmessage = event => {
+            const frame = JSON.parse(event.data);
+            if (frame.type === 'window-gone' && frame.id === ${JSON.stringify(childRoster.window.id)} &&
+                frame.instance === ${JSON.stringify(childRoster.window.instance)}) {
+              window.__childCloseProbe.heldGone.push(frame); return;
+            }
+            receive.call(feed, event);
+          };
+          window.__releaseChildGone = () => {
+            feed.onmessage = receive;
+            for (const frame of window.__childCloseProbe.heldGone) receive.call(feed, { data: JSON.stringify(frame) });
+          };
+        })()`);
+      }
       await evaluate(primary.sessionId, `(() => {
         window.__observedShares = [document.getElementById('share-count')?.textContent || ''];
         new MutationObserver(() => window.__observedShares.push(document.getElementById('share-count')?.textContent || ''))
@@ -283,13 +315,31 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
         JSON.stringify({ primary: sessions.slice(0, 1), duplicate: sessions.slice(1) }));
       const afterChild = { primary: await ids(primary.sessionId) as string[],
         duplicate: await ids(duplicate.sessionId) as string[] };
+      // Deliver a genuine child roster after its departure, while the daemon
+      // notice is held. A first matching assignment must not hide reclamation.
+      for (const page of [primary, duplicate]) await evaluate(page.sessionId,
+        "window.__staleBarrier = false; window.__childCloseProbe.phase = 'late roster'");
+      await evaluate(primary.sessionId, `(() => {
+        const channel = new BroadcastChannel('shellpuppet.dashboard');
+        channel.postMessage(${JSON.stringify(childRoster)});
+        channel.postMessage({ type: 'test-roster-barrier' }); channel.close();
+      })()`);
+      await waitFor(async () => await evaluate(primary.sessionId, 'window.__staleBarrier') === true &&
+        await evaluate(duplicate.sessionId, 'window.__staleBarrier') === true, 'late child roster delivery');
+      const afterLate = { primary: await ids(primary.sessionId) as string[],
+        duplicate: await ids(duplicate.sessionId) as string[] };
+      const afterLateShare = await Promise.all([primary, duplicate].map(async page => String(await evaluate(page.sessionId,
+        "document.getElementById('share-count')?.textContent"))));
+      const diagnostics = await Promise.all([primary, duplicate].map(page => evaluate(page.sessionId,
+        `({ dashboard: ${dashboardTimeoutProbe}, childClose: window.__childCloseProbe })`)));
       const observed = await evaluate(primary.sessionId, 'window.__observedShares') as string[];
+      for (const page of [primary, duplicate]) await evaluate(page.sessionId, 'window.__releaseChildGone()');
       return { before: { primary: [], other: [], childConnected: '' }, after: [],
         paused: { primary: [], other: [], toolbar: [] }, closeMs: 0,
         oversized: { note: '', horizontal: 0, vertical: 0, left: 0, top: 0 },
         movedFit: { before: '', after: '', resizes: [], donorStreams: [] },
         watched: { before: initial, ...(left ? { left } : {}), ...(returned ? { returned } : {}),
-          after: afterChild, observed } };
+          after: afterChild, afterLate, afterLateShare, childRoster, diagnostics, observed } };
     }
     await waitFor(async () => String(await evaluate(primary.sessionId,
       "document.querySelector('.pane[data-session=s3] .pane-size')?.textContent")).includes('×'));
@@ -555,6 +605,34 @@ describe('dashboard screen controls in Chromium', () => {
     expect(result.afterReload).toContain('2 windows');
   }, 60_000);
 
+  for (const departure of ['leave', 'watch'] as const) it(`rejects a late child roster after ${departure} while keeping a silent live duplicate`, async (context) => {
+    if (!browser) { context.skip(); return; }
+    const result = await rosterSteps(`
+      document.querySelector('#screens button').click();
+      const id = new URLSearchParams(new URL(window.__openedChildUrl).hash.slice(1)).get('screen');
+      const child = roster(id, 'i-child'); child.window.document = 'child-document';
+      const duplicate = roster(id, 'i-duplicate'); duplicate.window.document = 'duplicate-document';
+      channel.postMessage(child); channel.postMessage(duplicate);
+      const before = await waitFor('the child and duplicate', value => value.includes('3 windows'));
+      ${departure === 'leave' ? `channel.postMessage({ type: 'window-leave', id, instance: 'i-child', token: 'test-leave' });`
+        : 'window.__watchedChild.closed = true;'}
+      const afterClose = await waitFor('only the child to leave', value => value.includes('2 windows'));
+      channel.postMessage(child); await barrier();
+      const afterLate = share();
+      const reload = roster(id, 'i-reloaded'); reload.window.document = 'reloaded-document';
+      channel.postMessage(reload);
+      const afterReload = await waitFor('a new document instance', value => value.includes('3 windows'));
+      return { before, afterClose, afterLate, afterReload, child, duplicate, diagnostics: ${dashboardTimeoutProbe} };
+    `, `Object.defineProperty(window, 'getScreenDetails', { configurable: true, value: undefined });
+      window.__watchedChild = { closed: false, __dashboardDocumentToken: 'child-document' };
+      window.open = url => { window.__openedChildUrl = String(url); return window.__watchedChild; };`);
+    expect(result.error, JSON.stringify(result)).toBeUndefined();
+    expect(result.before, JSON.stringify(result)).toContain('3 windows');
+    expect(result.afterClose, JSON.stringify(result)).toContain('2 windows');
+    expect(result.afterLate, JSON.stringify(result)).toContain('2 windows');
+    expect(result.afterReload, JSON.stringify(result)).toContain('3 windows');
+  }, 60_000);
+
   it('retains only the 64 most recent closed window instances', async (context) => {
     if (!browser) { context.skip(); return; }
     const result = await rosterSteps(`
@@ -614,13 +692,15 @@ describe('dashboard screen controls in Chromium', () => {
     await ensureSessions();
     const result = (await multiWindowProbe(await freshUrl(), undefined, false, false, false, false, false,
       { duplicateLeaves })).watched!;
-    expect(result.before).toEqual({ primary: sessions.slice(0, 1), child: sessions.slice(1, 2),
+    expect(result.before, JSON.stringify(result)).toEqual({ primary: sessions.slice(0, 1), child: sessions.slice(1, 2),
       duplicate: sessions.slice(2) });
     if (duplicateLeaves) {
-      expect(result.left).toEqual({ primary: sessions.slice(0, 2), child: sessions.slice(2) });
-      expect(result.returned).toEqual(result.before);
+      expect(result.left, JSON.stringify(result)).toEqual({ primary: sessions.slice(0, 2), child: sessions.slice(2) });
+      expect(result.returned, JSON.stringify(result)).toEqual(result.before);
     }
-    expect(result.after).toEqual({ primary: sessions.slice(0, 1), duplicate: sessions.slice(1) });
+    expect(result.after, JSON.stringify(result)).toEqual({ primary: sessions.slice(0, 1), duplicate: sessions.slice(1) });
+    expect(result.afterLate, JSON.stringify(result)).toEqual(result.after);
+    expect(result.afterLateShare, JSON.stringify(result)).toEqual(['1 of 3 here, 2 windows', '2 of 3 here, 2 windows']);
     expect(result.observed.some((value) => value.includes('1 window')), JSON.stringify(result)).toBe(false);
   }, 180_000);
 
