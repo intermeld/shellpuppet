@@ -91,7 +91,7 @@ async function rosterSteps(steps: string): Promise<Record<string, unknown>> {
 }
 
 async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', dragCheck = false, held = false,
-  sameScreen = false, reconnect = false, missedNotice = false): Promise<{
+  sameScreen = false, reconnect = false, missedNotice = false, watchedChild?: { duplicateLeaves: boolean }): Promise<{
   before: { primary: string[]; other: string[]; childConnected: string };
   after: string[];
   paused: { primary: string[]; other: string[]; toolbar: string[] };
@@ -106,6 +106,9 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
     donorStreams: string[] };
   dragIsolation?: { firstBefore: number; firstAfter: number; secondBefore: number; secondAfter: number;
     firstStored: string | null; secondStored: string | null };
+  watched?: { before: { primary: string[]; child: string[]; duplicate: string[] };
+    left?: { primary: string[]; child: string[] }; returned?: { primary: string[]; child: string[]; duplicate: string[] };
+    after: { primary: string[]; duplicate: string[] }; observed: string[] };
 }> {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'dashboard-screen-cdp-'));
   const child = spawn(browser!, captureBrowserArgs(profile, 1280, 720), { stdio: 'ignore', windowsHide: true });
@@ -148,13 +151,14 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
       if (result.error) throw new Error(JSON.stringify(result.error));
       return result;
     };
-    const makePage = async (pageUrl: string, width = 1280): Promise<{ targetId: string; sessionId: string }> => {
+    const makePage = async (pageUrl: string, width = 1280, beforeNavigate = ''): Promise<{ targetId: string; sessionId: string }> => {
       const target = await send('Target.createTarget', { url: 'about:blank' });
       const targetId = String(target.targetId);
       const attached = await send('Target.attachToTarget', { targetId, flatten: true });
       const sessionId = String(attached.sessionId);
       await send('Page.enable', {}, sessionId);
       await send('Page.addScriptToEvaluateOnNewDocument', { source: dashboardDiagnosticsScript }, sessionId);
+      if (beforeNavigate) await send('Page.addScriptToEvaluateOnNewDocument', { source: beforeNavigate }, sessionId);
       await send('Page.addScriptToEvaluateOnNewDocument', { source: `(() => {
         window.__resizeFrames = [];
         const nativeSend = WebSocket.prototype.send;
@@ -215,9 +219,77 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
     const sharedPage = new URL(url);
     sharedPage.hash = 'screen=shared-screen&rank=1000';
     const sharedUrl = sharedPage.toString();
-    const primary = await makePage(sameScreen ? sharedUrl : url);
+    const primary = await makePage(sameScreen ? sharedUrl : url, 1280,
+      watchedChild ? "Object.defineProperty(window, 'getScreenDetails', { configurable: true, value: undefined });" : '');
     pages.push(primary.sessionId);
     await waitFor(async () => (await ids(primary.sessionId) as string[] | undefined)?.length === 3);
+    if (watchedChild) {
+      await waitFor(async () => await evaluate(primary.sessionId,
+        "document.querySelector('#screens button')?.textContent === 'Open another window'") === true);
+      const button = await evaluate(primary.sessionId,
+        "document.querySelector('#screens button').getBoundingClientRect().toJSON()") as { x: number; y: number; width: number; height: number };
+      const x = button.x + button.width / 2;
+      const y = button.y + button.height / 2;
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 }, primary.sessionId);
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }, primary.sessionId);
+      let childTarget: { targetId: string; url: string } | undefined;
+      await waitFor(async () => {
+        const targets = await send('Target.getTargets') as { targetInfos?: { targetId: string; url: string }[] };
+        childTarget = targets.targetInfos?.find((target) => target.url.includes('/dashboard#screen='));
+        return childTarget !== undefined;
+      });
+      const childAttached = await send('Target.attachToTarget', { targetId: childTarget!.targetId, flatten: true });
+      const childPage = { targetId: childTarget!.targetId, sessionId: String(childAttached.sessionId) };
+      pages.push(childPage.sessionId);
+      await send('Page.enable', {}, childPage.sessionId);
+      await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 720,
+        deviceScaleFactor: 1, mobile: false }, childPage.sessionId);
+      const duplicateUrl = childTarget!.url;
+      let duplicate = await makePage(duplicateUrl, 1600);
+      pages.push(duplicate.sessionId);
+      const ownership = async () => ({ primary: await ids(primary.sessionId) as string[],
+        child: await ids(childPage.sessionId) as string[], duplicate: await ids(duplicate.sessionId) as string[] });
+      await waitFor(async () => {
+        const state = await ownership();
+        return JSON.stringify(state) === JSON.stringify({
+          primary: sessions.slice(0, 1), child: sessions.slice(1, 2), duplicate: sessions.slice(2),
+        });
+      }).catch(async (error: unknown) => {
+        throw new Error(`Initial session ownership did not settle: ${JSON.stringify(await ownership())}`, { cause: error });
+      });
+      const initial = await ownership();
+      let left: { primary: string[]; child: string[] } | undefined;
+      let returned: typeof initial | undefined;
+      if (watchedChild.duplicateLeaves) {
+        await send('Target.closeTarget', { targetId: duplicate.targetId });
+        pages.splice(pages.indexOf(duplicate.sessionId), 1);
+        await waitFor(async () => JSON.stringify({ primary: await ids(primary.sessionId), child: await ids(childPage.sessionId) }) ===
+          JSON.stringify({ primary: sessions.slice(0, 2), child: sessions.slice(2) }));
+        left = { primary: await ids(primary.sessionId) as string[], child: await ids(childPage.sessionId) as string[] };
+        duplicate = await makePage(duplicateUrl, 1600);
+        pages.push(duplicate.sessionId);
+        await waitFor(async () => JSON.stringify(await ownership()) === JSON.stringify(initial));
+        returned = await ownership();
+      }
+      await evaluate(primary.sessionId, `(() => {
+        window.__observedShares = [document.getElementById('share-count')?.textContent || ''];
+        new MutationObserver(() => window.__observedShares.push(document.getElementById('share-count')?.textContent || ''))
+          .observe(document.getElementById('share-count'), { childList: true, characterData: true, subtree: true });
+      })()`);
+      await send('Target.closeTarget', { targetId: childPage.targetId });
+      pages.splice(pages.indexOf(childPage.sessionId), 1);
+      await waitFor(async () => JSON.stringify({ primary: await ids(primary.sessionId), duplicate: await ids(duplicate.sessionId) }) ===
+        JSON.stringify({ primary: sessions.slice(0, 1), duplicate: sessions.slice(1) }));
+      const afterChild = { primary: await ids(primary.sessionId) as string[],
+        duplicate: await ids(duplicate.sessionId) as string[] };
+      const observed = await evaluate(primary.sessionId, 'window.__observedShares') as string[];
+      return { before: { primary: [], other: [], childConnected: '' }, after: [],
+        paused: { primary: [], other: [], toolbar: [] }, closeMs: 0,
+        oversized: { note: '', horizontal: 0, vertical: 0, left: 0, top: 0 },
+        movedFit: { before: '', after: '', resizes: [], donorStreams: [] },
+        watched: { before: initial, ...(left ? { left } : {}), ...(returned ? { returned } : {}),
+          after: afterChild, observed } };
+    }
     await waitFor(async () => String(await evaluate(primary.sessionId,
       "document.querySelector('.pane[data-session=s3] .pane-size')?.textContent")).includes('×'));
     const initialSize = String(await evaluate(primary.sessionId,
@@ -525,56 +597,17 @@ describe('dashboard screen controls in Chromium', () => {
   for (const duplicateLeaves of [false, true]) it(`keeps a live duplicate when its watched child closes, duplicate leaves first ${String(duplicateLeaves)}`, async (context) => {
     if (!browser) { context.skip(); return; }
     await ensureSessions();
-    const result = await rosterProbe(`(async () => {
-      const share = () => document.getElementById('share-count')?.textContent || '';
-      const button = document.querySelector('#screens button');
-      if (!button || button.textContent !== 'Open another window') throw new Error('Open another window is not ready');
-      button.click();
-      const id = new URL(window.__childUrl).hash.match(/screen=([^&]+)/)?.[1];
-      if (!id) throw new Error('Child screen ID was not recorded');
-      const channel = new BroadcastChannel('shellpuppet.dashboard');
-      const send = (instance, documentToken) => channel.postMessage({ type: 'window-roster', token: documentToken,
-        window: { id, instance, document: documentToken, rank: 1000, openedAt: Date.now(),
-          key: null, width: 1280, height: 720 } });
-      const waitFor = async (description, predicate) => {
-        let last;
-        const started = performance.now();
-        while (performance.now() - started < 5000) {
-          last = share();
-          if (predicate(last)) return last;
-          await new Promise(resolve => setTimeout(resolve, 50));
-        }
-        throw new Error('Timed out waiting for ' + description + '; last observed: ' + JSON.stringify(last));
-      };
-      try {
-        send('i-child', 'child-document');
-        send('i-duplicate', 'duplicate-document');
-        const before = await waitFor('three roster windows', value => value.includes('3 windows'));
-        if (${String(duplicateLeaves)}) {
-          channel.postMessage({ type: 'window-leave', id, instance: 'i-duplicate', token: 'duplicate-document' });
-          await waitFor('duplicate leave', value => value.includes('2 windows'));
-          send('i-duplicate', 'duplicate-document');
-          await waitFor('duplicate return', value => value.includes('3 windows'));
-        }
-        const observed = [share()];
-        const observer = new MutationObserver(() => observed.push(share()));
-        observer.observe(document.getElementById('share-count'), { childList: true, characterData: true, subtree: true });
-        window.__fakeChild.closed = true;
-        const heartbeat = setInterval(() => send('i-duplicate', 'duplicate-document'), 300);
-        try {
-          await new Promise(resolve => setTimeout(resolve, 2400));
-          return { before, settled: share(), observed };
-        } finally { clearInterval(heartbeat); observer.disconnect(); }
-      } finally { channel.close(); }
-    })()`, `
-      window.__fakeChild = { closed: false, __dashboardDocumentToken: 'child-document' };
-      window.open = url => { window.__childUrl = String(url); return window.__fakeChild; };
-      Object.defineProperty(window, 'getScreenDetails', { configurable: true, value: undefined });
-    `);
-    expect(result.before).toContain('3 windows');
-    expect(result.settled, JSON.stringify(result)).toContain('2 windows');
-    expect((result.observed as string[]).some((value) => value.includes('1 window')), JSON.stringify(result)).toBe(false);
-  }, 60_000);
+    const result = (await multiWindowProbe(await freshUrl(), undefined, false, false, false, false, false,
+      { duplicateLeaves })).watched!;
+    expect(result.before).toEqual({ primary: sessions.slice(0, 1), child: sessions.slice(1, 2),
+      duplicate: sessions.slice(2) });
+    if (duplicateLeaves) {
+      expect(result.left).toEqual({ primary: sessions.slice(0, 2), child: sessions.slice(2) });
+      expect(result.returned).toEqual(result.before);
+    }
+    expect(result.after).toEqual({ primary: sessions.slice(0, 1), duplicate: sessions.slice(1) });
+    expect(result.observed.some((value) => value.includes('1 window')), JSON.stringify(result)).toBe(false);
+  }, 180_000);
 
   it('bounds one document to one roster entry after 70 reconnects', async (context) => {
     if (!browser) { context.skip(); return; }
