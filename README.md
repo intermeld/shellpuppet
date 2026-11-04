@@ -342,13 +342,16 @@ shellpuppet mcp
 Build first, then run `shellpuppet daemon restart` so other clients wait for
 the replacement, including while the old daemon is stopping. A peer can wait
 about 20 seconds for a direct restart or about 130 seconds when the restart
-uses `startWith`. The wait has a fixed deadline, and clients can resume starting
+uses `startWith`. A failed wrapped start may add up to 15 seconds for cleanup,
+so the caller's worst case is its fixed deadline plus 15 seconds, up to about
+145 seconds for a wrapped restart. The wait has a fixed deadline, and clients can resume starting
 if the process performing the restart has gone. To stop before rebuilding, run `shellpuppet daemon stop
 --hold`, rebuild, then run `shellpuppet daemon start`. The hold lasts 120
 seconds by default (1 to 600 seconds with an explicit value), and `daemon
 status` shows the time remaining. If `daemon restart` cannot read the daemon
 record, wait about 15 seconds and run `daemon restart` again. If the record
-is still missing, no daemon is running and `daemon start` is safe.
+is still missing, the daemon is usually stopped. Check that no ShellPuppet
+daemon process is running before `daemon start`.
 
 On Windows, `start` uses `cmd.exe /d /s /c` by default. ShellPuppet joins the
 command and arguments with spaces; `cmd.exe` then parses that line. A value

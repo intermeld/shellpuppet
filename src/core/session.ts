@@ -119,14 +119,14 @@ export type TreeKiller = (pids: readonly number[]) => Promise<TreeKillFailure | 
  * overran the 30 s cap; one run given all thirty pids took 10 s. So daemon
  * shutdown kills every tree in one run (`SessionManager.killAll`).
  */
-export const taskkillTrees: TreeKiller = (pids) =>
+export const taskkillTrees = (pids: readonly number[], timeoutMs = TREE_KILL_TIMEOUT_MS): Promise<TreeKillFailure | null> =>
   new Promise((resolve) => {
     const startedAt = Date.now();
     execFile(
       'taskkill',
       ['/T', '/F', ...pids.flatMap((pid) => ['/PID', String(pid)])],
       // A line of output per process killed, descendants included.
-      { windowsHide: true, timeout: TREE_KILL_TIMEOUT_MS, maxBuffer: 16 * 1024 * 1024 },
+      { windowsHide: true, timeout: timeoutMs, maxBuffer: 16 * 1024 * 1024 },
       (error) => {
         resolve(
           error

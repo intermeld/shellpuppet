@@ -870,7 +870,7 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
         clearRestartHold(home);
         const record = inspectDaemonState(home);
         if (record.kind !== 'record') {
-          throw new Error('Cannot restart without a readable daemon record. Wait about 15 seconds and run `shellpuppet daemon restart` again. If the record is still missing, no daemon is running and `shellpuppet daemon start` is safe.');
+          throw new Error('Cannot restart without a readable daemon record. Wait about 15 seconds and run `shellpuppet daemon restart` again. If the record is still missing, the daemon is usually stopped; check that no ShellPuppet daemon process is running before `shellpuppet daemon start`.');
         }
         const existing = await discoverDaemon({ logger: stderrLogger });
         if (existing === null) return ensureDaemon({ logger: stderrLogger, direct }, lock);

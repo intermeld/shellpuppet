@@ -67,6 +67,6 @@ export function portAccepts(port: number, timeoutMs = PORT_PROBE_TIMEOUT_MS): Pr
 }
 
 /** Whether the daemon a state record names is still running. */
-export async function daemonRunning(record: { pid: number; port: number }): Promise<boolean> {
-  return processExists(record.pid) && (await portAccepts(record.port));
+export async function daemonRunning(record: { pid: number; port: number }, timeoutMs = PORT_PROBE_TIMEOUT_MS): Promise<boolean> {
+  return processExists(record.pid) && (await portAccepts(record.port, timeoutMs));
 }
