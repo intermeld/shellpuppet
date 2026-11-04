@@ -508,6 +508,22 @@ describe('Muse Code (built in)', () => {
   let muse: CompiledSignature;
   beforeEach(() => { muse = builtIn('muse'); });
 
+  it('reads the captured finished turn when the composer row carries a wrap flag', () => {
+    const capture = fs.readFileSync(path.join(__dirname, '..', 'fixtures', 'muse-finished-129.txt'), 'utf8');
+    const lines: StyledLine[] = capture.trimEnd().split('\n').map((text) => ({ text, spans: [] }));
+    const answer = lines.find((line) => line.text.startsWith('◆ Command not run:'))!;
+    answer.spans = [{ from: 0, to: answer.text.length, bold: true, dim: false, italic: false,
+      inverse: false, fg: '#ccd3db', bg: null }];
+    const composer = lines.find((line) => line.text.startsWith('❯ Start a message'))!;
+    composer.wrapped = true;
+    expect(latestResult(lines, muse)).toMatchObject({
+      found: true, answer: ['◆ Command not run: approval was denied, so no exit code was produced.'],
+    });
+    expect(latestResult(lines.filter((line) => line !== composer), muse)).toMatchObject({
+      found: false, reason: 'no-composer',
+    });
+  });
+
   it('recognises the captured typed composer', async () => {
     expect(latestResult(await screen('live96-1-composer-typed'), muse)).toMatchObject({
       found: false, reason: 'prompt-typed',

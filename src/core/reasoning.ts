@@ -783,7 +783,13 @@ function guarded<T>(signature: CompiledSignature, body: () => T): T | null {
 /** The index of the composer's line and the first line of chrome, or null. */
 function composerAt(lines: readonly StyledLine[], signature: CompiledSignature): { line: number; chrome: number } | null {
   for (let i = lines.length - 1; i >= 0; i--) {
-    if (!lineFits(lines[i]!, signature.composer)) continue;
+    const candidate = lines[i]!;
+    // A full-width rule above Muse's composer can leave its row marked as a
+    // continuation. The voice bar still anchors that row as the composer.
+    const wrappedMuseComposer = signature.name === 'muse' && candidate.wrapped === true &&
+      signature.composer.text?.test(candidate.text) === true &&
+      lines.slice(Math.max(0, i - 2), i).some((line) => /^── Voice input \(Alt\+V to start\)/.test(line.text));
+    if (!lineFits(candidate, signature.composer) && !wrappedMuseComposer) continue;
     if (signature.name === 'muse') {
       let inComposerBody = true;
       const tailIsChrome = lines.slice(i + 1).every((line) => {
