@@ -7,132 +7,27 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
-### Added
+## [0.2.0] - 2026-11-04
 
-- Muse Code 1.4.14 has a built-in agent signature for filtered reasoning,
-  latest-turn answers and its approval and workspace trust menus. Versioned
-  `muse-bin` executables are recognised, as are sessions started with
-  `agent: "muse"` through a launcher script.
-
-### Fixed
-
-- Staged approval menus now wait until their choices are ready, while quoted and completed menus no longer raise waiting alerts.
-- Resizing preserves the order of a submitted Enter and later input; input after a session ends is reported as failed, and text containing earlier Enters keeps its original timing.
-- Muse Code text submissions now send Enter after the text has reached the composer, so submitted prompts are no longer left unsent.
-- Muse Code two-option approvals now raise waiting alerts and resolve prompt waits, including when commands wrap across the screen.
-- Muse Code results now read answers above an empty composer hint and report typed, unsent text in the composer.
-- Muse Code results and waits now report a prompt left unsent in the composer,
-  and its staged approvals (stage 1/3 to 3/3) are recognised at any width.
-- `terminal_wait` and `shellpuppet wait` with `debounce` now settle once the
-  condition holds continuously, even when a busy timer keeps repainting.
-- Muse Code approval menus whose command wraps over many rows are now
-  recognised, so they raise waiting alerts and resolve prompt waits.
-- Dashboard relayouts now settle session and window assignments before taking
-  pane grids, avoiding intermediate resizes when sessions move between windows.
-- Dashboard windows return sessions promptly when a window or its session feed
-  closes. A late roster from a closed feed cannot reclaim them, while a
-  reconnected or reloaded dashboard joins the share again. Documents with the
-  same screen ID share sessions separately.
-- `terminal_wait` and `shellpuppet wait` with `hideReasoning` now match text and
-  regex only on the filtered screen.
-- Filtered screenshots repair extra replay text left by terminal serialisation
-  after a wrapped row is deleted, so the frozen browser picture matches the
-  daemon's rows on active inline screens.
-- Direct Windows starts (`--no-shell` or `shell: false`) now preserve literal
-  arguments which begin and end with double quotes and contain spaces.
-- Dashboard windows retain their session share through slowed browser timers,
-  hand sessions back on close, spread overflow by readable capacity and refit
-  panes in the window that receives them.
-- `terminal_screenshot` and `shellpuppet screenshot` with `hideReasoning` now
-  work on screens that keep changing, such as an agent's running timer or an
-  idle animation: the picture is taken of the same frozen screen the filter
-  read, instead of failing with "The screen changed". The CLI help lists
-  `--hide-reasoning` for `screenshot`.
-- `hideReasoning` now hides reasoning lines that the terminal wrapped onto
-  further rows, on every reader (snapshot, last lines, find, wait, result and
-  screenshots). A wrapped row always belongs to the line it continues, so a
-  long answer keeps all of its rows.
-- A dashboard window keeps driving its sessions' grids when a pane briefly
-  reconnects after a relayout, such as Enlarge and Restore or another session
-  closing, instead of falling back to following. Every grid take is
-  acknowledged, so a pane never repeats a take, and a session that exits on
-  its own releases its grid owner.
-
-### Changed
-
-- Root folder listing uses asynchronous reads and omits dot-prefixed folders,
-  links and common Windows system folder names. The Windows Hidden attribute
-  is not read. Folder picker helpers run from fixed system paths and are
-  cancelled on timeout or daemon shutdown. A mapped drive letter may still
-  name a network drive.
-- Dashboard panes fill their tile at the 400 by 150 grid cap.
-- Dashboard panes fill their tile at the 400 by 150 grid cap. Auto fit refits
-  after a settled outside resize, but follows a client that resizes again
-  within ten seconds. Followed and held grids scale down to 6 px, then scroll
-  when still larger than the pane. Shift+wheel and horizontal wheel movement
-  scroll the pane while plain wheel reaches the terminal. Focus and typing
-  keep the scrolled view steady, and the guidance note wraps. Text
-  stops growing at 40 px; Fit restores the chosen text size.
-- Renamed `viewer.launchMode: "none"` to `"no-window"`; `"none"` remains an alias for existing configurations.
+The dashboard: every session as a pane, across more than one screen, with
+launch profiles to start sessions from it.
 
 ### Added
 
-- `shellpuppet desktop` starts or reuses the daemon and opens the dashboard only
-  when no dashboard page is connected. `desktop --install` adds or updates a
-  per-user Start menu shortcut on Windows or an application launcher on Linux;
-  `--uninstall` removes it. A redeemed dashboard grant leaves the address bar
-  and history, and a page without a valid cookie explains how to start again.
-
-- `daemon.startWith` runs a configured wrapper when a missing daemon starts.
-  An optional environment condition and direct overrides support clients
-  already running under a secrets tool. Daemon status reports whether its
-  start was wrapped. Windows wrappers must be executable programs rather than
-  batch files, and failed wrapped starts clean up the spawned process tree.
-  Daemon starts are now serialised per ShellPuppet home through a local
-  endpoint that the operating system releases if the starting client dies;
-  other clients, `daemon stop` and `daemon restart` wait for a pending start.
-
-- Dashboard launch profiles accept `"envFromDaemon": "all"` to pass the
-  daemon's environment to sessions a person starts from that profile.
-  Connected feature credentials, ShellPuppet's own variables, `NODE_OPTIONS`
-  and malformed variable names stay out;
-  client-token starts are unchanged.
-- A profile with `"cwd": "ask"` may set `"folders": "any"` to accept an
-  existing local folder chosen by path or the desktop picker. Its dashboard
-  box offers recent paths and configured root folders together. The picker
-  requires the dashboard credential and page proof, allows one dialog at a
-  time, and times out after ten minutes.
-- Focus and Grid pane boundaries can be dragged or moved with the keyboard.
-  Grown panes fit on release; shrunken panes keep their terminal grid. Track
-  sizes survive a reload in their own window and reset with Auto or Grid.
-- New sessions open in the dashboard by default. The daemon opens one isolated
-  dashboard window when needed and waits for it to connect before trying another.
-  If the window cannot open, the start still succeeds and returns a viewer link.
-- `terminal_wait` can watch for prompts across every live session or a chosen
-  list, returning compact waiting details without screens. `now: true` polls
-  once. `terminal_list waitingOnly: true` and `shellpuppet list --waiting`
-  expose the same view; `shellpuppet wait --prompt` accepts no id or several.
-  Filtered views omit question and options. Single-session waits retain their
-  existing response.
-- Auto fit is on by default in the dashboard. It remembers the toggle and
-  refits visible panes after layout or window changes settle, respecting the
-  80 by 24 floor and geometry held by another client.
-- One remembered dashboard text size control applies to every pane and window.
-  `dashboard.fontSize` sets its initial size when the browser has no saved choice.
-- Dashboard error banners have a Close button and close on Escape outside a
-  terminal. A valid shortcut clears a previous shortcut error.
-- Dashboard profiles can offer immediate folders from `folderRoots` alongside
-  named folders. The page filters choices, starts the selected one on Enter,
-  and keeps recent folders per profile for one-click starts. The daemon
-  validates real paths at launch and refuses escaped or removed folders.
-
-- The dashboard can assign panes across several windows. It asks for screen
-  permission only on an Allow screens click, opens at most one window per
-  click, places granted windows in each screen's available rectangle and
-  offers an unplaced window when placement is unavailable. A blocked popup
-  leaves its button available. Browser windows share the dashboard cookie,
-  coordinate their roster and pane assignment over `BroadcastChannel`, and
-  return panes when a window closes.
+- `shellpuppet dashboard` opens the dashboard in ShellPuppet's isolated browser
+  profile and prints whether a window opened, never the URL or grant. The
+  daemon's dashboard opener never falls back to the default browser: a window
+  that cannot open revokes the grant and fails the command, with a message
+  naming `viewer.browserPath`.
+- The dashboard page shows passive terminal panes from the live session feed.
+  Auto uses an even grid while panes meet the 80 by 24 floor, then a large
+  pane and strip; Grid and Focus are available too. Pin, reorder, attention,
+  navigation with a configurable shortcut, text size, Fit, Enlarge and Restore
+  work in the page. Layout
+  and font changes leave the PTY grid alone; deliberate geometry acts take
+  it. Covered and scrolled-off panes disconnect until visible again. Browser
+  WebSockets that omit both Fetch Metadata headers work with the exact Origin
+  and page proof checks.
 - The dashboard page's human controls. Terminal mode types into the focused
   pane. The configurable `Ctrl+Shift+A` prefix enters navigation and is not
   sent to the session; `Ctrl+\` is not that prefix. Kill is one menu action
@@ -154,21 +49,13 @@ version may change behaviour, and every such change is listed here.
   Mode, order and pin stay in `localStorage`. The profile and folder a start
   used stay there too. Nothing is written to the daemon home or to
   `config.json`.
-- The dashboard page shows passive terminal panes from the live session feed.
-  Auto uses an even grid while panes meet the 80 by 24 floor, then a large
-  pane and strip; Grid and Focus are available too. Pin, reorder, attention,
-  navigation with a configurable shortcut, text size, Fit, Enlarge and Restore
-  work in the page. Layout
-  and font changes leave the PTY grid alone; deliberate geometry acts take
-  it. Covered and scrolled-off panes disconnect until visible again. Browser
-  WebSockets that omit both Fetch Metadata headers work with the exact Origin
-  and page proof checks.
-
-- `shellpuppet dashboard` opens the dashboard in ShellPuppet's isolated browser
-  profile and prints whether a window opened, never the URL or grant. The
-  daemon's dashboard opener never falls back to the default browser: a window
-  that cannot open revokes the grant and fails the command, with a message
-  naming `viewer.browserPath`.
+- The dashboard can assign panes across several windows. It asks for screen
+  permission only on an Allow screens click, opens at most one window per
+  click, places granted windows in each screen's available rectangle and
+  offers an unplaced window when placement is unavailable. A blocked popup
+  leaves its button available. Browser windows share the dashboard cookie,
+  coordinate their roster and pane assignment over `BroadcastChannel`, and
+  return panes when a window closes.
 - The dashboard's launch API can start a session from a profile you write in
   `launcher.profiles` in `config.json`, and from nothing else. `GET
   /dashboard/profiles` lists the profiles and any entry that did not load;
@@ -194,6 +81,64 @@ version may change behaviour, and every such change is listed here.
   `origin`. `envFromDaemon` copies only variables the daemon's environment
   holds as strings, and a variable reserved for a connected feature's
   credential never reaches a session. The page's start control comes later.
+- New sessions open in the dashboard by default. The daemon opens one isolated
+  dashboard window when needed and waits for it to connect before trying another.
+  If the window cannot open, the start still succeeds and returns a viewer link.
+- `shellpuppet desktop` starts or reuses the daemon and opens the dashboard only
+  when no dashboard page is connected. `desktop --install` adds or updates a
+  per-user Start menu shortcut on Windows or an application launcher on Linux;
+  `--uninstall` removes it. A redeemed dashboard grant leaves the address bar
+  and history, and a page without a valid cookie explains how to start again.
+- Muse Code 1.4.14 has a built-in agent signature for filtered reasoning,
+  latest-turn answers, its workspace trust menu and its approval menus, with
+  two or three choices, in stages, at any width and with long commands that
+  wrap. An empty composer showing Muse's hint is read as empty, so results
+  return the answer above it, and typed text not yet sent is reported as
+  `prompt-typed`. An approval menu whose heading is not bold counts as a
+  question once it has stayed unchanged for 1.5 seconds, because Muse draws
+  it a moment before its keys work. Text sent with a final Enter is written
+  first and the Enter 400 ms later, because Muse ignores an Enter that
+  arrives with the text; later input, keys and resizes wait behind it.
+  Versioned `muse-bin` executables are recognised, as are sessions started
+  with `agent: "muse"` through a launcher script.
+- `daemon.startWith` runs a configured wrapper when a missing daemon starts.
+  An optional environment condition and direct overrides support clients
+  already running under a secrets tool. Daemon status reports whether its
+  start was wrapped. Windows wrappers must be executable programs rather than
+  batch files, and failed wrapped starts clean up the spawned process tree.
+  Daemon starts are now serialised per ShellPuppet home through a local
+  endpoint that the operating system releases if the starting client dies;
+  other clients, `daemon stop` and `daemon restart` wait for a pending start.
+- Dashboard launch profiles accept `"envFromDaemon": "all"` to pass the
+  daemon's environment to sessions a person starts from that profile.
+  Connected feature credentials, ShellPuppet's own variables, `NODE_OPTIONS`
+  and malformed variable names stay out;
+  client-token starts are unchanged.
+- A profile with `"cwd": "ask"` may set `"folders": "any"` to accept an
+  existing local folder chosen by path or the desktop picker. Its dashboard
+  box offers recent paths and configured root folders together. The picker
+  requires the dashboard credential and page proof, allows one dialog at a
+  time, and times out after ten minutes.
+- Focus and Grid pane boundaries can be dragged or moved with the keyboard.
+  Grown panes fit on release; shrunken panes keep their terminal grid. Track
+  sizes survive a reload in their own window and reset with Auto or Grid.
+- `terminal_wait` can watch for prompts across every live session or a chosen
+  list, returning compact waiting details without screens. `now: true` polls
+  once. `terminal_list waitingOnly: true` and `shellpuppet list --waiting`
+  expose the same view; `shellpuppet wait --prompt` accepts no id or several.
+  Filtered views omit question and options. Single-session waits retain their
+  existing response.
+- Auto fit is on by default in the dashboard. It remembers the toggle and
+  refits visible panes after layout or window changes settle, respecting the
+  80 by 24 floor and geometry held by another client.
+- One remembered dashboard text size control applies to every pane and window.
+  `dashboard.fontSize` sets its initial size when the browser has no saved choice.
+- Dashboard error banners have a Close button and close on Escape outside a
+  terminal. A valid shortcut clears a previous shortcut error.
+- Dashboard profiles can offer immediate folders from `folderRoots` alongside
+  named folders. The page filters choices, starts the selected one on Enter,
+  and keeps recent folders per profile for one-click starts. The daemon
+  validates real paths at launch and refuses escaped or removed folders.
 - The dashboard has its own one-use grant, which lives for five minutes and is
   minted only by the daemon. `POST /dashboard/open` (client token) mints it and opens
   the page in the isolated browser profile, never the default browser. The grant is not returned to the
@@ -224,21 +169,22 @@ version may change behaviour, and every such change is listed here.
   report questions and options only from their filtered screens, and prompt
   stall logs omit question text. MCP instructions explain when to use the flag.
 
-### Fixed
-
-- Windows starts now retry once when node-pty 1.2.0-beta.18's ConPTY output
-  worker misses its connection bound, after the failed console host is confirmed
-  ended and node-pty's worker-disposal interval has passed. A start cancelled
-  during either attempt fails, and other start failures are returned without retry.
-- Dashboard profiles using `envFromDaemon: "all"` no longer inherit agent CLI
-  session markers from the process that started the daemon; `SHELLPUPPET_HOME`
-  remains available to the launched session.
-- Root folder lists omit dot-prefixed directories and common Windows system
-  folder names. Rooted launches fill `{folder}` and record the selected folder
-  in the start audit.
-
 ### Changed
 
+- Root folder listing uses asynchronous reads and omits dot-prefixed folders,
+  links and common Windows system folder names. The Windows Hidden attribute
+  is not read. Folder picker helpers run from fixed system paths and are
+  cancelled on timeout or daemon shutdown. A mapped drive letter may still
+  name a network drive.
+- Dashboard panes fill their tile at the 400 by 150 grid cap.
+- Dashboard panes fill their tile at the 400 by 150 grid cap. Auto fit refits
+  after a settled outside resize, but follows a client that resizes again
+  within ten seconds. Followed and held grids scale down to 6 px, then scroll
+  when still larger than the pane. Shift+wheel and horizontal wheel movement
+  scroll the pane while plain wheel reaches the terminal. Focus and typing
+  keep the scrolled view steady, and the guidance note wraps. Text
+  stops growing at 40 px; Fit restores the chosen text size.
+- Renamed `viewer.launchMode: "none"` to `"no-window"`; `"none"` remains an alias for existing configurations.
 - node-pty 1.2.0-beta.18 creates a Windows session's program only once its
   ConPTY output worker has connected: a few hundred milliseconds after the
   spawn returns, and five seconds at most, a bound node-pty adds.
@@ -290,6 +236,48 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- `terminal_wait` and `shellpuppet wait` with `debounce` now settle once the
+  condition holds continuously, even when a busy timer keeps repainting.
+- Dashboard relayouts now settle session and window assignments before taking
+  pane grids, avoiding intermediate resizes when sessions move between windows.
+- Dashboard windows return sessions promptly when a window or its session feed
+  closes. A late roster from a closed feed cannot reclaim them, while a
+  reconnected or reloaded dashboard joins the share again. Documents with the
+  same screen ID share sessions separately.
+- `terminal_wait` and `shellpuppet wait` with `hideReasoning` now match text and
+  regex only on the filtered screen.
+- Filtered screenshots repair extra replay text left by terminal serialisation
+  after a wrapped row is deleted, so the frozen browser picture matches the
+  daemon's rows on active inline screens.
+- Direct Windows starts (`--no-shell` or `shell: false`) now preserve literal
+  arguments which begin and end with double quotes and contain spaces.
+- Dashboard windows retain their session share through slowed browser timers,
+  hand sessions back on close, spread overflow by readable capacity and refit
+  panes in the window that receives them.
+- `terminal_screenshot` and `shellpuppet screenshot` with `hideReasoning` now
+  work on screens that keep changing, such as an agent's running timer or an
+  idle animation: the picture is taken of the same frozen screen the filter
+  read, instead of failing with "The screen changed". The CLI help lists
+  `--hide-reasoning` for `screenshot`.
+- `hideReasoning` now hides reasoning lines that the terminal wrapped onto
+  further rows, on every reader (snapshot, last lines, find, wait, result and
+  screenshots). A wrapped row always belongs to the line it continues, so a
+  long answer keeps all of its rows.
+- A dashboard window keeps driving its sessions' grids when a pane briefly
+  reconnects after a relayout, such as Enlarge and Restore or another session
+  closing, instead of falling back to following. Every grid take is
+  acknowledged, so a pane never repeats a take, and a session that exits on
+  its own releases its grid owner.
+- Windows starts now retry once when node-pty 1.2.0-beta.18's ConPTY output
+  worker misses its connection bound, after the failed console host is confirmed
+  ended and node-pty's worker-disposal interval has passed. A start cancelled
+  during either attempt fails, and other start failures are returned without retry.
+- Dashboard profiles using `envFromDaemon: "all"` no longer inherit agent CLI
+  session markers from the process that started the daemon; `SHELLPUPPET_HOME`
+  remains available to the launched session.
+- Root folder lists omit dot-prefixed directories and common Windows system
+  folder names. Rooted launches fill `{folder}` and record the selected folder
+  in the start audit.
 - A Windows console host that is already gone when cleanup lists it is now
   logged at info level. A session kill can leave no host for the later list;
   ambiguous matches and failed cleanup still warn.
@@ -309,7 +297,6 @@ version may change behaviour, and every such change is listed here.
   print the closing line. A line on screen that imitates a boundary is shown
   with a leading backslash. This covers the single-session and multi-session
   waits, both list forms and `terminal_result`.
-
 - On Windows, the console hosts queued in one batch are ended by one
   asynchronous PowerShell, off the daemon's thread, so the daemon keeps
   answering `/health` and its other sessions while that call runs. The

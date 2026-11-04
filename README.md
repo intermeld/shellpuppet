@@ -29,8 +29,8 @@ ShellPuppet is the open-source terminal layer of **Intermeld**, the agent
 governance platform by [Red Eagle Tech](https://redeagle.tech). Everything in
 this repository runs on your machine and needs nothing we operate.
 
-> **Status: 0.1.0, the first release.** The daemon, CLI, MCP server and viewer
-> install from npm (below). Watch the repository's Releases for what comes
+> **Status: 0.2.0, with the dashboard.** The daemon, CLI, MCP server, viewer
+> and dashboard install from npm (below). Watch the repository's Releases for what comes
 > next, and bring questions, ideas and what you build with it to
 > [Discussions](https://github.com/intermeld/shellpuppet/discussions). 🦅
 
@@ -439,16 +439,16 @@ follows it.
 
 ## Day one
 
-ShellPuppet 0.1.0 is the first release. Here is what to expect from it, as of
-October 2026. The [roadmap](ROADMAP.md) says what comes next, and your ideas
+ShellPuppet 0.2.0 adds the dashboard. Here is what to expect from it, as of
+November 2026. The [roadmap](ROADMAP.md) says what comes next, and your ideas
 shape it: tell us what you'd like, and where it trips you up, in
 [Discussions](https://github.com/intermeld/shellpuppet/discussions), and
 report bugs in the [issues](https://github.com/intermeld/shellpuppet/issues).
 
-- **One window per session, for now.** Each session opens its own viewer
-  window, and the windows don't arrange or size themselves yet. A dashboard
-  that holds every session as a pane, across more than one screen, is what
-  we're building now.
+- **The dashboard is new.** It holds every session as a pane, across more
+  than one screen, and fits the panes to the window. Its layout has been
+  driven hard on Windows with real agent CLIs; tell us where it lets you
+  down on your screens.
 - **Prompt detection is pattern-based.** It recognises the numbered,
   pointer-only and letter-keyed choosers and the confirmation prompts real
   agent CLIs draw, and the select, multi-select and confirm steps of

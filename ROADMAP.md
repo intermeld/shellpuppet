@@ -9,20 +9,20 @@ need is missing, say so: [SUPPORT.md](SUPPORT.md) says where.
 ## Shipped
 
 The [CHANGELOG](CHANGELOG.md) lists every release, and the README says
-[what to expect from the first release](README.md#day-one).
+[what to expect from the latest one](README.md#day-one).
 Releases carry npm provenance through trusted publishing from the first.
+
+- **One window for all your sessions** (0.2.0). A dashboard that holds the
+  sessions as panes, spreads them across screens, and lets you pop out a pane
+  into its own window. Each pane shares the single-session viewer's terminal
+  client. See
+  [ADR-009](docs/decisions/ADR-009-dashboard-and-sessions-you-start-yourself.md).
+- **Sessions you start yourself** (0.2.0). Start a session from the
+  dashboard's launch profiles and work in it, then hand it to an agent over
+  MCP or let one join you: a session is the same thing whoever started it.
 
 ## Now
 
-- **One window for all your sessions.** A dashboard that holds the sessions
-  as panes, spreads them across screens, and lets you pop out a pane into its
-  own window. Each pane shares the single-session viewer's terminal client.
-  See [ADR-009](docs/decisions/ADR-009-dashboard-and-sessions-you-start-yourself.md).
-- **Sessions you start yourself.** Start a session from the dashboard and work
-  in it, then hand it to an agent over MCP or let one join you: a session is
-  the same thing whoever started it, and the CLI already starts sessions that
-  every connected agent can see. ShellPuppet becomes a place to work as well
-  as something an agent invokes.
 - **A module per agent CLI.** What's specific to one program moves out of the
   core into a module of its own, in this repository: its prompt detection and
   its measured profile. It starts as an internal refactor, with the profiles as
