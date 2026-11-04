@@ -6,7 +6,7 @@ import type { Logger } from '../core/types.js';
 export interface RestartHold {
   expiresAt: number;
   pid: number;
-  replacing?: { instanceId: string; startMode: 'direct' | 'wrapped' };
+  replacing?: { instanceId?: string; pid: number; port: number; startMode: 'direct' | 'wrapped' };
 }
 const warnedRecords = new Set<string>();
 
@@ -80,7 +80,10 @@ export function readRestartHold(home: string, logger: Logger): RestartHold | nul
         hold.expiresAt - Date.now() > 600_000) throw new Error('invalid');
     if (hold.replacing !== undefined &&
         (typeof hold.replacing !== 'object' || hold.replacing === null ||
-          typeof hold.replacing.instanceId !== 'string' || hold.replacing.instanceId.length === 0 ||
+          (hold.replacing.instanceId !== undefined &&
+            (typeof hold.replacing.instanceId !== 'string' || hold.replacing.instanceId.length === 0)) ||
+          !Number.isSafeInteger(hold.replacing.pid) || hold.replacing.pid <= 0 ||
+          !Number.isSafeInteger(hold.replacing.port) || hold.replacing.port <= 0 || hold.replacing.port > 65_535 ||
           !['direct', 'wrapped'].includes(hold.replacing.startMode))) {
       throw new Error('invalid');
     }
@@ -107,5 +110,7 @@ export function readRestartHold(home: string, logger: Logger): RestartHold | nul
 export function restartHoldError(hold: RestartHold): Error {
   const remaining = Math.ceil((hold.expiresAt - Date.now()) / 1000);
   const timing = remaining > 0 ? `hold ends in ${String(remaining)} s` : 'hold expired while waiting';
-  return new Error(`The ShellPuppet daemon is stopped for a restart (${timing}). Try again shortly, or run \`shellpuppet daemon start\` to end the hold.`);
+  const replaced = hold.replacing === undefined ? '' :
+    `; replacing pid ${String(hold.replacing.pid)}, port ${String(hold.replacing.port)}`;
+  return new Error(`The ShellPuppet daemon is stopped for a restart (${timing}${replaced}). Try again shortly, or run \`shellpuppet daemon start\` to end the hold.`);
 }
