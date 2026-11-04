@@ -7,6 +7,14 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+### Added
+
+- `daemon stop --hold` pauses automatic starts during a planned rebuild;
+  `daemon restart` keeps the start lock through the replacement start and
+  makes clients wait for the replacement while the old daemon is stopping.
+  Clients identify the replacement by its daemon instance id, use a fixed
+  wait bound, and resume starts if the process performing a restart has gone.
+
 ## [0.2.0] - 2026-11-04
 
 The dashboard: every session as a pane, across more than one screen, with
