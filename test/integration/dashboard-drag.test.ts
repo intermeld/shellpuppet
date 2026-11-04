@@ -607,7 +607,7 @@ it('ends a drag when sessions arrive or move to another window', async (context)
         channel.onmessage = e => { if (e.data?.type === 'window-roster' && e.data.window?.rank === 0)
           id = JSON.stringify([e.data.window.id, e.data.window.instance]); };
         channel.postMessage({ type: 'window-roster', token: 'test-other', window:
-          { id: 'test-other', instance: 'i-test', rank: -1, openedAt: 1, width: 1300, height: 900 } });
+          { id: 'test-other', instance: 'i-test', document: 'test-other', rank: -1, openedAt: 1, width: 1300, height: 900 } });
         await waitFor('the local roster response', () => id, value => typeof value === 'string');
         await waitFor('the second window in the share count',
           () => document.getElementById('share-count').textContent, value => value.includes('2 windows'));
@@ -649,7 +649,7 @@ it('ends and rebuilds a Focus divider when the same-count assignment changes its
         if (e.data?.type === 'window-roster' && e.data.window?.rank === 0)
           resolve(JSON.stringify([e.data.window.id, e.data.window.instance]));
       }; channel.postMessage({ type: 'window-roster', token: 'test-swap', window:
-        { id: 'test-swap', instance: 'i-test', rank: -1, openedAt: 1, width: 1300, height: 900 } }); });
+        { id: 'test-swap', instance: 'i-test', document: 'test-swap', rank: -1, openedAt: 1, width: 1300, height: 900 } }); });
       const ids = window.__allIds = [...document.querySelectorAll('.pane')].map(pane => pane.dataset.session);
       channel.postMessage({ type: 'window-assignment', token: 'test-swap', owner: JSON.stringify(['test-swap', 'i-test']),
         byWindow: { [id]: ids.slice(0, 2) } });
@@ -755,7 +755,7 @@ it('forgets saved tracks when the pane count passes through zero', async (contex
           id = JSON.stringify([e.data.window.id, e.data.window.instance]); };
         const ids = [...document.querySelectorAll('.pane')].map(x => x.dataset.session);
         channel.postMessage({ type: 'window-roster', token: 'test-zero', window:
-          { id: 'test-zero', instance: 'i-test', rank: -1, openedAt: 1, width: 1300, height: 900 } });
+          { id: 'test-zero', instance: 'i-test', document: 'test-zero', rank: -1, openedAt: 1, width: 1300, height: 900 } });
         await waitFor('the local roster response', () => id, value => typeof value === 'string');
         await waitFor('the second window in the share count',
           () => document.getElementById('share-count').textContent, value => value.includes('2 windows'));

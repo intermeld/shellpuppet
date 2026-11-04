@@ -41,7 +41,7 @@ async function browserProbe(beforeNavigateScript: string, probe: string): Promis
   return JSON.parse(String(shot.probe)) as Record<string, unknown>;
 }
 
-async function rosterProbe(script: string): Promise<Record<string, unknown>> {
+async function rosterProbe(script: string, beforeNavigate = ''): Promise<Record<string, unknown>> {
   const shot = await captureDashboard({ browser: browser!, viewerUrl: await freshUrl(), width: 1280,
     height: 720, drive: true, timeoutMs: 30_000,
     beforeNavigateScript: `(() => {
@@ -50,6 +50,7 @@ async function rosterProbe(script: string): Promise<Record<string, unknown>> {
         if (typeof data === 'string' && data.includes('"type":"window-register"')) window.__rosterFeed = this;
         return send.call(this, data);
       };
+      ${beforeNavigate}
     })()`,
     probe: `(() => document.getElementById('connection')?.textContent === 'Connected' && window.__rosterFeed ? true : null)()`,
     interact: async ({ evaluate }) => evaluate(script),
@@ -72,7 +73,7 @@ async function rosterSteps(steps: string): Promise<Record<string, unknown>> {
     };
     const channel = new BroadcastChannel('shellpuppet.dashboard');
     const roster = (id, instance) => ({ type: 'window-roster', token: 'test-roster',
-      window: { id, instance, rank: 1000, openedAt: Date.now(), key: null, width: 1280, height: 720 } });
+      window: { id, instance, document: 'test-roster', rank: 1000, openedAt: Date.now(), key: null, width: 1280, height: 720 } });
     const notice = (id, instance) => window.__rosterFeed.onmessage({
       data: JSON.stringify({ type: 'window-gone', id, instance }) });
     const barrier = () => new Promise(resolve => {
@@ -90,7 +91,7 @@ async function rosterSteps(steps: string): Promise<Record<string, unknown>> {
 }
 
 async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', dragCheck = false, held = false,
-  sameScreen = false, reconnect = false): Promise<{
+  sameScreen = false, reconnect = false, missedNotice = false): Promise<{
   before: { primary: string[]; other: string[]; childConnected: string };
   after: string[];
   paused: { primary: string[]; other: string[]; toolbar: string[] };
@@ -99,6 +100,7 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
   survivor?: string[];
   recovered?: { primary: string[]; other: string[]; oldInstance: string; newInstance: string;
     peers: string[]; afterLate: { primary: string[]; other: string[]; peers: string[] } };
+  missed?: { before: string; after: string; oldInstance: string; newInstance: string };
   oversized: { note: string; horizontal: number; vertical: number; left: number; top: number };
   movedFit: { before: string; after: string; resizes: { cols: number; rows: number; take: boolean }[];
     donorStreams: string[] };
@@ -297,6 +299,34 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
         "document.getElementById('share-count')?.textContent")))).every((count) =>
         String(count).includes('3 windows')));
     }
+    if (missedNotice && extra) {
+      const beforeMissed = String(await evaluate(extra.sessionId,
+        "document.getElementById('share-count')?.textContent"));
+      await evaluate(extra.sessionId, `(() => { const socket = window.__dashboardDiagnostics.streams.find(
+        entry => entry.url.endsWith('/dashboard/events'))?.socket;
+        if (!socket) throw new Error('No observing dashboard socket');
+        socket.onclose = null; socket.close(); })()`);
+      await waitFor(async () => String(await evaluate(primary.sessionId,
+        "document.getElementById('share-count')?.textContent")).includes('2 windows'));
+      const oldInstance = ((await evaluate(second.sessionId, 'window.__lastRoster')) as
+        { window: { instance: string } }).window.instance;
+      await evaluate(second.sessionId, `(() => { const socket = window.__dashboardDiagnostics.streams.find(
+        entry => entry.url.endsWith('/dashboard/events'))?.socket;
+        if (!socket) throw new Error('No reconnecting dashboard socket');
+        socket.close(); })()`);
+      await waitFor(async () => {
+        const latest = await evaluate(second.sessionId, 'window.__lastRoster') as { window?: { instance?: string } };
+        return latest?.window?.instance !== oldInstance;
+      });
+      const newInstance = ((await evaluate(second.sessionId, 'window.__lastRoster')) as
+        { window: { instance: string } }).window.instance;
+      await evaluate(second.sessionId, `(() => { const channel = new BroadcastChannel('shellpuppet.dashboard');
+        channel.postMessage({ type: 'test-roster-barrier' }); channel.close(); })()`);
+      await waitFor(async () => await evaluate(extra.sessionId, 'window.__staleBarrier') === true);
+      return { before, movedFit, oversized, after: [], paused: { primary: [], other: [], toolbar: [] }, closeMs: 0,
+        missed: { before: beforeMissed, after: String(await evaluate(extra.sessionId,
+          "document.getElementById('share-count')?.textContent")), oldInstance, newInstance } };
+    }
     if (lostSocket) {
       const victim = lostSocket === 'primary' ? primary : second;
       const survivor = lostSocket === 'primary' ? second : primary;
@@ -470,6 +500,98 @@ describe('dashboard screen controls in Chromium', () => {
     expect(result.returned, JSON.stringify(result)).toContain('2 windows');
   }, 60_000);
 
+  it('replaces a reconnecting document while the observing feed is closed', async (context) => {
+    if (!browser) { context.skip(); return; }
+    const result = await rosterSteps(`
+      const feed = window.__rosterFeed;
+      feed.onclose = null;
+      feed.close();
+      const first = roster('reconnecting-window', 'i-first');
+      first.window.document = 'same-document';
+      first.window.openedAt = 1000;
+      channel.postMessage(first);
+      const before = await waitFor('the original document', value => value.includes('2 windows'));
+      const second = roster('reconnecting-window', 'i-second');
+      second.window.document = 'same-document';
+      second.window.openedAt = 1001;
+      channel.postMessage(second);
+      await barrier();
+      return { before, after: share() };
+    `);
+    expect(result.error).toBeUndefined();
+    expect(result.after, JSON.stringify(result)).toContain('2 windows');
+  }, 60_000);
+
+  for (const duplicateLeaves of [false, true]) it(`keeps a live duplicate when its watched child closes, duplicate leaves first ${String(duplicateLeaves)}`, async (context) => {
+    if (!browser) { context.skip(); return; }
+    await ensureSessions();
+    const result = await rosterProbe(`(async () => {
+      const share = () => document.getElementById('share-count')?.textContent || '';
+      const button = document.querySelector('#screens button');
+      if (!button || button.textContent !== 'Open another window') throw new Error('Open another window is not ready');
+      button.click();
+      const id = new URL(window.__childUrl).hash.match(/screen=([^&]+)/)?.[1];
+      if (!id) throw new Error('Child screen ID was not recorded');
+      const channel = new BroadcastChannel('shellpuppet.dashboard');
+      const send = (instance, documentToken) => channel.postMessage({ type: 'window-roster', token: documentToken,
+        window: { id, instance, document: documentToken, rank: 1000, openedAt: Date.now(),
+          key: null, width: 1280, height: 720 } });
+      const waitFor = async (description, predicate) => {
+        let last;
+        const started = performance.now();
+        while (performance.now() - started < 5000) {
+          last = share();
+          if (predicate(last)) return last;
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+        throw new Error('Timed out waiting for ' + description + '; last observed: ' + JSON.stringify(last));
+      };
+      try {
+        send('i-child', 'child-document');
+        send('i-duplicate', 'duplicate-document');
+        const before = await waitFor('three roster windows', value => value.includes('3 windows'));
+        if (${String(duplicateLeaves)}) {
+          channel.postMessage({ type: 'window-leave', id, instance: 'i-duplicate', token: 'duplicate-document' });
+          await waitFor('duplicate leave', value => value.includes('2 windows'));
+          send('i-duplicate', 'duplicate-document');
+          await waitFor('duplicate return', value => value.includes('3 windows'));
+        }
+        const observed = [share()];
+        const observer = new MutationObserver(() => observed.push(share()));
+        observer.observe(document.getElementById('share-count'), { childList: true, characterData: true, subtree: true });
+        window.__fakeChild.closed = true;
+        const heartbeat = setInterval(() => send('i-duplicate', 'duplicate-document'), 300);
+        try {
+          await new Promise(resolve => setTimeout(resolve, 2400));
+          return { before, settled: share(), observed };
+        } finally { clearInterval(heartbeat); observer.disconnect(); }
+      } finally { channel.close(); }
+    })()`, `
+      window.__fakeChild = { closed: false, __dashboardDocumentToken: 'child-document' };
+      window.open = url => { window.__childUrl = String(url); return window.__fakeChild; };
+      Object.defineProperty(window, 'getScreenDetails', { configurable: true, value: undefined });
+    `);
+    expect(result.before).toContain('3 windows');
+    expect(result.settled, JSON.stringify(result)).toContain('2 windows');
+    expect((result.observed as string[]).some((value) => value.includes('1 window')), JSON.stringify(result)).toBe(false);
+  }, 60_000);
+
+  it('bounds one document to one roster entry after 70 reconnects', async (context) => {
+    if (!browser) { context.skip(); return; }
+    const result = await rosterSteps(`
+      for (let index = 0; index < 70; index++) {
+        const message = roster('flapping-window', 'i-' + index.toString(36));
+        message.window.document = 'same-document';
+        message.window.openedAt = 1000 + index;
+        channel.postMessage(message);
+      }
+      await barrier();
+      return { after: share() };
+    `);
+    expect(result.error).toBeUndefined();
+    expect(result.after, JSON.stringify(result)).toContain('2 windows');
+  }, 60_000);
+
   const screenA = { availLeft: 0, availTop: 0, availWidth: 1280, availHeight: 720, isPrimary: true };
   const screenB = { availLeft: 1280, availTop: 20, availWidth: 1900, availHeight: 1000 };
   const screenC = { availLeft: -1600, availTop: 40, availWidth: 1600, availHeight: 900 };
@@ -627,6 +749,15 @@ describe('dashboard screen controls in Chromium', () => {
     expect(result.recovered?.peers.every((count) => count.includes('3 windows'))).toBe(true);
     expect(result.recovered?.afterLate).toEqual({ primary: result.recovered?.primary,
       other: result.recovered?.other, peers: result.recovered?.peers });
+  }, 180_000);
+
+  it('keeps one entry for a reconnecting document when an observing feed misses the close notice', async (context) => {
+    if (!browser) { context.skip(); return; }
+    await ensureSessions();
+    const result = await multiWindowProbe(await freshUrl(), undefined, false, false, false, true, true);
+    expect(result.missed?.before).toContain('3 windows');
+    expect(result.missed?.newInstance).not.toBe(result.missed?.oldInstance);
+    expect(result.missed?.after, JSON.stringify(result.missed)).toContain('3 windows');
   }, 180_000);
 
   it('keeps a drag in the window where it happened', async (context) => {
