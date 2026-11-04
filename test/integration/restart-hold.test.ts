@@ -39,6 +39,11 @@ function home(): string {
   return value;
 }
 
+function replacementHold(homePath: string, instanceId: string, oldPid: number, startedAt: string): void {
+  fs.writeFileSync(restartHoldPath(homePath), JSON.stringify({ expiresAt: Date.now() + 30_000,
+    pid: process.pid, replacing: { instanceId, startMode: 'direct', pid: oldPid, startedAt } }));
+}
+
 async function startEndpointOccupied(homePath: string): Promise<boolean> {
   const endpoint = process.platform === 'win32' ?
     `\\\\.\\pipe\\shellpuppet-start-${createHash('sha256').update(path.resolve(homePath)).update('\0')
@@ -66,6 +71,106 @@ afterEach(async () => {
 });
 
 describe('planned daemon restart hold', () => {
+  it('uses the health response identity when the record changes during discovery', async () => {
+    const value = home();
+    const oldId = 'old-instance';
+    const newId = 'new-instance';
+    const oldServer = http.createServer((request, response) => {
+      if (request.url !== '/health') return;
+      const address = newServer.address();
+      if (address === null || typeof address === 'string') throw new Error('missing new port');
+      fs.writeFileSync(daemonStatePath(value), JSON.stringify({ port: address.port, token: 'new-token',
+        pid: process.pid + 1, version: 'new', startedAt: new Date().toISOString(), instanceId: newId }));
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: true, version: 'old', pid: process.pid, instanceId: oldId }));
+    });
+    const newServer = http.createServer((request, response) => {
+      if (request.url !== '/health') return;
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: true, version: 'new', pid: process.pid + 1, instanceId: newId }));
+    });
+    try {
+      await new Promise<void>((resolve) => oldServer.listen(0, '127.0.0.1', resolve));
+      await new Promise<void>((resolve) => newServer.listen(0, '127.0.0.1', resolve));
+      const address = oldServer.address();
+      if (address === null || typeof address === 'string') throw new Error('missing old port');
+      const startedAt = new Date().toISOString();
+      fs.writeFileSync(daemonStatePath(value), JSON.stringify({ port: address.port, token: 'old-token',
+        pid: process.pid, version: 'old', startedAt, instanceId: oldId }));
+      replacementHold(value, oldId, process.pid, startedAt);
+      const connection = await ensureDaemon({ home: value });
+      expect(connection.instanceId).toBe(newId);
+      expect(connection.version).toBe('new');
+    } finally {
+      await new Promise<void>((resolve) => oldServer.close(() => resolve()));
+      await new Promise<void>((resolve) => newServer.close(() => resolve()));
+    }
+  }, 30_000);
+
+  it('accepts a replacement with a reused pid and start timestamp', async () => {
+    const value = home();
+    const server = http.createServer((request, response) => {
+      if (request.url !== '/health') return;
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end(JSON.stringify({ ok: true, version: 'new', pid: process.pid, instanceId: 'new-instance' }));
+    });
+    try {
+      await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+      const address = server.address();
+      if (address === null || typeof address === 'string') throw new Error('missing port');
+      fs.writeFileSync(daemonStatePath(value), JSON.stringify({ port: address.port, token: 'token',
+        pid: process.pid, version: 'new', startedAt: 'same-time', instanceId: 'new-instance' }));
+      replacementHold(value, 'old-instance', process.pid, 'same-time');
+      const connection = await ensureDaemon({ home: value });
+      expect(connection.instanceId).toBe('new-instance');
+    } finally {
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }, 30_000);
+
+  it('starts immediately when the process that wrote the hold has gone', async () => {
+    const value = home();
+    fs.writeFileSync(restartHoldPath(value), JSON.stringify({ expiresAt: Date.now() + 120_000,
+      pid: 99_999_999, replacing: { instanceId: 'old-instance', startMode: 'direct',
+        pid: process.pid, startedAt: 'same-time' } }));
+    const startedAt = Date.now();
+    const connection = await ensureDaemon({ home: value, daemonEntry: distDaemonEntry });
+    started.set(value, connection.pid);
+    expect(Date.now() - startedAt).toBeLessThan(10_000);
+  }, 25_000);
+
+  it('keeps one deadline when a restart hold is rewritten', async () => {
+    const value = home();
+    const write = (): void => replacementHold(value, 'old-instance', process.pid, 'same-time');
+    write();
+    const timer = setInterval(write, 250);
+    try {
+      const result = await Promise.race([
+        waitForPendingDaemon({ home: value }).then(() => 'settled', () => 'settled'),
+        new Promise<string>((resolve) => setTimeout(() => resolve('overran'), 23_000)),
+      ]);
+      expect(result).toBe('settled');
+    } finally { clearInterval(timer); }
+  }, 27_000);
+
+  it('refuses restart when the daemon record is unreadable', async () => {
+    const value = home();
+    fs.writeFileSync(daemonStatePath(value), '{');
+    const result = await cli(value, 'daemon', 'restart');
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('daemon stop');
+    expect(result.stderr).toContain('daemon start');
+    expect(readDaemonState(value)).toBeNull();
+  }, 20_000);
+
+  it('refuses restart when the daemon record is missing', async () => {
+    const value = home();
+    const result = await cli(value, 'daemon', 'restart');
+    expect(result.code).not.toBe(0);
+    expect(result.stderr).toContain('daemon stop');
+    expect(result.stderr).toContain('daemon start');
+    expect(readDaemonState(value)).toBeNull();
+  }, 20_000);
   it('keeps a peer behind restart from the stop through the new healthy daemon', async () => {
     const value = home();
     const marker = path.join(value, 'peer-started');
@@ -76,7 +181,7 @@ describe('planned daemon restart hold', () => {
     const server = http.createServer((request, response) => {
       if (request.url === '/health') {
         response.writeHead(200, { 'content-type': 'application/json' });
-        response.end(JSON.stringify({ ok: true, version: '0.0.0-stand-in', pid: process.pid }));
+        response.end(JSON.stringify({ ok: true, version: '0.0.0-stand-in', pid: process.pid, instanceId: 'old-instance' }));
       } else if (request.url === '/daemon/shutdown') {
         signalStopping();
         void stopCanFinish.then(() => {
@@ -90,10 +195,13 @@ describe('planned daemon restart hold', () => {
     const address = server.address();
     if (address === null || typeof address === 'string') throw new Error('missing stand-in port');
     fs.writeFileSync(daemonStatePath(value), JSON.stringify({ port: address.port, token: 'stand-in-token',
-      pid: process.pid, version: '0.0.0-stand-in', startedAt: new Date().toISOString() }));
+      pid: process.pid, version: '0.0.0-stand-in', startedAt: new Date().toISOString(), instanceId: 'old-instance' }));
+    fs.writeFileSync(path.join(value, 'config.json'), JSON.stringify({ daemon: { startWith: [process.execPath] } }));
     const closed = new Promise<void>((resolve) => server.once('close', resolve));
-    const restart = cli(value, 'daemon', 'restart');
+    const restart = cli(value, 'daemon', 'restart', '--direct');
     await stopping;
+    expect(readRestartHold(value, { debug: () => undefined, info: () => undefined,
+      warn: () => undefined, error: () => undefined })?.replacing?.startMode).toBe('direct');
     const previous = process.env['SP_TEST_SPAWN_MARKER'];
     process.env['SP_TEST_SPAWN_MARKER'] = marker;
     try {
@@ -188,6 +296,19 @@ describe('planned daemon restart hold', () => {
     expect(fs.readFileSync(sentinel, 'utf8')).toBe('unchanged');
   });
 
+  it('removes old regular temporary records when writing a hold', () => {
+    const value = home();
+    const oldFile = path.join(value, '.restart-hold-old.tmp');
+    const recentFile = path.join(value, '.restart-hold-recent.tmp');
+    fs.writeFileSync(oldFile, 'old');
+    fs.writeFileSync(recentFile, 'recent');
+    const oldTime = new Date(Date.now() - 3_700_000);
+    fs.utimesSync(oldFile, oldTime, oldTime);
+    writeRestartHold(value, 5);
+    expect(fs.existsSync(oldFile)).toBe(false);
+    expect(fs.readFileSync(recentFile, 'utf8')).toBe('recent');
+  });
+
   it('waits through a slow stop and a slow direct start', async () => {
     const value = home();
     let stopRequested: () => void = () => undefined;
@@ -195,7 +316,7 @@ describe('planned daemon restart hold', () => {
     const oldServer = http.createServer((request, response) => {
       if (request.url === '/health') {
         response.writeHead(200, { 'content-type': 'application/json' });
-        response.end(JSON.stringify({ ok: true, version: '0.0.0-old', pid: process.pid }));
+        response.end(JSON.stringify({ ok: true, version: '0.0.0-old', pid: process.pid, instanceId: 'old-instance' }));
       } else if (request.url === '/daemon/shutdown') {
         stopRequested();
         response.writeHead(200);
@@ -207,12 +328,12 @@ describe('planned daemon restart hold', () => {
     if (oldAddress === null || typeof oldAddress === 'string') throw new Error('missing old port');
     const startedAt = new Date().toISOString();
     fs.writeFileSync(daemonStatePath(value), JSON.stringify({ port: oldAddress.port, token: 'old-token',
-      pid: process.pid, version: '0.0.0-old', startedAt }));
+      pid: process.pid, version: '0.0.0-old', startedAt, instanceId: 'old-instance' }));
     let replacement: http.Server | undefined;
     let replacementPort = -1;
     try {
       const coordinator = withDaemonStartLock({ home: value }, async () => {
-        writeRestartHold(value, 30, { pid: process.pid, startedAt });
+        writeRestartHold(value, 30, { instanceId: 'old-instance', startMode: 'direct' });
         const shutdown = fetch(`http://127.0.0.1:${String(oldAddress.port)}/daemon/shutdown`, { method: 'POST' });
         await stopping;
         await new Promise((resolve) => setTimeout(resolve, 5_500));
@@ -223,7 +344,7 @@ describe('planned daemon restart hold', () => {
         replacement = http.createServer((request, response) => {
           if (request.url === '/health') {
             response.writeHead(200, { 'content-type': 'application/json' });
-            response.end(JSON.stringify({ ok: true, version: '0.0.0-new', pid: process.pid + 1 }));
+            response.end(JSON.stringify({ ok: true, version: '0.0.0-new', pid: process.pid + 1, instanceId: 'new-instance' }));
           }
         });
         await new Promise<void>((resolve) => replacement?.listen(0, '127.0.0.1', resolve));
@@ -231,7 +352,7 @@ describe('planned daemon restart hold', () => {
         if (address === null || typeof address === 'string') throw new Error('missing replacement port');
         replacementPort = address.port;
         fs.writeFileSync(daemonStatePath(value), JSON.stringify({ port: address.port, token: 'new-token',
-          pid: process.pid + 1, version: '0.0.0-new', startedAt: new Date().toISOString() }));
+          pid: process.pid + 1, version: '0.0.0-new', startedAt: new Date().toISOString(), instanceId: 'new-instance' }));
       });
       await stopping;
       const connection = await ensureDaemon({ home: value, daemonEntry: markerEntry });

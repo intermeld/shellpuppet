@@ -69,6 +69,8 @@ export interface DaemonConnection {
   /** The daemon's process, so a failed request can tell busy from gone. */
   pid: number;
   version: string;
+  /** Identity returned by the daemon's own health response. */
+  instanceId?: string;
   /** Human-readable warnings (e.g. version mismatch), which adapters surface. */
   warnings: string[];
 }
@@ -142,6 +144,7 @@ interface HealthResponse {
   ok: boolean;
   version: string;
   pid: number;
+  instanceId?: string;
 }
 
 async function health(port: number, timeoutMs = HEALTH_TIMEOUT_MS): Promise<HealthResponse | null> {
@@ -368,8 +371,25 @@ function releaseStartLock(server: net.Server): Promise<void> {
   return new Promise((resolve) => server.close(() => resolve()));
 }
 
-function startWaitBound(home: string): number {
+function startWaitBound(home: string, mode?: 'direct' | 'wrapped'): number {
+  if (mode !== undefined) return mode === 'wrapped' ? WRAPPED_START_TIMEOUT_MS : AUTO_START_TIMEOUT_MS;
   return readDaemonConfig(home).config.daemon?.startWith === undefined ? AUTO_START_TIMEOUT_MS : WRAPPED_START_TIMEOUT_MS;
+}
+
+/** Select the same start path that ensureDaemon will use for this environment. */
+export function daemonStartMode(home: string, direct: boolean | undefined, env: NodeJS.ProcessEnv = process.env): 'direct' | 'wrapped' {
+  const configured = readDaemonConfig(home).config.daemon;
+  const condition = configured?.startWithOnlyIfEnvContains;
+  return direct !== true && env['SHELLPUPPET_DAEMON_DIRECT'] !== '1' &&
+    configured?.startWith !== undefined &&
+    (condition === undefined || Object.values(env).some((value) => value?.includes(condition))) ? 'wrapped' : 'direct';
+}
+
+function callDeadline(home: string, logger: Logger): number {
+  const arrived = Date.now();
+  const hold = readRestartHold(home, logger);
+  return arrived + (hold?.replacing === undefined ? startWaitBound(home) :
+    RESTART_STOP_TIMEOUT_MS + startWaitBound(home, hold.replacing.startMode));
 }
 
 /** Hold the start endpoint while a daemon verb stops and replaces a daemon. */
@@ -389,37 +409,20 @@ export async function withDaemonStartLock<T>(options: ClientOptions, action: (lo
   finally { if (lock !== UNCOORDINATED_START) await releaseStartLock(lock); }
 }
 
-function replacingDaemon(home: string, hold: RestartHold, connection: DaemonConnection): boolean {
-  const state = readDaemonState(home);
-  return hold.replacing !== undefined && connection.pid === hold.replacing.pid &&
-    state?.pid === hold.replacing.pid && state.startedAt === hold.replacing.startedAt;
-}
-
-function deadlineWithRestartHold(home: string, deadline: number, hold: RestartHold): number {
-  return hold.replacing === undefined ? deadline :
-    Math.max(deadline, Date.now() + RESTART_STOP_TIMEOUT_MS + startWaitBound(home));
+function replacingDaemon(hold: RestartHold, connection: DaemonConnection): boolean {
+  return hold.replacing !== undefined &&
+    (connection.instanceId === undefined || connection.instanceId === hold.replacing.instanceId);
 }
 
 /** A removed or expired hold returns control to the caller's ordinary start loop. */
 async function waitForHeldDaemon(options: ClientOptions, home: string, deadline: number): Promise<DaemonConnection | null> {
-  let waitDeadline = deadline;
-  let seenRestart: string | null = null;
-  const noticeHold = (hold: RestartHold): void => {
-    if (hold.replacing === undefined) return;
-    const identity = `${String(hold.pid)}:${String(hold.expiresAt)}:${String(hold.replacing.pid)}:${hold.replacing.startedAt}`;
-    if (identity === seenRestart) return;
-    seenRestart = identity;
-    waitDeadline = deadlineWithRestartHold(home, waitDeadline, hold);
-  };
-  while (Date.now() < waitDeadline) {
+  while (Date.now() < deadline) {
     const hold = readRestartHold(home, options.logger ?? NULL_LOGGER);
     if (hold === null) return null;
-    noticeHold(hold);
     const existing = await discoverDaemon(options);
     const currentHold = readRestartHold(home, options.logger ?? NULL_LOGGER);
     if (currentHold === null) return null;
-    noticeHold(currentHold);
-    if (existing !== null && !replacingDaemon(home, currentHold, existing)) return existing;
+    if (existing !== null && !replacingDaemon(currentHold, existing)) return existing;
     await new Promise((resolve) => setTimeout(resolve, AUTO_START_POLL_MS));
   }
   const hold = readRestartHold(home, options.logger ?? NULL_LOGGER);
@@ -431,14 +434,12 @@ async function waitForHeldDaemon(options: ClientOptions, home: string, deadline:
 export async function waitForPendingDaemon(options: ClientOptions = {}): Promise<DaemonConnection | null> {
   const home = options.home ?? shellpuppetHome();
   if (!fs.existsSync(home)) return discoverDaemon(options);
-  let deadline = Date.now() + startWaitBound(home);
+  const deadline = callDeadline(home, options.logger ?? NULL_LOGGER);
   while (Date.now() < deadline) {
     const pendingHold = readRestartHold(home, options.logger ?? NULL_LOGGER);
     if (pendingHold !== null) {
-      deadline = deadlineWithRestartHold(home, deadline, pendingHold);
       const existing = await waitForHeldDaemon(options, home, deadline);
       if (existing !== null) return existing;
-      deadline = Date.now() + startWaitBound(home);
       continue;
     }
     const lock = await claimStartLock(home, options.logger ?? NULL_LOGGER);
@@ -448,8 +449,7 @@ export async function waitForPendingDaemon(options: ClientOptions = {}): Promise
         const existing = await discoverDaemon(options);
         const currentHold = readRestartHold(home, options.logger ?? NULL_LOGGER);
         if (currentHold !== null) {
-          deadline = deadlineWithRestartHold(home, deadline, currentHold);
-          if (existing !== null && !replacingDaemon(home, currentHold, existing)) return existing;
+          if (existing !== null && !replacingDaemon(currentHold, existing)) return existing;
           continue;
         }
         return existing;
@@ -510,6 +510,7 @@ export async function discoverDaemon(options: ClientOptions = {}): Promise<Daemo
     token: state.token,
     pid: state.pid,
     version: alive.version,
+    instanceId: alive.instanceId,
     warnings: versionWarnings(alive.version),
   };
 }
@@ -521,6 +522,11 @@ export async function discoverDaemon(options: ClientOptions = {}): Promise<Daemo
  * a started daemon that does not become healthy within the polling cap.
  */
 export async function ensureDaemon(options: ClientOptions = {}, heldLock?: Exclude<StartLockClaim, null>): Promise<DaemonConnection> {
+  const home = options.home ?? shellpuppetHome();
+  return ensureDaemonUntil(options, heldLock, callDeadline(home, options.logger ?? NULL_LOGGER));
+}
+
+async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<StartLockClaim, null> | undefined, waitDeadline: number): Promise<DaemonConnection> {
   const logger = options.logger ?? NULL_LOGGER;
   const home = options.home ?? shellpuppetHome();
   const directValue = process.env['SHELLPUPPET_DAEMON_DIRECT'];
@@ -531,24 +537,20 @@ export async function ensureDaemon(options: ClientOptions = {}, heldLock?: Exclu
 
   const homeResult = await ensureHome(home);
   if (homeResult.warning !== undefined) logger.warn(homeResult.warning);
-  let waitDeadline = Date.now() + startWaitBound(home);
   let lock: StartLockClaim = heldLock ?? null;
   while (heldLock === undefined && Date.now() < waitDeadline) {
     const hold = readRestartHold(home, logger);
     if (hold !== null) {
       // A peer can arrive at the start of a ten-second stop, followed by a
       // ten-second direct start or a two-minute configured startWith.
-      waitDeadline = deadlineWithRestartHold(home, waitDeadline, hold);
       const replacement = await waitForHeldDaemon(options, home, waitDeadline);
       if (replacement !== null) return replacement;
-      waitDeadline = Date.now() + startWaitBound(home);
       continue;
     }
     const existing = await discoverDaemon(options);
     const currentHold = readRestartHold(home, logger);
     if (currentHold !== null) {
-      waitDeadline = deadlineWithRestartHold(home, waitDeadline, currentHold);
-      if (existing !== null && !replacingDaemon(home, currentHold, existing)) return existing;
+      if (existing !== null && !replacingDaemon(currentHold, existing)) return existing;
       continue;
     }
     if (existing !== null) return existing;
@@ -556,7 +558,6 @@ export async function ensureDaemon(options: ClientOptions = {}, heldLock?: Exclu
     if (lock !== null) {
       const claimedHold = readRestartHold(home, logger);
       if (claimedHold === null) break;
-      waitDeadline = deadlineWithRestartHold(home, waitDeadline, claimedHold);
       if (lock !== UNCOORDINATED_START) await releaseStartLock(lock);
       lock = null;
       continue;
@@ -568,14 +569,13 @@ export async function ensureDaemon(options: ClientOptions = {}, heldLock?: Exclu
     if (heldLock === undefined) {
       const hold = readRestartHold(home, logger);
       if (hold !== null) {
-        waitDeadline = deadlineWithRestartHold(home, waitDeadline, hold);
         // An uncoordinated holder could publish a hold after our final check.
         // Release our endpoint before waiting so an explicit start can use it.
         if (lock !== UNCOORDINATED_START) await releaseStartLock(lock);
         lock = UNCOORDINATED_START;
         const replacement = await waitForHeldDaemon(options, home, waitDeadline);
         if (replacement !== null) return replacement;
-        return ensureDaemon(options);
+        return ensureDaemonUntil(options, undefined, waitDeadline);
       }
     }
     const wonWhileClaiming = await discoverDaemon(options);
@@ -593,11 +593,8 @@ export async function ensureDaemon(options: ClientOptions = {}, heldLock?: Exclu
     }
   }
   const configured = parsed.config.daemon;
-  const condition = configured?.startWithOnlyIfEnvContains;
-  const wrapped = options.direct !== true && directValue !== '1' &&
-    configured?.startWith !== undefined &&
-    (condition === undefined || Object.values(env).some((value) => value?.includes(condition)));
-  const wrapper = wrapped ? configured.startWith : undefined;
+  const wrapped = daemonStartMode(home, options.direct, env) === 'wrapped';
+  const wrapper = wrapped ? configured?.startWith : undefined;
   const program = wrapper?.[0];
   const programName = program === undefined ? undefined : path.basename(program);
   let command = process.execPath;
@@ -656,6 +653,7 @@ export async function ensureDaemon(options: ClientOptions = {}, heldLock?: Exclu
           token: state.token,
           pid: state.pid,
           version: alive.version,
+          instanceId: alive.instanceId,
           warnings: versionWarnings(alive.version),
         };
       }
