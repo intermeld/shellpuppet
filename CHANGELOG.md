@@ -7,6 +7,10 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-11-05
+
+Safer planned restarts, and a dashboard fix for windows that close.
+
 ### Added
 
 - `daemon stop --hold` pauses automatic starts during a planned rebuild;
@@ -14,6 +18,11 @@ version may change behaviour, and every such change is listed here.
   makes clients wait for the replacement while the old daemon is stopping.
   Clients identify the replacement by its daemon instance id, use a fixed
   wait bound, and resume starts if the process performing a restart has gone.
+
+### Changed
+
+- `/health` also returns the daemon's instance id, so a client can tell a
+  replacement daemon from the one it was talking to.
 
 ### Fixed
 
