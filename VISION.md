@@ -9,7 +9,7 @@ stays that way, and where the commercial platform begins. The
 document carries the commitments they add up to. A commitment made here
 changes only through a new decision record, never through a quiet edit.
 
-> **Status:** 0.2.0, with the dashboard, is on npm. The [README](README.md)
+> **Status:** 0.2.1, with the dashboard, is on npm. The [README](README.md)
 > carries the current status.
 
 ## What ShellPuppet is

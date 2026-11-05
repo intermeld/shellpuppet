@@ -29,7 +29,7 @@ ShellPuppet is the open-source terminal layer of **Intermeld**, the agent
 governance platform by [Red Eagle Tech](https://redeagle.tech). Everything in
 this repository runs on your machine and needs nothing we operate.
 
-> **Status: 0.2.0, with the dashboard.** The daemon, CLI, MCP server, viewer
+> **Status: 0.2.1, with the dashboard.** The daemon, CLI, MCP server, viewer
 > and dashboard install from npm (below). Watch the repository's Releases for what comes
 > next, and bring questions, ideas and what you build with it to
 > [Discussions](https://github.com/intermeld/shellpuppet/discussions). 🦅
