@@ -35,6 +35,7 @@
  * wall-clock budget once on a loaded machine.
  */
 
+import { BUILT_IN_DIALOGS, promptShapesFor } from '../agents/index.js';
 import { RegexBudgetError, SET_ASIDE_MS, withRegexBudget } from './regexBudget.js';
 import type { DetectedPrompt } from './promptDetector.js';
 
@@ -64,17 +65,7 @@ export const DEFAULT_DIALOG_BELOW = 4;
 const MAX_DIALOG_WITHIN = 100;
 const MAX_DIALOG_BELOW = 20;
 
-/** Built-in signatures, checked before the chooser shapes. */
-export const BUILT_IN_DIALOGS: readonly DialogSignature[] = [
-  {
-    // OpenCode offers three choices, the middle one "Always allow"; MiMo
-    // Code, built from it, calls that one "Allow always", and leaves it out
-    // when the command deletes files.
-    name: 'OpenCode and MiMo Code',
-    title: '^ *┃ +△ Permission required',
-    choices: '^ *┃ +Allow once {2,}(?:(?:Always allow|Allow always) {2,})?Reject',
-  },
-];
+export { BUILT_IN_DIALOGS } from '../agents/index.js';
 
 interface CompiledDialog {
   name: string;
@@ -183,8 +174,11 @@ export function dialogPrompt(
   raw: readonly string[],
   dialogs: readonly CompiledDialog[] = active,
   now: number = Date.now(),
+  agent = 'generic',
 ): DetectedPrompt | null {
+  const allowed = new Set(promptShapesFor(agent).flatMap(shape => shape.kind === 'dialog' ? [shape.signature.name] : []));
   for (const dialog of dialogs) {
+    if (dialog.builtIn && !allowed.has(dialog.name)) continue;
     if (dialog.overBudgetAt !== null && now - dialog.overBudgetAt < SET_ASIDE_MS) continue;
     let found: DetectedPrompt | null = null;
     try {

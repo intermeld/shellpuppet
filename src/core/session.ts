@@ -14,6 +14,9 @@
  * No stdout/stderr: logging via the injected Logger only (lint-enforced).
  */
 
+import { moduleFor } from '../agents/index.js';
+import type { AgentModule, AgentSource } from '../agents/types.js';
+import { resolveSessionAgent } from './reasoning.js';
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -24,7 +27,7 @@ import { ensureSpawnHelperExecutable, explainSpawnFailure, loadNodePty } from '.
 import { ScreenRenderer } from './renderer.js';
 import type { SerializeOptions, StyledLine } from './renderer.js';
 import { commandLine } from './policy.js';
-import { detectPrompt, MusePromptSettler, StalePromptGuard } from './promptDetector.js';
+import { detectPrompt, createPromptReader, StalePromptGuard } from './promptDetector.js';
 import { waitFor } from './waiter.js';
 import type { WaiterInternals } from './waiter.js';
 import type { WaitTarget } from './waiter.js';
@@ -158,15 +161,7 @@ export const taskkillTrees = (pids: readonly number[], timeoutMs = TREE_KILL_TIM
  */
 const WRITE_CHUNK_CHARS = 1024;
 const WRITE_CHUNK_DELAY_MS = 8;
-/** Muse needs a short pause after text before its submitting Enter. */
-export const MUSE_SUBMIT_DELAY_MS = 400;
-
-function museSubmittingText(data: string): boolean {
-  if (!data.endsWith('\r')) return false;
-  const body = data.slice(0, -1);
-  return !/[\r\n]/.test(body) &&
-    Array.from(body).some((character) => character > ' ' && character !== '\x7f');
-}
+export { MUSE_SUBMIT_DELAY_MS } from '../agents/index.js';
 
 /**
  * Bracketed paste (DEC private mode 2004). A TUI that enables it is telling us
@@ -430,6 +425,8 @@ function resolveExecutable(command: string, platform: NodeJS.Platform, cwd: stri
 }
 
 export interface SessionDeps {
+  /** A retry retains the identity resolved by its first start attempt. */
+  resolvedAgent?: { agent: string; agentSource: AgentSource };
   logger?: Logger;
   /** Platform override, for tests only. Defaults to `process.platform`. */
   platform?: NodeJS.Platform;
@@ -673,7 +670,10 @@ export class Session implements WaitTarget {
   readonly command: string;
   readonly args: string[];
   /** The agent it was started as, which chooses how its screen is read. */
-  readonly agent: string | undefined;
+  readonly agent: string;
+  readonly agentSource: AgentSource;
+  private readonly agentModule: AgentModule | undefined;
+  private readonly promptReader: ReturnType<typeof createPromptReader>;
   readonly createdAt: Date;
 
   private readonly pty: IPty;
@@ -708,8 +708,7 @@ export class Session implements WaitTarget {
   private cursorHidden = false;
   /** Serialises write() so chunked writes cannot interleave. See write(). */
   private writeChain: Promise<void> = Promise.resolve();
-  private museSubmissionsQueued = 0;
-  private readonly musePromptSettler = new MusePromptSettler();
+  private submissionsQueued = 0;
   /** Why the input pipe failed (Windows), once it has: input is refused from then on. */
   private inputFailure: Error | null = null;
   private lastChange = Date.now();
@@ -749,7 +748,11 @@ export class Session implements WaitTarget {
     this.label = options.label ?? options.command;
     this.purpose = options.purpose ?? '';
     this.startedBy = options.startedBy ?? 'unknown';
-    this.agent = options.agent;
+    const resolved = deps.resolvedAgent ?? resolveSessionAgent(options.agent, options.command);
+    this.agent = resolved.agent;
+    this.agentSource = resolved.agentSource;
+    this.agentModule = moduleFor(this.agent);
+    this.promptReader = createPromptReader(this.agent);
     this.createdAt = new Date();
     this.logger = deps.logger ?? NULL_LOGGER;
     this.platform = deps.platform ?? process.platform;
@@ -774,7 +777,7 @@ export class Session implements WaitTarget {
 
     const cols = options.cols ?? DEFAULT_COLS;
     const rows = options.rows ?? DEFAULT_ROWS;
-    this.renderer = new ScreenRenderer({ cols, rows, scrollback: DEFAULT_SCROLLBACK });
+    this.renderer = new ScreenRenderer({ cols, rows, scrollback: DEFAULT_SCROLLBACK, agent: this.agent });
 
     // cols/rows say where to START, and nothing more: a size that also froze
     // the grid would leave a viewer with a grid it could not change, and a
@@ -1104,16 +1107,21 @@ export class Session implements WaitTarget {
    * including for the rest of a chunked write it fails part-way through.
    */
   write(data: string): Promise<string> {
-    const museSubmit = this.agent === 'muse' && museSubmittingText(data);
-    if (museSubmit) this.museSubmissionsQueued++;
+    const delayedSubmit = this.delayedSubmission(data);
+    if (delayedSubmit) this.submissionsQueued++;
     const queued = this.writeChain.then(() => this.writeInput(data));
     // The chain must survive a failed write, or one rejection would wedge every
     // subsequent write on this session.
     this.writeChain = queued.then(
-      () => { if (museSubmit) this.museSubmissionsQueued--; },
-      () => { if (museSubmit) this.museSubmissionsQueued--; },
+      () => { if (delayedSubmit) this.submissionsQueued--; },
+      () => { if (delayedSubmit) this.submissionsQueued--; },
     );
     return queued;
+  }
+
+  private delayedSubmission(data: string): boolean {
+    const submit = this.agentModule?.input?.submit;
+    return submit?.delayMs !== undefined && submit.matches?.(data) === true;
   }
 
   private async writeInput(data: string): Promise<string> {
@@ -1123,15 +1131,15 @@ export class Session implements WaitTarget {
     // and its echo guard needs the input itself.
     this.lastInputData = data;
     const { screen } = this.renderer.snapshot();
-    this.stalePrompts.noteInput(screen);
+    this.stalePrompts.noteInput(screen, this.agent);
 
-    if (this.agent === 'muse' && museSubmittingText(data)) {
+    if (this.delayedSubmission(data)) {
       const body = data.slice(0, -1);
       await this.writeData(body);
-      await new Promise((resolve) => setTimeout(resolve, MUSE_SUBMIT_DELAY_MS));
+      await new Promise((resolve) => setTimeout(resolve, this.agentModule!.input!.submit!.delayMs));
       this.refuseIfInputFailed();
       this.refuseIfEnded();
-      this.pty.write('\r');
+      this.pty.write(this.agentModule!.input!.submit!.key);
       return screen;
     }
 
@@ -1211,7 +1219,7 @@ export class Session implements WaitTarget {
    * dropped (`windowsPtyStart.ts`).
    */
   resize(cols: number, rows: number, options: { hold?: boolean } = {}): void | Promise<void> {
-    if (this.agent === 'muse' && this.museSubmissionsQueued > 0) {
+    if (this.agentModule?.input?.resizeBehindSubmit === true && this.submissionsQueued > 0) {
       const queued = this.writeChain.then(() => this.resizeNow(cols, rows, options));
       this.writeChain = queued.then(() => undefined, () => undefined);
       return queued;
@@ -1228,9 +1236,8 @@ export class Session implements WaitTarget {
   }
 
   answerablePrompt(screen: string, now = Date.now()): ReturnType<typeof detectPrompt> {
-    if (this.agent !== 'muse') return detectPrompt(screen);
-    const styled = this.renderer.styledLines().lines;
-    return this.musePromptSettler.detect(screen, now, styled);
+    const styled = this.agentModule?.createPromptSettler === undefined ? undefined : this.renderer.styledLines().lines;
+    return this.promptReader(screen, now, styled);
   }
 
   // ----------------------------------------------------------------- output
@@ -1289,7 +1296,7 @@ export class Session implements WaitTarget {
     // prompt with identical text count as new rather than as the one just
     // answered, and that includes the ones the daemon's stall scan and verify
     // take.
-    this.stalePrompts.observe(detectPrompt(rendered.screen)?.signature ?? null);
+    this.stalePrompts.observe(detectPrompt(rendered.screen, this.agent)?.signature ?? null);
     return {
       id: this.id,
       label: this.label,
@@ -1348,7 +1355,7 @@ export class Session implements WaitTarget {
       label: this.label,
       purpose: this.purpose,
       startedBy: this.startedBy,
-      agent: this.agent ?? null,
+      agent: this.agent,
       command: this.command,
       args: this.args,
       cols: this.cols,

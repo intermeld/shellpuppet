@@ -1,10 +1,12 @@
 # ADR-006: A module per agent CLI, declarative from outside
 
-**Status:** Proposed
+**Status:** Accepted (2026-11-05)
 **Date:** 2026-09-17
 **Proposed by:** Red Eagle Tech (product owner)
 
 ## Context
+
+The following describes the context when this decision was proposed.
 
 Every program ShellPuppet drives has its own habits. Each shows readiness in
 its own way, asks questions in its own shapes, wants input submitted its own
@@ -31,8 +33,19 @@ though the code comes later.
   viewer and every security property.
 - **An internal refactor first, after the first release.** Modules are files
   in this repository, with today's tests as the safety net. They are reviewed
-  like any other change. How a session is matched to its module, including a
-  shell that later starts an agent CLI, is settled in the refactor.
+  like any other change. A session resolves one identity at start: its explicit
+  agent, otherwise a matching program name, otherwise `generic`. Readers,
+  writers, waiters, the session list and audit use that same identity. Every
+  session runs every module's prompt shapes and dialogs in the existing order,
+  including prompts forwarded by a child program inside a known agent session.
+  Input, resize, settling and reading use the session's own resolved module.
+  A fallback identity has no reading; a configured reading named `generic`
+  applies only when explicitly named or matched by program. Screen content
+  never changes the session's identity.
+- **Data first, with small internal functions where necessary.** Reading and
+  dialog signatures retain their existing shapes and configuration overlays.
+  A menu settler or command walk may be a small function inside its module.
+  These remain candidates for a general capability in the core.
 - **No public module interface yet.** The module format may change freely
   until one is published, and publishing one is a decision of its own, taken
   once the internal modules have settled.
@@ -58,8 +71,10 @@ though the code comes later.
 
 ## Consequences
 
-- Until the refactor, agent-profiles.md stays the reference and callers keep
-  passing readiness patterns themselves.
+- Agent-profiles.md remains the readiness reference and callers keep passing
+  readiness patterns themselves. Readiness defaults, environment markers and
+  safety adapters are reserved for subsequent work. The safety engine will
+  remain separate from harness adapters, with no safety behaviour added here.
 - The refactor aims to keep modules as data, so that a later external format
   can be the one the project already runs on. Where data cannot express
   something, the first choice is a general capability in the core.

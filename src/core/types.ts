@@ -113,7 +113,7 @@ export interface SessionSummary {
   purpose: string;
   /** The audit actor that started it, e.g. `mcp:claude-code`, `cli`. */
   startedBy: string;
-  /** The agent it was started as (`SessionOptions.agent`), or null. */
+  /** The agent resolved at start, or generic for a shell or unknown program. */
   agent: string | null;
   command: string;
   args: string[];

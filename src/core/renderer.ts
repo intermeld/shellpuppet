@@ -23,11 +23,13 @@ import { DEFAULT_COLS, DEFAULT_ROWS, DEFAULT_SCROLLBACK } from './types.js';
 import type { CursorPosition } from './types.js';
 import { markSelectedOption } from './selection.js';
 import { detectPrompt } from './promptDetector.js';
+import { promptShapesFor } from '../agents/index.js';
 
 const { Terminal } = xterm;
 const { SerializeAddon } = serializeAddon;
 
 export interface RendererOptions {
+  agent?: string;
   cols?: number;
   rows?: number;
   scrollback?: number;
@@ -80,12 +82,14 @@ export interface RenderedScreen {
 }
 
 export class ScreenRenderer {
+  private readonly agent: string;
   private readonly term: XtermTerminal;
   private readonly serializer: XtermSerializeAddon;
   /** Chain of pending writes, so `flush()` can await parser completion. */
   private pending: Promise<void> = Promise.resolve();
 
   constructor(options: RendererOptions = {}) {
+    this.agent = options.agent ?? 'generic';
     this.term = new Terminal({
       cols: options.cols ?? DEFAULT_COLS,
       rows: options.rows ?? DEFAULT_ROWS,
@@ -240,9 +244,9 @@ export class ScreenRenderer {
     }
     // Muse's staged menus use their visible text to identify the question;
     // marking the selected option still needs the styled rows.
-    const prompt = detectPrompt(lines.join('\n'));
-    const museHeading = lines.some((line) => /^Would .+ like to run the following command\?$/.test(line));
-    const marked = prompt?.optionRows === undefined && !museHeading
+    const prompt = detectPrompt(lines.join('\n'), this.agent);
+    const styledHeading = promptShapesFor(this.agent).some(shape => shape.kind === 'rows' && shape.styledHeading !== undefined && lines.some(line => shape.styledHeading!.test(line)));
+    const marked = prompt?.optionRows === undefined && !styledHeading
       ? lines
       : markSelectedOption(this.styledLines().lines, prompt);
     return {
@@ -280,7 +284,8 @@ export class ScreenRenderer {
       const line = buffer.getLine(i);
       lines.push(line ? line.translateToString(true) : '');
     }
-    return markSelectedOption(this.styledLines({ last: Math.max(count, 20) }).lines).slice(-lines.length);
+    const styled = this.styledLines({ last: Math.max(count, 20) }).lines;
+    return markSelectedOption(styled, detectPrompt(styled.map(line => line.text).join('\n'), this.agent)).slice(-lines.length);
   }
 
   /**

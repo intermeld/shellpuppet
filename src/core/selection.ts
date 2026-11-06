@@ -40,11 +40,11 @@ export function markSelectedOption(lines: readonly StyledLine[], prompt?: Detect
 }
 
 /** Apply the same marker after reasoning rows have been removed or collapsed. */
-export function markFilteredSelectedOption(filtered: readonly string[], source: readonly StyledLine[]): string[] {
+export function markFilteredSelectedOption(filtered: readonly string[], source: readonly StyledLine[], agent = 'generic'): string[] {
   const output = [...filtered];
-  const selected = selectedOption(source);
+  const selected = selectedOption(source, detectPrompt(source.map(line => line.text).join('\n'), agent));
   if (selected === null) return output;
-  const prompt = detectPrompt(output.join('\n'));
+  const prompt = detectPrompt(output.join('\n'), agent);
   const row = prompt?.optionRows?.[selected.option];
   if (row !== undefined && output[row] === source[selected.row]?.text) {
     output[row] = SELECTED_OPTION_MARKER + output[row];

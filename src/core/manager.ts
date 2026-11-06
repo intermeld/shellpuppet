@@ -127,7 +127,10 @@ export class SessionManager {
         if (!registered(true)) throw new SessionStartError('Session start was cancelled.');
         this.logger.warn('session ConPTY start retry', { id: session.id, delayMs: CONPTY_START_RETRY_DELAY_MS });
         try {
-          current = new Session(session.id, options, { ...this.sessionDeps, retryAttempt: true });
+          current = new Session(session.id, options, {
+            ...this.sessionDeps, retryAttempt: true,
+            resolvedAgent: { agent: session.agent, agentSource: session.agentSource },
+          });
         } catch (error) {
           discard();
           throw error;

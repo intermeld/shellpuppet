@@ -38,6 +38,8 @@
  * patterns are not timed.
  */
 
+import { BUILT_IN_SIGNATURES, claimsProgram, moduleFor, programName, resolveAgent } from '../agents/index.js';
+import type { AgentSource } from '../agents/types.js';
 import { RegexBudgetError, SET_ASIDE_MS, withRegexBudget } from './regexBudget.js';
 import { detectPrompt } from './promptDetector.js';
 import type { DetectedPrompt } from './promptDetector.js';
@@ -139,263 +141,7 @@ export interface AgentSignature {
   tidy?: string;
 }
 
-// ---------------------------------------------------------------- built in
-
-const RULE = '^[─━]{10,}$';
-const RULE_INDENTED = '^\\s*[─━]{10,}';
-
-/**
- * Grok draws its permission box behind the same bar as its reasoning: a
- * question row (`> `), a command's rows (`│` starts one, `:` continues it)
- * and option rows (`1 (○)`). No Grok reasoning rule starts or continues on
- * them, so a permission box keeps every row of its own, whatever wording
- * its question is asked in.
- */
-const GROK_BOX_ROW = ' {2}(?:> |\\d+ \\([○•●]\\) |[│:])';
-
-/**
- * Built-in signatures. Each comment names the screens its fixtures come from.
- */
-export const BUILT_IN_SIGNATURES: readonly AgentSignature[] = [
-  {
-    // Claude Code 2.1.312, default view and the ctrl+o transcript: no
-    // reasoning text is drawn in either, only a spinner line while the model
-    // thinks ("✻ Pondering… (2s · thinking with xhigh effort)"). The answer
-    // is a `●` in the text colour; tool calls get a grey or coloured `●`.
-    name: 'claude',
-    programs: ['claude'],
-    measured: 'Claude Code 2.1.312',
-    // The composer's prompt glyph is followed by a non-breaking space once
-    // something is typed; the echo of a sent prompt by an ordinary one.
-    composer: { text: '^❯( |\\xa0|$)' },
-    typed: { text: '^❯[ \\xa0]\\S', word: { dim: false } },
-    chrome: [{ text: RULE }, { text: '/effort\\s*$' }],
-    frame: { text: RULE },
-    busy: [{ text: '^[✻✽✶✢✳·*] \\S+…' }],
-    turn: { text: '^❯ \\S' },
-    answer: {
-      start: { text: '^● ', lead: { fg: ['default', '#ffffff', '#000000'] } },
-      continues: { text: '^ {2}' },
-    },
-    trailer: { text: '^✻ \\S' },
-    requireTrailer: true,
-  },
-  {
-    // Codex CLI 0.165.0 (GPT-6-Sol, high effort), default view. The answer is
-    // a dim "•" with plain text after it; a tool group is a dim "•" with a
-    // bold heading ("Explored"), a command a bold green "•" ("Ran"). While a
-    // turn runs, "Working (Ns • esc to interrupt)" sits above the composer.
-    name: 'codex',
-    programs: ['codex'],
-    measured: 'Codex CLI 0.165.0',
-    composer: { text: '^› ' },
-    // The placeholder ("Ask Codex to do anything") is dim; typed text is not.
-    typed: { text: '^› \\S', word: { dim: false } },
-    chrome: [{ text: 'esc to interrupt' }],
-    busy: [{ text: 'esc to interrupt' }],
-    turn: { text: '^› \\S' },
-    answer: {
-      start: { text: '^• ', lead: { dim: true }, word: { bold: false, italic: false } },
-      continues: { text: '^ {2}(?!Worked for )[^\\s└]' },
-    },
-    trailer: { text: '^ {2}Worked for ' },
-    requireTrailer: true,
-  },
-  {
-    // Antigravity CLI 1.4.10 (Gemini 3.8 Flash, high effort). A summary of
-    // the model's reasoning stays on screen as one line, "○ Thought for 4.2s
-    // (Create the file, then…)"; while it works, the spinner's label is the
-    // subject of what it is thinking about. "▸ Thought for 5s, 228 tokens"
-    // carries no text. Tool calls are a green "●"; the answer is plain text
-    // indented two spaces. While a turn runs, "esc to cancel" is under the
-    // composer.
-    name: 'agy',
-    programs: ['agy', 'antigravity'],
-    measured: 'Antigravity CLI 1.4.10',
-    composer: { text: '^>' },
-    chrome: [{ text: RULE_INDENTED }, { text: '^[⠀-⣿] {2}' }, { text: '^└ ' }],
-    frame: { text: RULE_INDENTED },
-    busy: [{ text: '^[⠀-⣿] {2}\\S' }, { text: '^esc to cancel' }],
-    turn: { text: '^> \\S' },
-    reasoning: [
-      { start: { text: '^○ Thought for ' } },
-      { start: { text: '^[⠀-⣿] {2}\\S' } },
-    ],
-    answer: {
-      start: { text: '^ {2}\\S', lead: { fg: ['default', '#ffffff', '#000000', 'p7', 'p15'] } },
-      continues: { text: '^ {2}\\S', lead: { fg: ['default', '#ffffff', '#000000', 'p7', 'p15'] } },
-      upward: true,
-    },
-  },
-  {
-    // Grok Build 1.0.70 (grok-4.7, xhigh effort). While the model thinks, its
-    // reasoning streams into a block behind a fading "│" bar, headed
-    // "♦ Thinking…"; once it is done the block collapses to "♦ Thought for
-    // Ns" with nothing under it. Messages and the answer are plain text
-    // indented five spaces; tool work is a "♦" line ("♦ Edited primes.py, ran
-    // 1 command"); "Worked for Ns" closes the turn. While a turn runs, a
-    // spinner line ("| Thinking… 3.1s") sits above the composer's box.
-    name: 'grok',
-    programs: ['grok'],
-    measured: 'Grok Build 1.0.70',
-    composer: { text: '^ {2}│ >' },
-    chrome: [{ text: '^ {2}╭' }, { text: '^ {3}[|/\\\\-] \\S' }, { text: '^ {3}\\S.*shift\\+tab', }],
-    frame: { text: '^ {2}[╭╰]' },
-    busy: [{ text: '^ {3}[|/\\\\-] .* \\d+(?:\\.\\d+)?s\\s*$' }, { text: '♦ Thinking…' }],
-    turn: { text: '^ {5}> \\S' },
-    reasoning: [
-      {
-        start: { text: '^ {2}│ {2}♦ Thinking' },
-        continues: { text: `^ {2}│(?!${GROK_BOX_ROW})` },
-      },
-      // The spinner's label can be the model's own words about what it is
-      // doing; it goes too, and the busy state still shows in the result.
-      { start: { text: '^ {3}[|/\\\\-] \\S' } },
-      // The bar on its own: the heading may have scrolled away.
-      {
-        start: { text: `^ {2}│(?!${GROK_BOX_ROW}) {2}\\S` },
-        continues: { text: `^ {2}│(?!${GROK_BOX_ROW})` },
-      },
-    ],
-    answer: {
-      start: { text: '^ {5}(?!Worked for )[^\\s♦>]', lead: { fg: ['default', '#c8c8c8', '#ffffff', '#000000'] } },
-      continues: { text: '^ {5}(?!Worked for )[^\\s♦>]', lead: { fg: ['default', '#c8c8c8', '#ffffff', '#000000'] } },
-      upward: true,
-    },
-    trailer: { text: '^ {5}Worked for ' },
-    requireTrailer: true,
-    // A right-aligned time on each message row.
-    tidy: ' {2,}\\d{1,2}:\\d{2}(?: ?[A-Za-z]{2})?\\s*$',
-  },
-  {
-    // OpenCode 2.0.26 (GLM-5.3): no reasoning text is drawn. While the model
-    // thinks it shows "⠇ Thinking"; afterwards a collapsed "+ Thought · Ns"
-    // with nothing under it. The answer is plain paragraphs, in the same
-    // colour and indent as any other text, closed by a footer naming the
-    // agent, the model and the time ("Build · GLM-5.3 · 7.0s"). A sidebar
-    // can share the rows on the right.
-    name: 'opencode',
-    programs: ['opencode'],
-    measured: 'OpenCode 2.0.26',
-    composer: { text: '^ {2}[┃╹]' },
-    chrome: [{ text: '^ {2}┃' }, { text: '^\\s{60,}\\S' }],
-    busy: [
-      { text: '\\besc interrupt\\b' },
-      { text: '^ {3,}[⠀-⣿] ' },
-      { text: '^ {3,}\\+ Thought\\s*$' },
-    ],
-    turn: { text: '^ {2}┃ {2}\\S' },
-    answer: {
-      start: { text: '^ {5}[^\\s→+⠀-⣿]', lead: { fg: ['default', '#eeeeee', '#ffffff', '#000000'] } },
-      continues: { text: '^ {5}[^\\s→+⠀-⣿]', lead: { fg: ['default', '#eeeeee', '#ffffff', '#000000'] } },
-      upward: true,
-    },
-    trailer: { text: '^ {5}\\S+ · [^·]+ · \\d[\\d.]*m?s\\b' },
-    requireTrailer: true,
-    // The sidebar, on the same rows to the right.
-    tidy: ' {20,}\\S.*$',
-  },
-  {
-    // MiMoCode 0.1.16 (MiMo-V2.6-Pro), built from OpenCode: no reasoning text
-    // is drawn. A collapsed "+ Thought: Ns" sits before each tool group and
-    // before the answer; tool calls are boxes behind a bar drawn in the
-    // background colour, the person's prompt and the composer behind one in
-    // the agent's colour. The answer is plain paragraphs closed by "▣ Build ·
-    // MiMo-V2.6-Pro · Ns", which carries no time while the turn runs. A side
-    // panel on the right shares the rows (the session's title, context and
-    // cost). The composer can hold a suggestion of its own after a turn.
-    name: 'mimo',
-    programs: ['mimo', 'mimocode', 'mimo-code'],
-    measured: 'MiMoCode 0.1.16',
-    composer: { text: '^ {2}[┃╹]' },
-    chrome: [{ text: '^ {2}┃' }, { text: '^\\s{60,}\\S' }],
-    busy: [
-      { text: '\\besc (?:to )?interrupt\\b' },
-      { text: '^ {5}▣ {2}\\S+ · [^·]+?\\s*(?:[⎘█].*)?$' },
-      { text: '^ {3,}[⠀-⣿] ' },
-    ],
-    turn: { text: '^ {2}┃ {2}\\S', lead: { notFg: ['#0a0a0a'] } },
-    answer: {
-      start: { text: '^ {5}[^\\s→+⠀-⣿▣]' },
-      continues: { text: '^ {5}[^\\s→+⠀-⣿▣]' },
-      upward: true,
-    },
-    trailer: { text: '^ {5}▣ {2}\\S+ · [^·]+ · \\d' },
-    requireTrailer: true,
-    // The scrollbar, the side panel and the copy button, on the same rows.
-    tidy: '\\s+[⎘█].*$',
-  },
-  {
-    // Qoder CLI 1.1.80 (GLM-5.3), default thinking: a "Thinking" heading in
-    // italics, then the reasoning behind a grey "│" bar in grey italics, as
-    // the model works and after it has answered. Messages start with a "▪"
-    // in the text colour, tool calls with a green one. While a turn runs, a
-    // braille spinner line says "(esc to cancel, Ns)".
-    name: 'qoder',
-    programs: ['qodercli', 'qoder'],
-    measured: 'Qoder CLI 1.1.80',
-    composer: { text: '^ > ' },
-    // The placeholder ("Type your message or @path/to/file") is grey; typed text is not.
-    typed: { text: '^ > ', word: { notFg: ['#95958f'] } },
-    chrome: [
-      { text: RULE_INDENTED },
-      { text: 'Shift\\+Tab' },
-      { text: '\\? for shortcuts\\s*$' },
-      { text: '\\(esc to cancel' },
-    ],
-    frame: { text: RULE_INDENTED },
-    busy: [{ text: '\\(esc to cancel' }],
-    turn: { text: '^ > \\S' },
-    reasoning: [
-      // The bar by its text alone: a code span or a table inside the
-      // reasoning is drawn upright, and an upright line is still reasoning.
-      {
-        start: { text: '^ Thinking\\s*$', lead: { italic: true } },
-        continues: { text: '^ │( |$)' },
-      },
-      // The same bar on its own: the heading may have scrolled away.
-      {
-        start: { text: '^ │ ' },
-        continues: { text: '^ │( |$)' },
-      },
-    ],
-    answer: {
-      start: { text: '^ ▪ ', lead: { fg: ['default', '#eeeeeb', '#ffffff', '#000000'] } },
-      continues: { text: '^ {3}[^\\s└│]' },
-    },
-  },
-  {
-    // Muse Code 1.4.14. A completed answer is a bold ◆ block. Tool calls
-    // use a green ◆, and the live reasoning summary uses a grey ◆. The
-    // composer is the last ❯ row followed only by chrome, with or without
-    // typed text. Submitted turns sit above it. The Muse Code banner
-    // sits above the transcript, and the status line ending in Launch overrides
-    // sits below the composer. A
-    // finished turn may have no Worked for line.
-    name: 'muse',
-    programs: ['muse', 'muse-bin-*'],
-    measured: 'Muse Code 1.4.14',
-    composer: { text: '^❯(?:\\s*$| \\S)' },
-    typed: { text: '^❯ \\S', body: { dim: false, fg: ['#ccd3db'] } },
-    chrome: [{ text: '^── Voice input \\(Alt\\+V to start\\)' }, { text: RULE }],
-    frame: { text: RULE },
-    busy: [
-      { text: '^[◇◈◆] .*esc to interrupt\\)' },
-      { text: '^└ (?:Hooks running|last event|Meta Model )' },
-    ],
-    turn: { text: '^❯ \\S' },
-    reasoning: [{
-      start: { text: '^◆ (?!Worked for )', lead: { fg: ['#676c74'] } },
-      continues: { text: '^ {2}(?![◆◇◈❯])\\S', lead: { fg: ['#676c74', '#8a9098'] } },
-    }],
-    answer: {
-      start: { text: '^◆ (?!Worked for |(?:Wrote|Ran command|Write)\\b)', lead: { bold: true, fg: ['#ccd3db'] } },
-      continues: { text: '^ {2}\\S', lead: { fg: ['#ccd3db'] } },
-      upward: true,
-    },
-    trailer: { text: '^◆ Worked for ' },
-  },
-];
+export { BUILT_IN_SIGNATURES } from '../agents/index.js';
 
 // ---------------------------------------------------------------- compiling
 
@@ -625,22 +371,17 @@ export function useAgentSignatures(
   return problems;
 }
 
+/** Resolve identity once, independently of a reading pattern's temporary time budget. */
+export function resolveSessionAgent(agent: string | undefined, command: string): ReturnType<typeof resolveAgent> {
+  return resolveAgent(agent, command, active);
+}
+
 /** The names `terminal_start`'s `agent` accepts. */
 export function agentNames(): string[] {
   return active.map((s) => s.name).sort();
 }
 
-/** A program's name from its start command: `C:\x\Claude.EXE` is `claude`. */
-export function programName(command: string): string {
-  const base = command.split(/[\\/]/).pop() ?? command;
-  return base.replace(/\.(exe|cmd|bat|ps1|com)$/i, '').toLowerCase();
-}
-
-/** A versioned Muse executable has a changing suffix after muse-bin-. */
-function claimsProgram(signature: CompiledSignature, program: string): boolean {
-  return signature.programs.includes(program) ||
-    (signature.programs.includes('muse-bin-*') && /^muse-bin-\d+(?:\.\d+)*(?:[-+][a-z0-9]+(?:[.-][a-z0-9]+)*)?$/.test(program));
-}
+export { programName } from '../agents/index.js';
 
 /**
  * The agent a session runs as, by name: the one it was started as, or the one
@@ -667,10 +408,15 @@ export function agentNameFor(agent: string | undefined, command: string, extra: 
  * The signature for a session: the agent it was started as, or the one whose
  * programs include its start command. Null when neither names one.
  */
-export function signatureFor(agent: string | undefined, command: string): CompiledSignature | null {
+export function signatureFor(agent: string | undefined, command = ''): CompiledSignature | null {
   if (agent !== undefined) return active.find((s) => s.name === agent && !setAside(s)) ?? null;
   const program = programName(command);
   return active.find((s) => !setAside(s) && claimsProgram(s, program)) ?? null;
+}
+
+/** A fallback identity must not select a configured reading named generic. */
+export function signatureForSession(session: { agent: string; agentSource: AgentSource }): CompiledSignature | null {
+  return session.agentSource === 'fallback' ? null : signatureFor(session.agent);
 }
 
 // ---------------------------------------------------------------- matching
@@ -784,28 +530,9 @@ function guarded<T>(signature: CompiledSignature, body: () => T): T | null {
 function composerAt(lines: readonly StyledLine[], signature: CompiledSignature): { line: number; chrome: number } | null {
   for (let i = lines.length - 1; i >= 0; i--) {
     const candidate = lines[i]!;
-    // A full-width rule above Muse's composer can leave its row marked as a
-    // continuation. The voice bar still anchors that row as the composer.
-    const wrappedMuseComposer = signature.name === 'muse' && candidate.wrapped === true &&
-      signature.composer.text?.test(candidate.text) === true &&
-      lines.slice(Math.max(0, i - 2), i).some((line) => /^── Voice input \(Alt\+V to start\)/.test(line.text));
-    if (!lineFits(candidate, signature.composer) && !wrappedMuseComposer) continue;
-    if (signature.name === 'muse') {
-      let inComposerBody = true;
-      const tailIsChrome = lines.slice(i + 1).every((line) => {
-        if (line.text.trim() === '') return true;
-        if (/^[─━]{10,}$/.test(line.text)) {
-          inComposerBody = false;
-          return true;
-        }
-        if (/· Launch overrides\s*$/.test(line.text)) return true;
-        // Muse indents later rows of a typed composer. Their text keeps the
-        // ordinary foreground, unlike the grey hint or status line.
-        return inComposerBody && /^ {2}\S/.test(line.text) &&
-          inkStyles(line).every((style) => style.fg === '#ccd3db');
-      });
-      if (!tailIsChrome) continue;
-    }
+    const composerRule = moduleFor(signature.name)?.readingRules?.composer;
+    if (!(composerRule === undefined ? lineFits(candidate, signature.composer) :
+      composerRule(lines, i, signature, readingContext))) continue;
     // Reasoning is never drawn below the composer. A line with reasoning under
     // it is the echo of the person's prompt, taken for the composer while a
     // dialog stands in its place: no composer is found, so the filter reads
@@ -953,7 +680,7 @@ export function hideReasoning(
   // signatures are the only patterns the detector times (`dialogs.ts`); its
   // own patterns are not.
   const detected =
-    signature.reasoning.length === 0 ? null : detectPrompt(lines.map((line) => line.wrapped ? '' : line.text).join('\n'));
+    signature.reasoning.length === 0 ? null : detectPrompt(lines.map((line) => line.wrapped ? '' : line.text).join('\n'), signature.name);
   return guarded(signature, () => {
     const claimed = claimedRows(lines, signature, detected);
     // Everything above the composer's own line, the chrome over it included:
@@ -1039,9 +766,9 @@ export function latestResult(lines: readonly StyledLine[], signature: CompiledSi
   const result = guarded<AgentResult>(signature, () => {
     const composer = composerAt(lines, signature);
     if (composer === null) {
-      const museBusy = signature.name === 'muse' && lines.some((line) =>
+      const busy = moduleFor(signature.name)?.readingRules?.busyWithoutComposer === true && lines.some((line) =>
         signature.busy.some((test) => lineFits(line, test)));
-      return { found: false, reason: museBusy ? 'busy' : 'no-composer', status: [] };
+      return { found: false, reason: busy ? 'busy' : 'no-composer', status: [] };
     }
     const status = lines
       .slice(composer.line + 1)
@@ -1060,31 +787,11 @@ export function latestResult(lines: readonly StyledLine[], signature: CompiledSi
     }
     // A spinner can be drawn in the latest turn or the chrome under it;
     // a stale copy in the scrollback above says nothing.
-    const current = lines.slice(turnStart);
-    if (signature.name !== 'muse' && signature.busy.some((test) => current.some((line) => lineFits(line, test)))) {
-      return { found: false, reason: 'busy', status };
-    }
-    let lastBusy = -1;
-    if (signature.name === 'muse') {
-      for (let i = lines.length - 1; i >= turnStart; i--) {
-        if (signature.busy.some((test) => lineFits(lines[i]!, test))) {
-          lastBusy = i;
-          break;
-        }
-      }
-    }
-    // Muse can retain an activity row above a finished answer. Only a later
-    // answer before the composer makes that row historical.
-    let museAnswerAfterBusy = false;
-    if (signature.name === 'muse' && lastBusy >= 0) {
-      const ranges = reasoningRanges(lines, signature, composer.chrome);
-      const inReasoning = (i: number): boolean => ranges.some(([from, to]) => i >= from && i < to);
-      museAnswerAfterBusy = lines.slice(lastBusy + 1, composer.chrome).some((line, offset) =>
-        !inReasoning(lastBusy + 1 + offset) && lineFits(line, signature.answer.start));
-    }
-    if (lastBusy >= 0 && !museAnswerAfterBusy) {
-      return { found: false, reason: 'busy', status };
-    }
+    const busyRule = moduleFor(signature.name)?.readingRules?.busy;
+    const busy = busyRule === undefined
+      ? signature.busy.some(test => lines.slice(turnStart).some(line => lineFits(line, test)))
+      : busyRule(lines, turnStart, composer.chrome, signature, readingContext);
+    if (busy) return { found: false, reason: 'busy', status };
     if (signature.typed !== undefined) {
       for (let i = composer.chrome; i <= composer.line; i++) {
         if (lineFits(lines[i]!, signature.typed)) return { found: false, reason: 'prompt-typed', status };
@@ -1124,3 +831,5 @@ export function latestResult(lines: readonly StyledLine[], signature: CompiledSi
   });
   return result ?? { found: false, reason: 'over-budget', status: [] };
 }
+
+const readingContext = { matches: lineFits, ink: inkStyles, ranges: reasoningRanges };

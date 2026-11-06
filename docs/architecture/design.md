@@ -165,6 +165,18 @@ if the state file names another daemon that is running, even one too busy to ans
 
 ```
 src/
+  agents/
+    types.ts          # internal agent module contract
+    index.ts          # built-in modules, name lookup and program matching
+    claude/           # reading signature and prompt shapes
+    codex/
+    agy/
+    grok/             # reading signature, box shapes and command walk
+    opencode/         # reading signature, question menu and permission dialog
+    mimo/             # shared OpenCode shapes and its clack trust message
+    qoder/
+    muse/             # reading, menus, settling, submission and composer rules
+    generic/          # shared prompt shapes for every session
   core/
     session.ts        # one PTY + its VT renderer + lifecycle
     manager.ts        # session registry, ids, cleanup
@@ -213,6 +225,33 @@ docs/                 # architecture/, reference/, decisions/
 
 **TypeScript, Node 22+.** Typed for maintainability, and the MCP SDK is
 TypeScript-first.
+
+Each agent's screen and input conventions live in its module under `src/agents/`.
+Reading and dialog signatures keep their configuration shapes. Small internal
+functions handle the menu and command walks that need more than patterns. The
+core runs those rules and retains terminal ownership, rendering, generic prompt
+detection, waits, policy, audit and every security property. Captured fixtures
+remain in their existing locations under `test/fixtures/`; relocation is a
+separate later change.
+
+A session resolves its agent once at start: a validated explicit name wins,
+otherwise the program name selects a module, otherwise it is `generic`. Readers,
+writers and waiters use that identity throughout the session. The session list
+and start audit entries report it; the session also retains whether the source
+was explicit, the program name or a fallback. A fallback has no reading, even
+when a configured reading is named `generic`; that reading still works when
+explicitly named or matched by program. Every session runs every module's prompt
+shapes and dialogs in the existing detection order, so a child program's forwarded
+prompt is supervised in a known agent session as well as in a shell. Input,
+resize, settling and reading use the session's own resolved module. No identity
+is inferred from screen content.
+
+`agents.signatures` continues to add or replace readings by name, including their
+program matches. `prompts.dialogs` continues to add dialogs for every session,
+and `agents.passEnv` continues to use agent names. Configured readings without a
+built-in module also use every harness shape for detection.
+Readiness defaults, environment markers and safety adapters are reserved optional
+module fields, unused at this stage.
 
 `viewer.js` and `dashboard.js` use `pane.js`; `term.onData` is registered once
 there. The dashboard uses plain script and the DOM renderer, with no new
@@ -289,7 +328,8 @@ just the visible viewport. Agent CLIs scroll long output past the screen; withou
 agents hit a wall the moment output exceeds one screen. (Scrollback *search* remains out
 of scope, as §8 records.)
 
-**Reading an agent CLI without its reasoning** (`src/core/reasoning.ts`). Several agent
+**Reading an agent CLI without its reasoning** (signatures in `src/agents/`,
+the reading engine in `src/core/reasoning.ts`). Several agent
 CLIs draw the model's reasoning on screen, and a supervisor that reads the screen takes it
 all into its own context: text it did not need, and another model's reasoning it has no
 business collecting. Each CLI's screen is described as data, a *signature*: tests on a

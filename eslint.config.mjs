@@ -33,7 +33,7 @@ export default tseslint.config(
   {
     // stdout discipline (design §2.4): a hard rule, scoped to the modules the MCP
     // adapter loads in-process.
-    files: ['src/core/**/*.ts', 'src/client/**/*.ts'],
+    files: ['src/core/**/*.ts', 'src/client/**/*.ts', 'src/agents/**/*.ts'],
     rules: {
       'no-console': 'error',
       'no-restricted-properties': [

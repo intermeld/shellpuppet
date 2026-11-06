@@ -7,6 +7,18 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+### Changed
+
+- Agent-specific knowledge (reading signatures, prompt shapes and dialogs,
+  Muse's input rules) now lives in one module per harness under
+  `src/agents/`, as ADR-006 describes. Prompt detection still runs every
+  harness's shapes in every session, so a prompt painted by a program running
+  inside an agent is still caught.
+- Sessions resolve their agent once from the explicit agent or the program
+  name, falling back to `generic`. The session list and start audit entries
+  now show that resolved agent. Starting Muse by its program name applies
+  its submit delay, resize ordering and menu settling as an explicit agent does.
+
 ## [0.2.1] - 2026-11-05
 
 Safer planned restarts, and a dashboard fix for windows that close.

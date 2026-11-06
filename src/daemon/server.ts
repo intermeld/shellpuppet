@@ -6,6 +6,7 @@
  * upgrades, bearer-token auth on the API, no CORS headers at all.
  */
 
+import { moduleFor } from '../agents/index.js';
 import * as fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import * as http from 'node:http';
@@ -35,7 +36,7 @@ import { detectPrompt } from '../core/promptDetector.js';
 import { markFilteredSelectedOption } from '../core/selection.js';
 import type { DetectedPrompt } from '../core/promptDetector.js';
 import { WaitConditionError } from '../core/waiter.js';
-import { agentNames, hideReasoning, latestResult, programName, signatureFor } from '../core/reasoning.js';
+import { agentNames, hideReasoning, latestResult, programName, signatureForSession } from '../core/reasoning.js';
 import type { CompiledSignature, FilteredLines } from '../core/reasoning.js';
 import type { Session } from '../core/session.js';
 import { DEFAULT_WAIT_TIMEOUT_MS, ENV_NAME_PATTERN, MAX_WAIT_TIMEOUT_MS, WAIT_POLL_INTERVAL_MS, howSessionEnded } from '../core/types.js';
@@ -510,7 +511,7 @@ function filteredWaitScreen(session: Session, signature: CompiledSignature): {
   const view = session.styledScreenNow(REASONING_CONTEXT_LINES);
   const filtered = hideReasoning(view.lines, signature, view.firstVisible);
   if (filtered === null) throw new WaitConditionError(overBudgetMessage(signature));
-  return { screen: markFilteredSelectedOption(filtered.lines, view.lines).join('\n'), filtered };
+  return { screen: markFilteredSelectedOption(filtered.lines, view.lines, session.agent).join('\n'), filtered };
 }
 
 /**
@@ -1979,6 +1980,7 @@ export class Daemon {
       command: profile.command,
       args: profile.args,
       resolvedCommand: resolvedCommand.file,
+      agent: session.agent,
       ...(profile.envFromDaemon === 'all'
         ? { envFromDaemon: 'all' }
         : copied.length > 0 ? { envFromDaemon: copied } : {}),
@@ -2610,10 +2612,10 @@ export class Daemon {
         }
         json(res, 200, {
           ...snapshot,
-          screen: markFilteredSelectedOption(screen.lines, view.lines).join('\n'),
+          screen: markFilteredSelectedOption(screen.lines, view.lines, session.agent).join('\n'),
           cursor: filteredCursor(snapshot.cursor, screen),
           ...(tail !== undefined && tailSource !== undefined
-            ? { lastLines: markFilteredSelectedOption(tail.lines, tailSource.lines) }
+            ? { lastLines: markFilteredSelectedOption(tail.lines, tailSource.lines, session.agent) }
             : {}),
           reasoning: {
             agent: signature.name,
@@ -2758,7 +2760,7 @@ export class Daemon {
         // `prompt === true` only.
         if (prompt !== null) condition.prompt = prompt !== 'false' && prompt !== '0';
         const filteredMatch = reader !== null && (condition.text !== undefined || condition.regex !== undefined || condition.prompt === true);
-        const muse = signatureFor(session.agent, session.command);
+        const pendingReader = signatureForSession(session);
         let matchView: ReturnType<typeof filteredWaitScreen> | undefined;
         const timeoutParam = url.searchParams.get('timeout');
         const debounceParam = url.searchParams.get('debounce');
@@ -2788,9 +2790,9 @@ export class Daemon {
               matchView = filteredWaitScreen(session, reader);
               return matchView.screen;
             } } : {}),
-            ...(muse?.name === 'muse' ? {
+            ...(pendingReader !== null && moduleFor(session.agent)?.readingRules?.pendingComposer === true ? {
               composerPending: () => {
-                const result = latestResult(session.styledScreenNow(REASONING_CONTEXT_LINES).lines, muse);
+                const result = latestResult(session.styledScreenNow(REASONING_CONTEXT_LINES).lines, pendingReader);
                 return !result.found && result.reason === 'prompt-typed';
               },
             } : {}),
@@ -2821,10 +2823,10 @@ export class Daemon {
             json(res, 400, { error: overBudgetMessage(reader) });
             return;
           }
-          const marked = markFilteredSelectedOption(filtered.lines, view.lines);
+          const marked = markFilteredSelectedOption(filtered.lines, view.lines, session.agent);
           const visiblePrompt = result.prompt === undefined
             ? null
-            : detectPrompt(marked.join('\n'));
+            : detectPrompt(marked.join('\n'), session.agent);
           const prompt = visiblePrompt !== null && visiblePrompt.signature === result.prompt?.signature
             ? {
                 question: visiblePrompt.question,
@@ -3092,7 +3094,7 @@ export class Daemon {
       command: options.command,
       args: options.args ?? [],
       ...(envNames.length > 0 ? { envNames } : {}),
-      ...(agent !== undefined ? { agent } : {}),
+      agent: session.agent,
       label: session.label,
     });
 
@@ -3188,12 +3190,12 @@ export class Daemon {
    * readers fail closed.
    */
   private readerFor(session: Session, res: http.ServerResponse): CompiledSignature | null {
-    const signature = signatureFor(session.agent, session.command);
+    const signature = signatureForSession(session);
     if (signature !== null) return signature;
     const known = agentNames().join(', ');
     json(res, 400, {
       error:
-        session.agent !== undefined
+        session.agentSource !== 'fallback'
           ? `Session ${session.id} was started as agent "${session.agent}", whose signature is not ` +
             `available now (removed from config, or set aside for running past its time budget), ` +
             `so its screen is not read for hideReasoning or a result.`

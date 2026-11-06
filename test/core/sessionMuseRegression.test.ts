@@ -87,6 +87,7 @@ describe('Muse menu settling', () => {
     const screen = renderer.snapshot().screen;
     renderer.dispose();
     expect(make('muse').session.answerablePrompt(screen, 0)).toBeNull();
-    expect(make('codex').session.answerablePrompt(screen, 0)?.signature).toContain('Stage 2/3');
+    expect(make('generic').session.answerablePrompt(screen, 0)?.signature).toContain('Stage 2/3');
+    expect(make('codex').session.answerablePrompt(screen, 0)).toBeNull();
   });
 });
