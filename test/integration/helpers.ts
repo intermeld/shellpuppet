@@ -128,6 +128,10 @@ export async function api(
   const response = await fetch(`http://127.0.0.1:${String(port)}${apiPath}`, {
     method: options.method ?? (options.body !== undefined ? 'POST' : 'GET'),
     headers: {
+      // The client shares a thread with the in-process daemon. A blocking
+      // ConPTY call can delay both idle timers until fetch reuses a socket
+      // the server is about to expire. Each test request owns its connection.
+      connection: 'close',
       ...(token !== null ? { authorization: `Bearer ${token}` } : {}),
       ...(options.body !== undefined ? { 'content-type': 'application/json' } : {}),
       ...(options.headers ?? {}),
