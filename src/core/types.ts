@@ -80,6 +80,10 @@ export interface SessionOptions {
   readyText?: string;
   /** Quiescence (ms of no output) that marks the session `ready` (§3.1). */
   readyQuiet?: number;
+  /** Wait for readiness when starting an agent CLI to delegate work to. Off by default. */
+  waitReady?: boolean;
+  /** Start's readiness wait in ms, default 30,000, capped at 300,000. */
+  readyTimeout?: number;
   /**
    * Shell-wrap the command daemon-side (`cmd.exe /c` on Windows). Defaults to
    * true on Windows because direct ConPTY spawns of single-file binaries hang
@@ -274,6 +278,26 @@ export interface WaitResult {
   detail?: string;
 }
 
+/** Present on a start response only when waitReady was requested. */
+export interface StartReadyResult {
+  reason: 'condition-met' | 'prompt' | 'exited' | 'timeout' | 'aborted';
+  waitedMs: number;
+  prompt?: WaitResult['prompt'];
+}
+
+/** Shared wording for CLI and MCP, excluding untrusted question text. */
+export function startReadyLine(result: StartReadyResult, exitCode: number | null, readyReason: unknown): string {
+  switch (result.reason) {
+    case 'condition-met': return 'Started and ready: the readiness condition held.';
+    case 'prompt': return 'Started, waiting for an answer to this question:';
+    case 'exited': return `Started, then exited (${howSessionEnded(exitCode)}).`;
+    case 'timeout': return 'Started, not ready yet: the time limit ran out. The session is still running.' +
+      (readyReason === 'pending' ? ' Its readiness is still tracked.' :
+        readyReason === 'never-held' ? ' Readiness tracking has ended.' : '');
+    case 'aborted': return 'Started; the readiness wait was cancelled.';
+  }
+}
+
 // ------------------------------------------------------------------------- policy
 
 export type PolicyMode = 'allow-all' | 'allowlist' | 'denylist';
@@ -350,6 +374,8 @@ export const DEFAULT_SCROLLBACK = 5000;
  * first paint and emit nothing meanwhile, so the default is deliberately generous.
  */
 export const DEFAULT_WAIT_TIMEOUT_MS = 60_000;
+/** Leaves room for startup overhead within a sixty-second MCP client budget. */
+export const DEFAULT_START_READY_TIMEOUT_MS = 30_000;
 export const MAX_WAIT_TIMEOUT_MS = 300_000;
 export const WAIT_POLL_INTERVAL_MS = 80;
 

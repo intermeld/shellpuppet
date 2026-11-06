@@ -570,6 +570,8 @@ function startShapeError(body: JsonBody): string | null {
     ['label', (value) => typeof value === 'string', 'a string'],
     ['purpose', (value) => typeof value === 'string', 'a string'],
     ['readyText', (value) => typeof value === 'string', 'a string'],
+    ['waitReady', (value) => typeof value === 'boolean', 'a boolean'],
+    ['readyTimeout', (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0, 'a non-negative number of milliseconds'],
     [
       'readyQuiet',
       (value) => typeof value === 'number' && Number.isFinite(value) && value >= 0,
@@ -3023,6 +3025,8 @@ export class Daemon {
       // diverge from the audit trail. Self-declared, not authenticated: see
       // SessionOptions.startedBy.
       startedBy: actor,
+      ...(body['waitReady'] === true ? { waitReady: true } : {}),
+      ...(asNumber(body['readyTimeout']) !== undefined ? { readyTimeout: asNumber(body['readyTimeout']) } : {}),
       ...(asString(body['readyText']) !== undefined
         ? { readyText: asString(body['readyText']) }
         : {}),
@@ -3043,7 +3047,7 @@ export class Daemon {
         json(res, 403, { error: error.message });
         return;
       }
-      if (error instanceof CommandNotFoundError) {
+      if (error instanceof CommandNotFoundError || error instanceof WaitConditionError) {
         json(res, 400, { error: error.message });
         return;
       }
@@ -3164,6 +3168,15 @@ export class Daemon {
     const handOver = wantsViewer && !dashboardWatching && !opened.launched && viewerUrl !== '';
     if (handOver) this.audit.record(actor, 'grant-mint', session.id, { readOnly: false });
 
+    const cancelled = new AbortController();
+    const onClose = (): void => cancelled.abort();
+    res.on('close', onClose);
+    if (res.destroyed) cancelled.abort();
+    const readyWait = options.waitReady === true
+      ? await session.waitUntilReady(options.readyTimeout, cancelled.signal)
+      : undefined;
+    res.off('close', onClose);
+
     json(res, 200, {
       id: session.id,
       label: session.label,
@@ -3174,6 +3187,7 @@ export class Daemon {
       // Without the reason, `ready: true` is ambiguous: it may mean nothing
       // was checked. Callers need to tell those apart before they type.
       readyReason: session.readyReason,
+      ...(readyWait === undefined ? {} : { readyWait, exited: session.exited, exitCode: session.exitCode }),
       geometryHeld: session.geometryHeld,
       viewer: {
         opened: opened.launched,

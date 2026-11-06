@@ -4,4 +4,5 @@ import { reading } from './reading.js';
 
 export const mimo: AgentModule = {
   name: reading.name, programs: reading.programs, reading, prompts,
+  readiness: { readyText: ['ctrl+p'] },
 };

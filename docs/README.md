@@ -7,6 +7,8 @@
 | [`reference/configuration.md`](reference/configuration.md) | Every `config.json` option, with the fail-closed rules. |
 | [`reference/releasing.md`](reference/releasing.md) | How a maintainer publishes a version to npm: trusted publishing that can only stage, provenance and the two approvals. |
 | [`reference/agent-profiles.md`](reference/agent-profiles.md) | Measured behaviour of the agent CLIs, readiness and idleness regexes, recipes and the manual smoke checklist. |
+| [`reference/mcp.md`](reference/mcp.md) | Opt-in readiness on `terminal_start` and its HTTP response. |
+| [`reference/cli.md`](reference/cli.md) | Start flags, readiness outcomes and exit codes. |
 | [`decisions/`](decisions/) | Decision records ADR-001 to ADR-008. |
 
 What the project is for, its principles and the open-core boundary are in

@@ -20,8 +20,10 @@ concluding anything.
 
 Two different numbers matter, and conflating them is how you reach a wrong
 conclusion. **First output** is when anything visible first appears.
-**Ready** is when the program will accept a prompt, which can be much later
-and sometimes behind a trust question or a self-restart.
+**Ready** in the table records the readiness text, a sign the input box is
+drawn. It is not a measured guarantee that every start-up frame has passed
+or that input will land. A trust question or self-restart can still block
+input; the end-to-end checks below separately record verified typing.
 
 Measured 2026-10-29 (Windows 11, Node 22.22.2) through ShellPuppet itself, on a
 workstation with other work running. Each CLI was started from a fresh, empty
@@ -29,7 +31,8 @@ folder under the default clean session environment, with the variables listed
 for it in `agents.passEnv`, and timed from asking for the session: two runs or
 more each, shown as a range. In the table, ready is when the text in the
 readiness table below appears; where a first-use question came first, its
-time is given instead, and the CLI is ready once you answer it.
+time is given instead. After answering, wait for its readiness signal and
+verify that typed input lands.
 Muse Code 1.4.14 was observed on 2026-11-02; its first output time was not
 recorded.
 
@@ -131,13 +134,18 @@ migrated, or an API-key / Vertex AI path is configured.
 Driving an agent CLI needs two different signals, and neither is `quiet`:
 an agent that is thinking still paints spinners and streaming output.
 
-- **Readiness:** the input box exists and will accept a prompt.
+- **Readiness:** recorded text indicates that the input box is drawn.
 - **Idleness:** the agent has stopped working and wants input again (or is
   blocked on a permission prompt you must answer).
 
 Hand-rolling these per session is the most repetitive part of driving an
 agent, and getting them wrong is how a prompt gets typed into a loading TUI
 and silently discarded. Start from this table.
+The implemented module signals are pinned to captured screens, mostly
+finished-turn screens. They establish the text's presence, not a measured
+guarantee that every start-up frame is past. A footer may also appear in
+help, loading or question screens. Recognised questions block an opted-in
+start's readiness; verify typed input after the condition holds.
 
 For an agent CLI with a signature, `terminal_result` says when a turn has
 finished; the table is for knowing when to type, and what blocks it. The
@@ -177,14 +185,14 @@ own resolved module.
 Two Qoder specifics worth knowing:
 
 - Its **folder-trust prompt** (`Do you trust the files in this folder?`)
-  appears on first use in a directory and blocks readiness. Wait on
-  `trust the files|Type your message` so a session works either way.
+  appears on first use in a directory and blocks readiness. Start with
+  `waitReady: true` so the call returns either ready or with the question.
 - It shows a **task counter** while working (`Tasks 3/7 completed`). Waiting
   on `Tasks\s+7/7`, or on your own known total, is a reliable "finished"
   signal for a multi-step job, and far better than guessing a timeout.
 
 **`ready: true` is not a readiness signal on its own.** When you pass no
-`readyText`/`readyQuiet`, nothing is checked, and `terminal_start` says
+`readyText`/`readyQuiet` and do not ask for `waitReady`, nothing is checked, and `terminal_start` says
 so explicitly (`readyReason: not-tracked`). Only `condition-met` is
 affirmative.
 
@@ -197,14 +205,34 @@ if it times out the result says the program has not painted anything yet.
 ## Long waits: know your client's own timeout
 
 `terminal_wait` accepts up to 300,000 ms, and this page tells you to budget
-generously. But **an MCP client may impose its own, shorter call timeout**
-and background the call before ShellPuppet's timeout is reached. Observed
+generously. But **an MCP client may impose its own, shorter call timeout**.
+The bundled MCP client times out at 60 seconds and discards a late answer.
+Other clients can background a call instead. Observed
 2026-08-01: a client that backgrounds tool calls at 120 s turned every
 `timeout: 240000` wait into an asynchronous notification.
 
-That is not a failure: the wait keeps running and its result arrives. If you
-need the answer *inline*, though, keep waits under your client's limit and
-poll, rather than asking for one long wait and being surprised.
+That observed client delivered the result later. A client that cancels or
+gives up may lose the answer instead. Keep waits below the client's budget,
+or increase that budget for a longer explicit wait.
+
+`terminal_start` with `waitReady: true` uses a **30,000 ms** default limit,
+or `readyTimeout` for that call, capped at **300,000 ms** like other waits.
+Thirty seconds covers the recorded Qoder 24 s and Muse 25 s starts while
+leaving room within a 60-second client budget for discovery, process creation
+and viewer opening. A longer explicit wait needs a longer client budget,
+including that overhead. If the client gives up, the session still exists
+and `terminal_list` shows it, even if the answer was lost. MCP cancellation
+stops that call's polling, leaving the session and readiness tracking running.
+A limit ending is not a failed start: the session keeps running, with
+`readyReason: pending` until the original five-minute tracking deadline.
+It becomes `condition-met` if the signal holds without a question, or
+`never-held` when tracking ends without it or the program exits. A timeout
+at that deadline can already report `never-held`; its message says tracking
+has ended. A question recognised by prompt or dialog detection returns at
+once with its question and choices, and makes readiness pending even if
+the signal appeared earlier during viewer opening. Answer it before waiting
+again; guarded tracking can then mark the session ready within its original
+deadline. The `terminal_wait` default remains 60,000 ms.
 
 ## Reading a session without the agent's reasoning
 
@@ -247,13 +275,35 @@ reading, so filtered reads and results are refused. A configured reading named
 
 ## Recipes
 
-Start sessions with a readiness condition and verify your typing:
+When starting an agent CLI to delegate work to, opt in to its module's known
+ready signals, then verify your typing:
 
 ```
-shellpuppet start --label qoder qodercli          # then:
-shellpuppet wait <id> --text "qoder" --timeout 60000 --debounce 2000
+shellpuppet start --wait-ready --label qoder qodercli
+# If the result names a question, answer it first, then:
+shellpuppet wait <id> --text "Type your message" --timeout 60000 --debounce 2000
 shellpuppet type <id> "your prompt" --verify      # retry after `key <id> escape` if not verified
 ```
+
+For MCP, use `terminal_start` with `command: "qodercli", waitReady: true`.
+The result says ready, waiting for an answer, exited, or started but not ready
+yet. On an affirmative result, type with verification. Qoder's module
+requires its ready text to hold for two seconds because it discards input
+while settling. This matches the recorded 22 to 23-second first paint and
+24-second readiness observation; it does not measure a maximum input-discard
+window. Muse requires the `❯` composer below its voice-input hint;
+Grok uses `│ >`, not its optional keyboard hint. The other modules use the
+literal text in the table. Caller `readyText` or `readyQuiet` overrides the
+module signal. A shell or unknown program needs one of those explicit
+conditions; no ready signal is guessed. Goose and Gemini have no module yet,
+so use their recorded text explicitly, for example
+`shellpuppet start --wait-ready --ready-text "( O)>" --ready-timeout 150000 goose`.
+Give the caller a budget longer than that explicit wait; for MCP the default
+60-second client budget is too short for a 150-second readiness wait.
+
+Without the switch, starts return immediately as before. Dashboard launches
+and launch profiles never wait and do not accept `waitReady` or `readyTimeout`.
+A person can see the session and type as soon as it starts.
 
 - **Wait on text that only appears in output, or pass `matchAfterInput`.**
   Waiting for text you just typed matches the echo of your own input in

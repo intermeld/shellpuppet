@@ -7,6 +7,10 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+### Added
+
+- Opt in to waiting for a delegate agent's known ready signals at start, with early returns for questions and exits and a time limit that leaves the session running.
+
 ### Changed
 
 - Agent-specific knowledge (reading signatures, prompt shapes and dialogs,

@@ -29,6 +29,8 @@ import type { SerializeOptions, StyledLine } from './renderer.js';
 import { commandLine } from './policy.js';
 import { detectPrompt, createPromptReader, StalePromptGuard } from './promptDetector.js';
 import { waitFor } from './waiter.js';
+import { readinessFor, trackReadiness, waitUntilReady } from './readiness.js';
+import type { Readiness } from './readiness.js';
 import type { WaiterInternals } from './waiter.js';
 import type { WaitTarget } from './waiter.js';
 import {
@@ -53,6 +55,7 @@ import type {
   SessionEnvMode,
   SessionOptions,
   SessionSummary,
+  StartReadyResult,
   WaitCondition,
   WaitOptions,
   WaitResult,
@@ -730,6 +733,7 @@ export class Session implements WaitTarget {
   private endingProgram: Promise<void> | null = null;
   private readyFlag: boolean;
   private readyReasonValue: SessionSummary['readyReason'] = 'not-tracked';
+  private readonly startupReadiness: Readiness | undefined;
   private geometryHeldFlag: boolean;
   private killPromise: Promise<void> | null = null;
   private consoleHostSettlement: Promise<boolean> | null = null;
@@ -752,6 +756,9 @@ export class Session implements WaitTarget {
     this.agent = resolved.agent;
     this.agentSource = resolved.agentSource;
     this.agentModule = moduleFor(this.agent);
+    // Refuse an unsupported wait before allocating a renderer or a terminal.
+    const readiness = readinessFor(options, this.agentModule);
+    this.startupReadiness = options.waitReady === true ? readiness : undefined;
     this.promptReader = createPromptReader(this.agent);
     this.createdAt = new Date();
     this.logger = deps.logger ?? NULL_LOGGER;
@@ -915,27 +922,15 @@ export class Session implements WaitTarget {
     // session counts as ready at spawn; otherwise readiness flips when the
     // condition holds. A session whose condition never holds stays not-ready,
     // which is the truth and is visible in list/snapshot output.
-    if (options.readyText !== undefined || options.readyQuiet !== undefined) {
+    if (readiness !== undefined) {
       this.readyFlag = false;
       this.readyReasonValue = 'pending';
-      const condition: WaitCondition =
-        options.readyText !== undefined
-          ? { text: options.readyText }
-          : { quiet: options.readyQuiet };
-      void waitFor(this, condition, { timeout: MAX_WAIT_TIMEOUT_MS }).then((result) => {
-        if (result.matched) {
-          this.readyFlag = true;
-          this.readyReasonValue = 'condition-met';
-          this.logger.info('session ready', { id, reason: result.reason });
-        } else {
-          this.readyReasonValue = 'never-held';
-          this.logger.warn('session readiness condition never held', {
-            id,
-            reason: result.reason,
-          });
-        }
-        for (const listener of this.readyListeners) listener();
-      });
+      // Preserve the existing explicit-condition path without the switch.
+      if (options.waitReady === true) this.trackStartupReadiness();
+      else {
+        void waitFor(this, options.readyText !== undefined ? { text: options.readyText } : { quiet: options.readyQuiet },
+          { timeout: MAX_WAIT_TIMEOUT_MS }).then(result => this.recordReadiness(result.matched, result.reason));
+      }
     } else {
       // No condition was asked for, so nothing is being checked. `ready` is
       // true, meaning only that the process started, and `readyReason` says
@@ -1347,6 +1342,34 @@ export class Session implements WaitTarget {
 
   waitFor(condition: WaitCondition, options?: WaitOptions & WaiterInternals): Promise<WaitResult> {
     return waitFor(this, condition, options);
+  }
+
+  waitUntilReady(timeout?: number, signal?: AbortSignal): Promise<StartReadyResult> {
+    return waitUntilReady(this, timeout, signal);
+  }
+
+  /** A question at start completion invalidates an earlier opted-in match. */
+  deferReadiness(): void {
+    if (this.startupReadiness === undefined || this.readyReasonValue !== 'condition-met') return;
+    this.readyFlag = false;
+    this.readyReasonValue = 'pending';
+    for (const listener of this.readyListeners) listener();
+    this.trackStartupReadiness();
+  }
+
+  private trackStartupReadiness(): void {
+    if (this.startupReadiness === undefined) return;
+    // Restart after a question without extending the session's tracking budget.
+    void trackReadiness(this, this.startupReadiness, true, this.createdAt.getTime() + MAX_WAIT_TIMEOUT_MS)
+      .then(matched => this.recordReadiness(matched, matched ? 'condition-met' : this.exited ? 'exited' : 'timeout'));
+  }
+
+  private recordReadiness(matched: boolean, reason: string): void {
+    this.readyFlag = matched;
+    this.readyReasonValue = matched ? 'condition-met' : 'never-held';
+    if (matched) this.logger.info('session ready', { id: this.id, reason });
+    else this.logger.warn('session readiness condition never held', { id: this.id, reason });
+    for (const listener of this.readyListeners) listener();
   }
 
   summary(): SessionSummary {

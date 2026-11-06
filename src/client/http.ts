@@ -736,12 +736,14 @@ export async function request(
   method: string,
   path: string,
   body?: unknown,
-  options: ClientOptions = {},
+  options: ClientOptions & { signal?: AbortSignal } = {},
 ): Promise<ApiResponse> {
   const actor = typeof options.actor === 'function' ? options.actor() : options.actor;
   const attempt = async (conn: DaemonConnection): Promise<ApiResponse> => {
+    options.signal?.throwIfAborted();
     const response = await fetch(`http://127.0.0.1:${String(conn.port)}${path}`, {
       method,
+      signal: options.signal,
       headers: {
         authorization: `Bearer ${conn.token}`,
         ...(actor !== undefined ? { 'x-shellpuppet-actor': actor } : {}),
@@ -755,6 +757,8 @@ export async function request(
   try {
     return await attempt(connection);
   } catch (error) {
+    // Cancellation belongs to this call, not to daemon discovery or retry.
+    if (options.signal?.aborted === true) throw error;
     if (await daemonRunning(connection)) {
       const pid = String(connection.pid);
       const statePath = daemonStatePath(options.home ?? shellpuppetHome());
