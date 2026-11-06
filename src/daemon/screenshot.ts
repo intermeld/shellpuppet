@@ -57,7 +57,7 @@ export interface CaptureOptions {
   cpuThrottlingRate?: number;
   /** A test-only expression read after a capture times out. */
   timeoutProbe?: string;
-  /** Browser integration tests can finish at the probe after closing their page. */
+  /** Browser integration tests that need no pixels can finish at the probe. */
   probeOnly?: boolean;
   /** Test-only DevTools interaction after the readiness probe succeeds. */
   interact?: (page: {
@@ -205,7 +205,7 @@ export class DevTools {
   private nextId = 1;
   private readonly pending = new Map<
     number,
-    { resolve: (result: unknown) => void; reject: (error: Error) => void }
+    { method: string; started: number; resolve: (result: unknown) => void; reject: (error: Error) => void }
   >();
 
   constructor(
@@ -213,7 +213,7 @@ export class DevTools {
     private deadline: number,
   ) {
     ws.on('message', (data: Buffer | string) => {
-      let message: { id?: number; result?: unknown; error?: { message?: string } };
+      let message: { id?: number; result?: unknown; error?: { code?: number; message?: string; data?: unknown } };
       try {
         message = JSON.parse(String(data)) as typeof message;
       } catch {
@@ -224,14 +224,17 @@ export class DevTools {
       if (waiter === undefined) return;
       this.pending.delete(message.id);
       if (message.error !== undefined) {
-        waiter.reject(new Error(message.error.message ?? 'DevTools error'));
+        waiter.reject(new Error(`${waiter.method} returned a DevTools error after ` +
+          `${String(Date.now() - waiter.started)} ms (${String(Math.max(0, this.deadline - Date.now()))} ms remaining): ` +
+          JSON.stringify(message.error), { cause: message.error }));
       } else {
         waiter.resolve(message.result);
       }
     });
     ws.on('close', () => {
       for (const waiter of this.pending.values()) {
-        waiter.reject(new Error('DevTools connection closed'));
+        waiter.reject(new Error(`DevTools connection closed during ${waiter.method} after ` +
+          `${String(Date.now() - waiter.started)} ms.`));
       }
       this.pending.clear();
     });
@@ -257,6 +260,8 @@ export class DevTools {
         Math.max(0, this.deadline - Date.now()),
       );
       this.pending.set(id, {
+        method,
+        started: Date.now(),
         resolve: (result) => {
           clearTimeout(timer);
           (resolve as (result: unknown) => void)(result);
@@ -386,8 +391,13 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
   let ws: WebSocket | null = null;
   let cdp: DevTools | null = null;
   let sessionId: string | null = null;
+  const timings: Record<string, number> = {};
+  let screenshotResult: Record<string, unknown> | undefined;
+  let stage = 'browser start';
   try {
     const endpoint = await waitForDevTools(profileDir, child, deadline);
+    timings['browserReadyMs'] = Date.now() - started;
+    stage = 'DevTools connection';
     ws = await connect(endpoint, deadline);
     cdp = new DevTools(ws, deadline);
 
@@ -399,6 +409,7 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
       flatten: true,
     });
     sessionId = attached.sessionId;
+    stage = 'page setup';
     await cdp.send('Page.enable', {}, sessionId);
     if (options.cpuThrottlingRate !== undefined) {
       await cdp.send('Emulation.setCPUThrottlingRate', { rate: options.cpuThrottlingRate }, sessionId);
@@ -423,6 +434,8 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
         ? options.viewerUrl
         : `${options.viewerUrl}${options.viewerUrl.includes('?') ? '&' : '?'}capture=1${options.hiddenRows === undefined ? '' : '&redact=1'}`;
     await cdp.send('Page.navigate', { url }, sessionId);
+    timings['navigationMs'] = Date.now() - started;
+    stage = 'readiness probe';
 
     const activeCdp = cdp;
     const activeSessionId = sessionId;
@@ -459,6 +472,7 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
     }
 
     if (options.interact !== undefined) {
+      stage = 'interaction';
       probed = await options.interact({
         evaluate,
         send: (method, params = {}, browserWideOrSession = false) =>
@@ -471,6 +485,8 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
         ...(probed === undefined ? {} : { probe: probed }) };
     }
 
+    timings['readyMs'] = Date.now() - started;
+    stage = 'read viewport rows';
     const rows = await cdp.send<{ result: { value?: unknown } }>(
       'Runtime.evaluate',
       {
@@ -483,11 +499,17 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
     if (options.hiddenRows !== undefined && options.hiddenRows.length > 0) {
       await evaluate(`window.__shellpuppetCoverRows(${JSON.stringify(options.hiddenRows)})`);
     }
+    stage = 'Page.captureScreenshot';
+    timings['screenshotStartedMs'] = Date.now() - started;
     const shot = await cdp.send<{ data: string }>(
       'Page.captureScreenshot',
       { format: 'png' },
       sessionId,
     );
+    timings['screenshotFinishedMs'] = Date.now() - started;
+    // Describe the reply without retaining terminal pixels in an error log.
+    screenshotResult = { resultType: shot === null ? 'null' : typeof shot,
+      dataType: typeof shot?.data, dataLength: typeof shot?.data === 'string' ? shot.data.length : undefined };
     await cdp.send('Browser.close').catch(() => undefined);
     const png = Buffer.from(shot.data, 'base64');
     return {
@@ -499,8 +521,13 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
       ...(probed === undefined ? {} : { probe: probed }),
     };
   } catch (error) {
-    if (options.timeoutProbe === undefined) throw error;
     const elapsed = Date.now() - started;
+    const captureDetails = `capture stage=${stage}, elapsedMs=${String(elapsed)}, ` +
+      `remainingMs=${String(Math.max(0, deadline - Date.now()))}, timings=${JSON.stringify(timings)}, ` +
+      `screenshotResult=${JSON.stringify(screenshotResult) ?? 'no reply'}, ` +
+      `browserExitCode=${String(child.exitCode)}, browserSignal=${String(child.signalCode)}, ` +
+      `devToolsState=${String(ws?.readyState)}`;
+    if (options.timeoutProbe === undefined) throw new Error(`${String(error)}; ${captureDetails}`, { cause: error });
     let details = 'page did not answer';
     if (cdp !== null && sessionId !== null && ws?.readyState === WebSocket.OPEN) {
       try {
@@ -510,7 +537,7 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
         details = JSON.stringify(response.result.value ?? null);
       } catch { /* A busy renderer has no page-side facts to report. */ }
     }
-    throw new Error(`${String(error)} after ${String(elapsed)} ms; dashboard diagnostics: ${details}`, { cause: error });
+    throw new Error(`${String(error)}; ${captureDetails}; dashboard diagnostics: ${details}`, { cause: error });
   } finally {
     ws?.close();
     if (child.exitCode === null) child.kill();

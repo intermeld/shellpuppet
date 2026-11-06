@@ -37,13 +37,15 @@ async function freshUrl(): Promise<string> {
 
 async function browserProbe(beforeNavigateScript: string, probe: string): Promise<Record<string, unknown>> {
   const shot = await captureDashboard({ browser: browser!, viewerUrl: await freshUrl(), width: 1280,
-    height: 720, drive: true, timeoutMs: 30_000, beforeNavigateScript, probe });
+    // These assertions use DOM results only. A compositor capture can fail
+    // independently after the complete screen-control probe has succeeded.
+    height: 720, drive: true, probeOnly: true, timeoutMs: 30_000, beforeNavigateScript, probe });
   return JSON.parse(String(shot.probe)) as Record<string, unknown>;
 }
 
 async function rosterProbe(script: string, beforeNavigate = ''): Promise<Record<string, unknown>> {
   const shot = await captureDashboard({ browser: browser!, viewerUrl: await freshUrl(), width: 1280,
-    height: 720, drive: true, timeoutMs: 30_000,
+    height: 720, drive: true, probeOnly: true, timeoutMs: 30_000,
     beforeNavigateScript: `(() => {
       const send = WebSocket.prototype.send;
       WebSocket.prototype.send = function(data) {
