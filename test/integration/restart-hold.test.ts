@@ -6,7 +6,7 @@ import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ensureDaemon, waitForPendingDaemon, withDaemonStartLock } from '../../src/client/http.js';
 import { daemonLogPath, daemonStatePath, readDaemonState } from '../../src/daemon/paths.js';
 import { readRestartHold, restartHoldPath, writeRestartHold } from '../../src/daemon/restartHold.js';
@@ -19,6 +19,37 @@ const markerEntry = path.join(repoRoot, 'test', 'integration', 'fixtures', 'daem
 const failureWrapper = path.join(repoRoot, 'test', 'fixtures', 'daemon-start-failure.mjs');
 const homes: string[] = [];
 const started = new Map<string, number>();
+
+const spawnReports = vi.hoisted(() => [] as { pid?: number; command: string; args: readonly string[];
+  code?: number | null; signal?: string | null; stderrPath: string }[]);
+vi.mock('node:child_process', async (original) => {
+  const actual = await original<typeof import('node:child_process')>();
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  return { ...actual, spawn: (command: string, args: readonly string[], options: import('node:child_process').SpawnOptions) => {
+    const home = options.env?.['SHELLPUPPET_HOME'];
+    if (home === undefined) return actual.spawn(command, args, options);
+    // A file keeps detached children independent of the test's stdio handles.
+    const stderrPath = path.join(home, `start-stderr-${String(spawnReports.length)}.log`);
+    const fd = fs.openSync(stderrPath, 'w');
+    let child: ReturnType<typeof actual.spawn>;
+    try { child = actual.spawn(command, args, { ...options, stdio: ['ignore', 'ignore', fd] }); }
+    finally { fs.closeSync(fd); }
+    const report = { pid: child.pid, command, args, stderrPath } as (typeof spawnReports)[number];
+    spawnReports.push(report);
+    child.on('exit', (code, signal) => { report.code = code; report.signal = signal; });
+    return child;
+  } };
+});
+
+function readLog(file: string): string {
+  try { return fs.readFileSync(file, 'utf8'); }
+  catch { return 'not written'; }
+}
+
+function spawnDiagnostics(): unknown[] {
+  return spawnReports.map((report) => ({ ...report, stderr: readLog(report.stderrPath) }));
+}
 
 async function cli(home: string, ...args: string[]): Promise<{ code: number; stdout: string; stderr: string }> {
   try {
@@ -69,6 +100,7 @@ afterEach(async () => {
     removeTempHome(value);
     started.delete(value);
   }
+  spawnReports.splice(0);
 });
 
 describe('planned daemon restart hold', () => {
@@ -183,11 +215,17 @@ describe('planned daemon restart hold', () => {
   it.each([true, false])('keeps a peer behind restart from the stop through the new healthy daemon (old id: %s)', async (oldHasId) => {
     const value = home();
     const marker = path.join(value, 'peer-started');
+    const events: unknown[] = [];
+    const record = (message: string, meta?: Record<string, unknown>): void => {
+      events.push({ at: Date.now(), message, meta });
+    };
+    const logger: Logger = { debug: record, info: record, warn: record, error: record };
     let signalStopping: () => void = () => undefined;
     const stopping = new Promise<void>((resolve) => { signalStopping = resolve; });
     let finishStop: () => void = () => undefined;
     const stopCanFinish = new Promise<void>((resolve) => { finishStop = resolve; });
     const server = http.createServer((request, response) => {
+      record('stand-in request', { path: request.url });
       if (request.url === '/health') {
         response.writeHead(200, { 'content-type': 'application/json' });
         response.end(JSON.stringify({ ok: true, version: '0.0.0-stand-in', pid: process.pid,
@@ -197,7 +235,7 @@ describe('planned daemon restart hold', () => {
         void stopCanFinish.then(() => {
           response.writeHead(200, { 'content-type': 'application/json' });
           response.end('{}');
-          response.once('finish', () => { server.close(); });
+          response.once('finish', () => { record('stand-in shutdown response finished'); server.close(); });
         });
       }
     });
@@ -207,8 +245,12 @@ describe('planned daemon restart hold', () => {
     fs.writeFileSync(daemonStatePath(value), JSON.stringify({ port: address.port, token: 'stand-in-token',
       pid: process.pid, version: '0.0.0-stand-in', startedAt: new Date().toISOString(),
       ...(oldHasId ? { instanceId: 'old-instance' } : {}) }));
-    fs.writeFileSync(path.join(value, 'config.json'), JSON.stringify({ daemon: { startWith: [process.execPath] } }));
-    const closed = new Promise<void>((resolve) => server.once('close', resolve));
+    // Deliberately unusable: Node would parse its own executable as a script.
+    // The direct restart must win, and the peer must never invoke this wrapper.
+    fs.writeFileSync(path.join(value, 'config.json'), JSON.stringify({
+      viewer: { launchMode: 'no-window' }, daemon: { startWith: [process.execPath] },
+    }));
+    const closed = new Promise<void>((resolve) => server.once('close', () => { record('stand-in closed'); resolve(); }));
     const restart = cli(value, 'daemon', 'restart', '--direct');
     const reachedStop = await Promise.race([stopping.then(() => true), restart.then(() => false)]);
     if (!reachedStop) {
@@ -227,7 +269,7 @@ describe('planned daemon restart hold', () => {
     process.env['SP_TEST_SPAWN_MARKER'] = marker;
     try {
       const occupied = await startEndpointOccupied(value);
-      const peerPromise = ensureDaemon({ home: value, daemonEntry: markerEntry });
+      const peerPromise = ensureDaemon({ home: value, daemonEntry: markerEntry, logger });
       let settled = false;
       void peerPromise.then(() => { settled = true; }, () => { settled = true; });
       await new Promise((resolve) => setTimeout(resolve, 350));
@@ -243,6 +285,10 @@ describe('planned daemon restart hold', () => {
       expect(fs.existsSync(marker)).toBe(false);
       const log = fs.readFileSync(daemonLogPath(value), 'utf8');
       expect(log.split('\n').filter((line) => line.includes('"message":"daemon started"'))).toHaveLength(1);
+    } catch (error) {
+      console.error('Restart failure diagnostics', { error: String(error), restart: await restart,
+        spawns: spawnDiagnostics(), events, daemonLog: readLog(daemonLogPath(value)) });
+      throw error;
     } finally {
       finishStop();
       await restart;
@@ -285,8 +331,16 @@ describe('planned daemon restart hold', () => {
     })), 7_200);
     try {
       const began = Date.now();
-      await expect(ensureDaemon({ home: value })).rejects.toThrow('running but did not answer in time');
+      const outcome = await ensureDaemon({ home: value }).then(
+        () => ({ error: undefined }), (error: unknown) => ({ error }),
+      );
+      // Both paths share the deadline. A late timer can expire the hold before
+      // the next discovery starts, leaving the outer start loop to report it.
       expect(Date.now() - began).toBeLessThan(12_000);
+      expect(outcome.error).toBeInstanceOf(Error);
+      expect(String(outcome.error)).toMatch(/running but did not answer in time|A pending daemon start did not settle within its health bound/);
+      expect(readDaemonState(value)?.instanceId).toBe('busy-instance');
+      expect(spawnReports).toHaveLength(0);
     } finally {
       clearTimeout(publish);
       busy.closeAllConnections();
