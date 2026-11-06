@@ -15,7 +15,7 @@ import {
   WAIT_POLL_INTERVAL_MS,
 } from './types.js';
 import type { WaitCondition, WaitOptions, WaitResult } from './types.js';
-import { MusePromptSettler } from './promptDetector.js';
+import { createPromptReader } from './promptDetector.js';
 import type { DetectedPrompt } from './promptDetector.js';
 import { echoEnd } from './echo.js';
 import { RegexBudgetError, withRegexBudget } from './regexBudget.js';
@@ -57,7 +57,7 @@ export interface WaitTarget {
   observePrompt(signature: string | null): void;
   /** True while `signature` is the prompt the last input answered, not yet seen to go. */
   isStalePrompt(signature: string): boolean;
-  /** Session-wide Muse menu settle clock, when available. */
+  /** Session-wide menu settle clock, when available. */
   answerablePrompt?(screen: string, now?: number): DetectedPrompt | null;
 }
 
@@ -222,7 +222,7 @@ export function waitFor(
   let matchedAt: number | null = null;
   let matchedReason: 'text' | 'regex' | 'prompt' | null = null;
   let matchedPrompt: DetectedPrompt | null = null;
-  const promptSettler = new MusePromptSettler();
+  const promptSettler = createPromptReader('generic', true);
   /** Last tick: the only prompt on screen was the one the last input answered. */
   let staleOnly = false;
   /** Last tick: matches existed, but only at or before the echo of the last input. */
@@ -305,7 +305,7 @@ export function waitFor(
         // question actually showing when the wait settles.
         const detected = target.answerablePrompt !== undefined
           ? target.answerablePrompt(screen, now)
-          : promptSettler.detect(screen, now);
+          : promptSettler(screen, now);
         target.observePrompt(detected?.signature ?? null);
         staleOnly = detected !== null && afterInput && target.isStalePrompt(detected.signature);
         if (detected !== null && !staleOnly) {

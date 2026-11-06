@@ -34,11 +34,19 @@
  * its fixed controls and custom-answer choice here.
  */
 
-import { dialogPrompt } from './dialogs.js';
 import type { StyledLine } from './renderer.js';
+import { dialogPrompt } from './dialogs.js';
+import { AGENT_MODULES, moduleFor, promptShapesFor, MuseMenuSettler } from '../agents/index.js';
+import type { PromptRows } from '../agents/types.js';
+import { normalise } from './promptText.js';
+export { MUSE_MENU_SETTLE_MS } from '../agents/index.js';
 
-/** A plain Muse heading can precede the moment its keys become active. */
-export const MUSE_MENU_SETTLE_MS = 1_500;
+/** Compatibility entry point; session readers obtain their settler from the module. */
+export class MusePromptSettler extends MuseMenuSettler {
+  detect(screen: string, now = Date.now(), styled?: readonly StyledLine[]): DetectedPrompt | null {
+    return this.settle(detectPrompt(screen), screen, now, styled);
+  }
+}
 
 export interface DetectedPrompt {
   /** Best-effort headline for the prompt (e.g. "Permission Required"). */
@@ -77,40 +85,11 @@ export interface DetectedPrompt {
 }
 
 /**
- * A numbered option row, in either of the two shapes real CLIs draw. Dot
- * form: `❯ 1. Allow once` / `› 1. Yes, proceed (y)` / `>1. Sign in
- * with ChatGPT` (Codex draws the sign-in marker TIGHT against the digit) /
- * `2. Don't trust and exit`. Radio form: `│  1 (○) Yes, and don't ask
- * again` / `│  2 (•) Yes, proceed` (Grok: box border, no dot, the radio IS
- * the selection state). The capture group is the option number, used to keep
- * wrap-interleaved rows in one block.
- */
-const OPTION_ROW = /^\s*(?:│\s*)?(?:[❯›]\s*|>\s*)?(\d+)(?:\.\s+|\s+\([○•●]\)\s+)\S/;
-/**
  * A letter-keyed row: `[Y] Yes`, `(a) Apply the change`,
  * optionally pointed. The capture is the key, used to keep a block to rows
  * with DISTINCT keys, because a markdown checkbox list repeats `[x]`.
  */
 const LETTER_ROW = /^\s*(?:│\s*)?(?:[❯›]\s*|>\s*)?[[(]([a-z])[\])]\s+\S/i;
-/**
- * An option with its key after it, as Grok's folder-trust question draws
- * them: `Yes, proceed        y`. The label, two or more spaces, then a single
- * letter ending the line. Captures indent, label and key.
- */
-const KEY_HINT_ROW = /^(\s*)(\S.*?)\s{2,}([a-z])$/i;
-/**
- * A pointer against plain text: `❯ npm`, `> minimal`. It is the
- * inquirer.js shape, and Claude Code's own folder-trust prompt. Captures
- * indent, pointer and text. `›` is deliberately absent: Codex draws it on
- * its composer line, and every `›` chooser seen so far numbers its rows.
- */
-const POINTER_ROW = /^(\s*)([❯>])\s+(\S.*)$/;
-/**
- * Focus markers TUIs draw on the selected option: `❯`/`›` anywhere,
- * line-leading `>` only before a numbered or letter-keyed row (tight or
- * spaced) or a FILLED radio `(•)`/`(●)`, Grok's selected-row marker.
- */
-const MARKER_LINE = /[❯›]|^\s*(?:│\s*)?>\s*(?:\d+\.|[[(][a-z][\])])|\([•●]\)/i;
 /**
  * A step headline as `@clack/prompts` draws it: the step glyph, two spaces,
  * the message. Only a step still waiting matches: `◆`, or `▲` while it shows
@@ -121,8 +100,6 @@ const MARKER_LINE = /[❯›]|^\s*(?:│\s*)?>\s*(?:\d+\.|[[(][a-z][\])])|\([•
  * folder-trust question in a message it logs above such a step.
  */
 const CLACK_HEADLINE = /^[◆▲](?: {2}(\S.*))?$/;
-/** The first line of a message clack logs: `●  Accessing workspace:`. */
-const CLACK_LOG = /^[●◆◇▲■] {2}(\S.*)$/;
 /**
  * A choice row in the `│` gutter clack draws down the left of a step. A
  * select draws radios (`●` for the selected option, `○` for the rest), a
@@ -154,31 +131,6 @@ const YES_NO_TAIL =
  * counts (see `isYesNo`): `(a/b)` in prose is a ratio, not a question.
  */
 const LETTER_LIST_TAIL = /[[(]\s*([a-z?](?:\s*[/,|]\s*[a-z?])+)\s*[\])]\s*[?:]?\s*$/i;
-/**
- * `Press enter to continue` / `…to confirm or esc to cancel`: the footer
- * both Codex prompt classes draw, and a wait state in its own right on the
- * onboarding screens that have no option list at all. `Enter to confirm ·
- * Esc to cancel`, without "press", is Claude Code's.
- */
-const PRESS_ENTER = /(?:press\s+)?\benter to (confirm|continue|select)/i;
-/**
- * Lines that mean the program is WORKING, not waiting. Spinner verbs with
- * their ellipsis only. A bare `esc to cancel` must NOT count as busy, since
- * Codex's `Press enter to confirm or esc to cancel` footer sits BELOW the
- * option block and would veto the very prompt it belongs to. `Waiting for
- * response…` is Grok's response spinner: it appears BELOW a just-answered
- * option block while the block is still in the tail, and without the veto
- * the stale block would go on alerting until it scrolled away. The ellipsis
- * is REQUIRED, matching the verbs: plain prose that happens to say
- * "waiting for response" must not veto a live prompt (a false negative here
- * is an unalerted stall, the costly direction). Claude Code's spinner is busy
- * whatever verb it shows: a spinner glyph at the start of the line, the verb
- * or the task in hand, the ellipsis and often the time so far
- * (`✻ Calculating… (14s · thinking)`). The line it leaves when a turn ends
- * has no ellipsis (`✻ Cooked for 19m 12s · done 20:31`).
- */
-const BUSY_LINE =
-  /(generating|thinking|running|working|waiting for response)(\.{3}|…)|^\s*[·✢✳✶✻✽*] [^…]+…(?: \(.*\))?\s*$/i;
 /** Horizontal rules and box-drawing rows (U+2500 to U+257F) carry no text content. */
 const RULE_LINE = /^[\s─-╿-]*$/;
 /**
@@ -196,33 +148,6 @@ const TAIL_WINDOW = 20;
  * misattribute ordinary transcript text.
  */
 const QUESTION_SEARCH_BUDGET = 8;
-/**
- * Grok's permission question row: two spaces, the bar, two spaces, `>`,
- * then a space. With or without a question mark, that row is the question
- * the box is asking. The composer is `│ >` with one space and does not match.
- */
-const GROK_BOX_QUESTION = /^ {2}│ {2}> /;
-/** Bar text in that same box: two spaces, the bar, two spaces, a word. */
-const GROK_BAR_TEXT = /^ {2}│ {2}\S/;
-/** The bare bar row that closes a command off from the reasoning above it. */
-const GROK_BARE_BAR = /^ {2}│\s*$/;
-/**
- * A line that starts Grok's reasoning. The command walk does not see the
- * signature. The thinking header is itself bar text, so the walk would
- * otherwise take it; the spinner is not bar text, and a run below it is
- * still closed off by it.
- */
-const GROK_REASONING_START = /^ {2}│ {2}♦ Thinking|^ {3}[|/\\-] \S/;
-/** A `$` on a command row, or a `:` continuation of one. */
-const GROK_COMMAND_MARK = /\$|^ {2}│ {2}:/;
-
-/** The fixed controls at the foot of OpenCode and MiMo Code's question menu. */
-const QUESTION_MENU_FOOTER = /^ *┃ {2}↑↓ select {2}enter submit {2}esc dismiss\s*$/u;
-const QUESTION_MENU_OPTION = /^ *┃ {2}([1-4])\. (\S.*)$/u;
-const QUESTION_MENU_DESCRIPTION = /^ *┃ {5}\S/u;
-const QUESTION_MENU_TEXT = /^ *┃ {2}(\S.*)$/u;
-const QUESTION_MENU_BAR = /^ *┃\s*$/u;
-
 interface Line {
   text: string;
   /** Index into the screen's raw lines, blank ones included. */
@@ -247,10 +172,6 @@ function contentLines(raw: string[]): Line[] {
     .filter((line) => line.text.trim() !== '');
 }
 
-function normalise(text: string): string {
-  return text.replace(/\s+/g, ' ').trim();
-}
-
 function stripMarkers(text: string): string {
   return normalise(text.replace(/^[\s│❯›>]+/, ''));
 }
@@ -270,219 +191,71 @@ function isYesNo(text: string): boolean {
  */
 export const SELECTED_OPTION_MARKER = '⟦SP:selected⟧ ';
 
-export function detectPrompt(screen: string): DetectedPrompt | null {
+export function detectPrompt(screen: string, agent = 'generic'): DetectedPrompt | null {
   const original = screen.split('\n');
   const plain = original.map((line) => line.replace(/^⟦SP:selected⟧ /, ''));
-  const prompt = detectPlainPrompt(plain.join('\n'));
+  const prompt = detectPlainPrompt(plain.join('\n'), agent);
   if (prompt?.optionRows === undefined) return prompt;
   const selected = prompt.optionRows.flatMap((row, index) =>
     original[row]?.startsWith(SELECTED_OPTION_MARKER) ? [index] : []);
   return selected.length === 1 ? { ...prompt, selectedOption: selected[0] } : prompt;
 }
 
-function detectPlainPrompt(screen: string): DetectedPrompt | null {
+function detectPlainPrompt(screen: string, agent: string): DetectedPrompt | null {
   const raw = screen.split('\n');
   const lines = contentLines(raw);
   if (lines.length === 0) return null;
   const tail = lines.slice(-TAIL_WINDOW);
 
-  const muse = musePrompt(raw, tail);
-  if (muse !== null) return muse;
-
-  const questionMenu = openCodeQuestionMenu(raw, lines);
-  if (questionMenu !== null) return questionMenu;
+  const shapes = promptShapesFor(agent);
+  const rows = shapes.filter((shape): shape is PromptRows => shape.kind === 'rows');
+  const busy = (text: string): boolean => rows.some(shape => shape.busy?.test(text));
+  for (const shape of shapes) {
+    if (shape.kind !== 'menu') continue;
+    const prompt = shape.detect(raw, lines, tail, busy);
+    if (prompt !== null) return prompt;
+  }
 
   // A dialog a program draws on its own screen, recognised by its signature
   // (`dialogs.ts`): the most specific test there is, so it goes first.
-  const dialog = dialogPrompt(raw);
+  const dialog = dialogPrompt(raw, undefined, undefined, agent);
   if (dialog !== null) return dialog;
 
   // A clack step draws its own frame, and the frame alone says whether the
   // step is waiting.
-  const clack = clackPrompt(tail, raw);
+  const clack = clackPrompt(tail, raw, rows, busy);
   if (clack !== null) return clack;
 
   // Four chooser shapes, most specific first. A block that is found but
   // not LIVE (a numbered list in the transcript, say) does not end the
   // search: the shapes below it, and the single-line tails after, may be.
   const blocks = [
-    numberedBlock(tail),
+    numberedBlock(tail, rows),
     letterBlock(tail),
-    keyHintBlock(tail),
-    pointerBlock(tail, raw),
+    keyHintBlock(tail, rows),
+    pointerBlock(tail, raw, rows),
   ];
   for (const block of blocks) {
     if (block === null) continue;
-    const prompt = livePrompt(block, tail, raw);
+    const prompt = livePrompt(block, tail, raw, rows, busy);
     if (prompt !== null) return prompt;
   }
 
   // No live option block: a y/n tail on the LAST content line is still a prompt.
   const last = lines[lines.length - 1]!;
-  if (isYesNo(last.text) && !BUSY_LINE.test(last.text)) {
+  if (isYesNo(last.text) && !busy(last.text)) {
     const question = normalise(last.text);
     return { question, options: [], signature: question, rows: [last.index, last.index], basis: 'frame' };
   }
 
   // A bare press-enter wait (the Codex onboarding screens): the last content
   // line asks for enter and nothing below it can contradict that.
-  if (PRESS_ENTER.test(last.text)) {
+  if (rows.some(shape => shape.footer?.test(last.text))) {
     const question = normalise(last.text);
     return { question, options: [], signature: question, rows: [last.index, last.index], basis: 'frame' };
   }
 
   return null;
-}
-
-function museQuestion(text: string): boolean {
-  return /^Would .+ like to run the following command\?$/.test(text) || text === 'Do you trust this workspace?';
-}
-
-/** Muse's approval and trust menus use ⟩ with numbered rows and no composer. */
-function musePrompt(raw: string[], tail: Line[]): DetectedPrompt | null {
-  const selected = [...tail].reverse().find((line) => /^⟩ [1-3](?:\. | {2})/.test(line.text));
-  if (selected === undefined) return null;
-  const marker = /^⟩ ([1-3])(\. | {2})/.exec(selected.text);
-  if (marker === null) return null;
-  const selectedOption = Number(marker[1]) - 1;
-  const approval = marker[2] === '. ';
-  const first = selected.index - selectedOption;
-  // Muse omits the workspace-wide choice for script blocks and some commands.
-  // The second row identifies that form even when the heading stays plain.
-  const twoOptionApproval = approval && /^(?:⟩ | {2})2\. Abort the entire command\s*\(esc\)/.test(raw[first + 1] ?? '');
-  const count = approval && !twoOptionApproval ? 3 : 2;
-  if (selectedOption >= count) return null;
-  const options: string[] = [];
-  const optionRows: number[] = [];
-  for (let offset = 0; offset < count; offset++) {
-    const row = first + offset;
-    const text = (raw[row] ?? '').trimEnd();
-    const prefix = `${offset === selectedOption ? '⟩ ' : '  '}${String(offset + 1)}${approval ? '. ' : '  '}`;
-    if (!text.startsWith(prefix) || text.slice(prefix.length).trim() === '') return null;
-    options.push(normalise(text.replace(/^⟩ /, '')));
-    optionRows.push(row);
-  }
-  // Walk the visible menu itself: a long wrapped command can put the heading
-  // beyond the tail and more than ten rows above the first choice. The first
-  // transcript or composer boundary prevents borrowing an answered question.
-  let question: Line | undefined;
-  for (let index = first - 1; index >= 0 && first - index <= 60; index--) {
-    const text = (raw[index] ?? '').trimEnd();
-    if (museQuestion(text)) {
-      question = { text, index };
-      break;
-    }
-    if (/^\s*(?:[◆◇◈]|❯(?:\s|$)|[─━═]{2,})/u.test(text)) break;
-  }
-  if (question === undefined) return null;
-  if (approval !== question.text.startsWith('Would ')) return null;
-  // A quoted menu inside an answer has no new Muse input border before it.
-  const before = raw.slice(0, question.index);
-  let border = -1;
-  for (let index = before.length - 1; index >= 0; index--) {
-    if (/^\s*── .*Voice input/.test(before[index]!)) { border = index; break; }
-  }
-  if (before.slice(border + 1).some((line) => /^\s*◆/.test(line))) return null;
-  const stage = approval ? raw.slice(question.index, first).find((line) => /^ {2}Stage \d+\/\d+$/.test(line.trimEnd())) : undefined;
-  // Only this menu's hint and footer, blank rows and Muse's status footer
-  // belong below its options. Other output means the menu is historical.
-  if (raw.slice(optionRows[optionRows.length - 1]! + 1).some((line) => {
-    const text = line.trimEnd();
-    return text.trim() !== '' && !/^Change approval defaults in \/permissions$/.test(text) &&
-      (approval || !/^Use Up\/Down or 1\/2, then Enter\. Esc quits\.$/.test(text)) &&
-      !/^\s*[─━═]{2,}$/.test(text) &&
-      !/^ {2}\S[^·]* · [^·]+ · [^·]+ · Launch overrides$/u.test(text);
-  })) return null;
-  return {
-    question: question.text,
-    options,
-    selectedOption,
-    optionRows,
-    signature: [question.text, stage ?? '', ...options].join(' | '),
-    rows: [question.index, optionRows[optionRows.length - 1]!],
-    basis: 'marker',
-  };
-}
-
-/** Tracks the visible menu block, independently of activity above it. */
-export class MusePromptSettler {
-  private menu: string | null = null;
-  private since = 0;
-
-  detect(screen: string, now = Date.now(), styled?: readonly StyledLine[]): DetectedPrompt | null {
-    const prompt = detectPrompt(screen);
-    if (prompt === null) {
-      this.menu = null;
-      return null;
-    }
-    if (!prompt.question.startsWith('Would ') || !prompt.signature.includes('Stage ') ||
-      prompt.optionRows === undefined) {
-      this.menu = null;
-      return prompt;
-    }
-    const atRow = styled?.[prompt.rows[0]];
-    const heading = atRow?.text === prompt.question ? atRow :
-      [...(styled ?? [])].reverse().find((line) => line.text === prompt.question);
-    const bold = heading !== undefined && heading.spans.some((span) =>
-      span.bold && span.to - span.from >= prompt.question.length / 2);
-    if (bold) {
-      this.menu = null;
-      return prompt;
-    }
-    // The heading to the last option row: a status footer below may tick.
-    const block = screen.split('\n').slice(prompt.rows[0], prompt.rows[1] + 1).join('\n');
-    if (block !== this.menu) {
-      this.menu = block;
-      this.since = now;
-    }
-    return now - this.since >= MUSE_MENU_SETTLE_MS ? prompt : null;
-  }
-}
-
-/** A live left-ruled question menu with its fixed footer and custom-answer choice. */
-function openCodeQuestionMenu(raw: string[], lines: Line[]): DetectedPrompt | null {
-  const footer = [...lines].reverse().find((line) => QUESTION_MENU_FOOTER.test(line.text));
-  if (footer === undefined) return null;
-  const after = lines.filter((line) => line.index > footer.index);
-  // The programme may draw a status line below the menu, but another input
-  // box or a resumed transcript means this menu is no longer waiting.
-  if (after.length > 2 || after.some((line) => BUSY_LINE.test(line.text) || /[╭╰│❯›]/u.test(line.text))) return null;
-
-  let cursor = footer.index - 1;
-  while (QUESTION_MENU_BAR.test(raw[cursor] ?? '')) cursor--;
-  const options: string[] = [];
-  for (let count = 0; count < 4 && cursor >= 0; count++) {
-    while (QUESTION_MENU_DESCRIPTION.test(raw[cursor] ?? '')) cursor--;
-    const row = QUESTION_MENU_OPTION.exec(raw[cursor] ?? '');
-    if (row === null) break;
-    options.unshift(row[2]!);
-    cursor--;
-  }
-  // The walk above collects option rows from the bottom. Their numbers must
-  // be consecutive, with the final row offering the custom answer.
-  if (options.length < 2 || options.length > 4 || options.at(-1) !== 'Type your own answer') return null;
-  const firstOption = cursor + 1;
-  const numbered = raw.slice(firstOption, footer.index).map((line) => QUESTION_MENU_OPTION.exec(line)?.[1]);
-  if (numbered.filter((value) => value !== undefined).join(',') !== options.map((_, i) => String(i + 1)).join(',')) return null;
-  if (!QUESTION_MENU_BAR.test(raw[cursor] ?? '')) return null;
-  while (QUESTION_MENU_BAR.test(raw[cursor] ?? '')) cursor--;
-  const question: string[] = [];
-  while (cursor >= 0 && question.length < 8) {
-    const row = QUESTION_MENU_TEXT.exec(raw[cursor] ?? '');
-    if (row === null || QUESTION_MENU_OPTION.test(raw[cursor] ?? '')) break;
-    question.unshift(row[1]!);
-    cursor--;
-  }
-  if (question.length === 0) return null;
-  const first = cursor + 1;
-  return {
-    question: normalise(question.join(' ')),
-    options,
-    optionRows: raw.slice(firstOption, footer.index).map((line, index) => QUESTION_MENU_OPTION.test(line) ? firstOption + index : -1).filter((index) => index >= 0),
-    signature: normalise(raw.slice(first, footer.index + 1).join(' ')),
-    rows: [first, footer.index],
-    basis: 'footer',
-  };
 }
 
 /**
@@ -496,7 +269,7 @@ function openCodeQuestionMenu(raw: string[], lines: Line[]): DetectedPrompt | nu
  * validation message may sit there, directly under the `└` that carries it and
  * indented as clack indents it (VALIDATION_REST).
  */
-function clackPrompt(tail: Line[], raw: string[]): DetectedPrompt | null {
+function clackPrompt(tail: Line[], raw: string[], shapes: PromptRows[], busy: (text: string) => boolean): DetectedPrompt | null {
   const text = (index: number): string => (raw[index] ?? '').trimEnd();
   let lastRow: Line | null = null;
   for (const line of tail) {
@@ -516,7 +289,7 @@ function clackPrompt(tail: Line[], raw: string[]): DetectedPrompt | null {
   let end = lastRow.index + 1;
   while (text(end) !== '' && !CLACK_BAR_END.test(text(end))) end++;
   if (!CLACK_BAR_END.test(text(end))) return null;
-  if (raw.slice(lastRow.index + 1).some((line) => BUSY_LINE.test(line))) return null;
+  if (raw.slice(lastRow.index + 1).some((line) => busy(line))) return null;
   let after = end + 1;
   if (/^└ {2}\S/.test(text(end))) while (VALIDATION_REST.test(text(after))) after++;
   if (raw.slice(after).some((line) => line.trim() !== '')) return null;
@@ -524,7 +297,7 @@ function clackPrompt(tail: Line[], raw: string[]): DetectedPrompt | null {
   // The message runs from the headline down to the first row, less the
   // `...` clack draws where it has scrolled rows out of view. A step with no
   // message of its own is asked by the message logged just above it.
-  const message = headline[1] === undefined ? loggedAbove(raw, top - 1) : [headline[1]];
+  const message = headline[1] === undefined ? (shapes.find(shape => shape.clackMessage)?.clackMessage?.(raw, top - 1) ?? []) : [headline[1]];
   const options: string[] = [];
   const optionRows: number[] = [];
   let radios = 0;
@@ -563,49 +336,17 @@ function clackPrompt(tail: Line[], raw: string[]): DetectedPrompt | null {
 }
 
 /**
- * The message clack logged directly above the line at `index`: its first
- * line (`●  Accessing workspace:`) and the lines in the gutter under it.
- * Empty when what is above is not a logged message.
- *
- * A line longer than the terminal is wide goes on at the start of the next
- * row, out of the gutter. Such a row is joined to the row above it as it
- * stands, since the break can fall inside a word, but only when the row above
- * fills the screen's width as far as the screen shows it (its longest line, or
- * one short where the break trimmed a space). Any other line out of the gutter
- * is not part of the message.
- */
-function loggedAbove(raw: string[], index: number): string[] {
-  const width = Math.max(...raw.map((line) => line.trimEnd().length));
-  const lines: string[] = [];
-  let wrapped = '';
-  for (let at = index - 1; at >= 0; at--) {
-    const line = (raw[at] ?? '').trimEnd();
-    const first = CLACK_LOG.exec(line);
-    if (first !== null) return [`${first[1] ?? ''}${wrapped}`, ...lines];
-    if (CLACK_GUTTER.test(line)) {
-      lines.unshift(`${line.slice(1).trim()}${wrapped}`);
-      wrapped = '';
-      continue;
-    }
-    if (line.trim() === '') return [];
-    if ((raw[at - 1] ?? '').trimEnd().length < width - 1) return [];
-    wrapped = `${line}${wrapped}`;
-  }
-  return [];
-}
-
-/**
  * Numbered option rows anywhere in the tail, wrap-tolerant: Codex wraps a
  * long option's text across several lines, so consecutive-row detection
  * would never see its blocks. Rows whose numbers never
  * DECREASE belong to one chooser; a decrease means a new list started and
  * only the newest can be live.
  */
-function numberedBlock(tail: Line[]): Block | null {
+function numberedBlock(tail: Line[], shapes: PromptRows[]): Block | null {
   let rows: Row[] = [];
   let previousNumber = 0;
   for (const line of tail) {
-    const match = OPTION_ROW.exec(line.text);
+    const match = firstMatch(shapes.map(shape => shape.numbered), line.text);
     if (match === null) continue;
     const number = Number(match[1]);
     if (number < previousNumber) rows = [];
@@ -647,13 +388,13 @@ function letterBlock(tail: Line[]): Block | null {
  * both y and n. A table of y/n flags fails the first test and a list of
  * keyboard shortcuts the second.
  */
-function keyHintBlock(tail: Line[]): Block | null {
+function keyHintBlock(tail: Line[], shapes: PromptRows[]): Block | null {
   let rows: Row[] = [];
   let keys: string[] = [];
   let layout = '';
   let lastIndex = -1;
   for (const line of tail) {
-    const match = KEY_HINT_ROW.exec(line.text);
+    const match = firstMatch(shapes.map(shape => shape.keyHint), line.text);
     if (match === null) continue;
     const label = match[2] ?? '';
     const key = (match[3] ?? '').toLowerCase();
@@ -683,10 +424,10 @@ function keyHintBlock(tail: Line[]): Block | null {
  * rule. Claude Code's idle screen would otherwise read as a three-option
  * chooser.
  */
-function pointerBlock(tail: Line[], raw: string[]): Block | null {
+function pointerBlock(tail: Line[], raw: string[], shapes: PromptRows[]): Block | null {
   let pointer: { line: Line; textCol: number } | null = null;
   for (const line of tail) {
-    const match = POINTER_ROW.exec(line.text);
+    const match = firstMatch(shapes.map(shape => shape.pointer), line.text);
     if (match === null) continue;
     const text = match[3] ?? '';
     if (!/[\p{L}\p{N}]/u.test(text)) continue; // `│ >   │`: a box, not a choice
@@ -700,7 +441,7 @@ function pointerBlock(tail: Line[], raw: string[]): Block | null {
     if (text.length <= textCol) return null;
     if (text.slice(0, textCol).trim() !== '') return null;
     if (/\s/.test(text.charAt(textCol))) return null;
-    if (POINTER_ROW.test(text)) return null;
+    if (shapes.some(shape => shape.pointer?.test(text))) return null;
     return { text, index };
   };
   const above: Line[] = [];
@@ -721,41 +462,10 @@ function pointerBlock(tail: Line[], raw: string[]): Block | null {
 }
 
 /**
- * Where an older Grok box's command starts. The command is plain bar text
- * above the radios. The walk may cross the one bare bar between that text
- * and the radios. It stops at the next bare bar, or at a line that starts
- * Grok's reasoning (`♦ Thinking`, or the spinner). The run is taken only
- * when a line in it is command evidence: the box's `│  > ` question row,
- * a `$`, or a `:` continuation. Otherwise the run is the same shape as
- * reasoning, and the radios stay the start.
- */
-function commandAboveRadios(raw: string[], firstOption: number): number {
-  const text = (index: number): string => (raw[index] ?? '').trimEnd();
-  if (!/^ {2}│ {2}\d+ \([○•●]\) /.test(text(firstOption))) return firstOption;
-  const above = firstOption - 1;
-  // The one bare bar between the command and the radios may be crossed.
-  // Text sitting directly on the radios is the command itself.
-  const gap = GROK_BARE_BAR.test(text(above));
-  let cursor = gap ? above - 1 : above;
-  let start = firstOption;
-  let sawText = false;
-  let sawEvidence = false;
-  while (cursor >= 0 && GROK_BAR_TEXT.test(text(cursor)) && !GROK_REASONING_START.test(text(cursor))) {
-    sawText = true;
-    if (GROK_BOX_QUESTION.test(text(cursor)) || GROK_COMMAND_MARK.test(text(cursor))) sawEvidence = true;
-    start = cursor;
-    cursor--;
-  }
-  if (!sawText || !sawEvidence) return firstOption;
-  if (GROK_BARE_BAR.test(text(cursor)) || GROK_REASONING_START.test(text(cursor))) return start;
-  return firstOption;
-}
-
-/**
  * Whether a block is a prompt the program is WAITING on, and if so the
  * prompt as the consumer should see it.
  */
-function livePrompt(block: Block, tail: Line[], raw: string[]): DetectedPrompt | null {
+function livePrompt(block: Block, tail: Line[], raw: string[], shapes: PromptRows[], busy: (text: string) => boolean): DetectedPrompt | null {
   const { rows, kind } = block;
   const blockStart = rows[0]!.line.index;
   const blockEnd = rows[rows.length - 1]!.line.index;
@@ -763,17 +473,17 @@ function livePrompt(block: Block, tail: Line[], raw: string[]): DetectedPrompt |
   // the block is history. (The `Press enter…` footer below the block is
   // the opposite: it confirms the prompt is live.)
   const below = tail.filter((line) => line.index > blockEnd);
-  if (below.some((line) => BUSY_LINE.test(line.text))) return null;
+  if (below.some((line) => busy(line.text))) return null;
 
   const hasMarker = tail.some(
-    (line) => line.index >= blockStart && line.index <= blockEnd && MARKER_LINE.test(line.text),
+    (line) => line.index >= blockStart && line.index <= blockEnd && shapes.some(shape => shape.marker?.test(line.text)),
   );
-  const hasPressEnter = below.some((line) => PRESS_ENTER.test(line.text));
+  const hasPressEnter = below.some((line) => shapes.some(shape => shape.footer?.test(line.text)));
   const nothingBelow = below.every((line) => RULE_LINE.test(line.text));
   // A question mark above the bare bar that closes an older Grok command is
   // reasoning. The command below that bar is claimed on its own, further down.
-  const commandStart = commandAboveRadios(raw, blockStart);
-  let question = findQuestion(tail, blockStart);
+  const commandStart = (shapes.find(shape => shape.commandStart)?.commandStart?.(raw, blockStart) ?? blockStart);
+  let question = findQuestion(tail, blockStart, shapes);
   if (question !== null && commandStart < blockStart && question.index < commandStart) question = null;
 
   let live: boolean;
@@ -861,8 +571,8 @@ export class StalePromptGuard {
   private cleared = false;
 
   /** Input is being written; `screen` is what the program showed at that moment. */
-  noteInput(screen: string): void {
-    this.signatureAtInput = detectPrompt(screen)?.signature ?? null;
+  noteInput(screen: string, agent = 'generic'): void {
+    this.signatureAtInput = detectPrompt(screen, agent)?.signature ?? null;
     this.cleared = false;
   }
 
@@ -891,7 +601,7 @@ export class StalePromptGuard {
  * (Like your own code…" and inquirer's `? Select a template: (Use arrow keys)`
  * leads with it. Returns the line, its text normalised.
  */
-function findQuestion(tail: Line[], blockStart: number): Line | null {
+function findQuestion(tail: Line[], blockStart: number, shapes: PromptRows[]): Line | null {
   const above = tail.filter((line) => line.index < blockStart);
   let inspected = 0;
   for (let i = above.length - 1; i >= 0 && inspected < QUESTION_SEARCH_BUDGET; i--) {
@@ -900,11 +610,10 @@ function findQuestion(tail: Line[], blockStart: number): Line | null {
     inspected++;
     // Only Grok's exact box prefix is chrome. A question may itself begin
     // with `>` or a box character, so leave everything after that prefix.
-    const cleaned = normalise(GROK_BOX_QUESTION.test(line.text)
-      ? line.text.replace(GROK_BOX_QUESTION, '')
-      : line.text);
+    const prefix = shapes.find(shape => shape.questionPrefix?.test(line.text))?.questionPrefix;
+    const cleaned = normalise(prefix === undefined ? line.text : line.text.replace(prefix, ''));
     if (
-      GROK_BOX_QUESTION.test(line.text) ||
+      prefix !== undefined ||
       /\?/.test(cleaned) ||
       /permission required/i.test(cleaned) ||
       /^allow\b/i.test(cleaned) ||
@@ -924,4 +633,23 @@ function findQuestion(tail: Line[], blockStart: number): Line | null {
  */
 function drawnTogether(tail: Line[], upper: number, lower: number): boolean {
   return tail.filter((line) => line.index > upper && line.index < lower).length === lower - upper - 1;
+}
+
+function firstMatch(patterns: (RegExp | undefined)[], text: string): RegExpExecArray | null {
+  for (const pattern of patterns) {
+    const match = pattern?.exec(text);
+    if (match !== undefined && match !== null) return match;
+  }
+  return null;
+}
+
+/** Each session owns its own settling clocks. A bare wait target retains the shared fallback. */
+export function createPromptReader(agent = 'generic', settleAll = false): (screen: string, now?: number, styled?: readonly StyledLine[]) => DetectedPrompt | null {
+  const modules = settleAll ? AGENT_MODULES : [moduleFor(agent)];
+  const settlers = modules.flatMap(module => module?.createPromptSettler === undefined ? [] : [module.createPromptSettler()]);
+  return (screen, now = Date.now(), styled) => {
+    let prompt = detectPrompt(screen, agent);
+    for (const settler of settlers) prompt = settler.settle(prompt, screen, now, styled);
+    return prompt;
+  };
 }

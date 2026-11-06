@@ -169,7 +169,10 @@ Antigravity's permission questions are numbered choosers, as are Codex's,
 Qoder's and Grok's; OpenCode and MiMo Code draw a bordered permission dialog
 that the daemon recognises by its title. Their question menu is recognised by
 its `↑↓ select  enter submit  esc dismiss` footer and `Type your own answer`
-choice.
+choice. Every session runs every module's prompt shapes and dialogs in the
+existing detection order, including a known agent session forwarding a child
+program's prompt. Input, resize, settling and reading still follow the session's
+own resolved module.
 
 Two Qoder specifics worth knowing:
 
@@ -206,7 +209,7 @@ poll, rather than asking for one long wait and being surprised.
 ## Reading a session without the agent's reasoning
 
 `terminal_result` and `hideReasoning` read each CLI's screen by its signature
-(`src/core/reasoning.ts`), measured on these versions at their default
+(`src/agents/`, interpreted by `src/core/reasoning.ts`), measured on these versions at their default
 settings:
 
 If your model's safety checks flag reasoning read off another model's screen
@@ -237,6 +240,10 @@ runs through a shell, a wrapper or a launcher script, name it:
 `terminal_start` with `agent: "codex"`, or `shellpuppet start --agent codex
 pwsh`. A newer version that draws its screen differently can need a
 replacement signature (`configuration.md`).
+
+An unmatched program is recorded as `generic` with a fallback source and has no
+reading, so filtered reads and results are refused. A configured reading named
+`generic` remains valid when explicitly selected or matched by its programs.
 
 ## Recipes
 
