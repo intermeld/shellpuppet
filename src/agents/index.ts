@@ -17,6 +17,9 @@ export { MUSE_SUBMIT_DELAY_MS } from './muse/input.js';
 export const AGENT_MODULES: readonly AgentModule[] = [claude, codex, agy, grok, opencode, mimo, qoder, muse, generic];
 export const BUILT_IN_SIGNATURES: readonly AgentSignature[] = AGENT_MODULES.filter(module => module !== generic).map(module => module.reading);
 
+/** Parent-session markers from every module, excluded from every "all" launch profile. */
+export const SESSION_MARKERS: ReadonlySet<string> = new Set(AGENT_MODULES.flatMap(module => module.env?.sessionMarkers ?? []));
+
 export function moduleFor(name: string): AgentModule | undefined {
   return AGENT_MODULES.find(module => module.name === name);
 }

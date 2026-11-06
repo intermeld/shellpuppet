@@ -637,6 +637,36 @@ describe('policy sees the real command, and both caps bite', () => {
 });
 
 describe('envFromDaemon copies names from the daemon, never from the body', () => {
+  it('keeps Claude parent-session markers out of a codex all profile', async () => {
+    const daemon = await startLaunchDaemon({
+      daemonEnv: {
+        CLAUDECODE: 'made-up-parent-marker',
+        CLAUDE_CODE_MESSAGING_TOKEN: 'made-up-parent-token',
+        CODEX_THREAD_ID: 'made-up-parent-thread',
+        ORDINARY_NAME: 'made-up-ordinary',
+      },
+      launcher: profilesOf([{
+        name: 'codex', agent: 'codex', command: process.execPath, shell: false,
+        envFromDaemon: 'all',
+        // Node reports the environment of a session with an explicit agent identity.
+        args: ['-e', 'for (const name of ["CLAUDECODE", "CLAUDE_CODE_MESSAGING_TOKEN", "CODEX_THREAD_ID", "ORDINARY_NAME"]) console.log(name + "=" + (process.env[name] ?? "missing")); console.log("END=1")'],
+      }]),
+    });
+    const started = await launch(daemon, { profile: 'codex' });
+    expect(started.status, started.body).toBe(200);
+    const id = String((JSON.parse(started.body) as Record<string, unknown>)['id']);
+    const listed = await api(daemon.port, daemon.token, '/sessions');
+    expect(listed.body['sessions']).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id, agent: 'codex' }),
+    ]));
+    await waitForScreen(daemon, id, 'END=1');
+    const screen = await screenOf(daemon, id);
+    expect(screen).toContain('CLAUDECODE=missing');
+    expect(screen).toContain('CLAUDE_CODE_MESSAGING_TOKEN=missing');
+    expect(screen).toContain('CODEX_THREAD_ID=missing');
+    expect(screen).toContain('ORDINARY_NAME=made-up-ordinary');
+  });
+
   it('filters verified parent markers and passes agent settings in a dashboard session', async () => {
     const excluded = [
       'CODEX_TOOL_CALL_ID', 'CODEX_VERSION', 'CODEX_PERMISSION_PROFILE',

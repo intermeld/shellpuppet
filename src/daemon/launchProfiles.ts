@@ -21,46 +21,19 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { SESSION_MARKERS } from '../agents/index.js';
 import { ENV_NAME_PATTERN, RESERVED_FEATURE_CREDENTIALS } from '../core/types.js';
 import { compilePolicy } from '../core/policy.js';
 import type { CompiledPolicy } from '../core/policy.js';
 
 export { RESERVED_FEATURE_CREDENTIALS };
-// Variables an agent CLI sets for its own child processes to describe the running
-// session. Sources: Claude Code https://code.claude.com/docs/en/env-vars;
-// Codex codex-rs/protocol/src/shell_environment.rs, codex-rs/core/src/exec_env.rs and
-// codex-rs/core/src/spawn.rs; OpenCode packages/opencode/src/index.ts and
-// packages/core/src/shell.ts; Grok crates/codegen/xai-grok-tools/src/util/env.rs;
-// Gemini CLI docs/reference/commands.md. Matched without regard to case on Windows only.
-const ALL_PROFILE_ENV_EXCLUSIONS: ReadonlySet<string> = new Set([
+// Every "all" profile excludes every agent's parent-session markers, whatever
+// agent it starts. Matched without regard to case on Windows only.
+export const ALL_PROFILE_ENV_EXCLUSIONS: ReadonlySet<string> = new Set([
+  ...SESSION_MARKERS,
   'NODE_OPTIONS', // Node.js runtime
-  'CLAUDECODE', // Claude Code
-  'CLAUDE_CODE_ENTRYPOINT', // Claude Code
-  'CLAUDE_CODE_SESSION_ID', // Claude Code
-  'CLAUDE_CODE_CHILD_SESSION', // Claude Code
-  'CLAUDE_CODE_MESSAGING_SOCKET', // Claude Code
-  'CLAUDE_CODE_MESSAGING_TOKEN', // Claude Code
-  'CLAUDE_CODE_SESSION_ATTENDED', // Claude Code
-  'CLAUDE_CODE_SSE_PORT', // Claude Code IDE session
-  'CLAUDE_CODE_EXECPATH', // Claude Code
-  'CLAUDE_CODE_BRIDGE_SESSION_ID', // Claude Code
-  'CLAUDE_CODE_REMOTE_SESSION_ID', // Claude Code
-  'CLAUDE_CODE_REMOTE', // Claude Code
-  'CLAUDE_JOB_DIR', // Claude Code background session
-  'CLAUDE_PID', // Claude Code
-  'CODEX_THREAD_ID', // Codex
-  'CODEX_SESSION_ID', // Codex
-  'CODEX_TOOL_CALL_ID', // Codex
-  'CODEX_VERSION', // Codex
-  'CODEX_PERMISSION_PROFILE', // Codex
-  'CODEX_SANDBOX', // Codex
-  'CODEX_SANDBOX_NETWORK_DISABLED', // Codex
-  'OPENCODE_TERMINAL', // OpenCode
-  'OPENCODE', // OpenCode
-  'OPENCODE_PID', // OpenCode
-  'GROK_AGENT', // Grok
-  'GROK_SESSION_ID', // Grok hooks
-  'GEMINI_CLI', // Gemini CLI
+  // Gemini CLI docs/reference/commands.md; moves when a Gemini module exists.
+  'GEMINI_CLI',
 ]);
 
 /** The name pattern a profile and each of its folders must match. */

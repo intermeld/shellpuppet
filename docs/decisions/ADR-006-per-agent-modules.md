@@ -29,7 +29,10 @@ though the code comes later.
   CLI, Goose, Qoder and Grok each get a module, and common shells can too. A
   module holds what is specific to its program: how it looks while starting,
   ready, busy or asking a question, what its answers look like and how input
-  is submitted. The core keeps what is universal: PTYs, rendering, waits, the
+  is submitted, and which environment variables describe its parent session.
+  The daemon excludes every module's markers from every launch profile that
+  copies its whole environment, whatever agent that profile starts. The core
+  keeps what is universal: PTYs, rendering, waits, the
   viewer and every security property.
 - **An internal refactor first, after the first release.** Modules are files
   in this repository, with today's tests as the safety net. They are reviewed
@@ -72,8 +75,8 @@ though the code comes later.
 ## Consequences
 
 - Agent-profiles.md remains the readiness reference and callers keep passing
-  readiness patterns themselves. Readiness defaults, environment markers and
-  safety adapters are reserved for subsequent work. The safety engine will
+  readiness patterns themselves. Readiness defaults and safety adapters are
+  reserved for subsequent work. The safety engine will
   remain separate from harness adapters, with no safety behaviour added here.
 - The refactor aims to keep modules as data, so that a later external format
   can be the one the project already runs on. Where data cannot express
