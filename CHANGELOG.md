@@ -18,6 +18,8 @@ version may change behaviour, and every such change is listed here.
   name, falling back to `generic`. The session list and start audit entries
   now show that resolved agent. Starting Muse by its program name applies
   its submit delay, resize ordering and menu settling as an explicit agent does.
+- A screenshot that fails now says which capture step failed, how long each
+  step took and what state the browser was in. It never includes the picture.
 
 ## [0.2.1] - 2026-11-05
 
