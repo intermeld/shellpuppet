@@ -226,7 +226,8 @@ docs/                 # architecture/, reference/, decisions/
 **TypeScript, Node 22+.** Typed for maintainability, and the MCP SDK is
 TypeScript-first.
 
-Each agent's screen and input conventions live in its module under `src/agents/`.
+Each agent's screen and input conventions and parent-session environment markers
+live in its module under `src/agents/`.
 Reading and dialog signatures keep their configuration shapes. Small internal
 functions handle the menu and command walks that need more than patterns. The
 core runs those rules and retains terminal ownership, rendering, generic prompt
@@ -250,8 +251,10 @@ is inferred from screen content.
 program matches. `prompts.dialogs` continues to add dialogs for every session,
 and `agents.passEnv` continues to use agent names. Configured readings without a
 built-in module also use every harness shape for detection.
-Readiness defaults, environment markers and safety adapters are reserved optional
-module fields, unused at this stage.
+The registry combines every module's parent-session markers for the daemon to
+exclude from every launch profile that copies its whole environment, regardless
+of the session's agent. Readiness defaults and safety adapters remain reserved
+optional module fields, unused at this stage.
 
 `viewer.js` and `dashboard.js` use `pane.js`; `term.onData` is registered once
 there. The dashboard uses plain script and the DOM renderer, with no new
@@ -994,9 +997,17 @@ A dashboard start uses the same clean baseline. `envFromDaemon` on its
 profile adds the names explicitly configured there from the daemon's
 environment, or `"all"` passes the daemon's whole environment to that profile's
 dashboard starts. Unset listed names do not refuse the start. ShellPuppet's
-own `SHELLPUPPET_` variables and connected feature credentials are excluded.
+own `SHELLPUPPET_` variables, except `SHELLPUPPET_HOME`, and connected feature
+credentials are excluded; `__proto__` is never copied.
 The `"all"` form also excludes `NODE_OPTIONS`, malformed variable names
-(including Windows drive pseudo-variables) and `__proto__`.
+(including Windows drive pseudo-variables) and every agent's parent-session
+markers. These exclusions apply to every `"all"` profile: a Codex session
+started by a daemon that inherited Claude Code's environment must not inherit
+`CLAUDECODE` or `CLAUDE_CODE_MESSAGING_TOKEN`. Claude Code, Codex, OpenCode and
+Grok declare their markers in their modules; the registry supplies their union.
+The daemon retains `NODE_OPTIONS` and `GEMINI_CLI`, with the latter moving when
+a Gemini module exists. Marker names match without regard to case on Windows
+only. Explicit lists can still copy agent markers deliberately.
 It has no client environment, so `agents.passEnv` is not consulted. The
 response and audit name copied variables for a list, or record `"all"` as a
 setting, never their values. Client-token starts do not use profiles.

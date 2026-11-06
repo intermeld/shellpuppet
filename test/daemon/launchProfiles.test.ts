@@ -10,6 +10,7 @@ import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parseDaemonConfig } from '../../src/daemon/config.js';
 import {
+  ALL_PROFILE_ENV_EXCLUSIONS,
   compileProfilePolicy,
   copyDaemonEnv,
   expandProfileText,
@@ -349,6 +350,47 @@ describe('profile policy', () => {
 });
 
 describe('the daemon environment copy', () => {
+  it('preserves the complete exclusion set from before agent modules owned the markers', () => {
+    // Frozen independently of the registry: a module must not silently drop a name.
+    const originalExclusions = Object.freeze([
+      'NODE_OPTIONS',
+      'CLAUDECODE',
+      'CLAUDE_CODE_ENTRYPOINT',
+      'CLAUDE_CODE_SESSION_ID',
+      'CLAUDE_CODE_CHILD_SESSION',
+      'CLAUDE_CODE_MESSAGING_SOCKET',
+      'CLAUDE_CODE_MESSAGING_TOKEN',
+      'CLAUDE_CODE_SESSION_ATTENDED',
+      'CLAUDE_CODE_SSE_PORT',
+      'CLAUDE_CODE_EXECPATH',
+      'CLAUDE_CODE_BRIDGE_SESSION_ID',
+      'CLAUDE_CODE_REMOTE_SESSION_ID',
+      'CLAUDE_CODE_REMOTE',
+      'CLAUDE_JOB_DIR',
+      'CLAUDE_PID',
+      'CODEX_THREAD_ID',
+      'CODEX_SESSION_ID',
+      'CODEX_TOOL_CALL_ID',
+      'CODEX_VERSION',
+      'CODEX_PERMISSION_PROFILE',
+      'CODEX_SANDBOX',
+      'CODEX_SANDBOX_NETWORK_DISABLED',
+      'OPENCODE_TERMINAL',
+      'OPENCODE',
+      'OPENCODE_PID',
+      'GROK_AGENT',
+      'GROK_SESSION_ID',
+      'GEMINI_CLI',
+    ]);
+    expect([...ALL_PROFILE_ENV_EXCLUSIONS].sort()).toEqual([...originalExclusions].sort());
+    const source = Object.fromEntries(originalExclusions.map(name => [name, 'made-up-parent']));
+    source['ORDINARY_NAME'] = 'made-up-ordinary';
+    expect(copyDaemonEnv('all', source)).toEqual({
+      env: { ORDINARY_NAME: 'made-up-ordinary' },
+      copied: ['ORDINARY_NAME'],
+    });
+  });
+
   it('excludes verified agent child markers that prefixes missed', () => {
     const names = [
       'CLAUDE_CODE_ENTRYPOINT', 'CLAUDE_CODE_SESSION_ATTENDED', 'CLAUDE_CODE_SSE_PORT',
