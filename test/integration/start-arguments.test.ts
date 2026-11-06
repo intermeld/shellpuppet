@@ -1,7 +1,9 @@
 import * as path from 'node:path';
+import * as http from 'node:http';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { startDiagnostics } from './startDiagnostics.js';
 import { api, repoRoot, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 
@@ -17,8 +19,47 @@ const values = [
 
 describe.skipIf(process.platform !== 'win32')('Windows start arguments', () => {
   let td: TestDaemon;
-  beforeAll(async () => { td = await startTestDaemon(); }, 30_000);
-  afterAll(async () => { await td.stop(); }, 60_000);
+  const diagnostics = startDiagnostics();
+  beforeAll(async () => {
+    td = await startTestDaemon({ logger: diagnostics.logger });
+    diagnostics.attach(td);
+  }, 30_000);
+  afterEach((context) => {
+    if (context.task.result?.state === 'fail') console.error(diagnostics.report());
+  });
+  afterAll(async () => {
+    try { await td.stop(); }
+    finally { diagnostics.close(); }
+  }, 60_000);
+
+  it('keeps API calls independent of idle sockets when a start blocks the event loop', async () => {
+    // ConPTY can occupy the same thread as this test's fetch client. Reproduce
+    // that scheduling window without depending on a slow native spawn.
+    const server = http.createServer((request, response) => {
+      const finish = (): void => {
+        response.writeHead(200, { 'content-type': 'application/json' });
+        response.end('{"ok":true}');
+      };
+      if (request.url === '/slow-start') {
+        // The daemon awaits its program-pid poll before answering the start.
+        setTimeout(() => {
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 7000);
+          finish();
+        }, 10);
+      } else finish();
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (address === null || typeof address === 'string') throw new Error('missing test port');
+    try {
+      await api(address.port, null, '/warm');
+      await api(address.port, null, '/slow-start', { body: {} });
+      expect(await api(address.port, null, '/wait')).toEqual({ status: 200, body: { ok: true } });
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  }, 15_000);
 
   it.each(values)('passes %j through a direct HTTP start', async (value) => {
     const started = await api(td.port, td.token, '/sessions', {
