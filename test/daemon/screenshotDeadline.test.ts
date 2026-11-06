@@ -7,6 +7,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type WebSocket from 'ws';
+import { EventEmitter } from 'node:events';
 import {
   DEFAULT_CAPTURE_TIMEOUT_MS,
   DevTools,
@@ -51,5 +52,23 @@ describe('DevTools client deadline', () => {
     await vi.advanceTimersByTimeAsync(600);
     expect(await outcome).toContain('did not answer Page.navigate');
     expect(socket.sent).toHaveLength(1);
+  });
+
+  it('identifies a refused screenshot separately from an expired capture deadline', async () => {
+    vi.useFakeTimers();
+    const socket = Object.assign(new EventEmitter(), { send: vi.fn() });
+    const cdp = new DevTools(socket as unknown as WebSocket, Date.now() + 30_000);
+    const result = cdp.send('Page.captureScreenshot', { format: 'png' })
+      .catch((error: unknown) => error as Error);
+    await vi.advanceTimersByTimeAsync(195);
+    const refusal = { code: -32000, message: 'Unable to capture screenshot', data: 'test capture refusal' };
+    socket.emit('message', JSON.stringify({ id: 1, error: refusal }));
+    const error = await result as Error;
+    expect(error.message).toContain('Page.captureScreenshot returned a DevTools error after 195 ms');
+    expect(error.message).toContain('29805 ms remaining');
+    expect(error.message).toContain(JSON.stringify(refusal));
+    expect(error.cause).toEqual(refusal);
+    expect(socket.send).toHaveBeenCalledTimes(1);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
