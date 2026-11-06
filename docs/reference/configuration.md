@@ -495,6 +495,10 @@ Each entry has these keys. Unknown keys refuse that entry.
 | `policy` | no | `{ "allow": [...], "deny": [...] }` regex lists. No `mode`, no `maxSessions`. |
 | `open` | no | `"grid"` (default), `"focus"` or `"window"`. Returned when the profile starts. |
 
+Launch profiles and dashboard launches never wait for readiness and do not
+accept `waitReady` or `readyTimeout`. Their explicit readiness conditions
+only track state; a person can see the session and type immediately.
+
 An entry that cannot be read whole is left out and named in `daemon.log`; its
 siblings still load. The dashboard's profile list shows the problem sentence
 beside the entries that did load, so a mistyped profile is visible without

@@ -25,7 +25,8 @@ import { planPassedEnv } from '../mcp/config.js';
 import { isEnvNamesProblem, readDaemonConfig } from '../daemon/config.js';
 import { agentNameFor } from '../core/reasoning.js';
 import { knownKeys } from '../core/keys.js';
-import { listedState } from '../core/types.js';
+import { listedState, startReadyLine } from '../core/types.js';
+import type { StartReadyResult } from '../core/types.js';
 import { installDesktopShortcut, uninstallDesktopShortcut, userShortcutOptions } from './desktopShortcut.js';
 import type { Logger, SessionSummary } from '../core/types.js';
 
@@ -35,6 +36,15 @@ Usage:
   shellpuppet start [options] <command> [args...]   Launch a program in a new session
       --label <s> --purpose <s> --cols <n> --rows <n> --cwd <dir>
       --ready-text <s> --ready-quiet <ms> --no-shell --hold --agent <name>
+      --wait-ready --ready-timeout <ms>
+      Pass --wait-ready when starting an agent CLI to delegate work to. It uses
+      its known ready signals, or your --ready-text/--ready-quiet override.
+      Returns for readiness, a question needing an answer, exit or timeout.
+      --ready-timeout defaults to 30000 ms, capped at 300000. A longer wait
+      needs a longer caller budget, including startup overhead. If the caller
+      gives up, it may lose the answer; the session still exists in list.
+      Readiness is tracked for up to five minutes from start. Unknown programs
+      need an explicit condition. Without --wait-ready, start returns without waiting.
       --env-name <NAME> (repeatable) --no-viewer
       --no-viewer opens no dashboard or viewer window, for a short scripted session nobody
       needs to watch; viewer-url still gives a link to it.
@@ -163,6 +173,7 @@ const VALUE_FLAGS = new Set([
   'cwd',
   'ready-text',
   'ready-quiet',
+  'ready-timeout',
   'last',
   'text',
   'regex',
@@ -333,6 +344,8 @@ async function main(): Promise<void> {
         ...(parsed.flags.has('ready-text')
           ? { readyText: String(parsed.flags.get('ready-text')) }
           : {}),
+        ...(parsed.flags.get('wait-ready') === true ? { waitReady: true } : {}),
+        ...(intFlag(parsed, 'ready-timeout') !== undefined ? { readyTimeout: intFlag(parsed, 'ready-timeout') } : {}),
         ...(intFlag(parsed, 'ready-quiet') !== undefined
           ? { readyQuiet: intFlag(parsed, 'ready-quiet') }
           : {}),
@@ -407,7 +420,11 @@ async function main(): Promise<void> {
         } else {
           console.log(`viewer: no window opened (--no-viewer); viewer-url ${String(result['id'])} mints a link`);
         }
-        if (result['ready'] !== true) {
+        const readyWait = result['readyWait'] as StartReadyResult | undefined;
+        if (readyWait !== undefined) {
+          console.log(startReadyLine(readyWait, result['exitCode'] as number | null, result['readyReason']));
+          if (readyWait.prompt !== undefined) console.log(JSON.stringify(readyWait.prompt, null, 2));
+        } else if (result['ready'] !== true) {
           console.log('ready: false. First paint is not readiness; wait before typing.');
         }
       }

@@ -4,6 +4,7 @@ import { reading } from './reading.js';
 
 export const grok: AgentModule = {
   name: reading.name, programs: reading.programs, reading, prompts,
+  readiness: { readyText: ['│ >'] },
   env: {
     // Grok child-session variables: crates/codegen/xai-grok-tools/src/util/env.rs.
     sessionMarkers: [

@@ -224,6 +224,7 @@ Twelve tools appear once the server is wired in: `terminal_start`,
 
 | Tool | Prompt supervision |
 | --- | --- |
+| `terminal_start` | Pass `waitReady: true` when starting an agent CLI to delegate work to. Returns ready, a question, exit or a timeout with the session still running. |
 | `terminal_wait` | `prompt: true` with no session or an array of ids waits for any prompt. `now: true` polls once. Both return compact details without a screen. |
 | `terminal_list` | `waitingOnly: true` returns only sessions waiting on a prompt. |
 
@@ -234,6 +235,15 @@ returns compact waiting sessions without screens; `now: true` polls once.
 CLI forms are `shellpuppet wait --prompt [id ...] [--now]` and
 `shellpuppet list --waiting`. A wait with one string session id keeps its
 usual screen response.
+
+`terminal_start` does not wait by default. With `waitReady: true` it uses the
+resolved agent's known ready signals, or your `readyText`/`readyQuiet`
+override. `readyTimeout` defaults to 30,000 ms and is capped at 300,000 ms.
+A longer explicit wait needs a longer MCP client budget, including startup
+overhead. A client that gives up may lose the answer; the session still exists
+and `terminal_list` shows it. Shells and unknown programs
+need an explicit condition. Dashboard launches and launch profiles never
+wait. See the [MCP start reference](docs/reference/mcp.md) for the outcomes.
 
 The HTTP `GET /sessions/wait?prompt=true` response is compact, including on a
 timeout or an immediate `now=true` poll:
@@ -336,6 +346,13 @@ shellpuppet daemon status|start|stop|restart     # manage the shared daemon
 shellpuppet daemon stop --hold [seconds]         # pause automatic starts (default 120 s)
 shellpuppet mcp
 ```
+
+Use `shellpuppet start --wait-ready <agent-command>` when delegating work.
+`--ready-timeout <ms>` changes the 60-second limit, up to 300 seconds.
+`--ready-text` or `--ready-quiet` overrides the agent's signal and is required
+for a program without one. The output names a question that needs answering,
+reports an exit, or says whether the session is ready. A timeout leaves it
+running. See the [CLI start reference](docs/reference/cli.md).
 
 ### Restarting a shared daemon
 

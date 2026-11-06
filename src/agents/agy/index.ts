@@ -4,4 +4,5 @@ import { prompts } from '../qoder/prompts.js';
 
 export const agy: AgentModule = {
   name: reading.name, programs: reading.programs, reading, prompts,
+  readiness: { readyText: ['? for shortcuts'] },
 };

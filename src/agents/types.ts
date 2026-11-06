@@ -54,7 +54,14 @@ export interface AgentModule {
     resizeBehindSubmit?: boolean;
     verifyMs?: VerifyTiming;
   };
-  readiness?: { readyText?: string[]; readyQuietMs?: number; settleMs?: number };
+  readiness?: {
+    /** Alternative literal ready signals recorded in agent-profiles.md. */
+    readyText?: string[];
+    /** A composer whose position matters as well as its text. */
+    readyScreen?: (screen: string) => boolean;
+    readyQuietMs?: number;
+    settleMs?: number;
+  };
   env?: { sessionMarkers: string[] };
   safety?: SafetyAdapter;
   matchesProgram?: (pattern: ProgramMatch, program: string) => boolean;

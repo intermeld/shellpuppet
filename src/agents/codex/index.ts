@@ -4,6 +4,7 @@ import { reading } from './reading.js';
 
 export const codex: AgentModule = {
   name: reading.name, programs: reading.programs, reading, prompts,
+  readiness: { readyText: ['Ask Codex'] },
   env: {
     // Codex child-session variables: codex-rs/protocol/src/shell_environment.rs,
     // codex-rs/core/src/exec_env.rs and codex-rs/core/src/spawn.rs.

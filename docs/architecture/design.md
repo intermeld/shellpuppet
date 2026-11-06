@@ -253,8 +253,8 @@ and `agents.passEnv` continues to use agent names. Configured readings without a
 built-in module also use every harness shape for detection.
 The registry combines every module's parent-session markers for the daemon to
 exclude from every launch profile that copies its whole environment, regardless
-of the session's agent. Readiness defaults and safety adapters remain reserved
-optional module fields, unused at this stage.
+of the session's agent. Readiness defaults apply only when a caller opts in
+with `waitReady`. Safety adapters remain a reserved optional module field.
 
 `viewer.js` and `dashboard.js` use `pane.js`; `term.onData` is registered once
 there. The dashboard uses plain script and the DOM renderer, with no new
@@ -295,7 +295,7 @@ ambiguous in clients that do not, so the prefix stays.
 
 | Tool | Purpose | Key args |
 |---|---|---|
-| `terminal_start` | Launch a program in a new PTY session | `command`, `args[]`, `cwd`, `cols`, `rows`, `hold`, `label`, `purpose`, `agent`, `readyText`, `readyQuiet`, `shell`, `envNames` |
+| `terminal_start` | Launch a program in a new PTY session | `command`, `args[]`, `cwd`, `cols`, `rows`, `hold`, `label`, `purpose`, `agent`, `waitReady`, `readyTimeout`, `readyText`, `readyQuiet`, `shell`, `envNames` |
 | `terminal_snapshot` | Read the rendered screen as plain text | `session`, `lastLines`, `hideReasoning` |
 | `terminal_type` | Type text (optionally submit) | `session`, `text`, `submit`, `verify` |
 | `terminal_key` | Press a semantic key | `session`, `key` |
@@ -536,6 +536,16 @@ A wait that ends without a match carries a `detail` saying why, when the waiter 
 **Startup input loss must be handled explicitly.** Qoder rendered its UI while still
 loading MCP servers (status bar climbed 6 → 23) and **silently discarded** typed input
 during that window, with no error. Mitigations, all of which are in the first release:
+- Start waits only with `waitReady: true` (CLI `--wait-ready`), using the
+  caller's readiness condition or the resolved module's recorded signals.
+  It returns on readiness, a recognised question, exit or timeout. The
+  default readiness limit is 30 s, with `readyTimeout` capped at 300 s.
+  Timeout leaves the session running and readiness tracked up to five
+  minutes from creation. An unknown signal needs `readyText` or `readyQuiet`
+  before anything starts. Dashboard launches and profiles never wait and
+  do not accept either wait field. The [MCP reference](../reference/mcp.md)
+  records the HTTP response and the [CLI reference](../reference/cli.md)
+  records its flags and output.
 - `terminal_start` accepts `readyText` and `readyQuiet`, and reports a `ready` boolean
   with a `readyReason` (`not-tracked`, `pending`, `condition-met` or `never-held`); only
   `condition-met` is affirmative.

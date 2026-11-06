@@ -4,6 +4,7 @@ import { reading } from './reading.js';
 
 export const claude: AgentModule = {
   name: reading.name, programs: reading.programs, reading, prompts,
+  readiness: { readyText: ['? for shortcuts', 'shift+tab'] },
   env: {
     // Claude Code child-session variables: https://code.claude.com/docs/en/env-vars.
     sessionMarkers: [
