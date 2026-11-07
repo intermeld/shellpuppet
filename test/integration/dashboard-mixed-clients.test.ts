@@ -97,12 +97,12 @@ it('bounds resize frames across two dashboards and a passive single-session view
       { body: { cols: 194, rows: 100 } })).status).toBe(200);
     await new Promise((resolve) => setTimeout(resolve, 1300));
     const first = await Promise.all(pages.map((evaluate) => evaluate(`({
-      frames: window.__resizes.length, owner: window.__geometry.at(-1)?.control
-    })`))) as { frames: number; owner: string }[];
-    expect(first[0]!.frames + first[1]!.frames).toBeGreaterThanOrEqual(1);
-    expect(first[0]!.frames + first[1]!.frames).toBeLessThanOrEqual(2);
-    expect(first[2]!.frames).toBe(0);
-    expect(first.filter((page) => page.owner === 'yours')).toHaveLength(1);
+      frames: window.__resizes.length, owner: window.__geometry.at(-1)?.control,
+      cols: window.__geometry.at(-1)?.cols, rows: window.__geometry.at(-1)?.rows
+    })`))) as { frames: number; owner: string; cols: number; rows: number }[];
+    expect(first.map(page => page.frames)).toEqual([0, 0, 0]);
+    expect(first.map(page => [page.cols, page.rows])).toEqual([[194, 100], [194, 100], [194, 100]]);
+    expect(first.filter((page) => page.owner === 'yours')).toHaveLength(0);
     await Promise.all(pages.map((evaluate) => evaluate(`window.__resizes.length = 0`)));
 
     expect((await api(daemon.port, daemon.token, `/sessions/${id}/resize`,

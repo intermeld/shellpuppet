@@ -77,26 +77,44 @@ client token must remain outside the browser.
   boundary or a Grid row or column boundary. Home resets that direction.
   The boundary stops at the readable pane minimum or the strip minimum.
   With Auto fit on, a release fits only panes that grew; panes that shrank retain
-  their grid. With Auto fit off, release keeps the grid until Fit is pressed.
+  their grid unless they fall below the floor, when they also fit to 80 by 24.
+  With Auto fit off, release keeps the grid until Fit is pressed.
   Boundaries announce their current track size in pixels.
   Each window keeps its own track sizes for the session and resets them on
   Auto, on Grid again, or when its pane count invalidates them.
 - **The terminal changes size only on a deliberate act.** A dashboard pane
   adopts the session grid without driving it when it connects. Auto fit is
   on by default and is the person's continuing choice to fit each pane after
-  layout, window, text size or outside grid changes, subject to the readable
-  floor and any geometry hold. A second outside resize soon after a refit
-  leaves the pane following until Fit is pressed. Turning Auto fit off makes
-  layout and window changes scale the font as before, within the 6 to 40 px
-  range. A grid still larger than its pane at 6 px can be scrolled with
-  Shift+wheel, horizontal wheel movement or its scrollbars, without moving
-  the view when the terminal gains focus.
+  layout, window, text size, font load or display-scale changes, subject to the
+  readable floor and any geometry hold. This includes visible unheld Focus
+  main panes, which refit to their own space and are never pulled down to the
+  shared floor. The first takeover in another window or viewer leaves the
+  pane following until Fit, Enlarge or a drag on that pane with Auto fit on
+  takes it back. An unowned session still receives its initial fit.
+  Turning Auto fit off makes
+  layout, window, font load and display-scale changes fit the displayed text
+  without changing the grid or the saved text preference. An uncapped grid
+  shrinks only as far as needed below the remembered text size and recovers
+  that size when it fits again. Owned grids at a configured column or row
+  limit retain their larger-text fitting rule.
   Fit, Enlarge and Restore take geometry control and resize the real terminal; Restore sends
-  the previous grid. Each pane has Enlarge and Restore. Focus gives one
+  the previous grid above the floor or 80 by 24 below it when Auto fit is off.
+  Each pane has Enlarge and Restore. Focus gives one
   session most of the window. The browser's full-screen key can make the
   dashboard full screen. An enlarged or focused pane also resizes the real
   terminal to fit when the person takes control. The single-session viewer's
   geometry rule and read-only enforcement remain.
+- **Consistent text below the floor (6 November 2026).** A pane is below the
+  floor when 80 by 24 cells do not fit at the person's chosen text size.
+  Every such pane the dashboard sizes receives exactly 80 by 24 cells.
+  Text is measured afresh, independently of its previous size. The smallest
+  of the largest sizes that fit those panes is shared by all visible panes
+  below the floor in that window. Text may fall below the person's choice
+  and below 6 px so the whole screen remains visible. Panes above the floor
+  keep their own fit. A held or followed grid stays unchanged and uses the
+  shared text size if it fits, otherwise the largest size that shows its
+  whole screen. The header keeps its floor note. Growing above the floor
+  restores normal fitting.
 - **Windows and placement.** A pane's Pop out control opens that session in
   its own movable, full-screen-capable window. It leaves the grid and returns
   when that window closes. This uses the same multi-window support as panes

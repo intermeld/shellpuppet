@@ -1104,9 +1104,9 @@ setting, never their values. Client-token starts do not use profiles.
   dashboard no longer depends on the flag, so forgetting it cannot resize the
   PTY. `drive=false` is not a spelling. A read-only viewer never drives, and
   a read-only viewer cookie is not a dashboard credential. `hold` remains a
-  client-token action. The 80 by 24 floor is a property of the dashboard
-  layout: a pane below it keeps the program's grid, and a layout pass does
-  not send a resize.
+  client-token action. With Auto fit on, layout changes schedule a deliberate
+  takeover under the floor and ownership rules in §5.1. With Auto fit off,
+  layout changes keep the program's grid.
 - **A screenshot is the page, not the cells.** The daemon's text snapshot is what the
   agent reads; the page is what the human sees, and the two can disagree in ways no
   text-level check can see. `screenshot.ts` opens the viewer page in capture mode
@@ -1246,40 +1246,55 @@ cannot be dragged further below it. Track sizes live only in this window's
 `sessionStorage`, survive a reload, and reset on Auto, on Grid again, or when
 the pane count invalidates them.
 
-**Geometry.** Each pane uses the session's grid and measures whole character
-cells to scale its font between 6 px and 40 px, without stretching glyphs.
-When a followed or held grid needs more room, it can temporarily use smaller
-text down to 6 px to keep every row and column visible. If the grid still
-exceeds the tile at 6 px, the pane scrolls in both directions as needed and
-shows a wrapping status note. Plain wheel input stays with the terminal;
-Shift+wheel scrolls the pane vertically, horizontal wheel movement scrolls it
-horizontally, and the scrollbars can be dragged. Focusing, typing or selecting
-inside the terminal keeps the pane's scroll position. Enlarge or Fit shows the
-whole grid. Text enlarged at the grid cap
-stops at 40 px.
-A pane below the floor is marked and keeps at least 80 by 24 cells. Auto fit
-is on by default and fits each visible pane's real terminal after a layout,
-window, text size or outside grid change settles for 250 ms. It sends at most
+**Geometry.** Each pane measures rendered character cells and searches afresh
+for the largest whole text size that fits, up to 40 px. The result does not
+depend on its previous size. A dashboard pane is below the floor when 80 by
+24 cells cannot fit at the chosen text size, or at 13 px for Auto text. Its
+header keeps the floor note. Such panes receive exactly 80 by 24 cells when
+the dashboard sizes them. All visible panes below the floor in one window
+share the smallest of their largest fitting text sizes. Panes above the floor
+keep their own fit. Held and followed panes keep their grids, using the shared
+text size when it fits and a smaller size otherwise. Text can fall below 6 px;
+if even a one-pixel font is too large, the screen is scaled uniformly to keep
+it wholly visible. A different grid can therefore look smaller beside the
+floor grids. This temporary reduction does not change the saved text choice.
+An uncapped retained grid uses the remembered text size as its display ceiling
+and shrinks only as far as needed to fit, recovering that size when space allows.
+An owned grid at its configured column or row limit can still use larger text.
+Auto fit is on by default and fits each visible pane's real terminal after a
+layout, window, text size, font load or display-scale change settles for 250 ms.
+This includes visible unheld Focus main panes: they refit to their own space
+and are never pulled down to the shared floor. It sends at most
 one resize per pane for the settled change and leaves a grid held by another
-client alone. If the same session is resized from outside again within ten
-seconds of that refit, the pane follows it until the person presses Fit. A
+client alone. The first takeover in another window or viewer makes the pane
+follow that grid until Fit, Enlarge or a drag on that pane with Auto fit on
+takes it back. The initial geometry frame distinguishes an unowned session,
+which still receives its initial fit, from one already owned elsewhere. A
 drag changes only the page during pointer movement. On release, panes that
 grew fit their real terminal under the same Auto fit and geometry ownership
-rules; panes that shrank keep their real grid and scale or scroll. With Auto
+rules; panes that shrank below the floor also fit to exactly 80 by 24. Panes
+that shrank but remain above it keep their grid and scale their text. With Auto
 fit off, release keeps the real terminal size until Fit is pressed. Each
 boundary exposes its current track size, minimum and maximum in pixels to
-assistive technology. A followed or held grid scales its text down to 6 px, then scrolls if it still
-does not fit. It returns to the chosen text size when it fits again. A popped
+assistive technology. Text returns to the chosen size when it fits again. A popped
 out pane follows its own window. Turning Auto fit off restores font scaling without a resize on
-layout and window changes. Fit takes control
+layout, window, font load and display-scale changes. Fit takes control
 and fits the pane. Enlarge covers the pane's
-current screen and fits the real terminal to it; Restore sends its previous
-grid. A focused or enlarged pane also fits the real terminal when the
+current screen and fits the real terminal to it; with Auto fit off, Restore
+sends its previous grid above the floor or 80 by 24 below it. A focused or enlarged pane also fits the real terminal when the
 person takes control. The dashboard window can use the browser's full-screen
 key. The viewport cap remains 400 by 150. At the cap, the text grows to fill
 the tile when the chosen size would leave spare space. Covered panes and panes scrolled
 out of a strip close their stream sockets; a revealed pane receives the
 existing bounded snapshot on reconnect.
+
+Rendered cell metrics are cached per font settings and device scale; loaded
+fonts invalidate them. Fitting results are reused only for identical space,
+grid and font inputs. Applying the final font synchronises the history viewport
+and retains its scroll position. Scaled panes translate mouse and pointer
+coordinates to terminal coordinates, including scrollbar drag distances.
+An unchanged grid still acknowledges a deliberate take, without resizing the
+real terminal. Divider gestures fit only panes in the affected tracks.
 
 **Text size.** The toolbar has one Smaller, Auto and Larger control for every
 pane in every dashboard window, including panes added later. Auto keeps the

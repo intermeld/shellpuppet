@@ -36,6 +36,23 @@ window.ShellPuppetPane = (() => {
   const MIN_FONT_PX = 6;
   const MAX_FONT_PX = 40;
   const DEFAULT_FONT_PX = 13;
+  const scaledEvents = new WeakSet();
+  let scaledSelection = null;
+  const cellMetrics = new Map();
+  const fontListeners = new Set();
+  let fontGeneration = 0;
+  document.fonts?.addEventListener('loadingdone', () => {
+    cellMetrics.clear();
+    fontGeneration++;
+    for (const refresh of fontListeners) refresh();
+  });
+
+  function remember(cache, key, value) {
+    // Bound caches across font choices, window sizes and device scales.
+    if (cache.size >= 256) cache.delete(cache.keys().next().value);
+    cache.set(key, value);
+    return value;
+  }
 
   function clampFont(px) {
     return Math.min(MAX_FONT_PX, Math.max(MIN_FONT_PX, px));
@@ -54,6 +71,8 @@ window.ShellPuppetPane = (() => {
    * @param {function} [config.onTitleChange] - Called when the window title should change.
    * @param {function} [config.onFontOverrideChange] - Called when the font override changes.
    * @param {function} [config.onGeometryReady] - Called after the first geometry frame.
+   * @param {function} [config.onGeometryChange] - Called after each geometry frame.
+   * @param {function} [config.onMetricsChange] - Called after font or device-scale metrics change.
    * @param {function} [config.onOutsideGeometry] - Called when another client changes an unheld grid.
    * @param {string} [config.dashboardProof] - Document proof for a dashboard stream.
    * @param {function} [config.onAttentionChange] - Reports prompt attention.
@@ -70,6 +89,8 @@ window.ShellPuppetPane = (() => {
       onTitleChange = () => {},
       onFontOverrideChange = () => {},
       onGeometryReady = () => {},
+      onGeometryChange = () => {},
+      onMetricsChange = () => {},
       onOutsideGeometry = () => {},
       onGridTaken = () => {},
       dashboardProof = null,
@@ -95,9 +116,11 @@ window.ShellPuppetPane = (() => {
     let destroyed = false;
     let reconnectTimer = null;
     let pendingTakeGrid = false;
-    let outsideResizePending = false;
-    let lastOutsideFitAt = 0;
     let followingExternal = false;
+    let dashboardFontLimit = null;
+    let fontScale = 1;
+    const fittingFonts = new Map();
+    let viewportSyncPending = false;
 
     const showBanner = (message) => {
       if (!elements.banner) return;
@@ -210,6 +233,46 @@ window.ShellPuppetPane = (() => {
     const fit = new FitAddon.FitAddon();
     term.loadAddon(fit);
     term.open(container);
+    let metricsFrame = null;
+    const refreshFontMetrics = () => {
+      if (destroyed || metricsFrame !== null) return;
+      // Let xterm finish updating its renderer before measuring a new fit.
+      metricsFrame = window.requestAnimationFrame(() => {
+        metricsFrame = null;
+        term._core._charSizeService.measure();
+        relayout(false);
+        onMetricsChange();
+      });
+    };
+    fontListeners.add(refreshFontMetrics);
+    const resolutionListener = term._core._coreBrowserService.onDprChange(refreshFontMetrics);
+    // xterm measures mouse positions in unscaled cells. Keep selection and
+    // terminal mouse reports aligned when a tiny held screen needs scaling.
+    const scaleMouseEvent = (event) => {
+      if (fontScale === 1 || scaledEvents.has(event)) return;
+      const inside = container.contains(event.target);
+      if (event.type === 'mousedown' || event.type === 'pointerdown') scaledSelection = inside ? container : null;
+      if (event.type === 'mousemove' && event.buttons === 0 && scaledSelection === container) scaledSelection = null;
+      if (scaledSelection ? scaledSelection !== container : !inside) return;
+      const screen = term.element?.querySelector('.xterm-screen');
+      if (!screen) return;
+      const rect = screen.getBoundingClientRect();
+      const clientX = rect.left + (event.clientX - rect.left) / fontScale;
+      const clientY = rect.top + (event.clientY - rect.top) / fontScale;
+      // Keep the original event, target and pointer id so native capture works.
+      // xterm's scrollbar uses page coordinates for its drag deltas. Native
+      // offsetX/Y are already local to the transformed target; leave them alone.
+      Object.defineProperties(event, {
+        clientX: { value: clientX }, clientY: { value: clientY },
+        pageX: { value: clientX + window.scrollX }, pageY: { value: clientY + window.scrollY },
+        movementX: { value: event.movementX / fontScale }, movementY: { value: event.movementY / fontScale },
+      });
+      scaledEvents.add(event);
+      if (['mouseup', 'pointerup', 'pointercancel'].includes(event.type)) scaledSelection = null;
+    };
+    const scaledMouseEvents = ['mousedown', 'mousemove', 'mouseup', 'wheel', 'contextmenu',
+      'pointerdown', 'pointermove', 'pointerup', 'pointercancel'];
+    for (const type of scaledMouseEvents) document.addEventListener(type, scaleMouseEvent, true);
     const outerScroll = container.parentElement;
     const helper = term.element?.querySelector('.xterm-helper-textarea');
     if (dashboardProof !== null && outerScroll && helper) {
@@ -385,23 +448,26 @@ window.ShellPuppetPane = (() => {
     }
 
     function proposeDashboardGrid() {
-      const drawn = term.options.fontSize;
-      let proposed;
-      try {
-        term.options.fontSize = fixedFontPx();
-        proposed = propose();
-        if (proposed === null) return null;
-        if (proposed.cols > gridMax.cols || proposed.rows > gridMax.rows) {
-          for (let font = fixedFontPx() + 1; font <= MAX_FONT_PX; font++) {
-            term.options.fontSize = font;
-            const larger = propose();
-            if (larger === null ||
-                (larger.cols < gridMax.cols && larger.rows < gridMax.rows)) break;
-            proposed = larger;
-          }
+      const style = window.getComputedStyle(container);
+      const terminalStyle = window.getComputedStyle(term.element);
+      const width = parseInt(style.width) - parseInt(terminalStyle.paddingLeft) - parseInt(terminalStyle.paddingRight) -
+        (term.options.scrollback === 0 ? 0 : term.options.overviewRuler?.width || 14);
+      const height = parseInt(style.height) - parseInt(terminalStyle.paddingTop) - parseInt(terminalStyle.paddingBottom);
+      if (!(width > 0 && height > 0)) return null;
+      const atFont = (font) => {
+        const cell = renderedCell(font);
+        return cell ? { cols: Math.max(2, Math.floor(width / cell.width)),
+          rows: Math.max(1, Math.floor(height / cell.height)) } : null;
+      };
+      let proposed = atFont(fixedFontPx());
+      if (proposed === null) return null;
+      if (proposed.cols > gridMax.cols || proposed.rows > gridMax.rows) {
+        for (let font = fixedFontPx() + 1; font <= MAX_FONT_PX; font++) {
+          const larger = atFont(font);
+          if (larger === null ||
+              (larger.cols < gridMax.cols && larger.rows < gridMax.rows)) break;
+          proposed = larger;
         }
-      } finally {
-        term.options.fontSize = drawn;
       }
       return proposed;
     }
@@ -423,36 +489,101 @@ window.ShellPuppetPane = (() => {
       return font;
     }
 
-    function fitGridByFont(cols, rows, grow = true) {
+    function availableSpace() {
       const wrap = container.parentElement;
-      if (!wrap) return;
-
+      if (!wrap) return null;
       const styles = window.getComputedStyle(wrap);
-      const availableWidth = wrap.clientWidth
-        - parseFloat(styles.paddingLeft) - parseFloat(styles.paddingRight);
-      const availableHeight = wrap.clientHeight
-        - parseFloat(styles.paddingTop) - parseFloat(styles.paddingBottom);
-      if (availableWidth <= 0 || availableHeight <= 0) return;
+      const width = wrap.clientWidth - parseFloat(styles.paddingLeft) - parseFloat(styles.paddingRight);
+      const height = wrap.clientHeight - parseFloat(styles.paddingTop) - parseFloat(styles.paddingBottom);
+      return width > 0 && height > 0 ? { width, height } : null;
+    }
 
-      for (let pass = 0; pass < 4; pass++) {
-        const screen = term.element && term.element.querySelector('.xterm-screen');
-        if (!screen) return;
-        const renderedWidth = screen.offsetWidth;
-        const renderedHeight = screen.offsetHeight;
-        if (renderedWidth <= 0 || renderedHeight <= 0) return;
+    function fontSettings() {
+      const options = term.options;
+      return JSON.stringify([fontGeneration, window.devicePixelRatio, options.fontFamily,
+        options.fontWeight, options.fontWeightBold, options.letterSpacing, options.lineHeight]);
+    }
 
-        const scale = Math.min(
-          availableWidth / renderedWidth,
-          availableHeight / renderedHeight,
-        );
-        if (Math.abs(scale - 1) < 0.01 || (scale > 1 && !grow)) return;
+    function renderedCell(font) {
+      const key = `${fontSettings()}:${font}`;
+      if (cellMetrics.has(key)) return cellMetrics.get(key);
+      const drawn = term.options.fontSize;
+      try {
+        term.options.fontSize = font;
+        // xterm's DOM renderer rounds the complete canvas to CSS pixels. Cache
+        // the unrounded cell so a different grid cannot inherit that rounding.
+        const cell = term._core._renderService.dimensions.device.cell;
+        const dpr = window.devicePixelRatio;
+        if (!(cell.width > 0 && cell.height > 0)) return null;
+        return remember(cellMetrics, key, { width: cell.width / dpr, height: cell.height / dpr });
+      } finally {
+        term.options.fontSize = drawn;
+      }
+    }
 
-        const current = term.options.fontSize || DEFAULT_FONT_PX;
-        const next = Math.min(MAX_FONT_PX, Math.max(MIN_FONT_PX, Math.floor(current * scale)));
-        if (next === current) return;
+    function gridFitsAtFont(cols, rows, font, space) {
+      const cell = renderedCell(font);
+      return cell !== null && Math.round(cell.width * cols) <= space.width &&
+        Math.round(cell.height * rows) <= space.height;
+    }
 
-        term.options.fontSize = next;
-        term.resize(cols, rows);
+    function largestFittingFont(cols, rows, maximum = MAX_FONT_PX, minimum = MIN_FONT_PX) {
+      const space = availableSpace();
+      if (!space || cols <= 0 || rows <= 0) return null;
+      const key = JSON.stringify([fontSettings(), space.width, space.height, cols, rows, maximum, minimum]);
+      if (fittingFonts.has(key)) return fittingFonts.get(key);
+      let low = minimum;
+      let high = maximum;
+      let best = 0;
+      while (low <= high) {
+        const font = Math.floor((low + high) / 2);
+        if (gridFitsAtFont(cols, rows, font, space)) {
+          best = font;
+          low = font + 1;
+        } else high = font - 1;
+      }
+      if (best === 0 && minimum === 1) {
+        // Even one pixel per row can exceed a very small held pane.
+        // Scale that minimum uniformly so its whole screen remains visible.
+        const cell = renderedCell(1);
+        if (cell) {
+          best = Math.min(maximum, space.width / Math.round(cell.width * cols),
+            space.height / Math.round(cell.height * rows));
+        }
+      }
+      return remember(fittingFonts, key, best || minimum);
+    }
+
+    function belowDashboardFloor(cols = 80, rows = 24) {
+      const space = availableSpace();
+      if (!space) return false;
+      return !gridFitsAtFont(cols, rows, fixedFontPx(), space);
+    }
+
+    function fitGridByFont(cols, rows, maximum = MAX_FONT_PX) {
+      const font = largestFittingFont(cols, rows, maximum, dashboardProof === null ? MIN_FONT_PX : 1);
+      if (font !== null) drawFont(font);
+    }
+
+    function drawFont(font) {
+      term.options.fontSize = Math.max(1, font);
+      fontScale = Math.min(1, font);
+      if (fontScale === 1 && scaledSelection === container) scaledSelection = null;
+      term.element.style.transform = fontScale < 1 ? `scale(${fontScale})` : '';
+      container.dataset.fontSize = String(font);
+      // Font measurement can leave xterm's history viewport at a candidate's
+      // dimensions. Sync once after the final display size, then restore the
+      // history row with the new cell height. Both callbacks run after render.
+      if (!viewportSyncPending) {
+        viewportSyncPending = true;
+        term._core._viewport.queueSync();
+        term._core._renderService.addRefreshCallback(() => {
+          viewportSyncPending = false;
+          // Terminal.scrollToLine is a no-op when the buffer is already on
+          // this row, even if the viewport still has the old pixel offset.
+          // Read the row now so output received before paint is kept too.
+          if (!destroyed) term._core._viewport.scrollToLine(term.buffer.active.viewportY, true);
+        });
       }
     }
 
@@ -471,20 +602,20 @@ window.ShellPuppetPane = (() => {
     }
 
     function applyFontPreference(cols, rows) {
-      if (fontOverride === null) {
+      if (dashboardProof !== null && dashboardFontLimit !== null) {
+        const font = largestFittingFont(cols, rows, dashboardFontLimit, 1);
+        if (font !== null) drawFont(font);
+      } else if (fontOverride === null) {
         fitGridByFont(cols, rows);
+      } else if (dashboardProof !== null) {
+        const capped = cols >= gridMax.cols || rows >= gridMax.rows;
+        // Retained owned grids must still fit when Auto fit is off. The saved
+        // size is the ceiling unless an owned grid has reached its size cap.
+        fitGridByFont(cols, rows, capped && controlMode === 'yours' ? MAX_FONT_PX : fontOverride);
       } else {
-        if (term.options.fontSize !== fontOverride) {
-          term.options.fontSize = fontOverride;
-          term.resize(cols, rows);
-        }
-        if (dashboardProof !== null) {
-          const capped = cols >= gridMax.cols || rows >= gridMax.rows;
-          if (controlMode !== 'yours' || capped) fitGridByFont(cols, rows, capped && controlMode === 'yours');
-        }
+        drawFont(fontOverride);
       }
       updateZoomButtons();
-      container.dataset.fontSize = String(term.options.fontSize);
       updateOverflowState();
     }
 
@@ -507,6 +638,7 @@ window.ShellPuppetPane = (() => {
           (controlMode === 'held' ? ' (fixed)' : controlMode === 'adopt' ? ' (following)' : '');
       }
       positionNotices();
+      onGeometryChange();
     }
 
     function updateZoomButtons() {
@@ -588,22 +720,19 @@ window.ShellPuppetPane = (() => {
             geometryDecided = true;
             controlMode = captureMode ? 'adopt' : control.control || 'adopt';
             if (dashboardProof !== null && firstGeometry && controlMode === 'yours') {
+              followingExternal = false;
               pendingTakeGrid = false;
               onGridTaken();
             }
-            if (dashboardProof !== null && !firstGeometry) {
+            if (dashboardProof !== null && (!firstGeometry || control.owned === true)) {
               if (controlMode === 'yours' && pendingTakeGrid) {
+                followingExternal = false;
                 pendingTakeGrid = false;
                 onGridTaken();
               } else if (controlMode === 'adopt' && !followingExternal) {
                 pendingTakeGrid = false;
-                if (Date.now() - lastOutsideFitAt < 10_000) {
-                  followingExternal = true;
-                  outsideResizePending = false;
-                } else {
-                  outsideResizePending = true;
-                  onOutsideGeometry();
-                }
+                followingExternal = true;
+                onOutsideGeometry();
               }
             }
             applyGeometry(control.cols, control.rows, control.max);
@@ -650,6 +779,11 @@ window.ShellPuppetPane = (() => {
     return {
       destroy() {
         destroyed = true;
+        fontListeners.delete(refreshFontMetrics);
+        resolutionListener.dispose();
+        if (metricsFrame !== null) window.cancelAnimationFrame(metricsFrame);
+        if (scaledSelection === container) scaledSelection = null;
+        for (const type of scaledMouseEvents) document.removeEventListener(type, scaleMouseEvent, true);
         outerScroll?.removeEventListener('wheel', scrollOversizedPane, true);
         clearTimeout(reconnectTimer);
         if (ws) ws.close();
@@ -685,24 +819,32 @@ window.ShellPuppetPane = (() => {
       getGrid() {
         return { cols: gridCols, rows: gridRows };
       },
+      belowDashboardFloor() {
+        return belowDashboardFloor();
+      },
+      floorFontSize() {
+        return largestFittingFont(80, 24, MAX_FONT_PX, 1);
+      },
+      setDashboardFontLimit(font) {
+        dashboardFontLimit = font;
+        if (geometryDecided) applyFontPreference(gridCols, gridRows);
+        positionNotices();
+      },
       autoFitGrid(floorCols = 80, floorRows = 24, force = false) {
         if (dashboardProof === null || controlMode === 'held' || (followingExternal && !force) || !geometryDecided ||
             !ws || ws.readyState !== 1 || sessionEnded) return false;
         if (force) {
           followingExternal = false;
-          outsideResizePending = false;
-          lastOutsideFitAt = 0;
         }
         let proposed = proposeDashboardGrid();
         if (proposed === null) {
           if (container.clientWidth <= 0 || container.clientHeight <= 0) return false;
           proposed = { cols: floorCols, rows: floorRows };
         }
-        const cols = Math.min(gridMax.cols, Math.max(floorCols, proposed.cols));
-        const rows = Math.min(gridMax.rows, Math.max(floorRows, proposed.rows));
+        const belowFloor = belowDashboardFloor(floorCols, floorRows);
+        const cols = Math.min(gridMax.cols, belowFloor ? floorCols : Math.max(floorCols, proposed.cols));
+        const rows = Math.min(gridMax.rows, belowFloor ? floorRows : Math.max(floorRows, proposed.rows));
         if (cols === gridCols && rows === gridRows && !force) return false;
-        if (outsideResizePending) lastOutsideFitAt = Date.now();
-        outsideResizePending = false;
         return this.takeGrid(cols, rows);
       },
       takeGrid(cols, rows) {
@@ -712,22 +854,18 @@ window.ShellPuppetPane = (() => {
         ws.send(JSON.stringify({ type: 'resize', ...wanted, take: true }));
         return true;
       },
-      fitGrid(floorCols = 0, floorRows = 0) {
+      fitGrid(floorCols = 80, floorRows = 24) {
         if (dashboardProof === null) return false;
         followingExternal = false;
-        outsideResizePending = false;
-        lastOutsideFitAt = 0;
-        if (term.options.fontSize !== fixedFontPx()) {
-          term.options.fontSize = fixedFontPx();
-          term.resize(term.cols, term.rows);
-        }
         const proposed = proposeDashboardGrid();
+        if (belowDashboardFloor(floorCols, floorRows)) return this.takeGrid(floorCols, floorRows);
         return proposed !== null && this.takeGrid(
           Math.max(floorCols, proposed.cols), Math.max(floorRows, proposed.rows));
       },
       fitAfterDrag(useAutoFit) {
         if (controlMode === 'held' || captureMode || !geometryDecided) return false;
-        return useAutoFit ? this.autoFitGrid(80, 24) : this.fitGrid(80, 24);
+        // A deliberate drag still takes its grid when the floor is unchanged.
+        return useAutoFit ? this.autoFitGrid(80, 24, true) : this.fitGrid(80, 24);
       },
     };
   }

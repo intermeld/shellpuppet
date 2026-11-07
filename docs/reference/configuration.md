@@ -465,7 +465,28 @@ Set `dashboard.fontSize` to an integer from 8 to 32 for the dashboard's initial
 text size, for example `"dashboard": { "fontSize": 16 }`. A text size saved
 in the dashboard browser profile takes precedence. The page reads this value
 from the daemon and never writes `config.json`.
-
+The chosen size also defines the dashboard's 80 by 24 floor: a pane is below
+the floor when those cells do not fit at that size. With Auto fit on, such
+panes use exactly 80 by 24 cells, with one shared smaller text size across the
+visible panes below the floor in that window. The whole screen stays visible,
+even when this needs text smaller than the configured or remembered choice.
+Panes above the floor keep their own fit and recover the chosen size when
+space permits. Held grids and grids followed from another client stay as they
+are; their text uses the shared size if it fits, or a smaller size if necessary.
+The first takeover in another window or viewer makes the dashboard follow
+that grid. Press Fit or Enlarge, or drag that pane's track with Auto fit on,
+to take it back. A hold continues to protect its grid. Wheel scrolling and
+scrollbar dragging work at the reduced text size.
+Font loading and display-scale changes refresh text fitting. With Auto fit on,
+visible unheld panes, including the Focus main pane, refit their grids to their
+own space; followed grids remain protected. This never pulls the Focus main
+pane down to the shared floor. With Auto fit off, only the displayed text is
+fitted: an uncapped grid uses the remembered size as its ceiling and shrinks
+only as needed to show the whole screen. The saved preference stays unchanged,
+and text returns to that size when it fits again. A grid owned by the dashboard
+that reaches the configured column or row limit can still use larger text to
+fill its space. Right-click menus remain aligned with the pointer at reduced
+text sizes.
 
 The dashboard may start a program only by naming a profile from
 `launcher.profiles`. The page sends the profile's name and, when the profile

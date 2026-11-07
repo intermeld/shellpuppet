@@ -193,7 +193,7 @@ it('stops capped text at 40 px even when the tile could grow it further', async 
   expect(measured.font, JSON.stringify(measured)).toBe(40);
 }, 150_000);
 
-it('refits one outside resize, follows a second, shows held grids whole, and Fit restores text', async (context) => {
+it('follows the first outside resize, shows held grids whole, and Fit restores text', async (context) => {
   if (!browser) { context.skip(); return; }
   let daemon: TestDaemon;
   let id: string;
@@ -260,12 +260,10 @@ it('refits one outside resize, follows a second, shows held grids whole, and Fit
         noteClientWidth: card.querySelector('.pane-overflow-note')?.clientWidth,
         noteOverflow: getComputedStyle(card.querySelector('.pane-overflow-note')).textOverflow,
         stripWidth: card.getBoundingClientRect().width };
-      wrap.scrollLeft = wrap.scrollWidth; wrap.scrollTop = wrap.scrollHeight;
-      await new Promise(resolve => requestAnimationFrame(resolve));
       const end = screenElement.getBoundingClientRect();
       const viewport = wrap.getBoundingClientRect();
-      result.reachable = wrap.scrollLeft > 0 && wrap.scrollTop > 0 &&
-        end.right <= viewport.right + 2 && end.bottom <= viewport.bottom + 2;
+      result.reachable = end.left >= viewport.left && end.top >= viewport.top &&
+        end.right <= viewport.right && end.bottom <= viewport.bottom;
       return result;
     })()`);
     expect((await api(daemon.port, daemon.token, `/sessions/${id}/resize`,
@@ -285,28 +283,25 @@ it('refits one outside resize, follows a second, shows held grids whole, and Fit
       reachable: boolean }; fit: { font: number; size: string } };
   expect(measured.heldFirst.frames).toHaveLength(0);
   expect(measured.heldFirst.size).toContain('fixed');
-  expect(measured.first.frames).toHaveLength(1);
-  expect(measured.first.size).not.toContain('194×100');
+  expect(measured.first.frames).toHaveLength(0);
+  expect(measured.first.size).toBe('194×100 (following)');
   expect(measured.second.frames).toHaveLength(0);
   expect(measured.second.size).toContain('following');
   expect(measured.second.contained).toBe(true);
   expect(measured.second.font).toBeLessThan(12);
   expect(measured.held.frames).toHaveLength(0);
   expect(measured.held.size).toContain('fixed');
-  expect(measured.held.contained || (measured.held.font === 6 && measured.held.scrolls), JSON.stringify(measured)).toBe(true);
-  expect(measured.narrowHeld.font, JSON.stringify(measured)).toBe(6);
+  expect(measured.held.contained, JSON.stringify(measured)).toBe(true);
+  expect(measured.narrowHeld.font, JSON.stringify(measured)).toBeLessThan(6);
   expect(measured.narrowHeld.stripWidth).toBeCloseTo(300, 0);
-  expect(measured.narrowHeld.scrollWidth).toBeGreaterThan(measured.narrowHeld.clientWidth);
-  expect(measured.narrowHeld.scrollHeight).toBeGreaterThan(measured.narrowHeld.clientHeight);
-  expect(measured.narrowHeld.overflow).toBe('auto');
-  expect(measured.narrowHeld.note).toContain('Shift+wheel');
-  expect(measured.narrowHeld.noteWidth).toBeLessThanOrEqual(measured.narrowHeld.noteClientWidth);
-  expect(measured.narrowHeld.noteOverflow).not.toBe('ellipsis');
+  expect(measured.narrowHeld.screen[0]).toBeLessThanOrEqual(measured.narrowHeld.tile[0]!);
+  expect(measured.narrowHeld.screen[1]).toBeLessThanOrEqual(measured.narrowHeld.tile[1]!);
+  expect(measured.narrowHeld.overflow).toBe('clip');
   expect(measured.narrowHeld.reachable, JSON.stringify(measured)).toBe(true);
   expect(measured.fit.font).toBe(12);
 }, 150_000);
 
-it('keeps plain alternate-screen wheel input in the app and scrolls overflow with Shift or deltaX', async (context) => {
+it('keeps alternate-screen wheel input in the app with the whole held grid visible', async (context) => {
   if (!browser) { context.skip(); return; }
   const tui = `setTimeout(() => process.stdout.write('\\x1b[?1049h\\x1b[?1000h\\x1b[?1006hREADY'), 4000); setInterval(() => {}, 1000);`;
   const { result } = await openDashboard(1400, 900, async ({ evaluate, send }) => {
@@ -320,22 +315,20 @@ it('keeps plain alternate-screen wheel input in the app and scrolls overflow wit
       document.querySelector('.pane').click(); document.getElementById('focus').click();
       let lastGeometry;
       for (let attempt = 0; attempt < 100; attempt++) {
-        const wrap = document.querySelector('#strip .pane-wrap');
-        lastGeometry = { overflow: wrap?.classList.contains('grid-overflow'),
-          width: wrap?.scrollWidth, clientWidth: wrap?.clientWidth,
-          height: wrap?.scrollHeight, clientHeight: wrap?.clientHeight };
-        if (wrap?.classList.contains('grid-overflow') &&
-            wrap.scrollWidth > wrap.clientWidth && wrap.scrollHeight > wrap.clientHeight) break;
+        const card = document.querySelector('#strip .pane');
+        const screen = card?.querySelector('.xterm-screen')?.getBoundingClientRect();
+        const tile = card?.querySelector('.pane-term')?.getBoundingClientRect();
+        lastGeometry = { whole: screen && tile && screen.width <= tile.width && screen.height <= tile.height };
+        if (lastGeometry.whole) break;
         await new Promise(resolve => setTimeout(resolve, 100));
       }
-      if (!lastGeometry?.overflow || lastGeometry.width <= lastGeometry.clientWidth ||
-          lastGeometry.height <= lastGeometry.clientHeight)
-        throw new Error('Timed out waiting for Focus overflow geometry; last observed: ' + JSON.stringify(lastGeometry));
+      if (!lastGeometry?.whole)
+        throw new Error('Timed out waiting for the whole held grid; last observed: ' + JSON.stringify(lastGeometry));
       const card = document.querySelector('#strip .pane');
       const wrap = card.querySelector('.pane-wrap');
-      const rect = wrap.getBoundingClientRect();
+      const rect = card.querySelector('.xterm-screen').getBoundingClientRect();
       window.__inputs.length = 0;
-      return { x: rect.left + 45, y: rect.top + 45,
+      return { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2,
         maxX: wrap.scrollWidth - wrap.clientWidth, maxY: wrap.scrollHeight - wrap.clientHeight };
     })()`) as { x: number; y: number; maxX: number; maxY: number };
     let readyText: unknown;
@@ -353,37 +346,16 @@ it('keeps plain alternate-screen wheel input in the app and scrolls overflow wit
     const plain = await evaluate(`(() => {
       const wrap = document.querySelector('#strip .pane-wrap');
       return { x: wrap.scrollLeft, y: wrap.scrollTop, inputs: window.__inputs.slice() }; })()`);
-    await wheel(0, 100, 8);
-    let scrollTop = 0;
-    await eventually(async () => (scrollTop = Number(await evaluate("document.querySelector('#strip .pane-wrap')?.scrollTop"))) > 0,
-      5_000, 100, 'Shift wheel vertical overflow', () => scrollTop);
-    const shifted = await evaluate(`(() => {
-      const wrap = document.querySelector('#strip .pane-wrap');
-      return { x: wrap.scrollLeft, y: wrap.scrollTop, inputs: window.__inputs.slice() }; })()`);
-    await wheel(100, 0);
-    let scrollLeft = 0;
-    await eventually(async () => (scrollLeft = Number(await evaluate("document.querySelector('#strip .pane-wrap')?.scrollLeft"))) > 0,
-      5_000, 100, 'horizontal wheel overflow', () => scrollLeft);
-    const horizontal = await evaluate(`(() => {
-      const wrap = document.querySelector('#strip .pane-wrap');
-      return { x: wrap.scrollLeft, y: wrap.scrollTop, inputs: window.__inputs.slice() }; })()`);
-    return { geometry, plain, shifted, horizontal };
+    return { geometry, plain };
   }, tui);
   const measured = result as { geometry: { maxX: number; maxY: number };
-    plain: { x: number; y: number; inputs: string[] };
-    shifted: { x: number; y: number; inputs: string[] };
-    horizontal: { x: number; y: number; inputs: string[] } };
-  expect(measured.geometry.maxX).toBeGreaterThan(0);
-  expect(measured.geometry.maxY).toBeGreaterThan(0);
+    plain: { x: number; y: number; inputs: string[] } };
   expect(measured.plain.inputs.length).toBeGreaterThan(0);
   expect(measured.plain.y).toBe(0);
-  expect(measured.shifted.y).toBeGreaterThan(0);
-  expect(measured.shifted.inputs).toHaveLength(measured.plain.inputs.length);
-  expect(measured.horizontal.x).toBeGreaterThan(0);
-  expect(measured.horizontal.inputs).toHaveLength(measured.shifted.inputs.length);
+  expect(measured.plain.x).toBe(0);
 }, 150_000);
 
-it('keeps a scrolled view steady during click, text entry and cell selection', async (context) => {
+it('keeps the whole held screen steady during click, text entry and cell selection', async (context) => {
   if (!browser) { context.skip(); return; }
   const screen = `process.stdin.setRawMode(true); process.stdout.write('\\x1b[?1049h'); for (let row = 0; row < 115; row++) process.stdout.write('ROW' + String(row).padStart(3, '0') + ':' + String(row % 10).repeat(210) + (row < 114 ? '\\r\\n' : '')); process.stdin.on('data', data => process.stdout.write('\\x1b[100;1HRECEIVED:' + data));`;
   const { result } = await openDashboard(1400, 900, async ({ evaluate, send }) => {
@@ -399,17 +371,18 @@ it('keeps a scrolled view steady during click, text entry and cell selection', a
       await new Promise(resolve => setTimeout(resolve, 700));
       const card = document.querySelector('#strip .pane');
       const wrap = card.querySelector('.pane-wrap');
-      wrap.scrollLeft = 250; wrap.scrollTop = 250;
       await new Promise(resolve => requestAnimationFrame(resolve));
       const rect = wrap.getBoundingClientRect();
       const screenRect = card.querySelector('.xterm-screen').getBoundingClientRect();
-      const x = rect.left + 75;
-      const y = rect.top + Math.min(20, rect.height / 2);
-      return { x, y, left: wrap.scrollLeft, top: wrap.scrollTop,
+      // MouseEvent coordinates use whole CSS pixels. With rows below a
+      // pixel, measure the row under the coordinate the browser will receive.
+      const x = Math.round(screenRect.left + screenRect.width / 2);
+      const y = Math.round(screenRect.top + screenRect.height * 30.5 / 115);
+      return { x, y, dx: screenRect.width * 20 / 220, left: wrap.scrollLeft, top: wrap.scrollTop,
         target: document.elementFromPoint(x, y)?.className,
         screen: [screenRect.left, screenRect.top, screenRect.right, screenRect.bottom],
         wrap: [rect.left, rect.top, rect.right, rect.bottom] };
-    })()`) as { x: number; y: number; left: number; top: number };
+    })()`) as { x: number; y: number; dx: number; left: number; top: number };
     await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 });
     await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 });
     await send('Input.insertText', { text: 'Wispr probe' });
@@ -420,8 +393,8 @@ it('keeps a scrolled view steady during click, text entry and cell selection', a
         rowText: document.querySelector('#strip .xterm-rows')?.textContent.slice(0, 80) }; })()`);
     const stream = await api(daemon.port, daemon.token, `/sessions/${String(held.body['id'])}/snapshot`);
     await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 });
-    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x + 35, y: point.y, button: 'left', buttons: 1 });
-    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x + 35, y: point.y, button: 'left', clickCount: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: point.x + point.dx, y: point.y, button: 'left', buttons: 1 });
+    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x + point.dx, y: point.y, button: 'left', clickCount: 1 });
     const selected = await evaluate(`(() => {
       const wrap = document.querySelector('#strip .pane-wrap');
       let copied = '';
@@ -442,8 +415,8 @@ it('keeps a scrolled view steady during click, text entry and cell selection', a
   const measured = result as { point: { left: number; top: number };
     afterText: { left: number; top: number; received: boolean };
     selected: { left: number; top: number; selection: string; underPointer: string; text: string } };
-  expect(measured.point.left).toBeGreaterThan(0);
-  expect(measured.point.top).toBeGreaterThan(0);
+  expect(measured.point.left).toBe(0);
+  expect(measured.point.top).toBe(0);
   expect(measured.afterText.received, JSON.stringify(measured)).toBe(true);
   expect(measured.afterText.left).toBe(measured.point.left);
   expect(measured.afterText.top).toBe(measured.point.top);
@@ -453,7 +426,7 @@ it('keeps a scrolled view steady during click, text entry and cell selection', a
   expect(measured.selected.selection).toMatch(new RegExp(`^${measured.selected.underPointer}+$`));
 }, 150_000);
 
-it('places IME composition at the cursor after outer and strip scrolling', async (context) => {
+it('places IME composition at the cursor with a whole held grid and a scrolled strip', async (context) => {
   if (!browser) { context.skip(); return; }
   const { result } = await openDashboard(1400, 900, async ({ evaluate, send }) => {
     const held = await api(running!.port, running!.token, '/sessions', { body: {
@@ -468,14 +441,14 @@ it('places IME composition at the cursor after outer and strip scrolling', async
       const strip = document.getElementById('strip');
       strip.style.height = '100px'; strip.style.flex = 'none'; strip.scrollTop = 40;
       const wrap = strip.querySelector('.pane-wrap');
-      wrap.scrollLeft = 150; wrap.scrollTop = 200;
       await new Promise(resolve => requestAnimationFrame(resolve));
-      const rect = wrap.getBoundingClientRect();
-      return { x: rect.left + 50, y: rect.top + 20, left: wrap.scrollLeft,
+      const card = strip.querySelector('.pane');
+      card.querySelector('.xterm-helper-textarea').focus();
+      const screen = card.querySelector('.xterm-screen').getBoundingClientRect();
+      const tile = card.querySelector('.pane-term').getBoundingClientRect();
+      return { whole: screen.width <= tile.width && screen.height <= tile.height, left: wrap.scrollLeft,
         top: wrap.scrollTop, stripTop: strip.scrollTop };
-    })()`) as { x: number; y: number; left: number; top: number; stripTop: number };
-    await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 });
-    await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 });
+    })()`) as { left: number; top: number; stripTop: number };
     await send('Input.imeSetComposition', { text: '日本', selectionStart: 2, selectionEnd: 2 });
     const composing = await evaluate(`(() => {
       const card = document.querySelector('#strip .pane');
@@ -495,13 +468,14 @@ it('places IME composition at the cursor after outer and strip scrolling', async
     })()`);
     return { point, composing, after };
   });
-  const measured = result as { point: { left: number; top: number; stripTop: number };
+  const measured = result as { point: { whole: boolean; left: number; top: number; stripTop: number };
     composing: { left: number; top: number; stripTop: number; inlineLeft: string; inlineTop: string;
       computedLeft: string; computedTop: string; position: string };
     after: { left: number; top: number; stripTop: number } };
-  expect(measured.point.left).toBeGreaterThan(0);
-  expect(measured.point.top).toBeGreaterThan(0);
+  expect(measured.point.left).toBe(0);
+  expect(measured.point.top).toBe(0);
   expect(measured.point.stripTop).toBeGreaterThan(0);
+  expect(measured.point.whole).toBe(true);
   expect(measured.composing.inlineLeft).not.toBe('');
   expect(measured.composing.inlineTop).not.toBe('');
   expect(measured.composing.computedLeft, JSON.stringify(measured)).toBe(measured.composing.inlineLeft);

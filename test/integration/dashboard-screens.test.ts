@@ -365,8 +365,12 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
     await waitFor(async () => String(await evaluate(second.sessionId,
       "document.querySelector('.pane[data-session=s3] .pane-size')?.textContent")).includes('×'));
     if (held) {
-      await waitFor(async () => await evaluate(second.sessionId,
-        "document.querySelector('.pane[data-session=s3] .pane-overflow-note')?.hidden === false") === true);
+      await waitFor(async () => await evaluate(second.sessionId, `(() => {
+        const card = document.querySelector('.pane[data-session=s3]');
+        const screen = card?.querySelector('.xterm-screen')?.getBoundingClientRect();
+        const tile = card?.querySelector('.pane-term')?.getBoundingClientRect();
+        return screen && tile && screen.width <= tile.width && screen.height <= tile.height;
+      })()`) === true);
     } else {
       await waitFor(async () => {
         const size = String(await evaluate(second.sessionId,
@@ -911,14 +915,16 @@ describe('dashboard screen controls in Chromium', () => {
     expect(result.survivor, JSON.stringify(result)).toEqual(sessions);
   }, 180_000);
 
-  it('starts a moved held oversized pane at the receiver origin with its overflow controls', async (context) => {
+  it('shows a moved held grid whole at the receiver origin', async (context) => {
     if (!browser) { context.skip(); return; }
     await ensureSessions();
     expect((await api(daemon.port, daemon.token, `/sessions/${sessions[2]}/resize`,
       { body: { cols: 220, rows: 115, hold: true } })).status).toBe(200);
     const result = await multiWindowProbe(await freshUrl(), undefined, false, true);
-    expect(result.oversized.note).toContain('Shift+wheel');
-    expect(Math.max(result.oversized.horizontal, result.oversized.vertical)).toBeGreaterThan(0);
+    expect(result.movedFit.after).toBe('220×115 (fixed)');
+    expect(result.movedFit.resizes).toEqual([]);
+    expect(result.oversized.note).toBe('');
+    expect(Math.max(result.oversized.horizontal, result.oversized.vertical)).toBe(0);
     expect([result.oversized.left, result.oversized.top]).toEqual([0, 0]);
   }, 180_000);
 });
