@@ -405,13 +405,40 @@ and the number of sharing windows. The screen buttons follow windows moved
 between screens. Closing a window returns its sessions to the others. Auto fit
 refits a session in the window that receives it.
 
+Auto fit sizes each terminal to its pane. If 80 by 24 cells cannot fit at your
+chosen text size, the pane keeps exactly 80 by 24 cells and shows the whole
+screen with smaller text. All visible panes below that floor in a window use
+the same text size, chosen to fit the smallest space. The header keeps its
+"Below 80×24 floor" note. Larger panes, such as the main pane in Focus, keep
+their own fit. Text is measured afresh after each change, and returns to your
+chosen size when there is room. Smaller, Larger and a remembered text size do
+not prevent this temporary reduction.
+
+Loading a font or changing display scale also refreshes the fit. With Auto fit
+on, visible unheld panes, including the Focus main pane, refit their grids to
+their own space unless they are following another client. This never pulls
+the Focus main pane down to the shared floor. With Auto fit off, grids stay
+unchanged. A grid below its column and row limits shows text no larger than
+the remembered size, shrinking only as needed to show the whole screen, and
+returns to that size when it fits again. A grid at its column or row limit can
+still use larger text to fill its pane. The saved text choice stays unchanged.
+Right-click menus stay under the pointer even at the smallest text sizes.
+
+A held session keeps its grid. As soon as you take a session in another window
+or viewer, the dashboard follows that grid until you press Fit, Enlarge or
+drag that pane's track with Auto fit on. These panes show
+their whole screen at the shared text size when it fits, or smaller text when
+their grid needs it. They may therefore look smaller beside the 80 by 24 panes.
+Wheel scrolling and the history scrollbar remain usable at the reduced size.
+
 In Focus, drag the boundary between the large pane and its strip. In Grid,
 drag a boundary between columns or rows. Focus a boundary and use the arrow
 keys for small steps, Shift with an arrow for larger steps, or Home to reset
 that direction. A drag stops at the readable pane size, or at the strip's
 minimum width. On release, a pane that grew fits its real terminal, respecting
-Auto fit's rules when it is on; one that shrank keeps its grid and scales or
-scrolls. With Auto fit off, release keeps the real terminal size until Fit is
+Auto fit's rules when it is on. A pane that shrank below the floor also fits
+to 80 by 24; one still above it keeps its grid and scales its text.
+With Auto fit off, release keeps the real terminal size until Fit is
 pressed. The boundary announces its position in pixels. Sizes stay
 in this window for the session and survive a reload. Choose Auto or Grid
 again to reset them.

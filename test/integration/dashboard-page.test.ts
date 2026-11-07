@@ -395,12 +395,12 @@ describe('passive dashboard page', () => {
     expect(result.resizes).toEqual([]);
   }, 180_000);
 
-  it('uses focus at 1280 by 720 and marks a forced small grid without resizing', async (context) => {
+  it('uses focus at 1200 by 720 and marks a forced small grid without resizing', async (context) => {
     if (!browser) { context.skip(); return; }
     const url = await dashboardUrl();
-    const shot = await captureDashboard({ browser, viewerUrl: url, width: 1280, height: 720,
+    const shot = await captureDashboard({ browser, viewerUrl: url, width: 1200, height: 720,
       drive: true, timeoutMs: 120_000, beforeNavigateScript: instrument,
-      probe: `(() => {
+      probe: `(async () => {
         const feed = window.__dashSockets?.find(s => s.url.endsWith('/dashboard/events'))?.socket;
         if (!feed || document.getElementById('connection').textContent !== 'Connected') return null;
         const sessions = ['one','two'].map(id => ({ id, label: id, cols: 100, rows: 30 }));
@@ -408,6 +408,7 @@ describe('passive dashboard page', () => {
         const auto = document.getElementById('panes').dataset.layout;
         document.getElementById('grid').click();
         const forced = document.getElementById('panes').dataset.layout;
+        await new Promise(resolve => requestAnimationFrame(resolve));
         const below = [...document.querySelectorAll('.pane')].map(c => c.classList.contains('below-floor'));
         document.getElementById('auto').click();
         return JSON.stringify({ auto, forced, below, resizes: window.__dashResizes });
@@ -422,6 +423,8 @@ describe('passive dashboard page', () => {
 
   it('double-clicks only the title bar to enlarge and restore the real terminal', async (context) => {
     if (!browser) { context.skip(); return; }
+    // Keep the restored Grid below the floor in both isolated and whole-file runs.
+    while (ids.length < 2) await startSession('title bar neighbour');
     const id = await startSession('double click pane');
     const shot = await captureDashboard({ browser, viewerUrl: await dashboardUrl(), width: 1280, height: 720,
       drive: true, timeoutMs: 120_000, beforeNavigateScript: instrument,
@@ -474,7 +477,7 @@ describe('passive dashboard page', () => {
           return null;
         }
         if (state.phase === 3) {
-          if (!acknowledged(frames[1]) || size !== '100×30') return null;
+          if (!acknowledged(frames[1])) return null;
           state.restoredSize = size;
           doubleClick(head);
           state.phase = 4;
@@ -489,7 +492,7 @@ describe('passive dashboard page', () => {
           state.phase = 5;
           return null;
         }
-        if (!acknowledged(frames[3]) || size !== '100×30') return null;
+        if (!acknowledged(frames[3])) return null;
         return JSON.stringify({ ...state, finalSize: size, frames, diagnostics: ${dashboardTimeoutProbe} });
       })()`,
     });
@@ -508,11 +511,11 @@ describe('passive dashboard page', () => {
     expect(result.frames, JSON.stringify(result)).toHaveLength(4);
     expect(result.frames.every((frame) => frame.take)).toBe(true);
     expect(result.frames[0]!.cols).toBeGreaterThan(100);
-    expect(result.frames[1]).toMatchObject({ cols: 100, rows: 30 });
-    expect(result.frames[3]).toMatchObject({ cols: 100, rows: 30 });
+    expect(result.frames[1]).toMatchObject({ cols: 80, rows: 24 });
+    expect(result.frames[3]).toMatchObject({ cols: 80, rows: 24 });
     expect(result.enlargedSize).toContain(`${result.frames[0]!.cols}×${result.frames[0]!.rows}`);
-    expect(result.restoredSize).toContain('100×30');
-    expect(result.finalSize).toContain('100×30');
+    expect(result.restoredSize).toBe('80×24');
+    expect(result.finalSize).toBe('80×24');
   }, 180_000);
 
   it('delivers Escape to an enlarged focused terminal and restores from navigation', async (context) => {
@@ -643,6 +646,11 @@ describe('passive dashboard page', () => {
           state.smallFont = first.querySelector('.pane-term').dataset.fontSize;
           for (let i = 0; i < 50; i++) document.getElementById('text-larger').click();
           state.largeFont = first.querySelector('.pane-term').dataset.fontSize;
+          state.chosenFont = JSON.parse(localStorage.getItem('shellpuppet.dashboard')).fontSize;
+          const screen = first.querySelector('.xterm-screen').getBoundingClientRect();
+          const wrap = first.querySelector('.pane-wrap').getBoundingClientRect();
+          state.whole = screen.left >= wrap.left && screen.top >= wrap.top &&
+            screen.right <= wrap.right && screen.bottom <= wrap.bottom;
           state.transform = getComputedStyle(first.querySelector('.xterm')).transform;
           state.afterFont = window.__dashResizes.length;
           return JSON.stringify({ ...state, frames: window.__dashResizes });
@@ -655,7 +663,7 @@ describe('passive dashboard page', () => {
       coveredClosed: boolean; returned: boolean; scrolledClosed: boolean; scrolledReturned: boolean;
       socketCount: number; beforeFont: number; afterFont: number;
       returnedSnapshotLines: number; scrolledSnapshotLines: number;
-      smallFont: string; largeFont: string; transform: string;
+      smallFont: string; largeFont: string; chosenFont: number; whole: boolean; transform: string;
     };
     expect(result.frames, JSON.stringify(result)).toHaveLength(4);
     expect(result.frames.every((f) => f.type === 'resize' && f.take === true)).toBe(true);
@@ -671,7 +679,10 @@ describe('passive dashboard page', () => {
     expect(result.scrolledSnapshotLines).toBeLessThanOrEqual(2030);
     expect(result.afterFont).toBe(result.beforeFont);
     expect(result.smallFont).toBe('8');
-    expect(result.largeFont).toBe('32');
+    // Auto fit is off: keep the chosen size, but fit the retained screen.
+    expect(result.chosenFont).toBe(32);
+    expect(result.largeFont).toBe('13');
+    expect(result.whole).toBe(true);
     expect(result.transform).toBe('none');
   }, 180_000);
 

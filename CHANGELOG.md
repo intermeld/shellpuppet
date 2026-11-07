@@ -25,6 +25,15 @@ version may change behaviour, and every such change is listed here.
 - A screenshot that fails now says which capture step failed, how long each
   step took and what state the browser was in. It never includes the picture.
 
+### Fixed
+
+- Keep dashboard screens wholly visible with consistent text below the 80 by
+  24 floor, refit after font or display-scale changes even with a remembered
+  text size and Auto fit off, and recover the chosen size when space allows;
+  preserve scrolling, scrollbar dragging, pointer-aligned right-click menus
+  and the first takeover from another window while avoiding unnecessary
+  terminal resizes and text measurements.
+
 ## [0.2.1] - 2026-11-05
 
 Safer planned restarts, and a dashboard fix for windows that close.

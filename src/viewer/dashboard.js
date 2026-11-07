@@ -44,6 +44,7 @@
     ? saved.fontSize : saved.fontSize === null ? null
       : Number.isInteger(configuredFont) && configuredFont >= 8 && configuredFont <= 32 ? configuredFont : null;
   let autoFitTimer = null;
+  let fontFitFrame = null;
   let assignmentSettleUntil = 0;
   let assignmentSettleStartedAt = 0;
   if (!window.name) window.name = `shellpuppet-dashboard-${Date.now()}-${Math.random()}`;
@@ -240,6 +241,7 @@
     document.getElementById('text-auto').classList.toggle('active', fontSize === null);
   }
   function scheduleAutoFit() {
+    scheduleFontFit();
     clearTimeout(autoFitTimer);
     if (activeDivider) return;
     if (!autoFit) { focusOpenFits.clear(); return; }
@@ -253,6 +255,33 @@
       }
     }, assignmentSettleUntil > window.performance.now()
       ? Math.max(0, assignmentSettleUntil - window.performance.now()) : 250);
+  }
+  function fitFonts() {
+    const visiblePanes = shown().filter((item) => item.client && visible(item));
+    const below = new Set();
+    let shared = Infinity;
+    for (const item of visiblePanes) {
+      // The note can wrap the header. Test without it, then measure the
+      // remaining terminal space with the note in place.
+      item.card.classList.remove('below-floor');
+      const isBelow = item.client.belowDashboardFloor();
+      item.card.classList.toggle('below-floor', isBelow);
+      if (isBelow) {
+        below.add(item);
+        const font = item.client.floorFontSize();
+        if (font !== null) shared = Math.min(shared, font);
+      }
+    }
+    for (const item of visiblePanes) {
+      item.client.setDashboardFontLimit(below.has(item) && Number.isFinite(shared) ? shared : null);
+    }
+  }
+  function scheduleFontFit() {
+    if (fontFitFrame !== null) return;
+    fontFitFrame = window.requestAnimationFrame(() => {
+      fontFitFrame = null;
+      fitFonts();
+    });
   }
   function settleAssignmentFits() {
     // A feed change and its window assignment can arrive in separate tasks.
@@ -482,12 +511,17 @@
       if (enlarged === item.id) {
         enlarged = null;
         arrange('restore');
-        if (!autoFit && item.previousGrid) item.client?.takeGrid(item.previousGrid.cols, item.previousGrid.rows);
+        if (!autoFit && item.previousGrid) {
+          if (item.client?.belowDashboardFloor()) item.client.fitGrid();
+          else item.client?.takeGrid(item.previousGrid.cols, item.previousGrid.rows);
+        }
         item.previousGrid = null;
+        if (autoFit) window.requestAnimationFrame(() => item.client?.autoFitGrid(80, 24, true));
       } else {
         item.previousGrid = item.client?.getGrid() || null;
         enlarged = item.id;
         arrange('enlarge');
+        if (autoFit) window.requestAnimationFrame(() => item.client?.autoFitGrid(80, 24, true));
         if (!autoFit) window.requestAnimationFrame(() => item.client?.fitGrid());
       }
     });
@@ -612,7 +646,13 @@
       elements: { banner: item.banner, promptAlert: item.prompt, size: item.size, overflowNote: item.overflowNote },
       onAttentionChange: () => updateAttention(),
       onGeometryReady: () => scheduleAutoFit(),
-      onOutsideGeometry: () => scheduleAutoFit(),
+      onGeometryChange: () => scheduleFontFit(),
+      onMetricsChange: () => scheduleAutoFit(),
+      onOutsideGeometry: () => {
+        focusOpenFits.delete(item.id);
+        incomingFits.delete(item.id);
+        scheduleFontFit();
+      },
       onGridTaken: () => { focusOpenFits.delete(item.id); incomingFits.delete(item.id); },
     });
   }
@@ -672,6 +712,7 @@
         else deactivate(item);
       }
       lastVisibilityGeometry = geometry;
+      scheduleFontFit();
     } finally {
       syncingVisibility = false;
       if (window.__dashboardTrace) window.__dashboardTrace.visibilityDepth--;
@@ -729,7 +770,7 @@
   function paneSizes() {
     return new Map(shown().map((item) => [item.id, item.card.getBoundingClientRect()]));
   }
-  function finishDivider(divider, before) {
+  function finishDivider(divider, before, resetDirection = false) {
     activeDivider = null;
     endActiveDivider = null;
     divider.classList.remove('dragging');
@@ -737,11 +778,14 @@
     positionDividers();
     lastVisibilityGeometry = null;
     syncVisibility();
+    const affected = new Set(JSON.parse(divider.dataset.panes).flat());
     for (const item of shown()) {
+      if (!resetDirection && !affected.has(item.id)) continue;
       const old = before.get(item.id);
       if (!old || !item.client || !visible(item)) continue;
       const now = item.card.getBoundingClientRect();
-      if (autoFit && (now.width > old.width + 1 || now.height > old.height + 1)) item.client.fitAfterDrag(true);
+      if (autoFit && (item.client.belowDashboardFloor() ||
+          now.width > old.width + 1 || now.height > old.height + 1)) item.client.fitAfterDrag(true);
     }
   }
   function beginDivider(divider, pointerId, start) {
@@ -827,7 +871,7 @@
         const before = paneSizes();
         if (axis === 'focus') tracks.focusStrip = null;
         else tracks[axis === 'column' ? 'columns' : 'rows'] = null;
-        applyTracks(); finishDivider(divider, before);
+        applyTracks(); finishDivider(divider, before, true);
       } else {
         const coordinate = divider.getBoundingClientRect()[axis === 'row' ? 'y' : 'x'];
         const action = beginDivider(divider, null, coordinate);
@@ -931,10 +975,6 @@
         }
         renderDividers(layout, columns, rows, items, primary);
         for (const item of items) {
-          const box = item.card.getBoundingClientRect();
-          const measuredWidth = box.width;
-          const measuredHeight = box.height;
-          item.card.classList.toggle('below-floor', measuredWidth < 652 || measuredHeight < 446);
           updateCard(item);
         }
         lastLayout = layoutKey;
@@ -1432,6 +1472,7 @@
     leaveWindow();
     clearTimeout(retry);
     clearTimeout(autoFitTimer);
+    window.cancelAnimationFrame(fontFitFrame);
     feed?.close();
     for (const item of panes.values()) deactivate(item);
     for (const watch of popWatches.values()) clearInterval(watch);

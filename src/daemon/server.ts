@@ -3844,6 +3844,9 @@ export class Daemon {
       // window wants more can then size its text for the grid it will be
       // given, rather than proposing one it never will be.
       max: { cols: MAX_VIEWPORT_COLS, rows: MAX_VIEWPORT_ROWS },
+      // An adopting dashboard must distinguish a fresh session from one
+      // already taken in another window before scheduling its initial fit.
+      owned: this.hasGeometryController(session.id),
       control: session.geometryHeld
         ? 'held'
         : this.geometryController.get(session.id) === ws
@@ -4095,7 +4098,7 @@ export class Daemon {
             const changed = wanted.cols !== session.cols || wanted.rows !== session.rows;
             let applied = false;
             try {
-              await session.resize(wanted.cols, wanted.rows);
+              if (changed) await session.resize(wanted.cols, wanted.rows);
               applied = true;
             } catch (error) {
               // The program has ended (a viewer fitting its window while
