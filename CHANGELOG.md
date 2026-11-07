@@ -27,6 +27,8 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Avoid a second real terminal resize when a viewer's fractional character
+  width rounds differently after the first grid change.
 - Keep dashboard screens wholly visible with consistent text below the 80 by
   24 floor, refit after font or display-scale changes even with a remembered
   text size and Auto fit off, and recover the chosen size when space allows;
