@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import { afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { captureDashboard } from './dashboardCapture.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
@@ -17,6 +19,17 @@ async function setup() {
   const urls: string[] = [];
   daemon = await startTestDaemon({ idleCheckIntervalMs: 600_000,
     launcher: url => { urls.push(url); return Promise.resolve({ launched: true, mode: 'isolated-app', browser: 'mock' }); },
+  });
+  // Serve the fixture from the test daemon's own origin, retaining the page's CSP.
+  const httpDaemon = daemon.daemon as unknown as {
+    handleRequest: (req: IncomingMessage, res: ServerResponse) => Promise<void>;
+  };
+  const handleRequest = httpDaemon.handleRequest.bind(httpDaemon);
+  vi.spyOn(httpDaemon, 'handleRequest').mockImplementation((req, res) => {
+    if (req.url !== '/test-font.ttf') return handleRequest(req, res);
+    res.writeHead(200, { 'Content-Type': 'font/ttf', 'Cache-Control': 'no-store' });
+    res.end(fontData);
+    return Promise.resolve();
   });
   return async () => {
     expect((await api(daemon!.port, daemon!.token, '/dashboard/open', { body: {} })).status).toBe(200);
@@ -181,12 +194,34 @@ it('automatically refits a held Focus strip through device scales 1, 1.5, 2 and 
 
 const fontInstrument = instrument.replace('const client = value.create(config);',
   "const client = value.create(config); client.getTerminal().options.fontFamily = 'FloorFont, monospace';");
-const loadFont = `(async () => {
-  let events = 0; document.fonts.addEventListener('loadingdone', () => events++);
-  const face = new FontFace('FloorFont', 'local("Arial")'); document.fonts.add(face);
-  await document.fonts.load('13px FloorFont'); await document.fonts.ready; await __pause();
-  return { events, status: face.status, panes: __views(), frames: __frames() };
-})()`;
+const fontData = readFileSync(new URL('../fixtures/floor-metrics.ttf', import.meta.url));
+
+async function loadFont(evaluate: (expression: string) => Promise<unknown>, family = 'FloorFont') {
+  const loaded = await evaluate(`(async () => {
+    let events = 0;
+    const onLoad = () => events++;
+    document.fonts.addEventListener('loadingdone', onLoad);
+    const measure = document.createElement('canvas').getContext('2d');
+    measure.font = '13px ' + ${JSON.stringify(family)} + ', monospace';
+    const beforeWidth = measure.measureText('W').width;
+    const face = new FontFace(${JSON.stringify(family)}, 'url(/test-font.ttf)');
+    document.fonts.add(face);
+    let error;
+    try {
+      await document.fonts.load('13px ' + ${JSON.stringify(family)});
+      await document.fonts.ready; await __pause();
+    } catch (cause) { error = String(cause); }
+    finally { document.fonts.removeEventListener('loadingdone', onLoad); }
+    return { events, status: face.status, error, beforeWidth, afterWidth: measure.measureText('W').width,
+      panes: __views(), frames: __frames() };
+  })()`) as { events: number; status: string; error?: string; beforeWidth: number; afterWidth: number;
+    panes: PaneView[]; frames: unknown[] };
+  const details = JSON.stringify({ platform: process.platform, family, ...loaded });
+  expect(loaded.status, details).toBe('loaded');
+  expect(loaded.events, details).toBe(1);
+  expect(loaded.afterWidth, details).toBeGreaterThan(loaded.beforeWidth);
+  return loaded;
+}
 
 it('keeps a remembered text size as the ceiling for an owned grid with Auto fit off after metric changes', async context => {
   if (!browser) { context.skip(); return; }
@@ -223,9 +258,7 @@ it('keeps a remembered text size as the ceiling for an owned grid with Auto fit 
         expect.soft(session.nativeResize, stage).not.toHaveBeenCalled();
         expect.soft({ cols: session.session.cols, rows: session.session.rows }, stage).toEqual(before.grid);
       };
-      const loaded = await evaluate(loadFont) as { events: number; status: string };
-      expect(loaded.events).toBe(1);
-      expect(loaded.status).toBe('loaded');
+      await loadFont(evaluate);
       await checkRetained('local font loaded', true);
       for (const deviceScaleFactor of [1.5, 2, 1]) {
         await send('Emulation.setDeviceMetricsOverride', { width: 1400, height: 900, deviceScaleFactor, mobile: false });
@@ -261,9 +294,7 @@ it('fits equal grids after a local font loads while respecting Auto fit, hidden,
         expect(before[0]!.grid).toEqual(before[1]!.grid);
         for (const session of sessions) { session.resize.mockClear(); session.nativeResize.mockClear(); }
         await evaluate('__reset()');
-        const loaded = await evaluate(loadFont) as { events: number; status: string; panes: PaneView[]; frames: unknown[] };
-        expect(loaded.events).toBe(1);
-        expect(loaded.status).toBe('loaded');
+        const loaded = await loadFont(evaluate);
         expect(loaded.panes.every(pane => pane.below && pane.whole)).toBe(true);
         expect.soft(loaded.panes.map(pane => pane.grid)).toEqual(autoFit ?
           [{ cols: 80, rows: 24 }, { cols: 80, rows: 24 }] : before.map(pane => pane.grid));
@@ -300,7 +331,7 @@ it('fits equal grids after a local font loads while respecting Auto fit, hidden,
         expect((await evaluate('__views()') as PaneView[]).find(pane => pane.id === sessions[1]!.id)!.size).toContain('following');
         for (const session of [...sessions, held]) { session.resize.mockClear(); session.nativeResize.mockClear(); }
         await evaluate('__reset()');
-        await evaluate(loadFont);
+        await loadFont(evaluate);
         for (const session of [sessions[1]!, held]) {
           expect(session.resize).not.toHaveBeenCalled();
           expect(session.nativeResize).not.toHaveBeenCalled();
@@ -312,7 +343,7 @@ it('fits equal grids after a local font loads while respecting Auto fit, hidden,
         await evaluate('__pause()');
         for (const session of [...sessions, held]) { session.resize.mockClear(); session.nativeResize.mockClear(); }
         await evaluate("for (const client of __clients.values()) client.getTerminal().options.fontFamily = 'HiddenFloorFont, monospace'");
-        await evaluate(loadFont.replaceAll('FloorFont', 'HiddenFloorFont'));
+        await loadFont(evaluate, 'HiddenFloorFont');
         for (const session of sessions) {
           expect(session.resize).not.toHaveBeenCalled();
           expect(session.nativeResize).not.toHaveBeenCalled();

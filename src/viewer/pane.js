@@ -17,7 +17,7 @@
  * - `term.onData` is registered exactly ONCE, never inside the connect path.
  *   Registering per-connect would stack a listener per reconnect and send
  *   every keystroke N times.
- * - The fit addon measures what grid this window would like, and the pane asks
+ * - The pane measures what grid this window would like, and asks
  *   the daemon for it rather than assuming it (§5). The daemon decides who is
  *   driving the grid and answers with a geometry frame; only that frame
  *   resizes anything here.
@@ -28,7 +28,7 @@
  *   replayed here would start mid-frame.
  */
 
-/* global Terminal, FitAddon */
+/* global Terminal */
 
 window.ShellPuppetPane = (() => {
   'use strict';
@@ -230,8 +230,6 @@ window.ShellPuppetPane = (() => {
       fontFamily: 'ui-monospace, "Cascadia Code", Consolas, monospace',
       theme: { background: '#0b0e14', foreground: '#c5cdd9', cursor: '#6cb6ff' },
     });
-    const fit = new FitAddon.FitAddon();
-    term.loadAddon(fit);
     term.open(container);
     let metricsFrame = null;
     const refreshFontMetrics = () => {
@@ -433,37 +431,34 @@ window.ShellPuppetPane = (() => {
     }
 
     function propose() {
-      let proposed;
-      try {
-        proposed = fit.proposeDimensions();
-      } catch {
-        return null;
-      }
-      if (!proposed || !proposed.cols || !proposed.rows) return null;
-      return { cols: proposed.cols, rows: proposed.rows };
+      return proposeAtFont(term.options.fontSize);
     }
 
     function fixedFontPx() {
       return fontOverride === null ? DEFAULT_FONT_PX : fontOverride;
     }
 
-    function proposeDashboardGrid() {
+    function proposeAtFont(font) {
       const style = window.getComputedStyle(container);
       const terminalStyle = window.getComputedStyle(term.element);
       const width = parseInt(style.width) - parseInt(terminalStyle.paddingLeft) - parseInt(terminalStyle.paddingRight) -
         (term.options.scrollback === 0 ? 0 : term.options.overviewRuler?.width || 14);
       const height = parseInt(style.height) - parseInt(terminalStyle.paddingTop) - parseInt(terminalStyle.paddingBottom);
       if (!(width > 0 && height > 0)) return null;
-      const atFont = (font) => {
-        const cell = renderedCell(font);
-        return cell ? { cols: Math.max(2, Math.floor(width / cell.width)),
-          rows: Math.max(1, Math.floor(height / cell.height)) } : null;
-      };
-      let proposed = atFont(fixedFontPx());
+      // Use the unrounded cell in both clients. The DOM renderer rounds the
+      // whole canvas, so its CSS cell width changes with the current grid and
+      // can make a viewer request another resize on the geometry reply.
+      const cell = renderedCell(font);
+      return cell ? { cols: Math.max(2, Math.floor(width / cell.width)),
+        rows: Math.max(1, Math.floor(height / cell.height)) } : null;
+    }
+
+    function proposeDashboardGrid() {
+      let proposed = proposeAtFont(fixedFontPx());
       if (proposed === null) return null;
       if (proposed.cols > gridMax.cols || proposed.rows > gridMax.rows) {
         for (let font = fixedFontPx() + 1; font <= MAX_FONT_PX; font++) {
-          const larger = atFont(font);
+          const larger = proposeAtFont(font);
           if (larger === null ||
               (larger.cols < gridMax.cols && larger.rows < gridMax.rows)) break;
           proposed = larger;

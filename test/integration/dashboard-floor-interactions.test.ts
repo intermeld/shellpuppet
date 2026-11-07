@@ -32,7 +32,7 @@ async function start(cols = 96, rows = 24, hold = false, history = false) {
     command: process.execPath, args: ['-e', script], shell: false, openViewer: false,
     cwd: process.cwd(), cols, rows, hold,
   } });
-  expect(response.status).toBe(200);
+  expect(response.status, JSON.stringify(response.body)).toBe(200);
   const id = String(response.body['id']);
   const manager = (daemon!.daemon as unknown as {
     manager: { get: (id: string) => import('../../src/core/session.js').Session };
@@ -40,7 +40,8 @@ async function start(cols = 96, rows = 24, hold = false, history = false) {
   const session = manager.get(id);
   // Observe the actual PTY call as well as the session method and wire frames.
   const pty = (session as unknown as { pty: { resize: (cols: number, rows: number) => void } }).pty;
-  return { id, resize: vi.spyOn(session, 'resize'), nativeResize: vi.spyOn(pty, 'resize') };
+  const resizePty = pty.resize.bind(pty);
+  return { id, resizePty, resize: vi.spyOn(session, 'resize'), nativeResize: vi.spyOn(pty, 'resize') };
 }
 
 const instrument = `(() => {
@@ -240,36 +241,84 @@ it('adopts a grid already owned elsewhere on the first dashboard connection', as
   } finally { external.close(); }
 }, 120_000);
 
-it('follows a viewer on its first takeover until Fit, Enlarge or a drag takes the pane back', async context => {
+it.for([null, 'monospace'])('follows a viewer on its first takeover until Fit, Enlarge or a drag takes the pane back (%s)', { timeout: 240_000 }, async (fontFamily, context) => {
   if (!browser) { context.skip(); return; }
   const open = await setup();
   const session = await start();
   const grant = await api(daemon!.port, daemon!.token, `/sessions/${session.id}/viewer`, { body: {} });
   expect(grant.status).toBe(200);
+  const nativeCalls: { cols: number; rows: number; stack: string | undefined }[] = [];
+  session.nativeResize.mockImplementation((cols, rows) => {
+    nativeCalls.push({ cols, rows, stack: new Error('PTY resize').stack });
+    return session.resizePty(cols, rows);
+  });
+  const viewerInstrument = (fontFamily === null ? instrument : instrument.replace(
+    'const client = value.create(config);',
+    `const client = value.create(config); client.getTerminal().options.fontFamily = ${JSON.stringify(fontFamily)};`)) + `;(() => {
+    window.__viewerResizes = [];
+    const send = WebSocket.prototype.send;
+    WebSocket.prototype.send = function(data) {
+      try {
+        const frame = JSON.parse(data);
+        if (frame.type === 'resize') {
+          const term = [...__clients.values()][0].getTerminal();
+          __viewerResizes.push({ ...frame, stack: new Error('viewer resize').stack,
+            font: term.options.fontSize, grid: { cols: term.cols, rows: term.rows },
+            dimensions: structuredClone(term._core._renderService.dimensions), dpr: devicePixelRatio });
+        }
+      } catch { /* Terminal input is not a control frame. */ }
+      return send.call(this, data);
+    };
+  })()`;
   await captureDashboard({ browser, viewerUrl: await open(), width: 750, height: 650, drive: true,
     probeOnly: true, timeoutMs: 120_000, beforeNavigateScript: instrument,
     probe: 'window.__clients?.size === 1', interact: async ({ evaluate }) => {
       await evaluate('__pause()');
       session.nativeResize.mockClear();
       await captureViewer({ browser: browser!, viewerUrl: String(grant.body['viewerUrl']), width: 900, height: 700,
-        drive: true, probeOnly: true, timeoutMs: 90_000, beforeNavigateScript: instrument,
+        drive: true, probeOnly: true, timeoutMs: 90_000, beforeNavigateScript: viewerInstrument,
         probe: 'window.__clients?.size === 1', interact: async viewer => {
           await viewer.evaluate('__pause()');
           expect(session.nativeResize).not.toHaveBeenCalled();
           for (const [index, action] of ['Fit', 'Enlarge', 'drag'].entries()) {
+            // A fractional cell can cross a column boundary when xterm rounds
+            // the whole canvas. Exercise that boundary with the real font.
+            const width = fontFamily === null ? 1000 + index * 100 : await viewer.evaluate(`(() => {
+              const term = [...__clients.values()][0].getTerminal(), drawn = term.options.fontSize;
+              term.options.fontSize = 13;
+              const cell = term._core._renderService.dimensions.device.cell.width / devicePixelRatio;
+              term.options.fontSize = drawn;
+              for (let width = ${1000 + index * 100}; width < ${1600 + index * 100}; width++) {
+                const available = width - 30; // Viewer padding and the xterm scrollbar.
+                const first = Math.floor(available / (Math.round(cell * term.cols) / term.cols));
+                const second = Math.floor(available / (Math.round(cell * first) / first));
+                if (first !== second) return width;
+              }
+              return null;
+            })()`);
+            expect(width, 'a real fractional cell boundary').toBeTypeOf('number');
+            session.resize.mockClear();
             session.nativeResize.mockClear();
+            nativeCalls.length = 0;
+            await viewer.evaluate('__viewerResizes.length = 0');
             await evaluate('__reset()');
             await viewer.send('Emulation.setDeviceMetricsOverride', {
-              width: 1000 + index * 100, height: 760 + index * 50, deviceScaleFactor: 1, mobile: false,
+              width, height: 760 + index * 50, deviceScaleFactor: 1, mobile: false,
             });
             await viewer.evaluate('__pause(2000)');
-            const grid = await viewer.evaluate('[...__clients.values()][0].getGrid()');
+            const grid = await viewer.evaluate('[...__clients.values()][0].getGrid()') as { cols: number; rows: number };
             expect.soft(await evaluate('[...__clients.values()][0].getGrid()')).toEqual(grid);
             expect.soft(await evaluate('__frames()')).toEqual([]);
-            expect.soft(session.nativeResize).toHaveBeenCalledTimes(1);
+            const details = JSON.stringify({ platform: process.platform, action, fontFamily, nativeCalls: nativeCalls.slice(0, 12),
+              viewer: await viewer.evaluate('__viewerResizes.slice(0, 12)') });
+            expect.soft(session.resize, details).toHaveBeenCalledTimes(1);
+            expect.soft(session.nativeResize, details).toHaveBeenCalledTimes(1);
+            expect.soft(session.nativeResize.mock.calls[0], details).toEqual([grid.cols, grid.rows]);
+            expect.soft(await viewer.evaluate('__viewerResizes.length'), details).toBe(1);
             // Changing the dashboard layout must not take a followed grid either.
             await evaluate(`(async () => { window.dispatchEvent(new Event('resize')); await __pause(); })()`);
             expect.soft(await evaluate('[...__clients.values()][0].getGrid()')).toEqual(grid);
+            expect.soft(session.nativeResize, details).toHaveBeenCalledTimes(1);
             if (action === 'drag') await evaluate('[...__clients.values()][0].fitAfterDrag(true)');
             else await evaluate(`document.querySelector('button[aria-label="${action}"]').click()`);
             await evaluate('__pause()');
@@ -279,4 +328,4 @@ it('follows a viewer on its first takeover until Fit, Enlarge or a drag takes th
       });
     },
   });
-}, 240_000);
+});
