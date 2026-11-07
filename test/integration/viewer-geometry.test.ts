@@ -20,7 +20,7 @@
 
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { captureViewer } from '../../src/daemon/screenshot.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
 import { api, startTestDaemon } from './helpers.js';
@@ -81,6 +81,97 @@ if (now - st.since < ${String(stableMs)}) return null;`;
 }
 
 describe('geometry in the browser (design §5)', () => {
+  it('fills a rounded canvas at small text sizes with one native resize', async (context) => {
+    if (browser === null) { context.skip(); return; }
+    const started = await api(td.port, td.token, '/sessions', {
+      body: { command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'],
+        shell: false, openViewer: false, cols: 96, rows: 24 },
+    });
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+    const id = String(started.body['id']);
+    const manager = (td.daemon as unknown as {
+      manager: { get: (id: string) => import('../../src/core/session.js').Session };
+    }).manager;
+    const session = manager.get(id);
+    const pty = (session as unknown as { pty: { resize: (cols: number, rows: number) => void } }).pty;
+    const resize = vi.spyOn(session, 'resize');
+    const nativeResize = vi.spyOn(pty, 'resize');
+    try {
+      await captureViewer({ browser, viewerUrl: await freshViewerUrl(id), width: 558, height: 931,
+        drive: true, probeOnly: true, timeoutMs: 60_000,
+        beforeNavigateScript: `(() => {
+          window.__paneErrors = [];
+          window.addEventListener('error', event => __paneErrors.push(event.message));
+          let implementation;
+          Object.defineProperty(window, 'ShellPuppetPane', {
+            get: () => implementation,
+            set: value => { implementation = { ...value, create(config) {
+              const client = value.create(config);
+              client.getTerminal().options.fontFamily = 'monospace';
+              window.__pane = client;
+              return client;
+            } }; }
+          });
+          window.__resizes = [];
+          const send = WebSocket.prototype.send;
+          WebSocket.prototype.send = function(data) {
+            try { const frame = JSON.parse(data); if (frame.type === 'resize') __resizes.push(frame); }
+            catch { /* Terminal input is not a control frame. */ }
+            return send.call(this, data);
+          };
+          window.__pause = () => new Promise(resolve => setTimeout(resolve, 1600));
+        })()`,
+        probe: 'window.__pane?.getGrid().cols > 0',
+        timeoutProbe: 'JSON.stringify({ errors: window.__paneErrors, grid: window.__pane?.getGrid(), body: document.body?.innerText.slice(0, 400) })',
+        interact: async ({ evaluate, send }) => {
+          await evaluate('(async () => { __pane.setFontOverride(7); await __pause(); })()');
+          // At a 3.8486328125 px monospace cell these are exactly 558 and 634.
+          // Other installed monospace fonts exercise the same 137 -> 157 grid.
+          const widths = await evaluate(`(() => {
+            const term = __pane.getTerminal(), cell = term._core._renderService.dimensions.device.cell.width / devicePixelRatio;
+            const style = getComputedStyle(term.element), container = getComputedStyle(document.getElementById('term'));
+            const inset = innerWidth - parseInt(container.width) + parseInt(style.paddingLeft) + parseInt(style.paddingRight) + 14;
+            return [Math.ceil(137 * cell) + inset, Math.round(157 * cell) + inset];
+          })()`) as number[];
+          await send('Emulation.setDeviceMetricsOverride', {
+            width: widths[0], height: 931, deviceScaleFactor: 1, mobile: false,
+          });
+          await evaluate('__pause()');
+          const before = await evaluate('__pane.getGrid()') as { cols: number; rows: number };
+          expect(before.cols).toBe(137);
+          resize.mockClear(); nativeResize.mockClear();
+          await evaluate('__resizes.length = 0');
+          await send('Emulation.setDeviceMetricsOverride', {
+            width: widths[1], height: 931, deviceScaleFactor: 1, mobile: false,
+          });
+          await evaluate('__pause()');
+          const after = await evaluate(`(() => {
+            const term = __pane.getTerminal(), style = getComputedStyle(term.element);
+            const available = parseInt(getComputedStyle(document.getElementById('term')).width) -
+              parseInt(style.paddingLeft) - parseInt(style.paddingRight) - 14;
+            return { grid: __pane.getGrid(), font: term.options.fontSize, available,
+              width: term.element.querySelector('.xterm-screen').offsetWidth, frames: __resizes };
+          })()`) as { grid: { cols: number; rows: number }; font: number; available: number; width: number; frames: unknown[] };
+          const details = JSON.stringify({ platform: process.platform, widths, before, after, nativeCalls: nativeResize.mock.calls });
+          expect.soft(after.grid, details).toEqual({ cols: 157, rows: before.rows });
+          expect.soft(after.font, details).toBe(7);
+          expect.soft(after.available - after.width, details).toBe(0);
+          expect.soft(resize, details).toHaveBeenCalledTimes(1);
+          expect.soft(nativeResize, details).toHaveBeenCalledTimes(1);
+          expect.soft(nativeResize.mock.calls[0], details).toEqual([157, before.rows]);
+          expect.soft(after.frames, details).toHaveLength(1);
+          await evaluate('__pause()');
+          expect.soft(await evaluate('__pane.getGrid()'), details).toEqual({ cols: 157, rows: before.rows });
+          expect.soft(nativeResize, details).toHaveBeenCalledTimes(1);
+          expect.soft(await evaluate('__resizes.length'), details).toBe(1);
+        },
+      });
+    } finally {
+      resize.mockRestore(); nativeResize.mockRestore();
+      await api(td.port, td.token, `/sessions/${id}`, { method: 'DELETE' });
+    }
+  }, 120_000);
+
   it('keeps notices off the cursor at both ends without resizing, and lets clicks through', async (context) => {
     if (browser === null) { context.skip(); return; }
     const started = await api(td.port, td.token, '/sessions', {

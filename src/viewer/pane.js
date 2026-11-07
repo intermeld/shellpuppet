@@ -449,8 +449,14 @@ window.ShellPuppetPane = (() => {
       // whole canvas, so its CSS cell width changes with the current grid and
       // can make a viewer request another resize on the geometry reply.
       const cell = renderedCell(font);
-      return cell ? { cols: Math.max(2, Math.floor(width / cell.width)),
-        rows: Math.max(1, Math.floor(height / cell.height)) } : null;
+      if (!cell) return null;
+      let cols = Math.floor(width / cell.width);
+      let rows = Math.floor(height / cell.height);
+      // Include every whole cell whose rounded canvas fits, as gridFitsAtFont
+      // does, without depending on the current grid's rounded average cell.
+      while (Math.round((cols + 1) * cell.width) <= width) cols++;
+      while (Math.round((rows + 1) * cell.height) <= height) rows++;
+      return { cols: Math.max(2, cols), rows: Math.max(1, rows) };
     }
 
     function proposeDashboardGrid() {
