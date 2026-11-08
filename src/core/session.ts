@@ -718,6 +718,7 @@ export class Session implements WaitTarget {
   private stallValidatedTranscript: string | undefined;
   private stallValidationPending = false;
   private readonly stallScreen = new StallScreenCache();
+  private readonly stallInk: ReturnType<ScreenRenderer['watchForeground']> | undefined;
 
   /** Whether the program has hidden the cursor (DECTCEM off), carried to viewers. */
   private cursorHidden = false;
@@ -797,6 +798,8 @@ export class Session implements WaitTarget {
     const cols = options.cols ?? DEFAULT_COLS;
     const rows = options.rows ?? DEFAULT_ROWS;
     this.renderer = new ScreenRenderer({ cols, rows, scrollback: DEFAULT_SCROLLBACK, agent: this.agent });
+    this.stallInk = this.agentModule?.stalls === undefined ? undefined :
+      this.renderer.watchForeground(this.agentModule.stalls.flatMap(shape => shape.marker.fg));
 
     // cols/rows say where to START, and nothing more: a size that also froze
     // the grid would leave a viewer with a grid it could not change, and a
@@ -897,7 +900,9 @@ export class Session implements WaitTarget {
       this.modeScanTail = scan.slice(-MODE_SCAN_TAIL_CHARS);
       const rendered = this.renderer.write(data);
       if (this.agentModule?.stalls !== undefined) {
-        void rendered.then(() => this.scheduleStall()).catch(() => {
+        void rendered.then(() => {
+          if (this.stallTracker.tracking || this.stallInk?.possible) this.scheduleStall();
+        }).catch(() => {
           this.publishStall(undefined);
           this.logger.warn('stall reading failed', { id: this.id });
         });
@@ -1150,7 +1155,7 @@ export class Session implements WaitTarget {
       // before suppressing it, so a delayed check cannot announce that old turn.
       if (this.agentModule?.stalls !== undefined && !this.stallTracker.tracking) {
         await this.renderer.flush();
-        this.refreshStall();
+        if (this.stallInk?.possible) this.refreshStall();
       }
       this.stallTracker.noteInput();
       this.clearStallTimer();
@@ -1328,7 +1333,10 @@ export class Session implements WaitTarget {
           this.stallNextCheck = Date.now() + 250;
           if (this.hasStallInk(this.renderer.plainViewport())) this.refreshStall();
           // Absence also releases input suppression for a later occurrence.
-          else this.stallTracker.observe(null);
+          else {
+            this.stallTracker.observe(null);
+            this.stallInk?.checkAbsent();
+          }
         }, Math.max(0, this.stallNextCheck - Date.now()));
         this.stallTimer.unref();
       }
@@ -1408,6 +1416,7 @@ export class Session implements WaitTarget {
     }
     this.stallValidationPending = false;
     this.publishStall(this.stallTracker.observe(candidate));
+    if (!this.stallTracker.tracking) this.stallInk?.checkAbsent();
     const remaining = this.stallTracker.remaining();
     if (remaining !== null) {
       this.stallTimer = setTimeout(() => this.refreshStall(), remaining);

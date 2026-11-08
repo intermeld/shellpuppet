@@ -89,6 +89,7 @@ export class ScreenRenderer {
   private readonly serializer: XtermSerializeAddon;
   /** Chain of pending writes, so `flush()` can await parser completion. */
   private pending: Promise<void> = Promise.resolve();
+  private readonly foregroundReflows: (() => void)[] = [];
 
   constructor(options: RendererOptions = {}) {
     this.agent = options.agent ?? 'generic';
@@ -130,6 +131,57 @@ export class ScreenRenderer {
 
   resize(cols: number, rows: number): void {
     this.term.resize(cols, rows);
+    for (const reflow of this.foregroundReflows) reflow();
+  }
+
+  /**
+   * A conservative ink hint from xterm's already parsed colour operations.
+   * It never proves a screen shape. Once absent ink is checked, ordinary
+   * output needs no viewport reads until a relevant colour or reflow occurs.
+   */
+  watchForeground(colours: readonly string[]): { readonly possible: boolean; checkAbsent(): void } {
+    let active = false;
+    let possible = false;
+    const unknown = () => { active = true; possible = true; return false; };
+    this.foregroundReflows.push(() => { possible = true; });
+    this.term.buffer.onBufferChange(unknown);
+    this.term.parser.registerEscHandler({ final: '8' }, unknown);
+    this.term.parser.registerCsiHandler({ final: 'u' }, unknown);
+    this.term.parser.registerEscHandler({ final: 'c' }, () => { active = false; possible = true; return false; });
+    this.term.parser.registerCsiHandler({ final: 'm' }, params => {
+      for (let i = 0; i < params.length; i++) {
+        const param = params[i]!;
+        const code = Array.isArray(param) ? param[0] : param;
+        if (code === 0 || code === 39) active = false;
+        else if (code !== undefined && ((code >= 30 && code <= 37) || (code >= 90 && code <= 97))) {
+          active = colours.includes(`p${code >= 90 ? code - 82 : code - 30}`);
+        } else if (code === 38 || code === 48 || code === 58) {
+          // Both semicolon parameters and colon subparameters come from
+          // xterm, including any split byte sequences and colour-space slot.
+          const values = Array.isArray(param) ? param : params.slice(i, i + (params[i + 1] === 2 ? 5 : 3));
+          if (!Array.isArray(param)) i += values.length - 1;
+          if (code !== 38) continue;
+          let colour: string | null = null;
+          if (values[1] === 5 && typeof values[2] === 'number' && values[2] >= 0 && values[2] <= 255) colour = `p${values[2]}`;
+          if (values[1] === 2 && (values.length === 5 || (values.length === 6 && (values[2] === 0 || values[2] === -1)))) {
+            const rgb = values.slice(-3);
+            if (rgb.every(value => typeof value === 'number' && value >= 0 && value <= 255)) {
+              colour = '#' + rgb.map(value => (value as number).toString(16).padStart(2, '0')).join('');
+            }
+          }
+          // An unfamiliar colour operation cannot establish absence.
+          active = colour === null || colours.includes(colour);
+        }
+        possible ||= active;
+      }
+      return false;
+    });
+    return {
+      get possible() { return possible; },
+      checkAbsent: () => {
+        if (!active) possible = this.hasForeground(Array.from({ length: this.rows }, (_, row) => row), colours);
+      },
+    };
   }
 
   /**
