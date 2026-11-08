@@ -23,6 +23,11 @@ Releases carry npm provenance through trusted publishing from the first.
 
 ## Now
 
+- **Sessions that stall, noticed.** A session that stops on a refusal from its
+  model provider has a state of its own beside waiting, in session lists, the
+  dashboard and wait conditions, and its supervisor is told. MiMo's refusal is
+  recognised first; each further error shape comes with a fixture from a real
+  screen. Nudging and a supervisor model stay in Later.
 - **A module per agent CLI.** What's specific to one program moves out of the
   core into a module of its own, in this repository: its prompt detection and
   its measured profile. It starts as an internal refactor, with the profiles as
@@ -77,14 +82,11 @@ Releases carry npm provenance through trusted publishing from the first.
 - **More ways to install.** winget, Homebrew and signed Windows binaries.
 - **Remote access through Intermeld**, end-to-end encrypted, with the client
   half open here.
-- **Sessions that stall, noticed and nudged.** An agent CLI can end its turn
-  on an error from its provider, such as a model at capacity, a dropped stream
-  or a usage limit, rather than on a question, and then sit idle. Such a
-  session gets a state of its own beside waiting, in the session list, the
-  dashboard and as a wait condition, and whoever supervises it, an agent or
-  you, is told. Nudging it to carry on is a setting, off until you switch it
-  on, and each nudge is recorded as the daemon's own input. Further off: a
-  supervisor, a model you choose that watches the sessions you put it on,
+- **Sessions that stall, nudged.** More provider errors noticed, such as a
+  model at capacity, a dropped stream or a usage limit. Nudging a stalled
+  session to carry on is a setting, off until you switch it on, and each
+  nudge is recorded as the daemon's own input. Further off: a supervisor, a
+  model you choose that watches the sessions you put it on,
   nudges the ones that have stalled and, given a goal for a session, checks
   that it is still heading there; on a machine registered to Intermeld, one
   that Intermeld provides

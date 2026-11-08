@@ -1,4 +1,4 @@
-# CLI start reference
+# CLI reference
 
 ```text
 shellpuppet start [options] <command> [args...]
@@ -44,3 +44,57 @@ Dashboard launches and launch profiles do not accept readiness wait fields
 and never wait. A person's session appears as soon as its program starts.
 See the [agent recipes](agent-profiles.md#recipes) for answering first-use
 questions and verifying typed prompts.
+
+## Listing and supervising sessions
+
+`shellpuppet list` shows `STALLED <reason> since <ISO time>: <description>`
+where readiness normally appears when a supported provider error has left
+the session idle. JSON lists include `stalled: { reason, description, since }`.
+The initial reason is `provider-refused`, with the fixed description
+"The model provider refused the turn." Only the MiMo error block,
+measured from a real screen, is supported. `list --waiting` continues to select permission prompts only.
+
+```text
+shellpuppet wait <id> --stalled [--timeout <ms>]
+shellpuppet wait <id> --prompt --stalled [--hide-reasoning]
+shellpuppet wait --stalled [id ...] [--now] [--timeout <ms>]
+shellpuppet wait --prompt --stalled [id ...] [--now] [--hide-reasoning]
+```
+
+With no ids, the multi-session form watches every live session. `--now`
+polls once. A stall match reports `reason: "stalled"` and the stall metadata;
+its screen is empty. A prompt match still reports `reason: "prompt"`.
+A wait for stalled alone also leaves the screen empty on timeout or exit.
+With `--stalled`, each compact session row names its matched condition too.
+The top-level reason names the first condition represented, with prompts
+first if both conditions are present in different sessions. Bare `--prompt`
+keeps its existing response. Text, regex and quiet cannot be combined with
+these supervision conditions. Exit code 3 means a wait did not match;
+`--now` returns normally even when no session needs attention.
+
+The refusal is recognised by its shape on screen, at and above the 80x24
+floor. It must finish the live turn, outside MiMo's recognised tool panels and
+quoted content, with a visible idle composer and only recognised bottom chrome
+below it. The same refusal must persist for one second. Indented unsent input
+does not qualify; a clipped user-turn boundary prevents a new stall. Copy and recovery
+controls, sidebar changes, resize reflow and cursor-only writes preserve the
+stall and its original time. Composer frames repainted to the new width and
+accepted grey suggestions arriving or leaving also preserve it while the
+canonical refusal identity is unchanged, with no clear or further announcement.
+Presentation changes are validated on a coalesced timer. Resize restarts its
+250 ms window so a preliminary native redraw can finish reconstructing the user
+turn before its identity is compared. Output does not extend that window.
+If only the user-turn boundary is outside the viewport plus 128 preceding rows,
+an established notice
+keeps its identity and time while the available content, same refusal block,
+footer and idle composer still qualify. An incomplete leading wrapped row has
+unknown context; it cannot set quotation, fence or tool-panel state. Every complete
+available content row is still checked. Missing context cannot finish settling
+a new notice. A changed identity or invalid visible shape clears the notice.
+Busy output, newer transcript output, a prompt,
+non-empty real input or exit clears it. Empty writes and terminal reports do not. Input
+suppresses the unchanged refusal even if its controls change. A program that
+paints the same shape is reported the same way, including forged MiMo bars,
+headers, footers or `Build ·` status rows. The state is a notice and nothing
+acts on it. ShellPuppet sends no nudge.
+Stall metadata contains no terminal text, with or without `--hide-reasoning`.

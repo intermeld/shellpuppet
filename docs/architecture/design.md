@@ -299,7 +299,7 @@ ambiguous in clients that do not, so the prefix stays.
 | `terminal_snapshot` | Read the rendered screen as plain text | `session`, `lastLines`, `hideReasoning` |
 | `terminal_type` | Type text (optionally submit) | `session`, `text`, `submit`, `verify` |
 | `terminal_key` | Press a semantic key | `session`, `key` |
-| `terminal_wait` | Wait for one screen condition or a prompt in any chosen session | `session` (id, list of ids or omitted with `prompt`), `text`\|`regex`\|`quiet`\|`prompt`, `timeout`, `debounce`, `matchAfterInput`, `now`, `hideReasoning` |
+| `terminal_wait` | Wait for a screen condition, prompt or supported provider stall | `session` (id, list of ids or omitted for supervision), `text`\|`regex`\|`quiet` or `prompt` and/or `stalled`, `timeout`, `debounce`, `matchAfterInput`, `now`, `hideReasoning` |
 | `terminal_find` | Regex search the current screen, with line numbers | `session`, `pattern`, `hideReasoning` |
 | `terminal_result` | The answer that ended an agent CLI's latest turn, and nothing else | `session` |
 | `terminal_list` | List sessions and their state, or just waiting prompts | `waitingOnly`, `hideReasoning` |
@@ -612,6 +612,103 @@ configurable 300 s. A wrongly low timeout is indistinguishable from a hard failu
 **Every response is untrusted data.** See §4.4.
 
 ---
+
+### 3.2 Sessions that stall, noticed
+
+A supported provider refusal at the end of an idle turn is `stalled`, distinct
+from a session waiting for an answer. `AgentModule.stalls` is an optional list
+of signatures, separate from the reserved `safety` adapter. Each has a stable
+reason code, fixed product description, a cheap visible marker, styled row
+tests for the error, its preceding line, closing footer and idle composer,
+and the allowed bottom chrome. Only MiMo's measured
+`provider-refused` shape is seeded. OpenCode has a different measured footer
+and no refusal capture proving the same shape. Other errors and agents need
+real screen fixtures before they gain signatures.
+
+Detection recognises the refusal by its shape on screen, at and above the
+80x24 floor in ADR-009. It uses the existing reading engine's styled rows,
+composer, latest user-turn boundary and module busy rules. MiMo's content walk
+uses its own panel framing to distinguish tool listings and quotations from
+the live answer. A clipped context without a known turn boundary cannot
+establish a new stall. The last transcript block must have the red
+left bar and red `✗ Error` marker, the provider refusal message and the
+completed `Build · <model> · <time>` footer directly above a current visible
+idle composer. Only recognised bottom chrome may follow it. The input region
+comes from the composer frame and independently repeated panel dividers;
+indentation alone never makes typed text a sidebar. Text before a proven
+divider remains input, including text beyond the closing frame's edge.
+The grey suggestion has a separate style rule.
+No detected prompt or busy indication may be present.
+
+The same semantic refusal and user turn must remain for one second. Logical
+lines join terminal wraps before matching; copy labels, the `↻ /recover`
+control, sidebar chrome and irrelevant styles are excluded from identity.
+Resize reflow, composer frames repainted to the new width, and accepted grey
+suggestions arriving or leaving preserve the original `since` time and produce
+no clear or further announcement while the canonical refusal identity is unchanged.
+If reflow clips the user-turn boundary beyond the bounded read, validation is
+inconclusive only when the available content walk, refusal block, footer and
+idle composer still qualify. A leading incomplete wrapped logical row has
+unknown context: its text cannot open or close a quotation, fence or tool panel.
+Every complete available row still contributes to the content walk.
+An already settled stall with the same refusal
+and footer keeps its full identity and original `since`. Missing context
+cannot create a new stall or finish settling one. Cursor-only writes do not
+end the observation.
+New transcript output, a prompt, busy output, non-empty real input or exit
+clears the state. Automatic terminal reports and zero-byte writes do not.
+Real input also suppresses that same semantic identity until the block
+disappears or is replaced.
+
+Discovery and revalidation share a coalesced path of at most four checks per
+second. Known cosmetic controls and cursor-only repaints skip full validation.
+A different viewport retains the candidate and its clock pending validation
+unless cheap text comparison finds a transcript change, busy marker or prompt.
+This comparison excludes possible composer presentation using the module's
+idle and bottom-row text rules and joins terminal wraps. It omits a leading
+wrapped continuation whose length changes as native redraws scroll the viewport;
+the bounded styled read still validates the available turn context. It does not prove
+the composer idle: coalesced styled validation still checks the full shape,
+including suggestion ink. An unchanged canonical identity or inconclusive
+turn context with the same validated refusal and footer keeps an established
+notice. A changed identity or invalid visible shape clears it. Reflowed text
+and the last fully validated turn provide comparison baselines for native
+repaints; inconclusive reads retain the latter for growth.
+Resize restarts the 250 ms coalescing window, including any pending check.
+Native preliminary redraws can temporarily shorten the reconstructed user-turn
+text while leaving the refusal and footer unchanged. That layout change waits
+for the window to end; a complete identity that still differs then clears the
+notice and must settle again. Equal refusal and footer alone cannot establish
+that a complete user turn is unchanged. Output does not extend the deadline.
+Non-empty real input, new transcript text, busy markers and prompts clear the
+state immediately. Busy screens, missing composer edges and absent candidate
+ink are rejected before styled history or prompt scans. Context reads are
+limited to the viewport and 128 preceding rows.
+
+The session owns the settle clock and evaluates rendered output, so the
+list, waits and notifications share one state. `stalled` contains only
+`reason`, `description` and an ISO `since` time for the first stable sighting.
+Detector identities and screen text remain private, including for
+`hideReasoning` callers. A matched stall wait carries an empty `screen`;
+a wait for stalled alone also keeps it empty on timeout or exit.
+`--stalled` and MCP `stalled: true` work alone or alongside the existing
+prompt condition, for one or several sessions. The result names the condition
+that fired; bare prompt waits keep their existing contract.
+
+Each transition to stalled produces one `session-stalled` event, audit record
+and log warning. A clear produces `session-stall-clear`. Both events reach
+the session viewer, the dashboard feed carries `stalled`, and a viewer joining
+late receives the current stall. The pane shows the fixed reason and since
+time; the dashboard counts it as needing attention.
+
+The state is a notice and nothing acts on it. It sends no input, retries or
+nudges and does not choose a supervisor model. A program that paints the same
+shape is reported the same way. Changing MiMo's own bar or header colours,
+removing its header, or forging its footer or a `Build ·` status row defeats
+the distinction between content and interface. These are limits of recognising
+rendered shapes, not authenticated provider signals. Grids below 80x24 and
+unrecorded error shapes are outside this detection contract. Terminal content
+remains untrusted under §4.4.
 
 ## 4. Security model
 
@@ -1200,7 +1297,7 @@ gets a fresh proof, without replacing the cookie. The routes are:
 | `GET /dashboard/profiles` | Cookie read; profile descriptions and problems, never environment values |
 | `POST /dashboard/launch` | Cookie, document proof and JSON profile name; limits in §4.3 |
 | `POST /dashboard/folder-picker` | Cookie, same-origin mutation proof and JSON name of an `any` profile; opens one desktop picker at a time for at most ten minutes |
-| `GET /sessions` | Cookie may read the existing list, including prompt state |
+| `GET /sessions` | Cookie may read the existing list, including prompt and stall state |
 | `DELETE /sessions/<id>` | Cookie plus document proof may kill |
 | `/dashboard/events` | Cookie plus subprotocol; outbound WebSocket; inbound ignored |
 | `/sessions/<id>/stream` | Cookie plus subprotocol. The dashboard credential is always passive; `drive=0` is not required and cannot make it drive |
@@ -1216,7 +1313,7 @@ remains client-token only. Stream authentication precedes session existence
 checks, preventing unauthenticated enumeration. `/dashboard/events` sends
 `hello` first, then a `snapshot` of sessions. `session-added`,
 `session-updated` and `session-removed` follow lifecycle changes, with
-timestamps after the initial hello. `session-updated` includes prompt state;
+timestamps after the initial hello. `session-updated` includes prompt and stall state;
 the client-token `/events` keeps its existing `prompt-stall` and
 `prompt-clear` frames. While a dashboard events socket is open, a new
 session opens no separate viewer window and the start response omits
@@ -1233,8 +1330,9 @@ and typing in shipped agent CLIs at 80 by 24; if it fails, raise it to the
 smallest size proven readable. Forced Grid divides panes evenly in stable
 contiguous order even below the floor. Focus gives one pane most of the
 window and a strip. New panes append. Attention adds a badge and a title
-count after twenty seconds without moving or focusing a pane; the jump key
-selects a waiting pane where it stands. Pin does not reorder a grid; the
+count after twenty seconds for prompts, or as soon as a provider stall settles,
+without moving or focusing a pane; the jump key selects a pane needing attention
+where it stands. Pin does not reorder a grid; the
 earliest pinned pane takes the large slot in Focus. Only an explicit reorder
 changes order. Mode, order, pin, Auto fit and text size live in `localStorage` in the isolated
 profile; gone session ids are dropped. Focus has a draggable boundary between

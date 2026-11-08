@@ -14,11 +14,12 @@ export type FeedFrame =
 
 const trackedFields = [
   'cols', 'rows', 'geometryHeld', 'ready', 'readyReason', 'watchers',
-  'label', 'purpose', 'exited', 'exitCode', 'waitingOnPrompt',
+  'label', 'purpose', 'exited', 'exitCode', 'waitingOnPrompt', 'stalled',
 ] as const;
 
 export function changedFields(before: FeedSummary, after: FeedSummary): string[] {
   return trackedFields.filter((field) => {
+    if (field === 'stalled') return before.stalled?.reason !== after.stalled?.reason || before.stalled?.since !== after.stalled?.since;
     if (field !== 'waitingOnPrompt') return before[field] !== after[field];
     const left = before.waitingOnPrompt;
     const right = after.waitingOnPrompt;

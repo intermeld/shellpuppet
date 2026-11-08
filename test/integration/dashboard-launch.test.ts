@@ -311,6 +311,7 @@ function standInStart(options: SessionOptions, id: string): Session {
       ready: true, readyReason: 'not-tracked', geometryHeld: false, exited: false,
       exitCode: null, watchers: 0, createdAt: new Date().toISOString() }),
     onExit: () => () => undefined, onReady: () => () => undefined,
+    onStall: () => () => undefined,
   } as unknown as Session;
 }
 

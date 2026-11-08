@@ -25,8 +25,8 @@ import { planPassedEnv } from '../mcp/config.js';
 import { isEnvNamesProblem, readDaemonConfig } from '../daemon/config.js';
 import { agentNameFor } from '../core/reasoning.js';
 import { knownKeys } from '../core/keys.js';
-import { listedState, startReadyLine } from '../core/types.js';
-import type { StartReadyResult } from '../core/types.js';
+import { listedState, stallLine, startReadyLine } from '../core/types.js';
+import type { StallState, StartReadyResult } from '../core/types.js';
 import { installDesktopShortcut, uninstallDesktopShortcut, userShortcutOptions } from './desktopShortcut.js';
 import type { Logger, SessionSummary } from '../core/types.js';
 
@@ -88,21 +88,23 @@ Usage:
   shellpuppet type <id> <text> [--enter] [--verify] Type text (--verify re-reads the screen,
                                                     for up to 15 s on long text)
   shellpuppet key <id> <name>                       Press a key (enter, escape, ctrl+c, f1…)
-  shellpuppet wait <id> [--text <s>|--regex <r>|--quiet <ms>|--prompt]
+  shellpuppet wait <id> [--text <s>|--regex <r>|--quiet <ms>|--prompt|--stalled]
                         [--timeout <ms>] [--debounce <ms>] [--match-after-input true|false]
                         [--hide-reasoning]
                                                     Wait for a condition, print the screen
                         --prompt waits until the session asks a permission question
                         (the one you just answered does not count until it has been
                         seen to go; --match-after-input false accepts any prompt)
+                        --stalled waits for a supported idle provider error, with
+                        fixed reason and since metadata; combine with --prompt
                         --match-after-input true ignores text/regex matches at or
                         before the echo of what you last typed
                         --debounce waits for the condition to hold on every poll
                         for this many ms; a missed poll restarts it, while other
                         output such as a ticking timer does not; a match on the
                         final screen settles at once if the program exits
-  shellpuppet wait --prompt [id ...] [--now] [--timeout <ms>] [--hide-reasoning]
-                                                    Wait for any listed session's prompt,
+  shellpuppet wait [--prompt] [--stalled] [id ...] [--now] [--timeout <ms>] [--hide-reasoning]
+                                                    Wait for any listed session's prompt or stall,
                                                     or every live session if no ids are given;
                                                     --now polls once without waiting
   shellpuppet find <id> <pattern> [--hide-reasoning]
@@ -455,7 +457,7 @@ async function main(): Promise<void> {
         console.log(
           `${s.id}  ${listedState(s)}  ` +
             `${String(s.cols)}x${String(s.rows)}  watchers:${String(s.watchers)}  ` +
-            `${s.ready ? 'ready' : 'NOT-READY'}  ${s.label}` +
+            `${s.stalled !== undefined ? stallLine(s.stalled) : s.ready ? 'ready' : 'NOT-READY'}  ${s.label}` +
             (s.agent !== null && s.agent !== undefined ? `  agent:${s.agent}` : ''),
         );
         const waiting = (s as SessionSummary & {
@@ -544,9 +546,14 @@ async function main(): Promise<void> {
     }
 
     case 'wait': {
-      const multi = parsed.flags.get('prompt') === true && (parsed.positionals.length !== 1 || parsed.flags.get('now') === true);
+      const multi = (parsed.flags.get('prompt') === true || parsed.flags.get('stalled') === true) && (parsed.positionals.length !== 1 || parsed.flags.get('now') === true);
       if (multi) {
-        const params = new URLSearchParams({ prompt: 'true' });
+        for (const name of ['text', 'regex', 'quiet', 'debounce', 'match-after-input']) {
+          if (parsed.flags.has(name)) fail(2, 'A multi-session wait accepts --prompt and/or --stalled, --timeout, --now and --hide-reasoning only.');
+        }
+        const params = new URLSearchParams();
+        if (parsed.flags.get('prompt') === true) params.set('prompt', 'true');
+        if (parsed.flags.get('stalled') === true) params.set('stalled', 'true');
         for (const id of parsed.positionals) params.append('session', id);
         if (parsed.flags.get('now') === true) params.set('now', 'true');
         if (parsed.flags.has('timeout')) params.set('timeout', String(parsed.flags.get('timeout')));
@@ -554,7 +561,8 @@ async function main(): Promise<void> {
         const result = await call(connection, 'GET', `/sessions/wait?${params.toString()}`);
         if (wantJson) printJson(result);
         else {
-          for (const waiting of result['sessions'] as { id: string; label: string; question?: string; options?: string[]; selectedOption?: number; waitingMs: number }[]) {
+          for (const waiting of result['sessions'] as { id: string; label: string; stalled?: StallState; question?: string; options?: string[]; selectedOption?: number; waitingMs: number }[]) {
+            if (waiting.stalled !== undefined) { console.log(`${waiting.id}  ${waiting.label}  ${stallLine(waiting.stalled)}`); continue; }
             console.log(`${waiting.id}  ${waiting.label}  WAITING ${String(Math.round(waiting.waitingMs / 1000))}s` + (waiting.question === undefined ? '' : `: ${waiting.question}`));
             for (const [index, option] of (waiting.options ?? []).entries()) console.log(`    ${index === waiting.selectedOption ? '* ' : '  '}${option}`);
           }
@@ -565,7 +573,7 @@ async function main(): Promise<void> {
       }
       const id = parsed.positionals[0] ?? fail(2, 'wait needs a session id.');
       const params = new URLSearchParams();
-      for (const name of ['text', 'regex', 'quiet', 'timeout', 'debounce', 'prompt'] as const) {
+      for (const name of ['text', 'regex', 'quiet', 'timeout', 'debounce', 'prompt', 'stalled'] as const) {
         const value = parsed.flags.get(name);
         if (value !== undefined) params.set(name, String(value));
       }
@@ -583,6 +591,7 @@ async function main(): Promise<void> {
         // anything yet"), when it has one. It goes to stderr, with the outcome
         // line.
         if (typeof result['detail'] === 'string') console.error(result['detail']);
+        if (result['stalled'] !== undefined) console.error(stallLine(result['stalled'] as StallState));
         const detected = result['prompt'] as { question: string; options: string[]; selectedOption?: number } | undefined;
         if (detected !== undefined) {
           // stderr, like the outcome line: stdout stays the screen alone, so

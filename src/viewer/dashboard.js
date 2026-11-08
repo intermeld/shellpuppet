@@ -586,7 +586,9 @@
     const summary = item.summary;
     item.label.textContent = summary.label || summary.id;
     item.purpose.textContent = summary.purpose || '';
-    item.badge.textContent = attention(item) ? '● Waiting' : '';
+    item.badge.textContent = summary.stalled ? '● Stalled' : attention(item) ? '● Waiting' : '';
+    item.badge.title = summary.stalled
+      ? `${summary.stalled.reason} since ${summary.stalled.since}: ${summary.stalled.description}` : '';
     item.card.classList.toggle('attention', attention(item));
     item.card.classList.toggle('selected', selected === item.id);
     item.card.classList.toggle('ended', summary.exited === true);
@@ -605,14 +607,15 @@
   }
   function attention(item) {
     const prompt = item.summary.waitingOnPrompt;
-    return Boolean(prompt && prompt.waitingMs >= 20_000);
+    return Boolean(item.summary.stalled || (prompt && prompt.waitingMs >= 20_000));
   }
   function updateAttention() {
     for (const item of panes.values()) updateCard(item);
     const count = sorted().filter(attention).length;
-    attentionCount.textContent = count ? `${count} waiting` : '';
+    const state = sorted().some(item => item.summary.stalled) ? 'need attention' : 'waiting';
+    attentionCount.textContent = count ? `${count} ${state}` : '';
     const focus = panes.get(selected);
-    document.title = `${count ? `${count} waiting · ` : ''}${focus?.label.textContent || 'Dashboard'} · ShellPuppet`;
+    document.title = `${count ? `${count} ${state} · ` : ''}${focus?.label.textContent || 'Dashboard'} · ShellPuppet`;
   }
   function select(id, focusTerminal = false) {
     if (!panes.has(id)) return;

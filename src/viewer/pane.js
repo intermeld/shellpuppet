@@ -8,7 +8,8 @@
  * Wire protocol: BINARY WebSocket frames carry terminal bytes (snapshots, the
  * live stream and the exit notice); TEXT frames are JSON control messages:
  * `identity`, `geometry`, `input-source`, `input-refused`, `exited`,
- * `prompt-stall` and `prompt-clear`. What this pane sends is text: a JSON
+ * `prompt-stall`, `prompt-clear`, `session-stalled` and `session-stall-clear`.
+ * What this pane sends is text: a JSON
  * resize message, or bytes for the program, which are either keystrokes or
  * the terminal's own answers to the program's queries. The daemon tells those
  * two apart.
@@ -106,6 +107,7 @@ window.ShellPuppetPane = (() => {
     let sessionEnded = false;
     let inputFailed = false;
     let promptWaiting = false;
+    let providerStall = null;
     let gridCols = 0;
     let gridRows = 0;
     let gridMax = { cols: Infinity, rows: Infinity };
@@ -131,7 +133,7 @@ window.ShellPuppetPane = (() => {
     };
 
     const refreshTitle = () => {
-      const prefix = sessionEnded ? '[ENDED] ' : promptWaiting ? '[ANSWER ME] ' : '';
+      const prefix = sessionEnded ? '[ENDED] ' : promptWaiting ? '[ANSWER ME] ' : providerStall ? '[STALLED] ' : '';
       onTitleChange(prefix + identityTitle);
     };
     refreshTitle();
@@ -214,11 +216,33 @@ window.ShellPuppetPane = (() => {
     };
 
     const clearPromptAlert = () => {
+      promptWaiting = false;
+      if (providerStall) { showStallAlert(providerStall); return; }
       if (!elements.promptAlert) return;
       elements.promptAlert.hidden = true;
       elements.promptAlert.textContent = '';
       promptWaiting = false;
       onAttentionChange(false);
+      refreshTitle();
+    };
+
+    const showStallAlert = (stalled) => {
+      providerStall = stalled;
+      if (!elements.promptAlert || promptWaiting) return;
+      elements.promptAlert.textContent = `Stalled: ${stalled.reason} since ${stalled.since}. ${stalled.description}`;
+      elements.promptAlert.hidden = false;
+      positionNotices();
+      onAttentionChange(true);
+      refreshTitle();
+    };
+
+    const clearStallAlert = () => {
+      providerStall = null;
+      if (!promptWaiting && elements.promptAlert) {
+        elements.promptAlert.hidden = true;
+        elements.promptAlert.textContent = '';
+      }
+      onAttentionChange(promptWaiting);
       refreshTitle();
     };
 
@@ -687,6 +711,7 @@ window.ShellPuppetPane = (() => {
       ws.binaryType = 'arraybuffer';
 
       ws.onopen = () => {
+        clearStallAlert();
         everConnected = true;
         if (elements.dot) elements.dot.classList.remove('off');
         if (elements.banner) elements.banner.hidden = true;
@@ -750,6 +775,10 @@ window.ShellPuppetPane = (() => {
             showPromptAlert(control.question, control.waitingMs, control.options);
           } else if (control && control.type === 'prompt-clear') {
             clearPromptAlert();
+          } else if (control && control.type === 'session-stalled') {
+            showStallAlert(control.stalled);
+          } else if (control && control.type === 'session-stall-clear') {
+            clearStallAlert();
           }
         } catch {
           // Unknown text frame: ignore rather than corrupt the terminal.

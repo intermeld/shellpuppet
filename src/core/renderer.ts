@@ -68,6 +68,8 @@ export interface StyledLine {
   spans: StyleSpan[];
   /** xterm says this row continues the physical row above it. */
   wrapped?: boolean;
+  /** Spaces trimmed from a row that continues onto the next physical row. */
+  wrapPadding?: number;
 }
 
 /** The rendered viewport plus cursor state (screen-level, not session-level). */
@@ -231,6 +233,45 @@ export class ScreenRenderer {
     return { view: captured.view, state, cols: captured.cols, rows: captured.rows };
   }
 
+  /** Viewport text without prompt detection or styled row materialisation. */
+  plainViewport(options: { joinWrapped?: boolean; skipClipped?: boolean } = {}): string[] {
+    const buffer = this.term.buffer.active;
+    if (options.joinWrapped) {
+      const lines: string[] = [];
+      let clipped = options.skipClipped === true;
+      for (let i = 0; i < this.term.rows; i++) {
+        const line = buffer.getLine(buffer.baseY + i);
+        // The leading continuation changes length as a native redraw scrolls
+        // the viewport. It cannot identify a change to the live bottom block.
+        if (clipped && line?.isWrapped) continue;
+        clipped = false;
+        const text = line?.translateToString(!buffer.getLine(buffer.baseY + i + 1)?.isWrapped) ?? '';
+        if (line?.isWrapped && lines.length > 0) lines[lines.length - 1] += text;
+        else lines.push(text);
+      }
+      return lines;
+    }
+    return Array.from({ length: this.term.rows }, (_, i) =>
+      buffer.getLine(buffer.baseY + i)?.translateToString(true) ?? '');
+  }
+
+  /** Probe only the marked viewport rows; no style objects or history scan. */
+  hasForeground(rows: readonly number[], colours: readonly string[]): boolean {
+    const buffer = this.term.buffer.active;
+    const cell = buffer.getNullCell();
+    for (const row of rows) {
+      const line = buffer.getLine(buffer.baseY + row);
+      if (line === undefined) continue;
+      for (let x = 0; x < line.length; x++) {
+        line.getCell(x, cell);
+        if (!cell.getChars().trim()) continue;
+        const fg = colourOf(cell.isFgDefault(), cell.isFgRGB(), cell.getFgColor());
+        if (fg !== null && colours.includes(fg)) return true;
+      }
+    }
+    return false;
+  }
+
   /** Render the visible viewport (the bottom page when scrolled fully down). */
   snapshot(): RenderedScreen {
     const buffer = this.term.buffer.active;
@@ -297,7 +338,7 @@ export class ScreenRenderer {
    * written, scrollback included, as `lastLines` takes them. Text matches
    * the screen text before selection annotations are added for text readers.
    */
-  styledLines(options: { above?: number; last?: number } = {}): { lines: StyledLine[]; firstVisible: number } {
+  styledLines(options: { above?: number; last?: number; extendWrapped?: boolean } = {}): { lines: StyledLine[]; firstVisible: number } {
     const buffer = this.term.buffer.active;
     let start: number;
     let end: number;
@@ -317,7 +358,7 @@ export class ScreenRenderer {
     // A read can begin in the middle of a soft-wrapped logical line. Include
     // its parent as context so the reasoning filter can classify the visible
     // continuation. The walk stops at the finite buffer boundary.
-    if (options.above !== undefined || options.last !== undefined) {
+    if (options.extendWrapped !== false && (options.above !== undefined || options.last !== undefined)) {
       while (start > 0 && buffer.getLine(start)?.isWrapped) start--;
     }
     if (options.last === undefined) firstVisible = buffer.baseY - start;
@@ -350,7 +391,9 @@ export class ScreenRenderer {
         kept.push({ ...span, to: Math.min(span.to, trimmed.length) });
       }
       lines.push({ text: trimmed, spans: kept,
-        ...(line.isWrapped ? { wrapped: true } : {}) });
+        ...(line.isWrapped ? { wrapped: true } : {}),
+        ...(buffer.getLine(y + 1)?.isWrapped && text.length > trimmed.length
+          ? { wrapPadding: text.length - trimmed.length } : {}) });
     }
     if (options.last === undefined) {
       while (lines.length > firstVisible && lines[lines.length - 1]?.text.trim() === '') lines.pop();
