@@ -109,12 +109,14 @@ describe('live refusal regressions', () => {
   it('does not schedule stall validation for busy frames without candidate ink', async () => {
     const { session, draw } = make();
     const refresh = vi.spyOn(session as unknown as { refreshStall(): void }, 'refreshStall');
+    const plain = vi.spyOn(ScreenRenderer.prototype, 'plainViewport');
     for (let i = 0; i < 12; i++) {
       await draw(`\x1b[2J\x1b[H  ┃  Explain the ✗ Error example.\r\n     Working ${i}\r\n   esc to interrupt`);
       await sleep(30);
     }
     await sleep(300);
     expect(refresh).not.toHaveBeenCalled();
+    expect(plain).not.toHaveBeenCalled();
   });
   it('can announce another identical refusal after input and an ink-free busy turn', async () => {
     const { session, transitions, draw } = make();
@@ -125,6 +127,12 @@ describe('live refusal regressions', () => {
     await session.write('x');
     await draw('\x1b[2J\x1b[H  ┃  A new task.\r\n   esc to interrupt');
     await sleep(400);
+    const plain = vi.spyOn(ScreenRenderer.prototype, 'plainViewport');
+    for (let i = 0; i < 12; i++) {
+      await draw(`\x1b[3;1H   esc to interrupt ${i}\x1b[K`);
+      await sleep(30);
+    }
+    expect(plain).not.toHaveBeenCalled();
     await draw(refusal.replace('Summarise the sample.', 'A new task.'));
     await sleep(1400);
     const next = session.getStalled();
