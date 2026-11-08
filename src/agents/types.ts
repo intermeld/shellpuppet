@@ -52,9 +52,9 @@ export interface StallSignature {
   reason: string;
   /** Fixed product wording. Never supplied by the terminal. */
   description: string;
-  /** Cheap visible marker check before reading styled context or prompts. */
+  /** Complete visible marker row, excluding trailing space, before styled reads. */
   marker: { text: string; fg: string[] };
-  /** Built-in cosmetic controls, excluded from identity and repaint comparison. */
+  /** Anchored controls; capture groups 1 and 2 retain the semantic row prefix. */
   cosmetic?: RegExp;
   before: LineTest;
   rows: LineTest[];

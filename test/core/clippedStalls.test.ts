@@ -102,7 +102,12 @@ for (const end of ['refusal replaced', 'new footer', 'busy', 'prompt', 'new tran
     else if (end === 'new transcript') await draw(`\x1b[${row('▣  Build') - 1};1H\x1b[2K     A newer answer follows.`);
     else if (end === 'white suggestion') await draw(suggestion(composer - 2, '238;238;238'));
     else await draw(`\x1b[${row('✗ Error') - 1};1H\x1b[2K`);
-    if (end !== 'white suggestion' && end !== 'missing error row' && end !== 'new footer') expect(session.getStalled()).toBeUndefined();
+    if (end === 'new footer') {
+      expect(session.getStalled()).toBe(state);
+      // Include the first coalesced check: it must request confirmation.
+      await sleep(100);
+      expect(session.getStalled()).toBe(state);
+    } else if (end !== 'white suggestion' && end !== 'missing error row') expect(session.getStalled()).toBeUndefined();
     await sleep(1400);
     expect(session.getStalled()).toBeUndefined();
     expect(transitions).toEqual([state, undefined]);

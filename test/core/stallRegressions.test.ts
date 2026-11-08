@@ -33,6 +33,105 @@ afterEach(async () => {
 });
 
 describe('live refusal regressions', () => {
+  it('keeps a notice when a user prompt mentions the busy status', async () => {
+    const { session, transitions, draw } = make();
+    await draw(refusal);
+    await sleep(1400);
+    const state = session.getStalled();
+    expect(state).toBeDefined();
+    await draw(refusal.replace('Summarise the sample.', 'Explain esc to interrupt in the sample.'));
+    await sleep(600);
+    expect(transitions).toEqual([state]);
+  });
+  it('treats a copy symbol inside ordinary transcript text as new output', async () => {
+    const { session, draw } = make();
+    const screen = refusal.replace('Reading the sample.', 'Reading the sample. ⎘ first');
+    await draw(screen);
+    await sleep(1400);
+    expect(session.getStalled()).toBeDefined();
+    await draw(screen.replace('⎘ first', '⎘ second'));
+    expect(session.getStalled()).toBeUndefined();
+  });
+  it('keeps a notice when ordinary user text containing the error marker is redrawn alone', async () => {
+    const { session, transitions, draw } = make();
+    const prompt = 'Explain the ✗ Error message shown by the sample.';
+    const screen = refusal.replace('Summarise the sample.', prompt);
+    await draw(screen);
+    await sleep(1400);
+    const state = session.getStalled();
+    expect(state).toBeDefined();
+    await draw(screen.replace(prompt, prompt.slice(0, -8)));
+    expect(session.getStalled()).toBe(state);
+    await draw(screen.slice(0, screen.indexOf('\r\n')));
+    expect(session.getStalled()).toBe(state);
+    await sleep(80);
+    await draw(screen);
+    await sleep(600);
+    expect(transitions).toEqual([state]);
+  });
+  it('cancels presentation validation when a native partial frame is restored', async () => {
+    const { session, transitions, draw } = make();
+    await draw(refusal);
+    await sleep(1400);
+    const state = session.getStalled();
+    expect(state).toBeDefined();
+    const styled = vi.spyOn(ScreenRenderer.prototype, 'styledLines');
+    // First invalid check, then restoration before its confirmation deadline.
+    await draw('\x1b[2J\x1b[H');
+    await sleep(80);
+    await draw(refusal);
+    styled.mockClear();
+    for (let i = 0; i < 12; i++) {
+      await draw('\x1b[2J\x1b[H');
+      await draw(refusal.replace('⎘ copy', `⎘ copy ${i}`));
+      await sleep(30);
+    }
+    await sleep(300);
+    expect(styled).not.toHaveBeenCalled();
+    expect(transitions).toEqual([state]);
+    // Cancelling an obsolete check must not disable a later persistent loss.
+    await draw('\x1b[2J\x1b[H');
+    await sleep(600);
+    expect(session.getStalled()).toBeUndefined();
+  });
+  it('confirms a changed footer despite repeated identical invalid frames', async () => {
+    const { session, draw } = make();
+    await draw(refusal);
+    await sleep(1400);
+    const state = session.getStalled();
+    expect(state).toBeDefined();
+    for (let i = 0; i < 20; i++) {
+      await draw(refusal.replace('17m 17s', '2s'));
+      await sleep(30);
+    }
+    expect(session.getStalled()).toBeUndefined();
+  });
+  it('does not schedule stall validation for busy frames without candidate ink', async () => {
+    const { session, draw } = make();
+    const refresh = vi.spyOn(session as unknown as { refreshStall(): void }, 'refreshStall');
+    for (let i = 0; i < 12; i++) {
+      await draw(`\x1b[2J\x1b[H  ┃  Explain the ✗ Error example.\r\n     Working ${i}\r\n   esc to interrupt`);
+      await sleep(30);
+    }
+    await sleep(300);
+    expect(refresh).not.toHaveBeenCalled();
+  });
+  it('can announce another identical refusal after input and an ink-free busy turn', async () => {
+    const { session, transitions, draw } = make();
+    await draw(refusal);
+    await sleep(1400);
+    const original = session.getStalled();
+    expect(original).toBeDefined();
+    await session.write('x');
+    await draw('\x1b[2J\x1b[H  ┃  A new task.\r\n   esc to interrupt');
+    await sleep(400);
+    await draw(refusal.replace('Summarise the sample.', 'A new task.'));
+    await sleep(1400);
+    const next = session.getStalled();
+    expect(next).toBeDefined();
+    expect(next?.since).not.toBe(original?.since);
+    expect(transitions).toEqual([original, undefined, next]);
+  });
   it('keeps an established notice through persistent user-turn text changes', async () => {
     const { session, transitions, draw } = make();
     await draw(refusal);

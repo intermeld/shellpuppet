@@ -16,7 +16,7 @@
 
 import { moduleFor } from '../agents/index.js';
 import type { AgentModule, AgentSource } from '../agents/types.js';
-import { validateStall, possibleStall, resolveSessionAgent, signatureForSession, stallScreenContent, stallTranscriptContent, stallPresentationRows, StallTracker } from './reasoning.js';
+import { validateStall, possibleStall, resolveSessionAgent, signatureForSession, stallTranscriptContent, stallPresentationRows, StallScreenCache, StallTracker } from './reasoning.js';
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -717,6 +717,7 @@ export class Session implements WaitTarget {
   private stallTranscript: string | undefined;
   private stallValidatedTranscript: string | undefined;
   private stallValidationPending = false;
+  private readonly stallScreen = new StallScreenCache();
 
   /** Whether the program has hidden the cursor (DECTCEM off), carried to viewers. */
   private cursorHidden = false;
@@ -1260,7 +1261,7 @@ export class Session implements WaitTarget {
     // Reflow is layout, including when it clips the recognised context. Take
     // the new comparison baseline so a later cursor-only write stays layout.
     if (this.agentModule?.stalls !== undefined) {
-      this.stallContent = stallScreenContent(this.renderer.plainViewport(), this.agentModule.stalls);
+      this.stallContent = this.stallScreen.content(this.renderer.plainViewport(), this.agentModule.stalls);
       this.stallTranscript = this.readStallTranscript();
       if (this.stallState === undefined) this.scheduleStall();
     }
@@ -1318,17 +1319,39 @@ export class Session implements WaitTarget {
 
   private scheduleStall(): void {
     if (this.exitedFlag || this.isKilled) return;
+    if (!this.stallTracker.tracking) {
+      // Coalesce discovery screening too. An ordinary repaint must neither
+      // rebuild viewport rows per chunk nor enter validation without ink.
+      if (this.stallTimer === null) {
+        this.stallTimer = setTimeout(() => {
+          this.clearStallTimer();
+          this.stallNextCheck = Date.now() + 250;
+          if (this.hasStallInk(this.renderer.plainViewport())) this.refreshStall();
+          // Absence also releases input suppression for a later occurrence.
+          else this.stallTracker.observe(null);
+        }, Math.max(0, this.stallNextCheck - Date.now()));
+        this.stallTimer.unref();
+      }
+      return;
+    }
     // Physical row changes can be composer presentation. Retain the candidate
     // and clock until coalesced validation compares its canonical identity.
     // Only new transcript text (including busy markers and prompts) clears at
     // once; known cosmetic repaints need no full validation.
     if (this.stallTracker.tracking) {
       const plain = this.renderer.plainViewport();
-      const content = stallScreenContent(plain, this.agentModule!.stalls!);
+      const content = this.stallScreen.content(plain, this.agentModule!.stalls!);
       if (content === this.stallContent || content === this.stallValidatedContent) {
         // A native terminal can redraw its pre-resize text after xterm has
         // reflowed padded rows and clipped the viewport. Both are layout.
         this.stallContent = content;
+        if (content === this.stallValidatedContent && this.stallState !== undefined) {
+          // The invalidating frame has been restored. A pending presentation
+          // check is obsolete; a settling candidate still needs its timer.
+          this.stallValidationPending = false;
+          this.clearStallTimer();
+          this.stallTranscript = this.stallValidatedTranscript;
+        }
         return;
       }
       this.stallContent = content;
@@ -1346,6 +1369,11 @@ export class Session implements WaitTarget {
     this.stallTimer.unref();
   }
 
+  private hasStallInk(plain: readonly string[]): boolean {
+    return this.agentModule!.stalls!.some(shape => this.renderer.hasForeground(
+      plain.flatMap((line, row) => line.trimEnd() === shape.marker.text ? [row] : []), shape.marker.fg));
+  }
+
   private refreshStall(): void {
     this.clearStallTimer();
     if (this.exitedFlag || this.isKilled) return;
@@ -1353,9 +1381,8 @@ export class Session implements WaitTarget {
     const signature = signatureForSession(this);
     if (signature === null) { this.publishStall(undefined); return; }
     const plain = this.renderer.plainViewport();
-    this.stallContent = stallScreenContent(plain, this.agentModule!.stalls!);
-    const ink = possibleStall(plain, signature) && this.agentModule!.stalls!.some(shape =>
-      this.renderer.hasForeground(plain.flatMap((line, row) => line.includes(shape.marker.text) ? [row] : []), shape.marker.fg));
+    this.stallContent = this.stallScreen.content(plain, this.agentModule!.stalls!);
+    const ink = this.hasStallInk(plain) && possibleStall(plain, signature);
     let candidate = null;
     if (ink) {
       const { lines, firstVisible } = this.renderer.styledLines({ above: 128, extendWrapped: false });
@@ -1366,7 +1393,7 @@ export class Session implements WaitTarget {
       this.stallTranscript = this.readStallTranscript(plain);
       // Keep the complete-context baselines across an inconclusive read: a
       // native redraw on growth can restore that viewport after clipped reflow.
-      if (!('inconclusive' in candidate)) {
+      if (!('inconclusive' in candidate) && (this.stallState === undefined || this.stallTracker.matchesBlock(candidate))) {
         this.stallValidatedContent = this.stallContent;
         this.stallValidatedTranscript = this.stallTranscript;
       }
