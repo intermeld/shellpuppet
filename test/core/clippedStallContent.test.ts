@@ -36,18 +36,23 @@ for (const marker of markers) {
     } finally { renderer.dispose(); }
   });
 
-  it(`still rejects a complete ${marker.name} row after the unknown continuation`, async () => {
+  it(`checks the framing of a complete ${marker.name} row after the unknown continuation`, async () => {
     const renderer = new ScreenRenderer({ cols: 80, rows: 24 });
     try {
       await renderer.write(fixture.replace('Summarise the sample.', 'Neutral sample text '.repeat(670))
-        .replace('     Reading the sample.', `     ${marker.ink}${marker.text}\x1b[0m`));
+        .replace('     Reading the sample.', `${marker.name === 'tool panel' ? '  ' : '     '}${marker.ink}${marker.text}\x1b[0m`));
       const bounded = renderer.styledLines({ above: 128, extendWrapped: false });
       expect(bounded.lines[0]?.wrapped).toBe(true);
       const complete = bounded.lines.findIndex(line => !line.wrapped && line.text.trim() === marker.text);
       expect(complete).toBeGreaterThan(0);
-      expect(validateStall(bounded.lines, signature, false, bounded.firstVisible)).toBeNull();
+      const expected: unknown = marker.name === 'tool panel' ? null : expect.objectContaining({ inconclusive: true });
+      expect(validateStall(bounded.lines, signature, false, bounded.firstVisible)).toEqual(expected);
+      // Literal punctuation does not prove a quotation or a tool. Neither
+      // result may discover without the user-turn boundary; a real dark
+      // gutter still disqualifies the refusal even when that boundary is lost.
+      expect(detectStall(bounded.lines, signature, false, bounded.firstVisible)).toBeNull();
       // A complete first row must also be checked when the turn is missing.
-      expect(validateStall(bounded.lines.slice(complete), signature, false, Math.max(0, bounded.firstVisible - complete))).toBeNull();
+      expect(validateStall(bounded.lines.slice(complete), signature, false, Math.max(0, bounded.firstVisible - complete))).toEqual(expected);
     } finally { renderer.dispose(); }
   });
 }

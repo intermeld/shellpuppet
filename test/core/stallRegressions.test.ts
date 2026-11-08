@@ -52,6 +52,21 @@ describe('live refusal regressions', () => {
     await draw(screen.replace('⎘ first', '⎘ second'));
     expect(session.getStalled()).toBeUndefined();
   });
+  it('clears new output when a validation timer precedes the deferred comparison', async () => {
+    const { session, transitions, draw } = make();
+    await draw(refusal);
+    await sleep(1400);
+    const state = session.getStalled();
+    expect(state).toBeDefined();
+    // A due timer can run before the next-tick output task. It must compare
+    // the old transcript before updating either validated baseline.
+    const internal = session as unknown as { deferStall(): void; refreshStall(): void };
+    vi.spyOn(internal, 'deferStall').mockImplementation(() => {});
+    await draw(refusal.replace('Reading the sample.', 'Changed real output.'));
+    internal.refreshStall();
+    expect(transitions).toEqual([state, undefined]);
+    expect(session.getStalled()).toBeUndefined();
+  });
   it('keeps a notice when ordinary user text containing the error marker is redrawn alone', async () => {
     const { session, transitions, draw } = make();
     const prompt = 'Explain the ✗ Error message shown by the sample.';
@@ -100,11 +115,71 @@ describe('live refusal regressions', () => {
     await sleep(1400);
     const state = session.getStalled();
     expect(state).toBeDefined();
+    const start = performance.now();
+    const transitions: { state: StallState | undefined; elapsed: number }[] = [];
+    session.onStall(next => transitions.push({ state: next, elapsed: performance.now() - start }));
     for (let i = 0; i < 20; i++) {
       await draw(refusal.replace('17m 17s', '2s'));
       await sleep(30);
     }
-    expect(session.getStalled()).toBeUndefined();
+    // Under load the loop can run past settlement of the *new* footer. The
+    // old occurrence must clear at its confirmation deadline either way.
+    expect(transitions.length).toBeGreaterThan(0);
+    expect(transitions[0]?.state).toBeUndefined();
+    expect(transitions[0]?.elapsed).toBeLessThan(1000);
+    const next = session.getStalled();
+    if (next !== undefined) {
+      expect(next.since).not.toBe(state?.since);
+      expect(transitions[1]?.state).toBe(next);
+      expect(transitions[1]!.elapsed - transitions[0]!.elapsed).toBeGreaterThanOrEqual(1000);
+    }
+  });
+  it('confirms footer loss while retaining the independently framed error block', async () => {
+    const { session, transitions, draw } = make();
+    await draw(refusal);
+    await sleep(1400);
+    const state = session.getStalled();
+    expect(state).toBeDefined();
+    const rows = await session.viewportLines();
+    const footer = rows.findIndex(row => row.includes('▣  Build')) + 1;
+    await draw(`\x1b[${footer};1H\x1b[2K`);
+    expect(session.getStalled()).toBe(state);
+    await sleep(80);
+    await draw(refusal);
+    await sleep(400);
+    expect(transitions).toEqual([state]);
+    await draw(`\x1b[${footer};1H\x1b[2K`);
+    await sleep(600);
+    expect(transitions).toEqual([state, undefined]);
+  });
+  it('confirms erased error rows while the introduction and footer retain their positions', async () => {
+    const { session, transitions, draw } = make();
+    await draw(refusal);
+    await sleep(1400);
+    const state = session.getStalled();
+    expect(state).toBeDefined();
+    const rows = await session.viewportLines();
+    const marker = rows.findIndex(row => row.includes('✗ Error'));
+    const erased = Array.from({ length: 5 }, (_, i) => `\x1b[${marker + i};1H\x1b[2K`).join('');
+    await draw(erased);
+    expect(session.getStalled()).toBe(state);
+    await sleep(80);
+    await draw(refusal);
+    await sleep(400);
+    expect(transitions).toEqual([state]);
+    await draw(erased);
+    await sleep(600);
+    expect(transitions).toEqual([state, undefined]);
+  });
+  it('clears a printed introduction after a surviving error block even with blank padding', async () => {
+    const { session, transitions, draw } = make();
+    await draw(refusal);
+    await sleep(1400);
+    const state = session.getStalled();
+    expect(state).toBeDefined();
+    await draw(refusal.replace('     ▣', '     The request was rejected because it was considered high risk' +
+      '\r\n'.repeat(7) + '     ▣'));
+    expect(transitions).toEqual([state, undefined]);
   });
   it('does not schedule stall validation for busy frames without candidate ink', async () => {
     const { session, draw } = make();
@@ -178,6 +253,23 @@ describe('live refusal regressions', () => {
   const suggestion = '\x1b[16;1H  \x1b[38;2;255;128;64m┃\x1b[0m  ' +
     '\x1b[38;2;128;128;128mReview the sample. (Tab to accept)\x1b[0m\x1b[K';
   const blankInput = '\x1b[16;1H  \x1b[38;2;255;128;64m┃\x1b[0m\x1b[K';
+  it('keeps partial grey composer presentation inside an independently framed panel', async () => {
+    const { session, transitions, draw } = make();
+    const screen = fixture('sidebar');
+    await draw(screen);
+    await sleep(1400);
+    const state = session.getStalled();
+    expect(state).toBeDefined();
+    const withSuggestion = (text: string) => screen.split('\r\n').map((line, row) => row === 15
+      ? '  \x1b[38;2;255;128;64m┃\x1b[0m  \x1b[38;2;128;128;128m' + text + '\x1b[0m' +
+        ' '.repeat(83 - 5 - text.length) + '█ Example panel' : line).join('\r\n');
+    await draw(withSuggestion('Review the sam'));
+    expect(session.getStalled()).toBe(state);
+    await sleep(80);
+    await draw(withSuggestion('Review the sample. (Tab to accept)'));
+    await sleep(600);
+    expect(transitions).toEqual([state]);
+  });
   it('confirms partial grey composer text before clearing an established notice', async () => {
     const { session, transitions, draw } = make();
     await draw(refusal);
@@ -196,6 +288,37 @@ describe('live refusal regressions', () => {
     await sleep(600);
     expect(session.getStalled()).toBeUndefined();
     expect(transitions).toEqual([state, undefined]);
+  });
+  it('keeps a partial grey composer row whose padding wraps during a native redraw', async () => {
+    const { session, transitions, draw } = make();
+    await draw(refusal);
+    await sleep(1400);
+    const state = session.getStalled();
+    expect(state).toBeDefined();
+    // ConPTY can pad a shortened suggestion to the old width before drawing
+    // the next row. Its logical row and physical row then have different text.
+    const partial = '  \x1b[38;2;255;128;64m┃\x1b[0m  \x1b[38;2;128;128;128mReview the sam';
+    await draw('\x1b[16;1H' + partial + ' '.repeat(120 - stripVTControlCharacters(partial).length) + ' \x1b[K\x1b[0m');
+    expect(session.getStalled()).toBe(state);
+    await sleep(80);
+    await draw(refusal);
+    await sleep(600);
+    expect(transitions).toEqual([state]);
+  });
+  it('keeps the framed status region while the composer closing edge is redrawn', async () => {
+    const { session, transitions, draw } = make();
+    await draw(refusal);
+    await sleep(1400);
+    const state = session.getStalled();
+    expect(state).toBeDefined();
+    await draw('\x1b[18;1H\x1b[2K  \x1b[38;2;255;128;64m┃\x1b[0m');
+    expect(session.getStalled()).toBe(state);
+    await sleep(80);
+    await draw(refusal);
+    await sleep(600);
+    expect(transitions).toEqual([state]);
+    await draw('\r\n   ctrl+p settings');
+    expect(session.getStalled()).toBeUndefined();
   });
   const candidate = async (session: Session) => {
     const { lines, firstVisible } = await session.styledScreen(128);

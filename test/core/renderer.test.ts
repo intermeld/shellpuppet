@@ -194,3 +194,20 @@ describe('ScreenRenderer.flush', () => {
     expect(r.snapshot().screen).toBe('first second');
   });
 });
+
+describe('ScreenRenderer.styledLines', () => {
+  it('keeps string offsets and visible padding styles across wide and combined characters', async () => {
+    const r = makeRenderer(9, 5);
+    await r.write('\x1b[31m你🙂e\u0301\x1b[44m  \x1b[0mX\x1b[42m  Y');
+    const { lines } = r.styledLines();
+    expect(lines.map(line => line.text)).toEqual(['你🙂e\u0301  X', 'Y']);
+    expect(lines[0]!.wrapPadding).toBe(2);
+    expect(lines[1]!.wrapped).toBe(true);
+    expect(lines[0]!.spans.map(({ from, to, fg, bg }) => ({ from, to, fg, bg }))).toEqual([
+      { from: 0, to: 5, fg: 'p1', bg: null },
+      { from: 5, to: 7, fg: 'p1', bg: 'p4' },
+      { from: 7, to: 8, fg: null, bg: null },
+    ]);
+    expect(lines[1]!.spans[0]).toMatchObject({ from: 0, to: 1, fg: null, bg: 'p2' });
+  });
+});

@@ -16,7 +16,7 @@
 
 import { moduleFor } from '../agents/index.js';
 import type { AgentModule, AgentSource } from '../agents/types.js';
-import { validateStall, possibleStall, resolveSessionAgent, signatureForSession, stallTranscriptContent, stallPresentationRows, StallScreenCache, StallTracker } from './reasoning.js';
+import { validateStall, possibleStall, resolveSessionAgent, signatureForSession, stallTranscriptContent, StallScreenCache, StallTracker } from './reasoning.js';
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -711,6 +711,7 @@ export class Session implements WaitTarget {
   private readonly stallTracker = new StallTracker();
   private stallState: StallState | undefined;
   private stallTimer: NodeJS.Timeout | null = null;
+  private stallScheduled: Promise<void> | null = null;
   private stallNextCheck = 0;
   private stallContent: string | undefined;
   private stallValidatedContent: string | undefined;
@@ -901,7 +902,7 @@ export class Session implements WaitTarget {
       const rendered = this.renderer.write(data);
       if (this.agentModule?.stalls !== undefined) {
         void rendered.then(() => {
-          if (this.stallTracker.tracking || this.stallInk?.possible) this.scheduleStall();
+          if (this.stallTracker.tracking || this.stallInk?.possible) this.deferStall();
         }).catch(() => {
           this.publishStall(undefined);
           this.logger.warn('stall reading failed', { id: this.id });
@@ -1303,9 +1304,35 @@ export class Session implements WaitTarget {
 
   getStalled(): StallState | undefined { return this.stallState; }
 
+  /** Let PTY delivery finish before comparing a rendered batch. */
+  private deferStall(): void {
+    if (this.stallScheduled !== null) return;
+    this.stallScheduled = new Promise(resolve => {
+      setImmediate(() => {
+        this.stallScheduled = null;
+        try { this.scheduleStall(); }
+        catch { this.publishStall(undefined); this.logger.warn('stall reading failed', { id: this.id }); }
+        finally { resolve(); }
+      });
+    });
+  }
+
   private clearStallTimer(): void {
     if (this.stallTimer !== null) clearTimeout(this.stallTimer);
     this.stallTimer = null;
+  }
+
+  /** Let ready I/O run before a due validation, retaining cancellation. */
+  private queueStallCheck(check: () => void, delay: number): void {
+    const timer = setTimeout(() => {
+      setImmediate(() => {
+        // Input, exit or a restored frame may have cancelled this deadline
+        // after it became due but before the queued validation can run.
+        if (this.stallTimer === timer) check();
+      });
+    }, delay);
+    this.stallTimer = timer;
+    timer.unref();
   }
 
   private publishStall(state: StallState | undefined): void {
@@ -1314,12 +1341,22 @@ export class Session implements WaitTarget {
     for (const listener of this.stallListeners) listener(state);
   }
 
-  private readStallTranscript(plain = this.renderer.plainViewport()): string {
+  private readStallTranscript(): string {
     const signature = signatureForSession(this) ?? undefined;
-    const presentation = signature === undefined ? undefined : stallPresentationRows(plain, signature,
-      (row, colours) => this.renderer.hasForeground([row], colours));
-    return stallTranscriptContent(this.renderer.plainViewport({ joinWrapped: true, skipClipped: true }),
-      this.agentModule!.stalls!, signature, presentation);
+    return stallTranscriptContent(this.renderer.framedViewport(this.agentModule!.stalls!.flatMap(shape => shape.frameColumns)),
+      this.agentModule!.stalls!, signature);
+  }
+
+  /** Both output tasks and due timers must compare before rebasing. */
+  private compareStallTranscript(): void {
+    const transcript = this.readStallTranscript();
+    if (transcript !== '' && transcript !== this.stallTranscript && transcript !== this.stallValidatedTranscript) {
+      this.stallTracker.invalidate();
+      this.publishStall(undefined);
+      this.stallValidationPending = false;
+      this.clearStallTimer();
+    }
+    this.stallTranscript = transcript;
   }
 
   private scheduleStall(): void {
@@ -1328,7 +1365,7 @@ export class Session implements WaitTarget {
       // Coalesce discovery screening too. An ordinary repaint must neither
       // rebuild viewport rows per chunk nor enter validation without ink.
       if (this.stallTimer === null) {
-        this.stallTimer = setTimeout(() => {
+        this.queueStallCheck(() => {
           this.clearStallTimer();
           this.stallNextCheck = Date.now() + 250;
           if (this.hasStallInk(this.renderer.plainViewport())) this.refreshStall();
@@ -1338,7 +1375,6 @@ export class Session implements WaitTarget {
             this.stallInk?.checkAbsent();
           }
         }, Math.max(0, this.stallNextCheck - Date.now()));
-        this.stallTimer.unref();
       }
       return;
     }
@@ -1363,18 +1399,10 @@ export class Session implements WaitTarget {
         return;
       }
       this.stallContent = content;
-      const transcript = this.readStallTranscript(plain);
-      if (transcript !== '' && transcript !== this.stallTranscript && transcript !== this.stallValidatedTranscript) {
-        this.stallTracker.invalidate();
-        this.publishStall(undefined);
-        this.stallValidationPending = false;
-        this.clearStallTimer();
-      }
-      this.stallTranscript = transcript;
+      this.compareStallTranscript();
     }
     if (this.stallTimer !== null) return;
-    this.stallTimer = setTimeout(() => this.refreshStall(), Math.max(0, this.stallNextCheck - Date.now()));
-    this.stallTimer.unref();
+    this.queueStallCheck(() => this.refreshStall(), Math.max(0, this.stallNextCheck - Date.now()));
   }
 
   private hasStallInk(plain: readonly string[]): boolean {
@@ -1389,7 +1417,19 @@ export class Session implements WaitTarget {
     const signature = signatureForSession(this);
     if (signature === null) { this.publishStall(undefined); return; }
     const plain = this.renderer.plainViewport();
-    this.stallContent = this.stallScreen.content(plain, this.agentModule!.stalls!);
+    const content = this.stallScreen.content(plain, this.agentModule!.stalls!);
+    if (this.stallState !== undefined && content === this.stallValidatedContent) {
+      // A due validation can beat the deferred output task to a restored
+      // frame. Cancel here too, before materialising its styled context.
+      this.stallContent = content;
+      this.stallTranscript = this.stallValidatedTranscript;
+      this.stallValidationPending = false;
+      return;
+    }
+    if (this.stallTracker.tracking && content !== this.stallContent && content !== this.stallValidatedContent) {
+      this.compareStallTranscript();
+    }
+    this.stallContent = content;
     const ink = this.hasStallInk(plain) && possibleStall(plain, signature);
     let candidate = null;
     if (ink) {
@@ -1398,7 +1438,7 @@ export class Session implements WaitTarget {
       if (candidate !== null && detectPrompt(plain.join('\n'), this.agent) !== null) candidate = null;
     }
     if (candidate !== null) {
-      this.stallTranscript = this.readStallTranscript(plain);
+      this.stallTranscript = this.readStallTranscript();
       // Keep the complete-context baselines across an inconclusive read: a
       // native redraw on growth can restore that viewport after clipped reflow.
       if (!('inconclusive' in candidate) && (this.stallState === undefined || this.stallTracker.matchesBlock(candidate))) {
@@ -1410,8 +1450,7 @@ export class Session implements WaitTarget {
     // invalidation at the next bounded check; output cannot postpone it.
     if (this.stallState !== undefined && !this.stallTracker.matchesBlock(candidate) && !this.stallValidationPending) {
       this.stallValidationPending = true;
-      this.stallTimer = setTimeout(() => this.refreshStall(), 250);
-      this.stallTimer.unref();
+      this.queueStallCheck(() => this.refreshStall(), 250);
       return;
     }
     this.stallValidationPending = false;
@@ -1419,8 +1458,7 @@ export class Session implements WaitTarget {
     if (!this.stallTracker.tracking) this.stallInk?.checkAbsent();
     const remaining = this.stallTracker.remaining();
     if (remaining !== null) {
-      this.stallTimer = setTimeout(() => this.refreshStall(), remaining);
-      this.stallTimer.unref();
+      this.queueStallCheck(() => this.refreshStall(), remaining);
     }
   }
 
@@ -1456,6 +1494,7 @@ export class Session implements WaitTarget {
 
   async snapshot(): Promise<ScreenSnapshot> {
     await this.renderer.flush();
+    await this.stallScheduled;
     const rendered = this.renderer.snapshot();
     // Every look at the screen is evidence for the stale-prompt guard. A
     // snapshot that finds no prompt, or a different one, is what lets a later
@@ -1484,6 +1523,7 @@ export class Session implements WaitTarget {
   /** Current viewport lines (for `terminal_find`). */
   async viewportLines(): Promise<string[]> {
     await this.renderer.flush();
+    await this.stallScheduled;
     return this.renderer.snapshot().lines;
   }
 

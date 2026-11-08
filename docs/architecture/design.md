@@ -628,8 +628,9 @@ real screen fixtures before they gain signatures.
 Detection recognises the refusal by its shape on screen, at and above the
 80x24 floor in ADR-009. It uses the existing reading engine's styled rows,
 composer, latest user-turn boundary and module busy rules. MiMo's content walk
-uses its own panel framing to distinguish tool listings and quotations from
-the live answer. A clipped context without a known turn boundary cannot
+uses its own panel framing and error ink to distinguish tool listings and
+quoted text from the live answer. Punctuation in ordinary content does not
+establish a tool, quotation or interface region. A clipped context without a known turn boundary cannot
 establish a new stall. The last transcript block must have the red
 left bar and red `✗ Error` marker, the provider refusal message and the
 completed `Build · <model> · <time>` footer directly above a current visible
@@ -649,7 +650,7 @@ no clear or further announcement while the canonical refusal identity is unchang
 If reflow clips the user-turn boundary beyond the bounded read, validation is
 inconclusive only when the available content walk, refusal block, footer and
 idle composer still qualify. A leading incomplete wrapped logical row has
-unknown context: its text cannot open or close a quotation, fence or tool panel.
+unknown context: its text cannot open or close a tool panel.
 Every complete available row still contributes to the content walk.
 An already settled stall with the same refusal
 and footer keeps its full identity and original `since`. Missing context
@@ -662,7 +663,15 @@ disappears or is replaced.
 
 Discovery and revalidation share a coalesced path of at most four checks per
 second. Known cosmetic controls and cursor-only repaints skip full validation.
-Semantic viewport rows are cached. A restored validated frame cancels obsolete
+Semantic viewport comparisons are cached. They run in a coalesced next-tick
+task after PTY delivery, and snapshot and viewport reads await that task.
+If only the already framed footer changes, unchanged normalised footer content
+reuses that comparison. The composer and panel framing must be byte-for-byte
+unchanged; any other row change re-establishes their ownership.
+Due validation also yields to ready I/O before running; input or restoration
+can still cancel that queued check. Its module-only precheck does not arm a
+second regex watchdog. Configured patterns in full validation keep their budget.
+A restored validated frame cancels obsolete
 presentation checks, while a still-invalid frame keeps its confirmation deadline.
 An untracked screen without candidate ink cannot queue validation. The renderer
 observes xterm's parsed foreground operations to avoid even viewport reads until
@@ -671,16 +680,30 @@ and reflow retain a conservative hint; only a rendered absence check releases it
 The hint cannot recognise a refusal or bypass styled validation. Marker rows
 match completely; footer controls and right-hand panel chrome are anchored to
 their screen positions so ordinary user text containing their symbols remains text.
+The user-echo gutter owns its entire run, including indented hard-newline
+continuations and terminal wraps. A side panel needs repeated dividers beside
+the composer frame, including a divider on its closing edge or mode row.
+Aligned glyphs in draft rows cannot establish a panel. Footer controls are removed only from the completed footer
+directly above that frame. Busy hints are checked in the status region, not
+inside prompt, answer or tool text. Real output retains its indentation and
+internal spaces; only terminal padding and empty rows are ignored.
 A different viewport retains the candidate and its clock pending validation
 unless cheap text comparison finds a transcript change, busy marker or prompt.
-This comparison excludes possible composer presentation using the module's
-idle and bottom-row text rules and joins terminal wraps. It omits a leading
+This comparison applies the module's idle and bottom-row rules only inside
+their established composer and status regions, and joins terminal wraps. It omits a leading
 wrapped continuation whose length changes as native redraws scroll the viewport;
 the bounded styled read still validates the available turn context. It does not prove
 the composer idle: coalesced styled validation still checks the full shape,
 including suggestion ink. Incomplete composer text with the module's suggestion
 ink also waits for validation; a partial paint is not new transcript output.
 The full idle text and style rules must still qualify at validation.
+If erasure leaves only the introduction and completed footer around empty error
+row slots, that loss also waits for confirmation. An introduction printed after
+a surviving error block remains new output.
+During a redraw, the styled mode row and input gutter retain ownership of the
+closing-edge slot and its single following status row. Discovery still requires
+the complete closing edge. The same settings phrase printed after that status
+row is transcript output.
 The same validated refusal and footer keep an established
 notice even when the complete user-turn text changes or its context is clipped.
 Reflowed text and the last fully validated turn provide comparison baselines for native
@@ -696,7 +719,10 @@ block disappears or is replaced.
 Non-empty real input, new transcript text, busy markers and prompts clear the
 state immediately. Busy screens, missing composer edges and absent candidate
 ink are rejected before styled history or prompt scans. Context reads are
-limited to the viewport and 128 preceding rows.
+limited to the viewport and 128 preceding rows. Styled reads stop attribute
+extraction at each row's right-trimmed text boundary; discarded padding has
+no style to validate. Visible whitespace styles and soft-wrap padding lengths
+are preserved.
 
 The session owns the settle clock and evaluates rendered output, so the
 list, waits and notifications share one state. `stalled` contains only

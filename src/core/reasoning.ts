@@ -453,6 +453,11 @@ function lineFits(line: StyledLine, test: CompiledLine): boolean {
   if (line.wrapped) return false;
   if (test.text !== undefined && !test.text.test(line.text)) return false;
   if (test.lead === undefined && test.body === undefined && test.word === undefined) return true;
+  if (test.lead !== undefined && test.body === undefined && test.word === undefined) {
+    const first = line.text.search(/\S/u);
+    const style = line.spans.find(span => span.from <= first && span.to > first);
+    return style !== undefined && styleFits(style, test.lead);
+  }
   const ink = inkStyles(line);
   if (ink.length === 0) return false;
   if (test.lead !== undefined && !styleFits(ink[0]!, test.lead)) return false;
@@ -764,6 +769,7 @@ export type AgentResult =
  * reasoning block; nothing else is ever returned in its place.
  */
 export function latestResult(lines: readonly StyledLine[], signature: CompiledSignature): AgentResult {
+  lines = moduleFor(signature.name)?.readingRules?.contentRegion?.(lines) ?? lines;
   const result = guarded<AgentResult>(signature, () => {
     const composer = composerAt(lines, signature);
     if (composer === null) {
@@ -913,7 +919,7 @@ export class StallTracker {
 }
 
 const compiledStalls = new WeakMap<StallSignature, {
-  before: CompiledLine; rows: CompiledLine[]; footer: CompiledLine; composer: CompiledLine; idle: CompiledLine[]; bottom: CompiledLine[];
+  before: CompiledLine; rows: CompiledLine[]; footer: CompiledLine; composer: CompiledLine; composerStatus?: CompiledLine; chrome: CompiledLine[]; idle: CompiledLine[]; bottom: CompiledLine[];
 }>();
 
 function stallTests(shape: StallSignature) {
@@ -924,6 +930,8 @@ function stallTests(shape: StallSignature) {
       rows: shape.rows.map(row => compileLine(row, 'stall.rows')),
       footer: compileLine(shape.footer, 'stall.footer'),
       composer: compileLine(shape.composer, 'stall.composer'),
+      composerStatus: shape.composerStatus === undefined ? undefined : compileLine(shape.composerStatus, 'stall.composerStatus'),
+      chrome: shape.chrome.map(row => compileLine(row, 'stall.chrome')),
       idle: shape.idle.map(row => compileLine(row, 'stall.idle')),
       bottom: shape.bottom.map(row => compileLine(row, 'stall.bottom')),
     };
@@ -933,24 +941,94 @@ function stallTests(shape: StallSignature) {
 }
 
 /** Cheap viewport comparison; cursor, styles and known controls are not output. */
-export function stallScreenContent(lines: readonly string[], shapes: readonly StallSignature[]): string {
-  return lines.map(line => {
+function stallScreenFrame(lines: readonly string[], shapes: readonly StallSignature[]): { content: string; footer: number } {
+  const framed = stallRegion(lines, shapes);
+  const composer = stallComposer(framed, shapes);
+  let footer = (composer?.chrome ?? 0) - 1;
+  while (footer >= 0 && blank(framed[footer])) footer--;
+  const content = framed.map((row, index) => {
+    let line = row.text;
     for (const shape of shapes) {
-      if (shape.cosmetic !== undefined) line = line.replace(shape.cosmetic, '$1$2');
+      if (index === footer && shape.cosmetic !== undefined) line = line.replace(shape.cosmetic, '$1');
     }
     return line.trimEnd();
   }).join('\n').trimEnd();
+  return { content, footer: framed.length === lines.length ? footer : -1 };
+}
+
+export function stallScreenContent(lines: readonly string[], shapes: readonly StallSignature[]): string {
+  return stallScreenFrame(lines, shapes).content;
 }
 
 /** Cache physical semantic rows; a repaint usually changes only a control. */
 export class StallScreenCache {
-  private rows: { raw: string; semantic: string }[] = [];
+  private lines: string[] = [];
+  private shapes: readonly StallSignature[] | undefined;
+  private footer = -1;
+  private semantic = '';
 
   content(lines: readonly string[], shapes: readonly StallSignature[]): string {
-    this.rows = lines.map((raw, row) => this.rows[row]?.raw === raw ? this.rows[row] :
-      { raw, semantic: stallScreenContent([raw], shapes) });
-    return this.rows.map(row => row.semantic).join('\n').trimEnd();
+    if (shapes === this.shapes && lines.length === this.lines.length) {
+      let changed = -1;
+      for (let i = 0; i < lines.length; i++) {
+        if (lines[i] === this.lines[i]) continue;
+        if (changed !== -1) { changed = -2; break; }
+        changed = i;
+      }
+      if (changed === -1) return this.semantic;
+      if (changed >= 0 && changed === this.footer) {
+        const normalise = (line: string) => {
+          for (const shape of shapes) line = line.replace(shape.cosmetic ?? /$^/u, '$1');
+          return line.trimEnd();
+        };
+        // The composer, its gutter run and any panel dividers are unchanged.
+        // Only a control on the already framed footer may skip that walk.
+        // All other row changes, including a moved footer, re-establish it.
+        if (normalise(lines[changed]!) === normalise(this.lines[changed]!)) {
+          this.lines[changed] = lines[changed]!;
+          return this.semantic;
+        }
+      }
+    }
+    const frame = stallScreenFrame(lines, shapes);
+    this.lines = [...lines];
+    this.shapes = shapes;
+    this.footer = frame.footer;
+    this.semantic = frame.content;
+    return this.semantic;
   }
+}
+
+function stallRegion(lines: readonly (string | StyledLine)[], shapes: readonly StallSignature[]): readonly StyledLine[] {
+  let rows: readonly StyledLine[] = lines.map(line => typeof line === 'string' ? { text: line, spans: [] } : line);
+  for (const shape of shapes) rows = shape.contentRegion?.(rows) ?? rows;
+  return rows;
+}
+
+function stallComposer(lines: readonly StyledLine[], shapes: readonly StallSignature[], partial = false): { line: number; chrome: number } | null {
+  for (let line = lines.length - 1; line >= 0; line--) {
+    const complete = shapes.some(shape => lineFits(lines[line]!, stallTests(shape).composer));
+    // A native redraw may replace the closing edge with one gutter row. The
+    // independently styled mode row and preceding input gutter still establish
+    // ownership, but never prove a complete composer for discovery.
+    if (!complete && !(partial && line > 1 && shapes.some(shape => {
+      const tests = stallTests(shape);
+      return tests.composerStatus !== undefined && lineFits(lines[line - 1]!, tests.composerStatus) &&
+        tests.chrome.some(test => lineFits(lines[line - 2]!, test)) &&
+        (blank(lines[line]) || tests.chrome.some(test => lineFits(lines[line]!, test)));
+    }))) continue;
+    let chrome = line;
+    // Use the owning module's reading walk, with no broad tidy expression.
+    while (chrome > 0 && (blank(lines[chrome - 1]) ||
+      shapes.some(shape => stallTests(shape).chrome.some(test => {
+        const above = lines[chrome - 1]!;
+        // Unstyled rows serve only the cosmetic cache and suggestion hint.
+        // Validation and transcript ownership always supply gutter ink.
+        return lineFits(above, above.spans.length === 0 ? { text: test.text } : test);
+      })))) chrome--;
+    return { line, chrome };
+  }
+  return null;
 }
 
 /**
@@ -958,68 +1036,85 @@ export class StallScreenCache {
  * Text that could be idle chrome is left for styled validation, never accepted
  * as proof of an idle composer here. The caller supplies joined terminal wraps.
  */
-export function stallTranscriptContent(lines: readonly string[], shapes: readonly StallSignature[], signature?: CompiledSignature,
-  presentation: ReadonlySet<string> = new Set()): string {
-  let content = stallScreenContent(lines, shapes).split('\n');
-  if (signature !== undefined) {
-    // A joined user-turn row can change length during reflow. Only content
-    // after that boundary can prove new transcript output. This cheap text
-    // walk never proves a live refusal; styled validation still does that.
-    const block = content.findIndex(line => shapes.some(shape => {
-      const tests = stallTests(shape);
-      return tests.before.text?.test(line) || tests.footer.text?.test(line);
-    }));
-    for (let i = (block < 0 ? content.length : block) - 1; i >= 0; i--) {
-      const line = content[i]!;
-      const chrome = shapes.some(shape => stallTests(shape).idle.some(test => test.text?.test(line)));
-      if (!chrome && signature.turn?.text?.test(line)) { content = content.slice(i + 1); break; }
+export function stallTranscriptContent(lines: readonly (string | StyledLine)[], shapes: readonly StallSignature[], signature?: CompiledSignature): string {
+  const content = stallRegion(lines, shapes);
+  const composer = stallComposer(content, shapes, true);
+  const omitted = new Set<number>();
+  const limit = composer?.chrome ?? content.length;
+  let turnStart = 0;
+  if (signature?.turn !== undefined) for (let i = limit - 1; i >= 0; i--) {
+    if (lineFits(content[i]!, signature.turn)) { turnStart = i + 1; break; }
+  }
+  for (const shape of shapes) {
+    const tests = stallTests(shape);
+    // Only the error-ink gutter run immediately before the completed footer
+    // owns these rows. The same words elsewhere remain transcript output.
+    let footer = limit - 1;
+    while (footer >= turnStart && blank(content[footer])) footer--;
+    let end = footer;
+    let completed = false;
+    if (footer >= turnStart) {
+      const text = content[footer]!.text.replace(shape.cosmetic ?? /$^/u, '$1');
+      if (tests.footer.text?.test(text)) {
+        completed = true;
+        omitted.add(footer);
+        end--;
+      }
+    }
+    while (end >= turnStart && blank(content[end])) end--;
+    let start = end;
+    const lead = tests.rows[0]?.lead;
+    while (start >= turnStart) {
+      const row = content[start]!;
+      if (row.text.trim() !== '' && !(lead !== undefined && lineFits(row, { text: signature?.chrome[0]?.text, lead }))) break;
+      start--;
+    }
+    if (start < end) {
+      for (let i = start + 1; i <= end; i++) omitted.add(i);
+      // The gutter still owns its block when the footer is temporarily gone.
+      // Its introduction is the preceding paragraph, not a phrase elsewhere.
+      if (start >= turnStart) omitted.add(start);
+    } else if (completed && end >= turnStart && footer - end - 1 >= tests.rows.length &&
+      lineFits(content[end]!, tests.before)) {
+      // Erasure can leave the introduction above the now-empty error slots.
+      // The completed footer and those module-sized slots retain ownership;
+      // full validation still confirms the missing ink. A new paragraph after
+      // a surviving error block leaves that block in the comparison and clears.
+      omitted.add(end);
+    }
+    if (composer !== null) {
+      for (let i = composer.chrome; i <= composer.line; i++) {
+        const row = content[i]!;
+        // Suggestion ink belongs to the framed input row, including its
+        // terminal wraps. Physical-row text equality cannot establish that.
+        const presentation = tests.idle.some(test => test.word !== undefined && lineFits(row, { word: test.word }));
+        if (tests.idle.some(test => test.text?.test(row.text)) || presentation || blank(row)) omitted.add(i);
+      }
+      for (let n = 0; n < tests.bottom.length; n++) {
+        const i = composer.line + 1 + n;
+        if (content[i] !== undefined && lineFits(content[i], tests.bottom[n]!)) omitted.add(i);
+      }
     }
   }
-  return content.filter(line =>
-    !presentation.has(line) && !shapes.some(shape => {
-      const tests = stallTests(shape);
-      // Loss or replacement of the recognised block/footer is confirmed on
-      // the coalesced path. Ordinary new text still clears immediately.
-      const allowed = signature === undefined ? [...tests.idle, ...tests.bottom] :
-        [tests.before, ...tests.rows, tests.footer, ...tests.idle, ...tests.bottom];
-      return allowed.some(test => test.text?.test(line));
-    })).join('').replace(/\s+/gu, '');
-}
-
-/** Incomplete styled composer presentation needs validation, not immediate clearing. */
-export function stallPresentationRows(lines: readonly string[], signature: CompiledSignature,
-  hasInk: (row: number, colours: readonly string[]) => boolean): ReadonlySet<string> {
-  const shapes = moduleFor(signature.name)?.stalls ?? [];
-  const colours = shapes.flatMap(shape => shape.idle.flatMap(rule => rule.word?.fg ?? []));
-  const result = new Set<string>();
-  if (colours.length === 0) return result;
-  // Reuse the reading engine's composer walk on cheap text rows. Ink only
-  // makes a row eligible for coalesced validation; it never proves it idle.
-  const composer = composerAt(lines.map(text => ({ text, spans: [] })), signature);
-  if (composer === null || !shapes.some(shape => stallTests(shape).composer.text?.test(lines[composer.line]!))) return result;
-  for (let row = composer.chrome; row <= composer.line; row++) {
-    if (hasInk(row, colours)) result.add(stallScreenContent([lines[row]!], shapes));
-  }
-  return result;
+  return content.slice(turnStart).filter((_, index) => !omitted.has(index + turnStart))
+    .map(line => line.text.trimEnd()).filter(text => text !== '').join('\n');
 }
 
 /** Reject ordinary screens before styled context and prompt detection. */
 export function possibleStall(lines: readonly string[], signature: CompiledSignature): boolean {
   if (setAside(signature)) return false;
   const shapes = moduleFor(signature.name)?.stalls;
-  // This literal check also avoids arming the regex watchdog on ordinary
-  // repaints. Configured patterns still run under their existing budget.
+  // This hint uses only module-owned marker and closing-edge rules. No
+  // configured pattern runs here; full validation retains its regex budget.
   if (!shapes?.some(shape => lines.some(line => line.trimEnd() === shape.marker.text))) return false;
-  return guarded(signature, () => {
-    // Busy rules run within the turn during validation. Testing the entire
-    // viewport here would also reject an ordinary user echo quoting a rule.
-    return shapes.some(shape => {
-      if (!lines.some(line => line.trimEnd() === shape.marker.text)) return false;
-      // Stall closing edges are narrower than the reading composer's rule.
-      const test = compiledStalls.get(shape)?.composer ?? compileLine(shape.composer, 'stall.composer');
-      return test.text !== undefined && lines.some(line => test.text!.test(line));
-    }) === true;
-  }) === true;
+  // Busy rules run within the turn during validation. Testing the entire
+  // viewport here would also reject an ordinary user echo quoting a rule.
+  return shapes.some(shape => {
+    if (!lines.some(line => line.trimEnd() === shape.marker.text)) return false;
+    // Stall closing edges are narrower than the reading composer's rule.
+    const test = stallTests(shape).composer;
+    return test.text !== undefined && lines.some(line => test.text!.test(line));
+  });
 }
 
 /** Keep the physical origin for visibility, but match soft wraps as one line. */
@@ -1052,8 +1147,10 @@ export function validateStall(physical: readonly StyledLine[], signature: Compil
   const signatures = moduleFor(signature.name)?.stalls;
   if (prompt || signatures === undefined || setAside(signature)) return null;
   return guarded(signature, () => {
-    const { lines, starts } = logicalStallLines(physical);
-    const composer = composerAt(lines, signature);
+    const logical = logicalStallLines(physical);
+    const lines = stallRegion(logical.lines, signatures);
+    const starts = logical.starts;
+    const composer = stallComposer(lines, signatures);
     if (composer === null || starts[composer.line]! < firstVisible) return null;
     let turnStart = 0;
     for (let i = composer.chrome - 1; i >= 0; i--) {
@@ -1062,36 +1159,35 @@ export function validateStall(physical: readonly StyledLine[], signature: Compil
     if (turnBusy(lines, signature, turnStart, composer.chrome)) return null;
     for (const shape of signatures) {
       const tests = stallTests(shape);
-      // Tidy only the module's known sidebar/copy chrome. Preserve spans.
-      const tidy = (line: StyledLine): StyledLine => ({ ...line,
-        text: signature.tidy === undefined ? line.text : line.text.replace(signature.tidy, '') });
-      if (!lineFits(tidy(lines[composer.line]!), tests.composer)) continue;
-      if (lines.slice(composer.line + 1).some(line =>
-        !blank(line) && !tests.bottom.some(test => lineFits(tidy(line), test)))) continue;
+      if (!lineFits(lines[composer.line]!, tests.composer)) continue;
+      if (lines.slice(composer.line + 1).some((line, index) =>
+        !blank(line) && (tests.bottom[index] === undefined || !lineFits(line, tests.bottom[index])))) continue;
       const rules = moduleFor(signature.name)?.readingRules;
       const rawInput = lines.slice(composer.chrome, composer.line + 1);
       const input = rules?.inputRegion?.(rawInput, rawInput.length - 1) ?? rawInput;
       if (input.some(line =>
         !blank(line) && !tests.idle.some(test => lineFits(line, test)))) continue;
       let end = composer.chrome - 1;
-      while (end >= turnStart && blank(lines[end], signature.tidy)) end--;
-      if (end < turnStart || !lineFits(tidy(lines[end]!), tests.footer)) continue;
+      while (end >= turnStart && blank(lines[end])) end--;
+      const footer = end < turnStart ? undefined : { ...lines[end]!,
+        text: lines[end]!.text.replace(shape.cosmetic ?? /$^/u, '$1') };
+      if (footer === undefined || !lineFits(footer, tests.footer)) continue;
       let row = end - 1;
-      while (row >= turnStart && blank(lines[row], signature.tidy)) row--;
+      while (row >= turnStart && blank(lines[row])) row--;
       let matches = true;
       for (let n = tests.rows.length - 1; n >= 0; n--, row--) {
-        if (row < turnStart || !lineFits(tidy(lines[row]!), tests.rows[n]!)) { matches = false; break; }
+        if (row < turnStart || !lineFits(lines[row]!, tests.rows[n]!)) { matches = false; break; }
       }
       if (!matches) continue;
-      while (row >= turnStart && blank(lines[row], signature.tidy)) row--;
-      if (row < turnStart || !lineFits(tidy(lines[row]!), tests.before)) continue;
+      while (row >= turnStart && blank(lines[row])) row--;
+      if (row < turnStart || !lineFits(lines[row]!, tests.before)) continue;
       const live = rules?.liveContent?.(lines, turnStart, row, readingContext);
       if (live !== true && live !== 'inconclusive') continue;
       // The same semantic identity drives both settlement and suppression.
       // Styles prove the shape above, but do not identify an occurrence.
       const semantic = (line: StyledLine): string => {
-        const text = tidy(line).text;
-        return (shape.cosmetic === undefined ? text : text.replace(shape.cosmetic, '$1$2')).trim().replace(/\s+/gu, ' ');
+        const text = line.text;
+        return (line === lines[end] ? footer.text : text).trim().replace(/\s+/gu, ' ');
       };
       const block = lines.slice(row, end + 1).map(semantic).filter(Boolean);
       const blockIdentity = JSON.stringify([shape.reason, block]);

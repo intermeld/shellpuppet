@@ -1,6 +1,6 @@
 [2J[H  [38;2;255;128;64m┃[38;2;238;238;238m  Summarise the sample.[0m
 
-     Reading the sample.                                                █ Example title
+     Reading the sample.                                                           █ Example panel
 
      The request was rejected because it was considered high risk
 
@@ -10,10 +10,10 @@
   [38;2;251;113;133m┃[0m     [38;2;238;238;238mThe response was withheld by the model provider's content safety filter.[0m
   [38;2;251;113;133m┃[0m
 
-     ▣  Build · Example Model · 17m 17s          ↻ /recover          ⎘ copy        █ Example panel
+     ▣  Build · Example Model · 17m 17s          ↻ /recover          ⎘ copy
 
-  [38;2;255;128;64m┃[0m
-  [38;2;255;128;64m┃[0m
-  [38;2;255;128;64m┃[0m  Build · Example Model
+  [38;2;255;128;64m┃[0m                                                                                █ Example panel
+  [38;2;255;128;64m┃[0m                                                                                █ Example panel
+  [38;2;255;128;64m┃[0m  Build · Example Model                                                         █ Example panel
   [38;2;255;128;64m╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀[0m
    ctrl+p settings

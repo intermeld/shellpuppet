@@ -307,6 +307,27 @@ export class ScreenRenderer {
       buffer.getLine(buffer.baseY + i)?.translateToString(true) ?? '');
   }
 
+  /** Logical viewport rows with just the framing columns styled. No history. */
+  framedViewport(columns: readonly number[]): StyledLine[] {
+    const buffer = this.term.buffer.active;
+    const cell = buffer.getNullCell();
+    const rows: StyledLine[] = [];
+    for (let y = 0; y < this.rows; y++) {
+      const line = buffer.getLine(buffer.baseY + y);
+      // A clipped continuation has no known framing origin. Its text cannot
+      // establish ownership; validation retains the bounded history check.
+      if (line?.isWrapped && rows.length === 0) continue;
+      const text = line?.translateToString(!buffer.getLine(buffer.baseY + y + 1)?.isWrapped) ?? '';
+      if (line?.isWrapped) { rows[rows.length - 1]!.text += text; continue; }
+      const spans: StyleSpan[] = [];
+      for (const column of columns) {
+        if (line?.getCell(column, cell) && column < text.length) spans.push({ ...styleOf(cell), from: column, to: column + 1 });
+      }
+      rows.push({ text, spans });
+    }
+    return rows;
+  }
+
   /** Probe only the marked viewport rows; no style objects or history scan. */
   hasForeground(rows: readonly number[], colours: readonly string[]): boolean {
     const buffer = this.term.buffer.active;
@@ -422,27 +443,28 @@ export class ScreenRenderer {
         lines.push({ text: '', spans: [] });
         continue;
       }
-      let text = '';
+      // Text readers discard right padding. Find that boundary before
+      // extracting attributes, so a bounded context full of short rows does
+      // not allocate styles for thousands of cells it immediately discards.
+      // Keep the untrimmed length for soft-wrap padding, including wide and
+      // combined characters whose string offsets differ from cell columns.
+      const text = line.translateToString(false);
+      const trimmed = text.replace(/\s+$/, '');
+      let offset = 0;
       const spans: StyleSpan[] = [];
-      for (let x = 0; x < line.length; x++) {
+      for (let x = 0; x < line.length && offset < trimmed.length; x++) {
         line.getCell(x, cell);
         // The second half of a wide character holds nothing of its own.
         if (cell.getWidth() === 0) continue;
         const chars = cell.getChars() || ' ';
         const style = styleOf(cell);
         const last = spans[spans.length - 1];
-        if (last !== undefined && sameStyle(last, style)) last.to += chars.length;
-        else spans.push({ ...style, from: text.length, to: text.length + chars.length });
-        text += chars;
+        const to = Math.min(offset + chars.length, trimmed.length);
+        if (last !== undefined && sameStyle(last, style)) last.to = to;
+        else spans.push({ ...style, from: offset, to });
+        offset += chars.length;
       }
-      // Right-trimmed, as snapshot text is, with the spans cut to match.
-      const trimmed = text.replace(/\s+$/, '');
-      const kept: StyleSpan[] = [];
-      for (const span of spans) {
-        if (span.from >= trimmed.length) break;
-        kept.push({ ...span, to: Math.min(span.to, trimmed.length) });
-      }
-      lines.push({ text: trimmed, spans: kept,
+      lines.push({ text: trimmed, spans,
         ...(line.isWrapped ? { wrapped: true } : {}),
         ...(buffer.getLine(y + 1)?.isWrapped && text.length > trimmed.length
           ? { wrapPadding: text.length - trimmed.length } : {}) });

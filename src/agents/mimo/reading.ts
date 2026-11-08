@@ -12,14 +12,14 @@ export const reading: AgentSignature = {
   name: 'mimo',
   programs: ['mimo', 'mimocode', 'mimo-code'],
   measured: 'MiMoCode 0.1.16',
-  composer: { text: '^ {2}[┃╹]' },
-  chrome: [{ text: '^ {2}┃' }, { text: '^\\s{60,}\\S' }],
+  composer: { text: '^ {2}╹▀+' },
+  chrome: [{ text: '^ {2}┃', lead: { notFg: ['#0a0a0a', '#fb7185'] } }],
   busy: [
-    { text: '\\besc (?:to )?interrupt\\b' },
+    { text: '^ {3}esc (?:to )?interrupt\\s*$' },
     { text: '^ {5}▣ {2}\\S+ · [^·]+?\\s*(?:[⎘█].*)?$' },
     { text: '^ {3,}[⠀-⣿] ' },
   ],
-  turn: { text: '^ {2}┃ {2}\\S', lead: { notFg: ['#0a0a0a'] } },
+  turn: { text: '^ {2}┃', lead: { notFg: ['#0a0a0a', '#fb7185'] } },
   answer: {
     start: { text: '^ {5}[^\\s→+⠀-⣿▣]' },
     continues: { text: '^ {5}[^\\s→+⠀-⣿▣]' },
