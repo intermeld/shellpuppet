@@ -85,6 +85,7 @@ Presentation changes are validated on a coalesced timer. Changes confined to
 user-turn text never end an established notice. Changes or loss of the refusal,
 completed footer or valid composer must persist across two checks 250 ms apart.
 Output and resize do not postpone confirmation.
+Partial grey suggestion paints also wait for validation of the complete idle composer.
 If only the user-turn boundary is outside the viewport plus 128 preceding rows,
 an established notice
 keeps its identity and time while the available content, same refusal block,

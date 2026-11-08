@@ -669,7 +669,10 @@ idle and bottom-row text rules and joins terminal wraps. It omits a leading
 wrapped continuation whose length changes as native redraws scroll the viewport;
 the bounded styled read still validates the available turn context. It does not prove
 the composer idle: coalesced styled validation still checks the full shape,
-including suggestion ink. The same validated refusal and footer keep an established
+including suggestion ink. Incomplete composer text with the module's suggestion
+ink also waits for validation; a partial paint is not new transcript output.
+The full idle text and style rules must still qualify at validation.
+The same validated refusal and footer keep an established
 notice even when the complete user-turn text changes or its context is clipped.
 Reflowed text and the last fully validated turn provide comparison baselines for native
 repaints; inconclusive reads retain the latter for growth.

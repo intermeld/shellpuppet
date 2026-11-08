@@ -4,13 +4,13 @@ const screen = readFileSync(new URL('./stalls/mimo-refusal.ansi', import.meta.ur
   .replace('Summarise the sample.', 'Neutral sample text '.repeat(670) + (process.argv.includes('--colon') ? ':' : ''));
 process.stdout.write(screen);
 // Test-only transport variation: let the native preliminary growth redraw
-// persist beyond one validation interval, then split the application tail at
-// different boundaries. Queue writes so ANSI byte order is unchanged.
+// persist beyond one validation interval, then split application and composer
+// writes at different boundaries. Queue writes so ANSI byte order is unchanged.
 const delayed = process.argv.includes('--chunk-delays');
 let writes = Promise.resolve();
 let frame = 0;
 const write = (text, growth = false) => {
-  if (!delayed || !growth) { process.stdout.write(text); return; }
+  if (!delayed) { process.stdout.write(text); return; }
   const tail = [22, 83, 147][frame++ % 3];
   writes = writes.then(async () => {
     if (growth) await new Promise(resolve => setTimeout(resolve, 450));
