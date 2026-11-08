@@ -115,15 +115,16 @@ resize reflow and cursor-only writes preserve its identity and original time.
 Composer frames repainted to the new width and accepted grey suggestions
 arriving or leaving preserve the notice while the canonical refusal identity
 is unchanged, with no clear or further announcement. Presentation changes are
-validated on a coalesced timer. Resize restarts its 250 ms window so a preliminary
-native redraw can finish reconstructing the user turn before its identity is
-compared. Output does not extend that window. If only the user-turn boundary is
+validated on a coalesced timer. Changes confined to user-turn text never end an
+established notice. Changes or loss of the refusal, completed footer or valid
+composer must persist across two checks 250 ms apart. Output and resize do not
+postpone confirmation. If only the user-turn boundary is
 outside the viewport plus 128 preceding rows, an established notice keeps its identity and
 time while the available content, same refusal block, footer and idle composer
 still qualify. An incomplete leading wrapped row has unknown context; it cannot
 set quotation, fence or tool-panel state. Every complete available content row
-is still checked. Missing context cannot finish settling a new notice. A changed
-identity or invalid visible shape clears the notice.
+is still checked. Missing context cannot finish settling a new notice. A confirmed
+changed refusal or invalid visible shape clears the notice.
 Non-empty real input, newer transcript output, busy output, a prompt or exit
 clears it. Empty writes and
 terminal reports do not. Real input suppresses the unchanged refusal across

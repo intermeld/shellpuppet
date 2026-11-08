@@ -33,6 +33,40 @@ afterEach(async () => {
 });
 
 describe('live refusal regressions', () => {
+  it('keeps an established notice through persistent user-turn text changes', async () => {
+    const { session, transitions, draw } = make();
+    await draw(refusal);
+    await sleep(1400);
+    const state = session.getStalled();
+    expect(state).toBeDefined();
+    for (const text of ['Short.', 'A different reconstructed prompt.', 'Summarise the sample.']) {
+      await draw(refusal.replace('Summarise the sample.', text));
+      expect(session.getStalled()).toBe(state);
+      await sleep(1400);
+      expect(session.getStalled()).toBe(state);
+    }
+    expect(transitions).toEqual([state]);
+  }, 8000);
+  it('confirms loss of the refusal instead of clearing for a transient redraw', async () => {
+    const { session, transitions, draw } = make();
+    await draw(refusal);
+    await sleep(1400);
+    const state = session.getStalled();
+    expect(state).toBeDefined();
+    await draw('\x1b[2J\x1b[H');
+    await sleep(80);
+    expect(session.getStalled()).toBe(state);
+    await draw('  ┃  A partially reconstructed user turn.');
+    expect(session.getStalled()).toBe(state);
+    await draw(refusal);
+    await sleep(400);
+    expect(session.getStalled()).toBe(state);
+    expect(transitions).toEqual([state]);
+    await draw('\x1b[2J\x1b[H');
+    await sleep(600);
+    expect(session.getStalled()).toBeUndefined();
+    expect(transitions).toEqual([state, undefined]);
+  });
   const frame = (cols: number) => refusal.replace('╹' + '▀'.repeat(20), '╹' + '▀'.repeat(cols - 5));
   const suggestion = '\x1b[16;1H  \x1b[38;2;255;128;64m┃\x1b[0m  ' +
     '\x1b[38;2;128;128;128mReview the sample. (Tab to accept)\x1b[0m\x1b[K';

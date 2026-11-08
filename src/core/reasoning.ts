@@ -864,6 +864,10 @@ export class StallTracker {
   /** A candidate has been recognised and may still be settling. */
   get tracking(): boolean { return this.candidate !== null; }
 
+  matchesBlock(candidate: StallValidation): boolean {
+    return candidate !== null && this.candidate?.blockIdentity === candidate.blockIdentity;
+  }
+
   /** Changed rendered content ends this observation, without undoing input suppression. */
   invalidate(): void {
     this.candidate = null;
@@ -871,21 +875,23 @@ export class StallTracker {
   }
 
   noteInput(): void {
-    this.suppressed = this.candidate?.identity ?? this.suppressed;
+    this.suppressed = this.candidate?.blockIdentity ?? this.suppressed;
     this.candidate = null;
     this.state = undefined;
   }
 
   observe(candidate: StallValidation, now = Date.now()): StallState | undefined {
+    // Discovery needs the complete user turn. Once established, its text is
+    // layout-sensitive: only the validated refusal and footer identify it.
+    // Input suppression uses that same block across user-text redraws.
+    if (this.state !== undefined && this.matchesBlock(candidate)) return this.state;
     if (candidate !== null && 'inconclusive' in candidate) {
-      // Only an established, unchanged refusal can survive missing context.
-      // Keep its full identity and clock, and never lift input suppression.
-      if (this.state !== undefined && this.candidate?.blockIdentity === candidate.blockIdentity) return this.state;
+      // Missing context cannot discover or finish settling a new refusal.
       this.invalidate();
       return undefined;
     }
     if (candidate === null) this.suppressed = null;
-    if (candidate === null || candidate.identity === this.suppressed) {
+    if (candidate === null || candidate.blockIdentity === this.suppressed) {
       this.candidate = null;
       this.state = undefined;
       return undefined;
@@ -941,11 +947,30 @@ export function stallScreenContent(lines: readonly string[], shapes: readonly St
  * Text that could be idle chrome is left for styled validation, never accepted
  * as proof of an idle composer here. The caller supplies joined terminal wraps.
  */
-export function stallTranscriptContent(lines: readonly string[], shapes: readonly StallSignature[]): string {
-  return stallScreenContent(lines, shapes).split('\n').filter(line =>
+export function stallTranscriptContent(lines: readonly string[], shapes: readonly StallSignature[], signature?: CompiledSignature): string {
+  let content = stallScreenContent(lines, shapes).split('\n');
+  if (signature !== undefined) {
+    // A joined user-turn row can change length during reflow. Only content
+    // after that boundary can prove new transcript output. This cheap text
+    // walk never proves a live refusal; styled validation still does that.
+    const block = content.findIndex(line => shapes.some(shape => {
+      const tests = stallTests(shape);
+      return tests.before.text?.test(line) || line.includes(shape.marker.text) || tests.footer.text?.test(line);
+    }));
+    for (let i = (block < 0 ? content.length : block) - 1; i >= 0; i--) {
+      const line = content[i]!;
+      const chrome = shapes.some(shape => stallTests(shape).idle.some(test => test.text?.test(line)));
+      if (!chrome && signature.turn?.text?.test(line)) { content = content.slice(i + 1); break; }
+    }
+  }
+  return content.filter(line =>
     !shapes.some(shape => {
       const tests = stallTests(shape);
-      return [...tests.idle, ...tests.bottom].some(test => test.text?.test(line));
+      // Loss or replacement of the recognised block/footer is confirmed on
+      // the coalesced path. Ordinary new text still clears immediately.
+      const allowed = signature === undefined ? [...tests.idle, ...tests.bottom] :
+        [tests.before, ...tests.rows, tests.footer, ...tests.idle, ...tests.bottom];
+      return allowed.some(test => test.text?.test(line));
     })).join('').replace(/\s+/gu, '');
 }
 

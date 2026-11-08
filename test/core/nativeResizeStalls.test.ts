@@ -14,7 +14,8 @@ const recording = JSON.parse(readFileSync(new URL('../fixtures/stalls/native-gro
 };
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-it.each(recording.captures)('preserves one notice through recorded native growth $capture', async (capture) => {
+it.each(recording.captures.flatMap(capture => [35, 400].map(delay => ({ ...capture, delay }))))(
+  'preserves one notice through recorded native growth $capture with $delay ms chunk delays', async (capture) => {
   let output: (data: string) => void = () => {};
   const pty = {
     pid: 0, cols: 120, rows: 30, process: 'native-replay', handleFlowControl: false,
@@ -34,7 +35,7 @@ it.each(recording.captures)('preserves one notice through recorded native growth
       await session.viewportLines();
       // Let the renderer and scheduled validation see the preliminary redraw
       // before the application repaint arrives, as separate native writes.
-      await sleep(35);
+      await sleep(capture.delay);
       if (state !== undefined) expect(session.getStalled()).toBe(state);
     }
     expect(offset).toBe(recording.streams[phase].length);
@@ -53,4 +54,4 @@ it.each(recording.captures)('preserves one notice through recorded native growth
     }
     expect(transitions).toEqual([state]);
   } finally { await session.kill(); }
-}, 8000);
+}, 20_000);

@@ -35,3 +35,26 @@ it('clears on input and cannot reannounce the unchanged old block', () => {
   expect(state.observe(candidate, 11000)).toBeUndefined();
   expect(state.observe(candidate, 12000)).toBeDefined();
 });
+
+it('retains an established refusal when only the user-turn text changes', () => {
+  const tracker = new reading.StallTracker();
+  tracker.observe(candidate, 1000);
+  const state = tracker.observe(candidate, 2000);
+  expect(state).toBeDefined();
+  const reflowed = { ...candidate, identity: 'shorter reconstructed user turn' };
+  expect(tracker.observe(reflowed, 5000)).toBe(state);
+  expect(tracker.observe(candidate, 9000)).toBe(state);
+  tracker.noteInput();
+  expect(tracker.observe(candidate, 10000)).toBeUndefined();
+  expect(tracker.observe(reflowed, 11000)).toBeUndefined();
+  expect(tracker.observe(reflowed, 12000)).toBeUndefined();
+});
+
+it('restarts an established notice when its refusal or footer changes', () => {
+  const tracker = new reading.StallTracker();
+  tracker.observe(candidate, 1000);
+  const state = tracker.observe(candidate, 2000);
+  const changed = { ...candidate, identity: 'different footer', blockIdentity: 'different footer' };
+  expect(tracker.observe(changed, 3000)).toBeUndefined();
+  expect(tracker.observe(changed, 4000)).not.toEqual(state);
+});
