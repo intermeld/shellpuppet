@@ -947,7 +947,8 @@ export function stallScreenContent(lines: readonly string[], shapes: readonly St
  * Text that could be idle chrome is left for styled validation, never accepted
  * as proof of an idle composer here. The caller supplies joined terminal wraps.
  */
-export function stallTranscriptContent(lines: readonly string[], shapes: readonly StallSignature[], signature?: CompiledSignature): string {
+export function stallTranscriptContent(lines: readonly string[], shapes: readonly StallSignature[], signature?: CompiledSignature,
+  presentation: ReadonlySet<string> = new Set()): string {
   let content = stallScreenContent(lines, shapes).split('\n');
   if (signature !== undefined) {
     // A joined user-turn row can change length during reflow. Only content
@@ -964,7 +965,7 @@ export function stallTranscriptContent(lines: readonly string[], shapes: readonl
     }
   }
   return content.filter(line =>
-    !shapes.some(shape => {
+    !presentation.has(line) && !shapes.some(shape => {
       const tests = stallTests(shape);
       // Loss or replacement of the recognised block/footer is confirmed on
       // the coalesced path. Ordinary new text still clears immediately.
@@ -972,6 +973,23 @@ export function stallTranscriptContent(lines: readonly string[], shapes: readonl
         [tests.before, ...tests.rows, tests.footer, ...tests.idle, ...tests.bottom];
       return allowed.some(test => test.text?.test(line));
     })).join('').replace(/\s+/gu, '');
+}
+
+/** Incomplete styled composer presentation needs validation, not immediate clearing. */
+export function stallPresentationRows(lines: readonly string[], signature: CompiledSignature,
+  hasInk: (row: number, colours: readonly string[]) => boolean): ReadonlySet<string> {
+  const shapes = moduleFor(signature.name)?.stalls ?? [];
+  const colours = shapes.flatMap(shape => shape.idle.flatMap(rule => rule.word?.fg ?? []));
+  const result = new Set<string>();
+  if (colours.length === 0) return result;
+  // Reuse the reading engine's composer walk on cheap text rows. Ink only
+  // makes a row eligible for coalesced validation; it never proves it idle.
+  const composer = composerAt(lines.map(text => ({ text, spans: [] })), signature);
+  if (composer === null || !shapes.some(shape => stallTests(shape).composer.text?.test(lines[composer.line]!))) return result;
+  for (let row = composer.chrome; row <= composer.line; row++) {
+    if (hasInk(row, colours)) result.add(stallScreenContent([lines[row]!], shapes));
+  }
+  return result;
 }
 
 /** Reject ordinary/busy screens before styled context and prompt detection. */

@@ -16,7 +16,7 @@
 
 import { moduleFor } from '../agents/index.js';
 import type { AgentModule, AgentSource } from '../agents/types.js';
-import { validateStall, possibleStall, resolveSessionAgent, signatureForSession, stallScreenContent, stallTranscriptContent, StallTracker } from './reasoning.js';
+import { validateStall, possibleStall, resolveSessionAgent, signatureForSession, stallScreenContent, stallTranscriptContent, stallPresentationRows, StallTracker } from './reasoning.js';
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -1261,7 +1261,7 @@ export class Session implements WaitTarget {
     // the new comparison baseline so a later cursor-only write stays layout.
     if (this.agentModule?.stalls !== undefined) {
       this.stallContent = stallScreenContent(this.renderer.plainViewport(), this.agentModule.stalls);
-      this.stallTranscript = stallTranscriptContent(this.renderer.plainViewport({ joinWrapped: true, skipClipped: true }), this.agentModule.stalls, signatureForSession(this) ?? undefined);
+      this.stallTranscript = this.readStallTranscript();
       if (this.stallState === undefined) this.scheduleStall();
     }
     if (options.hold !== undefined) this.geometryHeldFlag = options.hold;
@@ -1308,6 +1308,14 @@ export class Session implements WaitTarget {
     for (const listener of this.stallListeners) listener(state);
   }
 
+  private readStallTranscript(plain = this.renderer.plainViewport()): string {
+    const signature = signatureForSession(this) ?? undefined;
+    const presentation = signature === undefined ? undefined : stallPresentationRows(plain, signature,
+      (row, colours) => this.renderer.hasForeground([row], colours));
+    return stallTranscriptContent(this.renderer.plainViewport({ joinWrapped: true, skipClipped: true }),
+      this.agentModule!.stalls!, signature, presentation);
+  }
+
   private scheduleStall(): void {
     if (this.exitedFlag || this.isKilled) return;
     // Physical row changes can be composer presentation. Retain the candidate
@@ -1315,7 +1323,8 @@ export class Session implements WaitTarget {
     // Only new transcript text (including busy markers and prompts) clears at
     // once; known cosmetic repaints need no full validation.
     if (this.stallTracker.tracking) {
-      const content = stallScreenContent(this.renderer.plainViewport(), this.agentModule!.stalls!);
+      const plain = this.renderer.plainViewport();
+      const content = stallScreenContent(plain, this.agentModule!.stalls!);
       if (content === this.stallContent || content === this.stallValidatedContent) {
         // A native terminal can redraw its pre-resize text after xterm has
         // reflowed padded rows and clipped the viewport. Both are layout.
@@ -1323,7 +1332,7 @@ export class Session implements WaitTarget {
         return;
       }
       this.stallContent = content;
-      const transcript = stallTranscriptContent(this.renderer.plainViewport({ joinWrapped: true, skipClipped: true }), this.agentModule!.stalls!, signatureForSession(this) ?? undefined);
+      const transcript = this.readStallTranscript(plain);
       if (transcript !== '' && transcript !== this.stallTranscript && transcript !== this.stallValidatedTranscript) {
         this.stallTracker.invalidate();
         this.publishStall(undefined);
@@ -1354,7 +1363,7 @@ export class Session implements WaitTarget {
       if (candidate !== null && detectPrompt(plain.join('\n'), this.agent) !== null) candidate = null;
     }
     if (candidate !== null) {
-      this.stallTranscript = stallTranscriptContent(this.renderer.plainViewport({ joinWrapped: true, skipClipped: true }), this.agentModule!.stalls!, signature);
+      this.stallTranscript = this.readStallTranscript(plain);
       // Keep the complete-context baselines across an inconclusive read: a
       // native redraw on growth can restore that viewport after clipped reflow.
       if (!('inconclusive' in candidate)) {

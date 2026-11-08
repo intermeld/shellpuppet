@@ -71,6 +71,25 @@ describe('live refusal regressions', () => {
   const suggestion = '\x1b[16;1H  \x1b[38;2;255;128;64m┃\x1b[0m  ' +
     '\x1b[38;2;128;128;128mReview the sample. (Tab to accept)\x1b[0m\x1b[K';
   const blankInput = '\x1b[16;1H  \x1b[38;2;255;128;64m┃\x1b[0m\x1b[K';
+  it('confirms partial grey composer text before clearing an established notice', async () => {
+    const { session, transitions, draw } = make();
+    await draw(refusal);
+    await sleep(1400);
+    const state = session.getStalled();
+    expect(state).toBeDefined();
+    const partial = suggestion.replace('Review the sample. (Tab to accept)', 'Review the sam');
+    await draw(partial);
+    expect(session.getStalled()).toBe(state);
+    await sleep(80);
+    await draw(suggestion);
+    await sleep(400);
+    expect(session.getStalled()).toBe(state);
+    expect(transitions).toEqual([state]);
+    await draw(partial);
+    await sleep(600);
+    expect(session.getStalled()).toBeUndefined();
+    expect(transitions).toEqual([state, undefined]);
+  });
   const candidate = async (session: Session) => {
     const { lines, firstVisible } = await session.styledScreen(128);
     return detectStall(lines, signatureFor('mimo', 'mimo')!, false, firstVisible);
