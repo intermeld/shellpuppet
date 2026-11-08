@@ -24,7 +24,7 @@ it.each([
     await renderer.write('\x1b[2J');
     watch.checkAbsent();
     expect(watch.possible).toBe(false);
-  } finally { renderer.dispose(); }
+  } finally { await renderer.dispose(); }
 });
 
 it('does not treat a matching background colour as foreground ink', async () => {
@@ -33,7 +33,7 @@ it('does not treat a matching background colour as foreground ink', async () => 
   try {
     await renderer.write('\x1b[48;2;251;113;133mX\x1b[0m');
     expect(watch.possible).toBe(false);
-  } finally { renderer.dispose(); }
+  } finally { await renderer.dispose(); }
 });
 
 it('rechecks restored attributes and a restored buffer without new colour commands', async () => {
@@ -55,5 +55,5 @@ it('rechecks restored attributes and a restored buffer without new colour comman
     watch.checkAbsent();
     expect(watch.possible).toBe(true);
     expect(renderer.hasForeground([0], ['#fb7185'])).toBe(true);
-  } finally { renderer.dispose(); }
+  } finally { await renderer.dispose(); }
 });

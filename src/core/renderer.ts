@@ -90,6 +90,11 @@ export class ScreenRenderer {
   /** Chain of pending writes, so `flush()` can await parser completion. */
   private pending: Promise<void> = Promise.resolve();
   private readonly foregroundReflows: (() => void)[] = [];
+  private pendingCount = 0;
+  private closed = false;
+  private disposal: Promise<void> | undefined;
+  private width: number;
+  private height: number;
 
   constructor(options: RendererOptions = {}) {
     this.agent = options.agent ?? 'generic';
@@ -101,14 +106,16 @@ export class ScreenRenderer {
     });
     this.serializer = new SerializeAddon();
     this.term.loadAddon(this.serializer);
+    this.width = this.term.cols;
+    this.height = this.term.rows;
   }
 
   get cols(): number {
-    return this.term.cols;
+    return this.width;
   }
 
   get rows(): number {
-    return this.term.rows;
+    return this.height;
   }
 
   /**
@@ -117,8 +124,19 @@ export class ScreenRenderer {
    * callers may ignore it, but anything about to read the screen must `flush()`.
    */
   write(data: string): Promise<void> {
+    if (this.closed) return Promise.resolve();
+    return this.enqueue(data);
+  }
+
+  /** Include markers and resizes in the drain, not just PTY bytes. */
+  private enqueue(data: string, applied: () => void = () => undefined): Promise<void> {
+    this.pendingCount++;
     const written = new Promise<void>((resolve) => {
-      this.term.write(data, resolve);
+      this.term.write(data, () => {
+        this.pendingCount--;
+        applied();
+        resolve();
+      });
     });
     this.pending = this.pending.then(() => written);
     return written;
@@ -130,8 +148,17 @@ export class ScreenRenderer {
   }
 
   resize(cols: number, rows: number): void {
-    this.term.resize(cols, rows);
-    for (const reflow of this.foregroundReflows) reflow();
+    if (this.closed) return;
+    this.width = cols;
+    this.height = rows;
+    const resize = (): void => {
+      if (this.closed) return;
+      this.term.resize(cols, rows);
+      for (const reflow of this.foregroundReflows) reflow();
+    };
+    // Preserve the order of output, geometry and the next replay marker.
+    if (this.pendingCount === 0) resize();
+    else void this.enqueue('', resize);
   }
 
   /** Includes geometry changes parsed from the program's terminal output. */
@@ -199,8 +226,10 @@ export class ScreenRenderer {
    * it from its own mode scan.
    */
   serialize(options: SerializeOptions = {}): Promise<string> {
+    if (this.closed) return Promise.resolve('');
     return new Promise((resolve) => {
-      this.term.write('', () => {
+      void this.enqueue('', () => {
+        if (this.closed) { resolve(''); return; }
         resolve(
           this.serializer.serialize(
             options.scrollback === undefined ? {} : { scrollback: options.scrollback },
@@ -217,6 +246,8 @@ export class ScreenRenderer {
     cols: number;
     rows: number;
   }> {
+    const empty = { view: { lines: [], firstVisible: 0 }, state: '', cols: this.width, rows: this.height };
+    if (this.closed) return empty;
     const captured = await new Promise<{
       view: { lines: StyledLine[]; firstVisible: number };
       state: string;
@@ -224,7 +255,8 @@ export class ScreenRenderer {
       rows: number;
       eraseColumns: number[];
     }>((resolve) => {
-      this.term.write('', () => {
+      void this.enqueue('', () => {
+        if (this.closed) { resolve({ ...empty, eraseColumns: [] }); return; }
         const view = this.styledLines({ above: options.above });
         const state = this.serializer.serialize({ scrollback: options.scrollback });
         const visible = view.lines.slice(view.firstVisible);
@@ -245,6 +277,7 @@ export class ScreenRenderer {
         resolve({ view, state, cols: this.term.cols, rows: this.term.rows, eraseColumns });
       });
     });
+    if (this.closed) return empty;
     // The serialiser can leave a placeholder character behind when a wrapped
     // row was deleted. Check its replay before handing the bytes to Chromium.
     // Erasing only an extra suffix preserves the rest of the row, including
@@ -281,11 +314,11 @@ export class ScreenRenderer {
             state = repaired;
           }
         } finally {
-          check.dispose();
+          await check.dispose();
         }
       }
     } finally {
-      replay.dispose();
+      await replay.dispose();
     }
     return { view: captured.view, state, cols: captured.cols, rows: captured.rows };
   }
@@ -352,6 +385,8 @@ export class ScreenRenderer {
 
   /** Render the visible viewport (the bottom page when scrolled fully down). */
   snapshot(): RenderedScreen {
+    if (this.closed) return { cols: this.width, rows: this.height,
+      cursor: { x: 0, y: 0 }, lines: [], screen: '' };
     const buffer = this.term.buffer.active;
     const lines: string[] = [];
     for (let i = 0; i < this.term.rows; i++) {
@@ -388,6 +423,7 @@ export class ScreenRenderer {
    * lines are preserved.
    */
   lastLines(count: number): string[] {
+    if (this.closed) return [];
     if (count <= 0) return [];
     const buffer = this.term.buffer.active;
     let end = buffer.length - 1;
@@ -417,6 +453,7 @@ export class ScreenRenderer {
    * the screen text before selection annotations are added for text readers.
    */
   styledLines(options: { above?: number; last?: number; extendWrapped?: boolean } = {}): { lines: StyledLine[]; firstVisible: number } {
+    if (this.closed) return { lines: [], firstVisible: 0 };
     const buffer = this.term.buffer.active;
     let start: number;
     let end: number;
@@ -480,8 +517,28 @@ export class ScreenRenderer {
     return { lines, firstVisible };
   }
 
-  dispose(): void {
-    this.term.dispose();
+  /**
+   * Close access now and wait up to one second for release. A slower queue
+   * remains detached and releases its terminal only when parsing completes.
+   */
+  dispose(): Promise<void> {
+    if (this.disposal !== undefined) return this.disposal;
+    this.closed = true;
+    if (this.pendingCount === 0) {
+      this.term.dispose();
+      this.disposal = Promise.resolve();
+    } else {
+      // A timeout must never clear buffers beneath xterm's parser timer.
+      // Close the public surface immediately, and detach after at most one
+      // second. The finite queue retains its terminal until it drains, then
+      // releases it. No private xterm fields or exception handlers are needed.
+      const drained = this.pending.then(() => { this.term.dispose(); });
+      this.disposal = new Promise((resolve) => {
+        const timer = setTimeout(resolve, 1_000);
+        void drained.then(() => { clearTimeout(timer); resolve(); });
+      });
+    }
+    return this.disposal;
   }
 }
 

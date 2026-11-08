@@ -28,6 +28,8 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Keep ending sessions and closing dashboard panes safe while their last
+  output is still being drawn, and ignore output arriving after a session ends.
 - Avoid a second real terminal resize when a viewer's fractional character
   width rounds differently after the first grid change.
 - Keep dashboard screens wholly visible with consistent text below the 80 by

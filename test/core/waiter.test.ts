@@ -15,7 +15,7 @@ async function museFrame(name: string, typedAhead = false): Promise<{ plain: str
   const renderer = new ScreenRenderer({ cols: size.cols, rows: size.rows });
   await renderer.write(fs.readFileSync(`${root}.ansi`, 'utf8'));
   const lines = renderer.styledLines({ last: 2000 }).lines;
-  renderer.dispose();
+  await renderer.dispose();
   if (typedAhead) {
     const composer = lines.find((line) => line.text === '❯');
     if (composer === undefined) throw new Error('Muse composer missing');

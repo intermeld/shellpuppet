@@ -255,12 +255,39 @@ window.ShellPuppetPane = (() => {
       theme: { background: '#0b0e14', foreground: '#c5cdd9', cursor: '#6cb6ff' },
     });
     term.open(container);
+    let pendingWrites = 0;
+    let terminalReleased = false;
+    const releaseTerminal = () => {
+      if (terminalReleased) return;
+      terminalReleased = true;
+      term.dispose();
+    };
+    // Closing a pane detaches it immediately. Its finite parser queue keeps
+    // the terminal alive until the last callback, including geometry markers.
+    const writeTerminal = (data, applied) => {
+      if (destroyed) return;
+      pendingWrites++;
+      term.write(data, () => {
+        pendingWrites--;
+        if (!destroyed) applied?.();
+        if (destroyed && pendingWrites === 0) window.queueMicrotask(releaseTerminal);
+      });
+    };
+    const resizeTerminal = (cols, rows, force = false) => {
+      if (destroyed) return;
+      const apply = () => {
+        if (force || term.cols !== cols || term.rows !== rows) term.resize(cols, rows);
+      };
+      if (pendingWrites === 0) apply();
+      else writeTerminal('', apply);
+    };
     let metricsFrame = null;
     const refreshFontMetrics = () => {
       if (destroyed || metricsFrame !== null) return;
       // Let xterm finish updating its renderer before measuring a new fit.
       metricsFrame = window.requestAnimationFrame(() => {
         metricsFrame = null;
+        if (destroyed) return;
         term._core._charSizeService.measure();
         relayout(false);
         onMetricsChange();
@@ -339,6 +366,7 @@ window.ShellPuppetPane = (() => {
     const isMac = /Mac|iPhone|iPad/i.test(platform);
     // Let the browser deliver paste to xterm's textarea on Windows and Linux.
     term.attachCustomKeyEventHandler((event) => {
+      if (destroyed) return false;
       if (isMac || event.type !== 'keydown' || !event.ctrlKey || event.shiftKey || event.altKey || event.metaKey) return true;
       if (event.key.toLowerCase() === 'v') return false;
       if (event.key.toLowerCase() === 'c' && term.hasSelection()) {
@@ -349,7 +377,7 @@ window.ShellPuppetPane = (() => {
         }
         const selection = term.getSelection();
         void navigator.clipboard.writeText(selection).then(() => {
-          if (term.getSelection() === selection) term.clearSelection();
+          if (!destroyed && term.getSelection() === selection) term.clearSelection();
         }).catch(() => showBanner('Could not copy selected text to the clipboard.'));
         return false;
       }
@@ -360,6 +388,7 @@ window.ShellPuppetPane = (() => {
     // notices to the rendered screen, not to the outer fit box, and keep the
     // cursor's half free even as a TUI moves its cursor without a grid change.
     function positionNotices() {
+      if (destroyed) return;
       const notices = elements.promptAlert?.parentElement || elements.banner?.parentElement;
       const wrap = container.parentElement;
       const screen = term.element?.querySelector('.xterm-screen');
@@ -423,6 +452,7 @@ window.ShellPuppetPane = (() => {
     }
 
     function relayout(deliberate) {
+      if (destroyed) return;
       if (!geometryDecided) return;
       if (dashboardProof !== null) {
         applyFontPreference(gridCols, gridRows);
@@ -441,7 +471,7 @@ window.ShellPuppetPane = (() => {
       const font = drivingFontPx();
       if (term.options.fontSize !== font) {
         term.options.fontSize = font;
-        term.resize(term.cols, term.rows);
+        resizeTerminal(term.cols, term.rows, true);
       }
       updateZoomButtons();
       const proposed = propose();
@@ -651,7 +681,8 @@ window.ShellPuppetPane = (() => {
       if (max && Number.isInteger(max.cols) && Number.isInteger(max.rows)) {
         gridMax = { cols: max.cols, rows: max.rows };
       }
-      if (term.cols !== cols || term.rows !== rows) term.resize(cols, rows);
+      // Compare at the parser boundary: another geometry frame may be queued.
+      resizeTerminal(cols, rows);
       if (controlMode === 'yours' && !captureMode && dashboardProof === null) {
         updateZoomButtons();
       } else {
@@ -675,6 +706,7 @@ window.ShellPuppetPane = (() => {
     }
 
     function setFontOverride(value) {
+      if (destroyed) return;
       fontOverride = value;
       onFontOverrideChange(value);
       if (dashboardProof !== null) {
@@ -711,6 +743,7 @@ window.ShellPuppetPane = (() => {
       ws.binaryType = 'arraybuffer';
 
       ws.onopen = () => {
+        if (destroyed) return;
         clearStallAlert();
         everConnected = true;
         if (elements.dot) elements.dot.classList.remove('off');
@@ -725,16 +758,18 @@ window.ShellPuppetPane = (() => {
           if (redactedCapture && window.__shellpuppetPainted === true) return;
           if (captureMode && !firstFrameSeen) {
             firstFrameSeen = true;
-            term.write(new Uint8Array(event.data), () => {
+            writeTerminal(new Uint8Array(event.data), () => {
               window.requestAnimationFrame(() => {
+                if (destroyed) return;
                 window.requestAnimationFrame(() => {
+                  if (destroyed) return;
                   window.__shellpuppetPainted = true;
                 });
               });
             });
             return;
           }
-          term.write(new Uint8Array(event.data));
+          writeTerminal(new Uint8Array(event.data));
           return;
         }
         try {
@@ -808,6 +843,7 @@ window.ShellPuppetPane = (() => {
 
     return {
       destroy() {
+        if (destroyed) return;
         destroyed = true;
         fontListeners.delete(refreshFontMetrics);
         resolutionListener.dispose();
@@ -818,12 +854,13 @@ window.ShellPuppetPane = (() => {
         clearTimeout(reconnectTimer);
         if (ws) ws.close();
         if (redactedCapture) delete window.__shellpuppetCoverRows;
-        term.dispose();
+        if (pendingWrites === 0) releaseTerminal();
       },
       setFontOverride(value) {
         setFontOverride(value);
       },
       nudgeFont(delta) {
+        if (destroyed) return;
         nudgeFont(delta);
       },
       getFontOverride() {
@@ -850,17 +887,21 @@ window.ShellPuppetPane = (() => {
         return { cols: gridCols, rows: gridRows };
       },
       belowDashboardFloor() {
+        if (destroyed) return false;
         return belowDashboardFloor();
       },
       floorFontSize() {
+        if (destroyed) return null;
         return largestFittingFont(80, 24, MAX_FONT_PX, 1);
       },
       setDashboardFontLimit(font) {
+        if (destroyed) return;
         dashboardFontLimit = font;
         if (geometryDecided) applyFontPreference(gridCols, gridRows);
         positionNotices();
       },
       autoFitGrid(floorCols = 80, floorRows = 24, force = false) {
+        if (destroyed) return false;
         if (dashboardProof === null || controlMode === 'held' || (followingExternal && !force) || !geometryDecided ||
             !ws || ws.readyState !== 1 || sessionEnded) return false;
         if (force) {
@@ -878,6 +919,7 @@ window.ShellPuppetPane = (() => {
         return this.takeGrid(cols, rows);
       },
       takeGrid(cols, rows) {
+        if (destroyed) return false;
         if (dashboardProof === null || !ws || ws.readyState !== 1 || !geometryDecided) return false;
         const wanted = { cols: Math.max(2, Math.min(400, cols)), rows: Math.max(2, Math.min(150, rows)) };
         pendingTakeGrid = true;
@@ -885,6 +927,7 @@ window.ShellPuppetPane = (() => {
         return true;
       },
       fitGrid(floorCols = 80, floorRows = 24) {
+        if (destroyed) return false;
         if (dashboardProof === null) return false;
         followingExternal = false;
         const proposed = proposeDashboardGrid();

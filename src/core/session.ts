@@ -307,9 +307,11 @@ export class SessionInputFailedError extends Error {
 export class SessionProgramEndedError extends Error {
   constructor(
     readonly sessionId: string,
-    readonly exitCode: number,
+    readonly exitCode: number | null,
   ) {
-    super(`Cannot resize session ${sessionId}: its program has exited (code ${String(exitCode)}).`);
+    super(exitCode === null
+      ? `Cannot resize session ${sessionId}: it has ended or is being killed.`
+      : `Cannot resize session ${sessionId}: its program has exited (code ${String(exitCode)}).`);
     this.name = 'SessionProgramEndedError';
   }
 }
@@ -894,6 +896,7 @@ export class Session implements WaitTarget {
     this.stallPtyCols = this.pty.cols;
     this.stallPtyRows = this.pty.rows;
     this.pty.onData((data) => {
+      if (this.exitedFlag || this.isKilled) return;
       // node-pty can apply a requested resize later, after its first output.
       // Observe the dimensions it reports as well as our explicit requests.
       if (this.pty.cols !== this.stallPtyCols || this.pty.rows !== this.stallPtyRows) {
@@ -931,7 +934,7 @@ export class Session implements WaitTarget {
       // holds, so the snapshot cost stops at the first visible character.
       if (!this.painted) {
         void rendered.then(() => {
-          if (!this.painted && this.renderer.snapshot().screen !== '') this.painted = true;
+          if (!this.exitedFlag && !this.isKilled && !this.painted && this.renderer.snapshot().screen !== '') this.painted = true;
         });
       }
       this.lastChange = Date.now();
@@ -1276,6 +1279,7 @@ export class Session implements WaitTarget {
   }
 
   private resizeNow(cols: number, rows: number, options: { hold?: boolean }): void {
+    if (this.exitedFlag || this.isKilled) throw new SessionProgramEndedError(this.id, this.exitCodeValue);
     const ended = recordedExitCode(this.pty);
     if (ended !== undefined) throw new SessionProgramEndedError(this.id, ended);
     this.pty.resize(cols, rows);
@@ -1742,7 +1746,7 @@ export class Session implements WaitTarget {
     }
 
     this.queueConsoleHost();
-    this.renderer.dispose();
+    await this.renderer.dispose();
   }
 
   /**

@@ -17,7 +17,7 @@ async function museCapture(name: string): Promise<string> {
   const renderer = new ScreenRenderer({ cols: meta.cols, rows: meta.rows });
   await renderer.write(fs.readFileSync(`${root}.ansi`, 'utf8'));
   const screen = renderer.snapshot().screen;
-  renderer.dispose();
+  await renderer.dispose();
   return screen;
 }
 
@@ -181,7 +181,7 @@ describe('detectPrompt: Muse Code', () => {
       expect(renderer.styledLines().lines[row]?.text).toBe(lines[row]!.text);
       expect(detectPrompt(renderer.snapshot().screen)?.signature).toContain('Stage 2/3');
     } finally {
-      renderer.dispose();
+      await renderer.dispose();
     }
   });
 

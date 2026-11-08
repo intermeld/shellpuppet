@@ -78,7 +78,7 @@ describe('prompt supervision across sessions', () => {
         await renderer.write(fs.readFileSync(`${root}.ansi`, 'utf8'));
         const screenFile = path.join(short.home, 'menu.txt');
         fs.writeFileSync(screenFile, renderer.snapshot().screen);
-        renderer.dispose();
+        await renderer.dispose();
         const started = await api(short.port, short.token, '/sessions', {
           body: { command: process.execPath, args: [sink, screenFile, answered], shell: false, agent: 'muse', cols: size.cols, rows: size.rows },
         });

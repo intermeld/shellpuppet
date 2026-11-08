@@ -33,7 +33,7 @@ for (const marker of markers) {
       expect(validateStall(bounded.lines, signature, false, bounded.firstVisible))
         .toEqual({ inconclusive: true, blockIdentity: candidate!.blockIdentity });
       expect(detectStall(bounded.lines, signature, false, bounded.firstVisible)).toBeNull();
-    } finally { renderer.dispose(); }
+    } finally { await renderer.dispose(); }
   });
 
   it(`checks the framing of a complete ${marker.name} row after the unknown continuation`, async () => {
@@ -53,6 +53,6 @@ for (const marker of markers) {
       expect(detectStall(bounded.lines, signature, false, bounded.firstVisible)).toBeNull();
       // A complete first row must also be checked when the turn is missing.
       expect(validateStall(bounded.lines.slice(complete), signature, false, Math.max(0, bounded.firstVisible - complete))).toEqual(expected);
-    } finally { renderer.dispose(); }
+    } finally { await renderer.dispose(); }
   });
 }

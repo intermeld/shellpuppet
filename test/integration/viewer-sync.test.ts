@@ -96,7 +96,7 @@ function openViewer(id: string): Promise<ViewerSim> {
         wipes: () => wipes,
         close: () => {
           ws.close();
-          term.dispose();
+          void term.dispose();
         },
       });
     });
