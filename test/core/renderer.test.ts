@@ -11,8 +11,8 @@ function makeRenderer(cols = 40, rows = 5, scrollback = 100): ScreenRenderer {
   return r;
 }
 
-afterEach(() => {
-  while (renderers.length > 0) renderers.pop()?.dispose();
+afterEach(async () => {
+  while (renderers.length > 0) await renderers.pop()?.dispose();
 });
 
 describe('ScreenRenderer.snapshot', () => {

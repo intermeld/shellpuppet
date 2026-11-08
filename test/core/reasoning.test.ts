@@ -61,7 +61,7 @@ async function screen(name: string): Promise<StyledLine[]> {
   const renderer = new ScreenRenderer({ cols: meta.cols, rows: meta.rows });
   await renderer.write(fs.readFileSync(path.join(FIXTURES, `${name}.ansi`), 'utf8'));
   const { lines } = renderer.styledLines({ last: 2000 });
-  renderer.dispose();
+  await renderer.dispose();
   return lines;
 }
 
@@ -149,7 +149,7 @@ describe('the generic engine', () => {
     const filtered = hideReasoning(view.lines, builtIn('qoder'), view.firstVisible);
     expect(filtered?.lines.join('\n')).not.toContain('SECRET_');
     expect(filtered?.lines.join('\n')).toContain('MANGO');
-    renderer.dispose();
+    await renderer.dispose();
   });
 
   it('hides wrapped rows with an indent based reasoning continuation', async () => {
@@ -159,7 +159,7 @@ describe('the generic engine', () => {
     const filtered = hideReasoning(renderer.styledLines().lines, signature);
     expect(filtered?.lines.join('\n')).not.toContain('SECRET_');
     expect(filtered?.lines.join('\n')).toContain('MANGO');
-    renderer.dispose();
+    await renderer.dispose();
   });
 
   it('hides wrapped rows when the reasoning block has no continuation rule', async () => {
@@ -169,7 +169,7 @@ describe('the generic engine', () => {
     const filtered = hideReasoning(renderer.styledLines().lines, signature);
     expect(filtered?.lines.join('\n')).not.toContain('SECRET_');
     expect(filtered?.lines.join('\n')).toContain('MANGO');
-    renderer.dispose();
+    await renderer.dispose();
   });
 
   it('keeps every row of a soft-wrapped answer in the result', async () => {
@@ -179,7 +179,7 @@ describe('the generic engine', () => {
     const result = latestResult(renderer.styledLines().lines, signature);
     expect(result.found).toBe(true);
     if (result.found) expect(result.answer.join('')).toContain('MANGO_MANGO_MANGO_MANGO_MANGO_MANGO_MANGO_MANGO_MANGO_');
-    renderer.dispose();
+    await renderer.dispose();
   });
 
   it('hides a leading continuation by reading its parent above the window', async () => {
@@ -193,7 +193,7 @@ describe('the generic engine', () => {
     }]).signatures[0]!);
     expect(filtered?.lines.join('\n')).not.toContain('SECRET_');
     expect(filtered?.lines.join('\n')).toContain('MANGO');
-    renderer.dispose();
+    await renderer.dispose();
   });
 
   it('reads beyond the context window to keep a wrapped answer', async () => {
@@ -208,7 +208,7 @@ describe('the generic engine', () => {
     const firstVisible = Math.max(0, tail.lines.length - 3);
     expect(tail.lines[0]?.wrapped).not.toBe(true);
     expect(hideReasoning(tail.lines, signature, firstVisible)?.lines.join('\n')).toContain('MMMM');
-    renderer.dispose();
+    await renderer.dispose();
   });
 
   it('keeps hiding a continuation whose parent has left the buffer', async () => {
@@ -219,7 +219,7 @@ describe('the generic engine', () => {
     const filtered = hideReasoning(view.lines, builtIn('qoder'), view.firstVisible);
     expect(filtered?.lines.join('\n')).not.toContain('SSSS');
     expect(filtered?.hiddenLines).toBeGreaterThan(0);
-    renderer.dispose();
+    await renderer.dispose();
   });
 
   it('does not take wrapped text for an independent answer or reasoning start', () => {
@@ -252,7 +252,7 @@ describe('the generic engine', () => {
     expect(kept).toContain('Allow this command to run?');
     expect(kept).toContain('decision visible');
     expect(kept).not.toMatch(/^Thinking$/m);
-    renderer.dispose();
+    await renderer.dispose();
   });
 
   it('replaces each reasoning block with one marker line and keeps everything else', () => {

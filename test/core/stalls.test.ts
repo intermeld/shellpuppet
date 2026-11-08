@@ -12,7 +12,7 @@ async function rows(): Promise<StyledLine[]> {
   const renderer = new ScreenRenderer({ cols: 120, rows: 30 });
   await renderer.write(fixture);
   const lines = renderer.styledLines().lines;
-  renderer.dispose();
+  await renderer.dispose();
   return lines;
 }
 function detect(lines: StyledLine[], prompt = false) {

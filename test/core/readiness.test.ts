@@ -46,7 +46,7 @@ describe('recorded module readiness', () => {
       if (name === 'muse') {
         expect(readinessMatches(readiness, `${screen.split('Voice input')[0]}Voice input (Alt+V to start)`, target(), 0)).toBe(false);
       }
-    } finally { renderer.dispose(); }
+    } finally { await renderer.dispose(); }
   });
 
   it('selects defaults only on opt-in and refuses unknown programs before spawning', () => {

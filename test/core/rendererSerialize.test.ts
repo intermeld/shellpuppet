@@ -20,8 +20,8 @@ async function rebuild(bytes: string, cols = 40, rows = 5): Promise<ScreenRender
   return twin;
 }
 
-afterEach(() => {
-  while (renderers.length > 0) renderers.pop()?.dispose();
+afterEach(async () => {
+  while (renderers.length > 0) await renderers.pop()?.dispose();
 });
 
 describe('ScreenRenderer.serialize', () => {

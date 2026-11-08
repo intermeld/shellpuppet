@@ -598,6 +598,18 @@ list compiles nothing. It takes about ten seconds, cold or warm. The daemon's ow
 pseudoconsole handle stays open until the
 daemon process exits, and the host is given no CTRL_CLOSE_EVENT.
 
+Output arriving after an exit or the start of a kill is dropped before mode
+tracking, rendering or viewer delivery. Killing closes the renderer's public
+surface before disposal: writes and resizes become no-ops, reads return empty
+content, and dimensions remain available without reading xterm. Pending writes,
+resize markers and capture markers drain before xterm is disposed. A kill waits
+at most one second for that drain; a slower queue retains its detached terminal
+and disposes it when parsing finishes, never on the timeout itself. Replay and
+check renderers use the same lifetime. Browser panes likewise detach on close
+and dispose after their last write callback, with late paint callbacks ignored.
+Resizes take their place between writes so that subsequent replay bytes use the
+right grid. Unexpected errors still reach the daemon's normal shutdown handler.
+
 A **Job Object with kill-on-close** is future hardening: it needs a native module,
 and the gap it would close is narrow but real. If the daemon itself dies without running
 its teardown, its ConPTY handles close and console-attached descendants get that close

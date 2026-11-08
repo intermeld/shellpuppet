@@ -71,7 +71,7 @@ async function screen(name: string): Promise<StyledLine[]> {
   const renderer = new ScreenRenderer({ cols: meta.cols, rows: meta.rows });
   await renderer.write(fs.readFileSync(path.join(FIXTURES, `${name}.ansi`), 'utf8'));
   const { lines } = renderer.styledLines({ last: 2000 });
-  renderer.dispose();
+  await renderer.dispose();
   return lines;
 }
 

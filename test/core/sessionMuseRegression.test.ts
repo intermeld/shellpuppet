@@ -85,7 +85,7 @@ describe('Muse menu settling', () => {
     const renderer = new ScreenRenderer({ cols: meta.cols, rows: meta.rows });
     await renderer.write(fs.readFileSync(`${root}.ansi`, 'utf8'));
     const screen = renderer.snapshot().screen;
-    renderer.dispose();
+    await renderer.dispose();
     expect(make('muse').session.answerablePrompt(screen, 0)).toBeNull();
     expect(make('generic').session.answerablePrompt(screen, 0)?.signature).toContain('Stage 2/3');
     expect(make('codex').session.answerablePrompt(screen, 0)?.signature).toContain('Stage 2/3');
