@@ -716,6 +716,7 @@ export class Session implements WaitTarget {
   private stallValidatedContent: string | undefined;
   private stallTranscript: string | undefined;
   private stallValidatedTranscript: string | undefined;
+  private stallValidationPending = false;
 
   /** Whether the program has hidden the cursor (DECTCEM off), carried to viewers. */
   private cursorHidden = false;
@@ -1259,18 +1260,8 @@ export class Session implements WaitTarget {
     // Reflow is layout, including when it clips the recognised context. Take
     // the new comparison baseline so a later cursor-only write stays layout.
     if (this.agentModule?.stalls !== undefined) {
-      // ConPTY can first redraw a shorter user turn, then repaint it in full.
-      // Restart even a pending check so layout identity is compared only after
-      // this resize's coalescing window. Cheap genuine-end checks still run
-      // on every write; output alone must never move this deadline.
-      this.stallNextCheck = Date.now() + 250;
-      if (this.stallTimer !== null) {
-        this.clearStallTimer();
-        this.stallTimer = setTimeout(() => this.refreshStall(), Math.max(0, this.stallNextCheck - Date.now()));
-        this.stallTimer.unref();
-      }
       this.stallContent = stallScreenContent(this.renderer.plainViewport(), this.agentModule.stalls);
-      this.stallTranscript = stallTranscriptContent(this.renderer.plainViewport({ joinWrapped: true, skipClipped: true }), this.agentModule.stalls);
+      this.stallTranscript = stallTranscriptContent(this.renderer.plainViewport({ joinWrapped: true, skipClipped: true }), this.agentModule.stalls, signatureForSession(this) ?? undefined);
       if (this.stallState === undefined) this.scheduleStall();
     }
     if (options.hold !== undefined) this.geometryHeldFlag = options.hold;
@@ -1332,10 +1323,11 @@ export class Session implements WaitTarget {
         return;
       }
       this.stallContent = content;
-      const transcript = stallTranscriptContent(this.renderer.plainViewport({ joinWrapped: true, skipClipped: true }), this.agentModule!.stalls!);
-      if (transcript !== this.stallTranscript && transcript !== this.stallValidatedTranscript) {
+      const transcript = stallTranscriptContent(this.renderer.plainViewport({ joinWrapped: true, skipClipped: true }), this.agentModule!.stalls!, signatureForSession(this) ?? undefined);
+      if (transcript !== '' && transcript !== this.stallTranscript && transcript !== this.stallValidatedTranscript) {
         this.stallTracker.invalidate();
         this.publishStall(undefined);
+        this.stallValidationPending = false;
         this.clearStallTimer();
       }
       this.stallTranscript = transcript;
@@ -1362,7 +1354,7 @@ export class Session implements WaitTarget {
       if (candidate !== null && detectPrompt(plain.join('\n'), this.agent) !== null) candidate = null;
     }
     if (candidate !== null) {
-      this.stallTranscript = stallTranscriptContent(this.renderer.plainViewport({ joinWrapped: true, skipClipped: true }), this.agentModule!.stalls!);
+      this.stallTranscript = stallTranscriptContent(this.renderer.plainViewport({ joinWrapped: true, skipClipped: true }), this.agentModule!.stalls!, signature);
       // Keep the complete-context baselines across an inconclusive read: a
       // native redraw on growth can restore that viewport after clipped reflow.
       if (!('inconclusive' in candidate)) {
@@ -1370,6 +1362,15 @@ export class Session implements WaitTarget {
         this.stallValidatedTranscript = this.stallTranscript;
       }
     }
+    // A partial redraw may temporarily lose the block or composer. Confirm
+    // invalidation at the next bounded check; output cannot postpone it.
+    if (this.stallState !== undefined && !this.stallTracker.matchesBlock(candidate) && !this.stallValidationPending) {
+      this.stallValidationPending = true;
+      this.stallTimer = setTimeout(() => this.refreshStall(), 250);
+      this.stallTimer.unref();
+      return;
+    }
+    this.stallValidationPending = false;
     this.publishStall(this.stallTracker.observe(candidate));
     const remaining = this.stallTracker.remaining();
     if (remaining !== null) {

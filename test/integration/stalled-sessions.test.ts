@@ -12,6 +12,8 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerTools } from '../../src/mcp/tools.js';
+import type { SessionManager } from '../../src/core/manager.js';
+import { stallDiagnostics } from './stall-diagnostics.js';
 
 const run = promisify(execFile);
 let td: TestDaemon;
@@ -178,23 +180,30 @@ describe('provider stall supervision', () => {
   });
   it.each(['neutral', 'colon'])('keeps one native %s notice and its since through clipped context, repaints and growth', async (prompt) => {
     const started = await api(td.port, td.token, '/sessions', {
-      body: { command: process.execPath, args: [path.join(repoRoot, 'test/fixtures/clipped-stalled-screen.mjs'), ...(prompt === 'colon' ? ['--colon'] : [])],
+      body: { command: process.execPath, args: [path.join(repoRoot, 'test/fixtures/clipped-stalled-screen.mjs'), ...(prompt === 'colon' ? ['--colon'] : []),
+        ...(process.env['SP_STALL_CHUNK_DELAYS'] === '1' ? ['--chunk-delays'] : [])],
         shell: false, agent: 'mimo', cols: 120, rows: 30 },
     });
     expect(started.status).toBe(200);
     const clippedId = String(started.body['id']);
+    const manager = (td.daemon as unknown as { manager: SessionManager }).manager;
+    const diagnostics = stallDiagnostics(manager.get(clippedId)!);
     fs.writeFileSync(path.join(td.home, `clipped-${prompt}-fixture-pid.json`), JSON.stringify({ pid: started.body['pid'], id: clippedId }));
     const state = async () => {
       const result = await api(td.port, td.token, '/sessions');
       return (result.body['sessions'] as Record<string, unknown>[]).find(session => session['id'] === clippedId)?.['stalled'];
     };
-    await eventually(async () => await state() !== undefined);
-    const before = await state();
-    const live = await connectWs(td.port, clippedId, td.token);
+    let live: WsClient | undefined;
     try {
+      await eventually(async () => await state() !== undefined);
+      const before = await state();
+      live = await connectWs(td.port, clippedId, td.token);
       for (const [cols, rows] of [[80, 24], [120, 30]]) {
+        diagnostics.resize(cols!, rows!, 'requested');
         await api(td.port, td.token, `/sessions/${clippedId}/resize`, { body: { cols, rows } });
+        diagnostics.resize(cols!, rows!, 'returned');
         await new Promise(resolve => setTimeout(resolve, 2400));
+        diagnostics.resize(cols!, rows!, 'settled');
         expect(await state()).toEqual(before);
       }
       expect(messages.filter(message => message['type'] === 'session-stalled' && message['session'] === clippedId)).toHaveLength(1);
@@ -203,7 +212,8 @@ describe('provider stall supervision', () => {
       const audit = fs.readFileSync(path.join(td.home, 'audit.log'), 'utf8');
       expect(audit.split('\n').filter(line => line.includes('"session-stalled"') && line.includes(clippedId))).toHaveLength(1);
       expect(live.controls().filter(control => control['type'] === 'session-stall-clear')).toHaveLength(0);
-    } finally { live.close(); }
+    } catch (error) { diagnostics.print(); throw error; }
+    finally { diagnostics.stop(); live?.close(); }
   });
   it('announces a responsive native composer once across resize and grey suggestions', async () => {
     const started = await api(td.port, td.token, '/sessions', {

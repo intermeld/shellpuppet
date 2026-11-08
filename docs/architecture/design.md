@@ -669,17 +669,18 @@ idle and bottom-row text rules and joins terminal wraps. It omits a leading
 wrapped continuation whose length changes as native redraws scroll the viewport;
 the bounded styled read still validates the available turn context. It does not prove
 the composer idle: coalesced styled validation still checks the full shape,
-including suggestion ink. An unchanged canonical identity or inconclusive
-turn context with the same validated refusal and footer keeps an established
-notice. A changed identity or invalid visible shape clears it. Reflowed text
-and the last fully validated turn provide comparison baselines for native
+including suggestion ink. The same validated refusal and footer keep an established
+notice even when the complete user-turn text changes or its context is clipped.
+Reflowed text and the last fully validated turn provide comparison baselines for native
 repaints; inconclusive reads retain the latter for growth.
-Resize restarts the 250 ms coalescing window, including any pending check.
-Native preliminary redraws can temporarily shorten the reconstructed user-turn
-text while leaving the refusal and footer unchanged. That layout change waits
-for the window to end; a complete identity that still differs then clears the
-notice and must settle again. Equal refusal and footer alone cannot establish
-that a complete user turn is unchanged. Output does not extend the deadline.
+User-turn text participates in discovery, but never ends an established notice.
+Reflow and native redraws can change that text for an
+arbitrary duration. Changes or loss of the refusal, completed footer or valid
+composer must survive two coalesced validations before clearing; restoration
+between checks preserves the original time. Checks stay 250 ms apart, and
+neither output nor resize extends a pending confirmation deadline. Real input
+suppresses the refusal and footer across user-turn text changes until that
+block disappears or is replaced.
 Non-empty real input, new transcript text, busy markers and prompts clear the
 state immediately. Busy screens, missing composer edges and absent candidate
 ink are rejected before styled history or prompt scans. Context reads are
