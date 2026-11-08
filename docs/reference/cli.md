@@ -73,8 +73,8 @@ these supervision conditions. Exit code 3 means a wait did not match;
 `--now` returns normally even when no session needs attention.
 
 The refusal is recognised by its shape on screen, at and above the 80x24
-floor. It must finish the live turn, outside MiMo's recognised tool panels and
-quoted content, with a visible idle composer and only recognised bottom chrome
+floor. It must finish the live turn with MiMo's error ink, outside recognised
+tool panels, with a visible idle composer and only recognised bottom chrome
 below it. The same refusal must persist for one second. Indented unsent input
 does not qualify; a clipped user-turn boundary prevents a new stall. Copy and recovery
 controls, sidebar changes, resize reflow and cursor-only writes preserve the
@@ -82,7 +82,10 @@ stall and its original time. Composer frames repainted to the new width and
 accepted grey suggestions arriving or leaving also preserve it while the
 canonical refusal identity is unchanged, with no clear or further announcement.
 Presentation changes are validated on a coalesced timer. Changes confined to
-user-turn text never end an established notice. Changes or loss of the refusal,
+user-turn text, including every indented continuation behind its gutter, never
+end an established notice. Ordinary output keeps its marker characters and
+indentation; busy hints and cosmetic controls count only in their framed UI regions.
+Changes or loss of the refusal,
 completed footer or valid composer must persist across two checks 250 ms apart.
 Output and resize do not postpone confirmation.
 Partial grey suggestion paints also wait for validation of the complete idle composer.
@@ -90,7 +93,7 @@ If only the user-turn boundary is outside the viewport plus 128 preceding rows,
 an established notice
 keeps its identity and time while the available content, same refusal block,
 footer and idle composer still qualify. An incomplete leading wrapped row has
-unknown context; it cannot set quotation, fence or tool-panel state. Every complete
+unknown context; it cannot set tool-panel state. Every complete
 available content row is still checked. Missing context cannot finish settling
 a new notice. A confirmed changed refusal or invalid visible shape clears the notice.
 Busy output, newer transcript output, a prompt,

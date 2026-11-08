@@ -9,6 +9,7 @@
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { FeedFrame } from '../../src/daemon/sessionFeed.js';
+import type { SessionManager } from '../../src/core/manager.js';
 import { api, connectWs, eventually, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 
@@ -465,12 +466,30 @@ describe('dashboard feed prompts and removal races', () => {
     });
     const frames: FeedFrame[] = [];
     const unsubscribe = subscribe(daemon, frames);
+    const began = performance.now();
+    let phase = 'start';
+    let id = '';
+    const timings: { phase: string; at: string; elapsedMs: number }[] = [];
+    const mark = (next: string) => { phase = next; timings.push({ phase, at: new Date().toISOString(), elapsedMs: performance.now() - began }); };
+    const diagnostics = () => console.error('Session removal race diagnostics (no screen text):', JSON.stringify({
+      phase, elapsedMs: performance.now() - began, timings,
+      sessions: (daemon.daemon as unknown as { manager: SessionManager }).manager.list()
+        .map(session => ({ id: session.id, exited: session.exited })),
+      frames: frames.map(frame => ({ type: frame.type,
+        id: 'session' in frame ? (typeof frame.session === 'string' ? frame.session : frame.session.id) : undefined })),
+    }));
+    const watchdog = setTimeout(diagnostics, 55_000);
     try {
-      const id = await start(daemon, 'setTimeout(() => process.exit(0), 150)', { label: 'race' });
+      mark('starting');
+      id = await start(daemon, 'setTimeout(() => process.exit(0), 150)', { label: 'race' });
+      mark('started');
       await new Promise((resolve) => setTimeout(resolve, 40));
+      mark('delete requested');
       const killed = await api(daemon.port, daemon.token, `/sessions/${id}`, { method: 'DELETE' });
+      mark('delete returned');
       expect(killed.status).toBe(200);
       await eventually(() => forSession(frames, id).some((frame) => frame.type === 'session-removed'), 20_000);
+      mark('removal observed');
       // taskkill on this machine can take several seconds. Wait it out so a
       // second onRemoved from the overlapping reap or kill would have arrived.
       await new Promise((resolve) => setTimeout(resolve, 12_000));
@@ -480,9 +499,14 @@ describe('dashboard feed prompts and removal races', () => {
       expect(mine.at(-1)?.type).toBe('session-removed');
       const removedAt = mine.findIndex((frame) => frame.type === 'session-removed');
       expect(mine.slice(removedAt + 1)).toEqual([]);
+    } catch (error) {
+      diagnostics(); throw error;
     } finally {
+      mark('cleanup');
       unsubscribe();
       await daemon.stop();
+      mark('stopped');
+      clearTimeout(watchdog);
     }
   });
 

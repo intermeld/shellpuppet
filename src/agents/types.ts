@@ -37,6 +37,8 @@ export interface ReadingContext {
   ranges: (lines: readonly StyledLine[], signature: CompiledSignature, limit: number) => [number, number][];
 }
 export interface ReadingRules {
+  /** Crop only independently framed adjacent UI, before any reading walk. */
+  contentRegion?: (lines: readonly StyledLine[]) => readonly StyledLine[];
   composer?: (lines: readonly StyledLine[], index: number, signature: CompiledSignature, context: ReadingContext) => boolean;
   busyWithoutComposer?: boolean;
   busy?: (lines: readonly StyledLine[], turnStart: number, chrome: number, signature: CompiledSignature, context: ReadingContext) => boolean;
@@ -54,15 +56,22 @@ export interface StallSignature {
   description: string;
   /** Complete visible marker row, excluding trailing space, before styled reads. */
   marker: { text: string; fg: string[] };
-  /** Anchored controls; capture groups 1 and 2 retain the semantic row prefix. */
+  /** Controls on the completed footer only; group 1 retains its semantic prefix. */
   cosmetic?: RegExp;
+  /** Framing shared with the module's answer reader, independent of body text. */
+  contentRegion?: ReadingRules['contentRegion'];
+  chrome: LineTest[];
+  /** Columns whose ink establishes row ownership for cheap invalidation. */
+  frameColumns: number[];
   before: LineTest;
   rows: LineTest[];
   footer: LineTest;
   composer: LineTest;
+  /** Mode row immediately before the closing edge, for partial redraw ownership. */
+  composerStatus?: LineTest;
   /** Allowed non-blank rows of the idle composer, including placeholders. */
   idle: LineTest[];
-  /** The only non-blank rows allowed below the current composer. */
+  /** Positional rows immediately below the closing edge; later rows are output. */
   bottom: LineTest[];
 }
 

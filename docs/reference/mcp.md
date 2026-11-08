@@ -105,7 +105,7 @@ are present, otherwise `stalled` when any stalled rows are present, otherwise
 
 Only MiMo's refusal shape, measured from a real screen, is supported, at and
 above the 80x24 floor. It is recognised by its shape on screen. The error must belong to the live
-turn outside MiMo's recognised tool panels and quotations, with a completed
+turn with MiMo's error ink outside recognised tool panels, with a completed
 turn footer, a visible idle composer and only recognised bottom chrome below
 it. Indented unsent input does not qualify. Detection needs a known turn
 boundary within the bounded context to establish a new notice.
@@ -115,15 +115,18 @@ resize reflow and cursor-only writes preserve its identity and original time.
 Composer frames repainted to the new width and accepted grey suggestions
 arriving or leaving preserve the notice while the canonical refusal identity
 is unchanged, with no clear or further announcement. Presentation changes are
-validated on a coalesced timer. Changes confined to user-turn text never end an
-established notice. Changes or loss of the refusal, completed footer or valid
+validated on a coalesced timer. Changes confined to user-turn text, including
+every indented continuation behind its gutter, never end an established notice.
+Ordinary output keeps its marker characters and indentation; busy hints and
+cosmetic controls count only in their framed UI regions.
+Changes or loss of the refusal, completed footer or valid
 composer must persist across two checks 250 ms apart. Output and resize do not
 postpone confirmation. Partial grey suggestion paints also wait for validation
 of the complete idle composer. If only the user-turn boundary is
 outside the viewport plus 128 preceding rows, an established notice keeps its identity and
 time while the available content, same refusal block, footer and idle composer
 still qualify. An incomplete leading wrapped row has unknown context; it cannot
-set quotation, fence or tool-panel state. Every complete available content row
+set tool-panel state. Every complete available content row
 is still checked. Missing context cannot finish settling a new notice. A confirmed
 changed refusal or invalid visible shape clears the notice.
 Non-empty real input, newer transcript output, busy output, a prompt or exit
