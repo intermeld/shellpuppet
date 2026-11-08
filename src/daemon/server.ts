@@ -1448,12 +1448,14 @@ export class Daemon {
   private async waitAcrossSessions(res: http.ServerResponse, url: URL): Promise<void> {
     const hide = queryFlag(url, 'hideReasoning');
     const now = queryFlag(url, 'now');
+    const stalled = queryFlag(url, 'stalled');
+    const prompt = queryFlag(url, 'prompt');
     const timeoutText = url.searchParams.get('timeout');
     const timeout = timeoutText === null ? DEFAULT_WAIT_TIMEOUT_MS : Number(timeoutText);
-    if (hide === null || now === null || url.searchParams.get('prompt') !== 'true' ||
+    if (hide === null || now === null || stalled === null || prompt === null || (!prompt && !stalled) ||
         !Number.isFinite(timeout) || timeout < 0 || timeout > MAX_WAIT_TIMEOUT_MS ||
         ['text', 'regex', 'quiet', 'debounce', 'matchAfterInput'].some((key) => url.searchParams.has(key))) {
-      json(res, 400, { error: 'A multi-session wait needs prompt=true, optional now, hideReasoning and a timeout from 0 to 300000 ms.' });
+      json(res, 400, { error: 'A multi-session wait needs prompt=true and/or stalled=true, optional now, hideReasoning and a timeout from 0 to 300000 ms.' });
       return;
     }
     const requested = url.searchParams.getAll('session');
@@ -1466,10 +1468,14 @@ export class Daemon {
     this.waitsInFlight += 1;
     try {
       while (!res.destroyed) {
-        const sessions = this.waitingSessions(hide, ids);
+        const waiting = prompt ? this.waitingSessions(hide, ids) : [];
+        const stalledSessions = stalled ? this.listWithPrompts(hide).flatMap(session =>
+          session.exited || session.stalled === undefined || (ids !== undefined && !ids.has(session.id)) ? [] :
+            [{ id: session.id, label: session.label, reason: 'stalled' as const, stalled: session.stalled }]) : [];
+        const sessions = [...(stalled ? waiting.map(session => ({ ...session, reason: 'prompt' as const })) : waiting), ...stalledSessions];
         const waitedMs = Date.now() - started;
         if (sessions.length > 0 || now || waitedMs >= timeout) {
-          json(res, 200, { matched: sessions.length > 0, reason: sessions.length > 0 ? 'prompt' : 'timeout', waitedMs, sessions });
+          json(res, 200, { matched: sessions.length > 0, reason: waiting.length > 0 ? 'prompt' : stalledSessions.length > 0 ? 'stalled' : 'timeout', waitedMs, sessions });
           return;
         }
         await new Promise((resolve) => setTimeout(resolve, Math.min(WAIT_POLL_INTERVAL_MS, timeout - waitedMs)));
@@ -1973,6 +1979,7 @@ export class Daemon {
       this.updateFeedSession(session.id);
     });
     session.onReady(() => this.updateFeedSession(session.id));
+    this.watchStalls(session);
 
     // The profile name and the written command line, the file that was
     // actually resolved and started, and copied variable names or "all".
@@ -2747,13 +2754,16 @@ export class Daemon {
           json(res, 400, { error: BAD_HIDE_REASONING });
           return;
         }
-        const reader = hide ? this.readerFor(session, res) : null;
-        if (hide && reader === null) return;
+        const stalled = queryFlag(url, 'stalled');
+        if (stalled === null) { json(res, 400, { error: 'stalled must be true or false.' }); return; }
+        const prompt = url.searchParams.get('prompt');
+        const metadataOnly = stalled && (prompt === null || prompt === 'false' || prompt === '0');
+        const reader = hide && !metadataOnly ? this.readerFor(session, res) : null;
+        if (hide && !metadataOnly && reader === null) return;
         const condition: WaitCondition = {};
         const text = url.searchParams.get('text');
         const regex = url.searchParams.get('regex');
         const quiet = url.searchParams.get('quiet');
-        const prompt = url.searchParams.get('prompt');
         if (text !== null) condition.text = text;
         if (regex !== null) condition.regex = regex;
         if (quiet !== null) condition.quiet = Number(quiet);
@@ -2761,6 +2771,7 @@ export class Daemon {
         // become a prompt wait, and the waiter's exactly-one check counts
         // `prompt === true` only.
         if (prompt !== null) condition.prompt = prompt !== 'false' && prompt !== '0';
+        if (stalled) condition.stalled = true;
         const filteredMatch = reader !== null && (condition.text !== undefined || condition.regex !== undefined || condition.prompt === true);
         const pendingReader = signatureForSession(session);
         let matchView: ReturnType<typeof filteredWaitScreen> | undefined;
@@ -2806,6 +2817,10 @@ export class Daemon {
         }
         // Nobody to answer, and writing to a closed response throws.
         if (abort.signal.aborted) return;
+        if (result.reason === 'stalled') {
+          json(res, 200, { ...result, id: session.id, exited: session.exited, exitCode: session.exitCode });
+          return;
+        }
         if (reader !== null) {
           if (filteredMatch && matchView !== undefined) {
             json(res, 200, {
@@ -3089,6 +3104,7 @@ export class Daemon {
       this.updateFeedSession(session.id);
     });
     session.onReady(() => this.updateFeedSession(session.id));
+    this.watchStalls(session);
 
     // Commands are policy-visible by definition, so the command line IS
     // audited (§4.5), unlike typed content. Passed variables are audited by
@@ -3384,6 +3400,19 @@ export class Daemon {
   private updateFeedSession(id: string): void {
     const session = this.manager.get(id);
     if (session !== undefined) this.sessionFeed.update(this.summaryWithPrompt(session.summary()));
+  }
+
+  /** One transition drives the feed, audit, log and both notification channels. */
+  private watchStalls(session: Session): void {
+    session.onStall((stalled) => {
+      this.updateFeedSession(session.id);
+      const type = stalled === undefined ? 'session-stall-clear' : 'session-stalled';
+      const details = stalled === undefined ? {} : { stalled };
+      this.audit.record('daemon', type, session.id, details);
+      if (stalled !== undefined) this.logger.warn('session stalled', { id: session.id, ...details });
+      this.emitEvent({ type, session: session.id, ...details });
+      this.broadcastControl(session.id, { type, ...details });
+    });
   }
 
   private clearPromptGraceCheck(id: string): void {
@@ -4022,6 +4051,8 @@ export class Daemon {
     // the only announcement, and is the exact person the badge is for. Replay the
     // current state to them.
     const held = this.promptStates.get(session.id);
+    const stalled = session.getStalled();
+    if (stalled !== undefined) ws.send(JSON.stringify({ type: 'session-stalled', stalled }));
     if (held?.alerted === true) {
       ws.send(
         JSON.stringify({
@@ -4194,7 +4225,8 @@ export class Daemon {
       // sequences, so this is not always one keystroke.) .catch keeps the exit
       // race, the session dying mid-write, from escaping as an unhandled
       // rejection.
-      void session.write(text).catch((error: unknown) => {
+      const report = terminalReportKind(text);
+      void session.write(text, { terminalReport: report !== null }).catch((error: unknown) => {
         this.logger.warn('viewer input failed', {
           id: session.id,
           error: String(error),
@@ -4205,7 +4237,6 @@ export class Daemon {
       // because the program asked for it. Nobody typed it, so it is audited
       // as a report and leaves the "last input" indicator alone (§4.5, §5).
       // Content only under captureContent, as for input.
-      const report = terminalReportKind(text);
       if (report !== null) {
         this.audit.record(actor, 'report', session.id, {
           kind: report,

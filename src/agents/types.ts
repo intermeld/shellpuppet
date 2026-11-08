@@ -1,4 +1,4 @@
-import type { AgentSignature, CompiledSignature } from '../core/reasoning.js';
+import type { AgentSignature, CompiledSignature, LineTest } from '../core/reasoning.js';
 import type { DialogSignature } from '../core/dialogs.js';
 import type { DetectedPrompt } from '../core/promptDetector.js';
 import type { CellStyle, StyledLine } from '../core/renderer.js';
@@ -41,6 +41,29 @@ export interface ReadingRules {
   busyWithoutComposer?: boolean;
   busy?: (lines: readonly StyledLine[], turnStart: number, chrome: number, signature: CompiledSignature, context: ReadingContext) => boolean;
   pendingComposer?: boolean;
+  /** Live answer content, outside tools and quotations; missing turn context is inconclusive. */
+  liveContent?: (lines: readonly StyledLine[], turnStart: number, candidate: number, context: ReadingContext) => boolean | 'inconclusive';
+  /** Remove a side panel only when the surrounding frame establishes its columns. */
+  inputRegion?: (lines: readonly StyledLine[], composer: number) => readonly StyledLine[];
+}
+
+/** An evidenced error at the end of an idle turn, never a phrase search. */
+export interface StallSignature {
+  reason: string;
+  /** Fixed product wording. Never supplied by the terminal. */
+  description: string;
+  /** Cheap visible marker check before reading styled context or prompts. */
+  marker: { text: string; fg: string[] };
+  /** Built-in cosmetic controls, excluded from identity and repaint comparison. */
+  cosmetic?: RegExp;
+  before: LineTest;
+  rows: LineTest[];
+  footer: LineTest;
+  composer: LineTest;
+  /** Allowed non-blank rows of the idle composer, including placeholders. */
+  idle: LineTest[];
+  /** The only non-blank rows allowed below the current composer. */
+  bottom: LineTest[];
 }
 
 /** Internal harness data and the few detector walks not yet expressed as data. */
@@ -64,6 +87,7 @@ export interface AgentModule {
   };
   env?: { sessionMarkers: string[] };
   safety?: SafetyAdapter;
+  stalls?: StallSignature[];
   matchesProgram?: (pattern: ProgramMatch, program: string) => boolean;
   createPromptSettler?: () => PromptSettler;
   readingRules?: ReadingRules;

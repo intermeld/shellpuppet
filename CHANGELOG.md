@@ -9,6 +9,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Added
 
+- Show a session that stops on a refusal from its model provider as stalled, in session lists and the dashboard, wake `--stalled` / `stalled: true` waits for it and tell its supervisor; MiMo's refusal is the first one recognised.
 - Opt in to waiting for a delegate agent's known ready signals at start, with early returns for questions and exits and a time limit that leaves the session running.
 
 ### Changed

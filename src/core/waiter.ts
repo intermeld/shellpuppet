@@ -35,6 +35,8 @@ function promptForCaller(prompt: DetectedPrompt): NonNullable<WaitResult['prompt
  * the daemon's session.
  */
 export interface WaitTarget {
+  /** Settled, public stall metadata, maintained by the session's reader. */
+  getStalled?(): WaitResult['stalled'];
   /** Current rendered screen (viewport) as plain text. */
   getScreen(): string;
   /** Epoch ms of the most recent output. Session creation seeds this value. */
@@ -126,13 +128,14 @@ export function waitFor(
     condition.text !== undefined,
     condition.regex !== undefined,
     condition.quiet !== undefined,
-    condition.prompt === true,
+    condition.prompt === true || condition.stalled === true,
   ].filter(Boolean).length;
   if (provided !== 1) {
     throw new WaitConditionError(
-      `Exactly one of text, regex, quiet or prompt must be provided (got ${String(provided)}).`,
+      `Exactly one of text, regex, quiet or supervision (prompt and/or stalled) must be provided (got ${String(provided)}).`,
     );
   }
+  const metadataOnly = condition.stalled === true && condition.prompt !== true;
   if (condition.quiet !== undefined && (!Number.isFinite(condition.quiet) || condition.quiet < 0)) {
     throw new WaitConditionError('quiet must be a non-negative number of milliseconds.');
   }
@@ -264,7 +267,13 @@ export function waitFor(
       return undefined;
     };
     let settled = false;
-    const finish = (matched: boolean, reason: WaitResult['reason'], screen = target.getScreen()): void => {
+    const finishStalled = (stalled: NonNullable<WaitResult['stalled']>): void => {
+      if (settled) return;
+      settled = true;
+      options.signal?.removeEventListener('abort', onAbort);
+      resolve({ matched: true, reason: 'stalled', waitedMs: Date.now() - startedAt, screen: '', stalled });
+    };
+    const finish = (matched: boolean, reason: WaitResult['reason'], screen = metadataOnly ? '' : target.getScreen()): void => {
       if (settled) return;
       settled = true;
       options.signal?.removeEventListener('abort', onAbort);
@@ -275,7 +284,7 @@ export function waitFor(
         matched,
         reason,
         waitedMs: Date.now() - startedAt,
-        screen,
+        screen: metadataOnly ? '' : screen,
         ...(matchedPrompt !== null ? { prompt: promptForCaller(matchedPrompt) } : {}),
         ...(detail !== undefined ? { detail } : {}),
       });
@@ -283,7 +292,7 @@ export function waitFor(
 
     const step = (): void => {
       const now = Date.now();
-      const screen = (pattern !== null || condition.prompt === true) && options.screenForMatch !== undefined
+      const screen = metadataOnly ? '' : (pattern !== null || condition.prompt === true) && options.screenForMatch !== undefined
         ? options.screenForMatch()
         : target.getScreen();
 
@@ -316,6 +325,15 @@ export function waitFor(
           matchedAt = null;
           matchedReason = null;
           matchedPrompt = null;
+        }
+      }
+
+      if (matchedAt === null && condition.stalled === true && !target.isExited()) {
+        const stalled = target.getStalled?.();
+        if (stalled !== undefined) {
+          // A stall is already settled. Its reply never carries screen text.
+          finishStalled(stalled);
+          return;
         }
       }
 

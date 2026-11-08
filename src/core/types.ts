@@ -124,6 +124,8 @@ export interface SessionSummary {
   cols: number;
   rows: number;
   ready: boolean;
+  /** A settled provider error at the end of an idle turn. */
+  stalled?: StallState;
   /**
    * Why `ready` holds the value it does. `ready: true` alone is ambiguous and
    * easily read as a green light to start typing: when the caller supplies no
@@ -194,8 +196,8 @@ export interface ScreenSnapshot {
 // ------------------------------------------------------------------------ waiting
 
 /**
- * A wait condition (design §3, `terminal_wait`). Exactly one of `text`, `regex`,
- * `quiet` or `prompt` must be provided.
+ * A wait condition (design §3, `terminal_wait`). Choose `text`, `regex`,
+ * `quiet`, or supervision with `prompt` and/or `stalled`.
  */
 export interface WaitCondition {
   /** Case-insensitive substring to await on the rendered screen. */
@@ -212,6 +214,19 @@ export interface WaitCondition {
    * what this waits for and what `daemon.log` announces cannot drift apart.
    */
   prompt?: boolean;
+  /** An idle provider error; may be combined with prompt. */
+  stalled?: boolean;
+}
+
+/** Safe to publish to every reader: no screen text or detector identity. */
+export interface StallState {
+  reason: string;
+  description: string;
+  since: string;
+}
+
+export function stallLine(stall: StallState): string {
+  return `STALLED ${stall.reason} since ${stall.since}: ${stall.description}`;
 }
 
 export interface WaitOptions {
@@ -251,6 +266,7 @@ export type WaitReason =
   | 'regex'
   | 'quiet'
   | 'prompt'
+  | 'stalled'
   | 'prompt-typed'
   | 'exited'
   | 'timeout'
@@ -270,6 +286,7 @@ export interface WaitResult {
    * Absent for every other condition.
    */
   prompt?: Pick<DetectedPrompt, 'question' | 'options' | 'signature' | 'selectedOption'>;
+  stalled?: StallState;
   /**
    * Why the wait did NOT match, when the waiter can say more than the reason,
    * e.g. quiet timed out because the program has not painted anything yet.

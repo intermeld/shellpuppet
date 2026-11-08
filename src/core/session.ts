@@ -16,7 +16,7 @@
 
 import { moduleFor } from '../agents/index.js';
 import type { AgentModule, AgentSource } from '../agents/types.js';
-import { resolveSessionAgent } from './reasoning.js';
+import { validateStall, possibleStall, resolveSessionAgent, signatureForSession, stallScreenContent, stallTranscriptContent, StallTracker } from './reasoning.js';
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -56,6 +56,7 @@ import type {
   SessionOptions,
   SessionSummary,
   StartReadyResult,
+  StallState,
   WaitCondition,
   WaitOptions,
   WaitResult,
@@ -706,6 +707,15 @@ export class Session implements WaitTarget {
   private readonly dataListeners = new Set<(data: string) => void>();
   private readonly exitListeners = new Set<(exitCode: number | null) => void>();
   private readonly readyListeners = new Set<() => void>();
+  private readonly stallListeners = new Set<(state: StallState | undefined) => void>();
+  private readonly stallTracker = new StallTracker();
+  private stallState: StallState | undefined;
+  private stallTimer: NodeJS.Timeout | null = null;
+  private stallNextCheck = 0;
+  private stallContent: string | undefined;
+  private stallValidatedContent: string | undefined;
+  private stallTranscript: string | undefined;
+  private stallValidatedTranscript: string | undefined;
 
   /** Whether the program has hidden the cursor (DECTCEM off), carried to viewers. */
   private cursorHidden = false;
@@ -884,6 +894,12 @@ export class Session implements WaitTarget {
       this.cursorHidden = cursorHiddenAfter(scan, this.cursorHidden);
       this.modeScanTail = scan.slice(-MODE_SCAN_TAIL_CHARS);
       const rendered = this.renderer.write(data);
+      if (this.agentModule?.stalls !== undefined) {
+        void rendered.then(() => this.scheduleStall()).catch(() => {
+          this.publishStall(undefined);
+          this.logger.warn('stall reading failed', { id: this.id });
+        });
+      }
       // First paint is decided by the RENDERER, not by bytes arriving: ConPTY
       // emits mode-set sequences ~140 ms after spawn that draw nothing, and a
       // quiet/readyQuiet that counted them as output would report a CLI ready
@@ -906,6 +922,8 @@ export class Session implements WaitTarget {
       // reach it (`endProgram`).
       const exitCode = typeof reported === 'number' ? reported : null;
       this.exitedFlag = true;
+      this.clearStallTimer();
+      this.publishStall(undefined);
       this.exitedAtValue = Date.now();
       this.exitCodeValue = exitCode;
       this.lastChange = Date.now();
@@ -1101,10 +1119,10 @@ export class Session implements WaitTarget {
    * Rejects with `SessionInputFailedError` once the input pipe has failed,
    * including for the rest of a chunked write it fails part-way through.
    */
-  write(data: string): Promise<string> {
+  write(data: string, options: { terminalReport?: boolean } = {}): Promise<string> {
     const delayedSubmit = this.delayedSubmission(data);
     if (delayedSubmit) this.submissionsQueued++;
-    const queued = this.writeChain.then(() => this.writeInput(data));
+    const queued = this.writeChain.then(() => this.writeInput(data, options.terminalReport === true));
     // The chain must survive a failed write, or one rejection would wedge every
     // subsequent write on this session.
     this.writeChain = queued.then(
@@ -1119,12 +1137,23 @@ export class Session implements WaitTarget {
     return submit?.delayMs !== undefined && submit.matches?.(data) === true;
   }
 
-  private async writeInput(data: string): Promise<string> {
+  private async writeInput(data: string, terminalReport: boolean): Promise<string> {
     this.refuseIfInputFailed();
     // Recorded BEFORE the bytes go in, when the screen still shows what this
     // input is answering: the waiter's stale-prompt guard needs that prompt,
     // and its echo guard needs the input itself.
     this.lastInputData = data;
+    if (!terminalReport && data.length > 0) {
+      // Discovery may still be queued. Capture the screen this input answers
+      // before suppressing it, so a delayed check cannot announce that old turn.
+      if (this.agentModule?.stalls !== undefined && !this.stallTracker.tracking) {
+        await this.renderer.flush();
+        this.refreshStall();
+      }
+      this.stallTracker.noteInput();
+      this.clearStallTimer();
+      this.publishStall(undefined);
+    }
     const { screen } = this.renderer.snapshot();
     this.stalePrompts.noteInput(screen, this.agent);
 
@@ -1227,6 +1256,23 @@ export class Session implements WaitTarget {
     if (ended !== undefined) throw new SessionProgramEndedError(this.id, ended);
     this.pty.resize(cols, rows);
     this.renderer.resize(cols, rows);
+    // Reflow is layout, including when it clips the recognised context. Take
+    // the new comparison baseline so a later cursor-only write stays layout.
+    if (this.agentModule?.stalls !== undefined) {
+      // ConPTY can first redraw a shorter user turn, then repaint it in full.
+      // Restart even a pending check so layout identity is compared only after
+      // this resize's coalescing window. Cheap genuine-end checks still run
+      // on every write; output alone must never move this deadline.
+      this.stallNextCheck = Date.now() + 250;
+      if (this.stallTimer !== null) {
+        this.clearStallTimer();
+        this.stallTimer = setTimeout(() => this.refreshStall(), Math.max(0, this.stallNextCheck - Date.now()));
+        this.stallTimer.unref();
+      }
+      this.stallContent = stallScreenContent(this.renderer.plainViewport(), this.agentModule.stalls);
+      this.stallTranscript = stallTranscriptContent(this.renderer.plainViewport({ joinWrapped: true, skipClipped: true }), this.agentModule.stalls);
+      if (this.stallState === undefined) this.scheduleStall();
+    }
     if (options.hold !== undefined) this.geometryHeldFlag = options.hold;
   }
 
@@ -1251,6 +1297,85 @@ export class Session implements WaitTarget {
   onReady(listener: () => void): () => void {
     this.readyListeners.add(listener);
     return () => this.readyListeners.delete(listener);
+  }
+
+  onStall(listener: (state: StallState | undefined) => void): () => void {
+    this.stallListeners.add(listener);
+    return () => this.stallListeners.delete(listener);
+  }
+
+  getStalled(): StallState | undefined { return this.stallState; }
+
+  private clearStallTimer(): void {
+    if (this.stallTimer !== null) clearTimeout(this.stallTimer);
+    this.stallTimer = null;
+  }
+
+  private publishStall(state: StallState | undefined): void {
+    if (this.stallState === state) return;
+    this.stallState = state;
+    for (const listener of this.stallListeners) listener(state);
+  }
+
+  private scheduleStall(): void {
+    if (this.exitedFlag || this.isKilled) return;
+    // Physical row changes can be composer presentation. Retain the candidate
+    // and clock until coalesced validation compares its canonical identity.
+    // Only new transcript text (including busy markers and prompts) clears at
+    // once; known cosmetic repaints need no full validation.
+    if (this.stallTracker.tracking) {
+      const content = stallScreenContent(this.renderer.plainViewport(), this.agentModule!.stalls!);
+      if (content === this.stallContent || content === this.stallValidatedContent) {
+        // A native terminal can redraw its pre-resize text after xterm has
+        // reflowed padded rows and clipped the viewport. Both are layout.
+        this.stallContent = content;
+        return;
+      }
+      this.stallContent = content;
+      const transcript = stallTranscriptContent(this.renderer.plainViewport({ joinWrapped: true, skipClipped: true }), this.agentModule!.stalls!);
+      if (transcript !== this.stallTranscript && transcript !== this.stallValidatedTranscript) {
+        this.stallTracker.invalidate();
+        this.publishStall(undefined);
+        this.clearStallTimer();
+      }
+      this.stallTranscript = transcript;
+    }
+    if (this.stallTimer !== null) return;
+    this.stallTimer = setTimeout(() => this.refreshStall(), Math.max(0, this.stallNextCheck - Date.now()));
+    this.stallTimer.unref();
+  }
+
+  private refreshStall(): void {
+    this.clearStallTimer();
+    if (this.exitedFlag || this.isKilled) return;
+    this.stallNextCheck = Date.now() + 250;
+    const signature = signatureForSession(this);
+    if (signature === null) { this.publishStall(undefined); return; }
+    const plain = this.renderer.plainViewport();
+    this.stallContent = stallScreenContent(plain, this.agentModule!.stalls!);
+    const ink = possibleStall(plain, signature) && this.agentModule!.stalls!.some(shape =>
+      this.renderer.hasForeground(plain.flatMap((line, row) => line.includes(shape.marker.text) ? [row] : []), shape.marker.fg));
+    let candidate = null;
+    if (ink) {
+      const { lines, firstVisible } = this.renderer.styledLines({ above: 128, extendWrapped: false });
+      candidate = validateStall(lines, signature, false, firstVisible);
+      if (candidate !== null && detectPrompt(plain.join('\n'), this.agent) !== null) candidate = null;
+    }
+    if (candidate !== null) {
+      this.stallTranscript = stallTranscriptContent(this.renderer.plainViewport({ joinWrapped: true, skipClipped: true }), this.agentModule!.stalls!);
+      // Keep the complete-context baselines across an inconclusive read: a
+      // native redraw on growth can restore that viewport after clipped reflow.
+      if (!('inconclusive' in candidate)) {
+        this.stallValidatedContent = this.stallContent;
+        this.stallValidatedTranscript = this.stallTranscript;
+      }
+    }
+    this.publishStall(this.stallTracker.observe(candidate));
+    const remaining = this.stallTracker.remaining();
+    if (remaining !== null) {
+      this.stallTimer = setTimeout(() => this.refreshStall(), remaining);
+      this.stallTimer.unref();
+    }
   }
 
   /**
@@ -1384,6 +1509,7 @@ export class Session implements WaitTarget {
       cols: this.cols,
       rows: this.rows,
       ready: this.readyFlag,
+      ...(this.stallState === undefined ? {} : { stalled: this.stallState }),
       readyReason: this.readyReasonValue,
       geometryHeld: this.geometryHeldFlag,
       exited: this.exitedFlag,
@@ -1441,6 +1567,8 @@ export class Session implements WaitTarget {
   }
 
   private async killOnce(): Promise<void> {
+    this.clearStallTimer();
+    this.publishStall(undefined);
     // node-pty creates a Windows terminal's program only once its output
     // worker has connected, a few tens of milliseconds after the spawn
     // returns, and reports pid 0 until then; a start whose connection fails

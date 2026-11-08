@@ -39,11 +39,12 @@
  */
 
 import { BUILT_IN_SIGNATURES, claimsProgram, moduleFor, programName, resolveAgent } from '../agents/index.js';
-import type { AgentSource } from '../agents/types.js';
+import type { AgentSource, StallSignature } from '../agents/types.js';
 import { RegexBudgetError, SET_ASIDE_MS, withRegexBudget } from './regexBudget.js';
 import { detectPrompt } from './promptDetector.js';
 import type { DetectedPrompt } from './promptDetector.js';
 import type { CellStyle, StyledLine } from './renderer.js';
+import type { StallState } from './types.js';
 
 /** Conditions on how characters are drawn. Colours as in `CellStyle`, or `default`. */
 export interface StyleTest {
@@ -787,11 +788,7 @@ export function latestResult(lines: readonly StyledLine[], signature: CompiledSi
     }
     // A spinner can be drawn in the latest turn or the chrome under it;
     // a stale copy in the scrollback above says nothing.
-    const busyRule = moduleFor(signature.name)?.readingRules?.busy;
-    const busy = busyRule === undefined
-      ? signature.busy.some(test => lines.slice(turnStart).some(line => lineFits(line, test)))
-      : busyRule(lines, turnStart, composer.chrome, signature, readingContext);
-    if (busy) return { found: false, reason: 'busy', status };
+    if (turnBusy(lines, signature, turnStart, composer.chrome)) return { found: false, reason: 'busy', status };
     if (signature.typed !== undefined) {
       for (let i = composer.chrome; i <= composer.line; i++) {
         if (lineFits(lines[i]!, signature.typed)) return { found: false, reason: 'prompt-typed', status };
@@ -833,3 +830,221 @@ export function latestResult(lines: readonly StyledLine[], signature: CompiledSi
 }
 
 const readingContext = { matches: lineFits, ink: inkStyles, ranges: reasoningRanges };
+
+/** Shared turn boundary and busy rules for result reading and stall detection. */
+function turnBusy(lines: readonly StyledLine[], signature: CompiledSignature, turnStart: number, chrome: number): boolean {
+  const rule = moduleFor(signature.name)?.readingRules?.busy;
+  return rule === undefined
+    ? signature.busy.some(test => lines.slice(turnStart).some(line => lineFits(line, test)))
+    : rule(lines, turnStart, chrome, signature, readingContext);
+}
+
+export interface StallCandidate {
+  reason: string;
+  description: string;
+  /** Internal identity only, never part of a public stall state. */
+  identity: string;
+  /** Refusal and footer without the user turn, for bounded revalidation. */
+  blockIdentity: string;
+}
+
+/** The visible shape qualifies, but its user-turn context is unavailable. */
+export interface InconclusiveStall { inconclusive: true; blockIdentity: string }
+export type StallValidation = StallCandidate | InconclusiveStall | null;
+
+export const STALL_SETTLE_MS = 1000;
+
+/** The same candidate must survive settling; input suppresses its old screen. */
+export class StallTracker {
+  private candidate: StallCandidate | null = null;
+  private since = 0;
+  private suppressed: string | null = null;
+  private state: StallState | undefined;
+
+  /** A candidate has been recognised and may still be settling. */
+  get tracking(): boolean { return this.candidate !== null; }
+
+  /** Changed rendered content ends this observation, without undoing input suppression. */
+  invalidate(): void {
+    this.candidate = null;
+    this.state = undefined;
+  }
+
+  noteInput(): void {
+    this.suppressed = this.candidate?.identity ?? this.suppressed;
+    this.candidate = null;
+    this.state = undefined;
+  }
+
+  observe(candidate: StallValidation, now = Date.now()): StallState | undefined {
+    if (candidate !== null && 'inconclusive' in candidate) {
+      // Only an established, unchanged refusal can survive missing context.
+      // Keep its full identity and clock, and never lift input suppression.
+      if (this.state !== undefined && this.candidate?.blockIdentity === candidate.blockIdentity) return this.state;
+      this.invalidate();
+      return undefined;
+    }
+    if (candidate === null) this.suppressed = null;
+    if (candidate === null || candidate.identity === this.suppressed) {
+      this.candidate = null;
+      this.state = undefined;
+      return undefined;
+    }
+    if (this.candidate?.identity !== candidate.identity) {
+      this.candidate = candidate;
+      this.since = now;
+      this.state = undefined;
+    }
+    if (now - this.since >= STALL_SETTLE_MS) {
+      this.state ??= { reason: candidate.reason, description: candidate.description, since: new Date(this.since).toISOString() };
+    }
+    return this.state;
+  }
+
+  remaining(now = Date.now()): number | null {
+    return this.candidate === null || this.state !== undefined ? null : Math.max(1, this.since + STALL_SETTLE_MS - now);
+  }
+}
+
+const compiledStalls = new WeakMap<StallSignature, {
+  before: CompiledLine; rows: CompiledLine[]; footer: CompiledLine; composer: CompiledLine; idle: CompiledLine[]; bottom: CompiledLine[];
+}>();
+
+function stallTests(shape: StallSignature) {
+  let tests = compiledStalls.get(shape);
+  if (tests === undefined) {
+    tests = {
+      before: compileLine(shape.before, 'stall.before'),
+      rows: shape.rows.map(row => compileLine(row, 'stall.rows')),
+      footer: compileLine(shape.footer, 'stall.footer'),
+      composer: compileLine(shape.composer, 'stall.composer'),
+      idle: shape.idle.map(row => compileLine(row, 'stall.idle')),
+      bottom: shape.bottom.map(row => compileLine(row, 'stall.bottom')),
+    };
+    compiledStalls.set(shape, tests);
+  }
+  return tests;
+}
+
+/** Cheap viewport comparison; cursor, styles and known controls are not output. */
+export function stallScreenContent(lines: readonly string[], shapes: readonly StallSignature[]): string {
+  return lines.map(line => {
+    for (const shape of shapes) {
+      if (shape.cosmetic !== undefined) line = line.replace(shape.cosmetic, '');
+    }
+    return line.trimEnd();
+  }).join('\n').trimEnd();
+}
+
+/**
+ * Cheap evidence of new transcript text, using the module's presentation rules.
+ * Text that could be idle chrome is left for styled validation, never accepted
+ * as proof of an idle composer here. The caller supplies joined terminal wraps.
+ */
+export function stallTranscriptContent(lines: readonly string[], shapes: readonly StallSignature[]): string {
+  return stallScreenContent(lines, shapes).split('\n').filter(line =>
+    !shapes.some(shape => {
+      const tests = stallTests(shape);
+      return [...tests.idle, ...tests.bottom].some(test => test.text?.test(line));
+    })).join('').replace(/\s+/gu, '');
+}
+
+/** Reject ordinary/busy screens before styled context and prompt detection. */
+export function possibleStall(lines: readonly string[], signature: CompiledSignature): boolean {
+  if (setAside(signature)) return false;
+  const shapes = moduleFor(signature.name)?.stalls;
+  // This literal check also avoids arming the regex watchdog on ordinary
+  // repaints. Configured patterns still run under their existing budget.
+  if (!shapes?.some(shape => lines.some(line => line.includes(shape.marker.text)))) return false;
+  return guarded(signature, () => {
+    if (signature.busy.some(test => test.text !== undefined && lines.some(line => test.text!.test(line)))) return false;
+    return shapes.some(shape => {
+      if (!lines.some(line => line.includes(shape.marker.text))) return false;
+      // Stall closing edges are narrower than the reading composer's rule.
+      const test = compiledStalls.get(shape)?.composer ?? compileLine(shape.composer, 'stall.composer');
+      return test.text !== undefined && lines.some(line => test.text!.test(line));
+    }) === true;
+  }) === true;
+}
+
+/** Keep the physical origin for visibility, but match soft wraps as one line. */
+function logicalStallLines(physical: readonly StyledLine[]): { lines: StyledLine[]; starts: number[] } {
+  const lines: StyledLine[] = [];
+  const starts: number[] = [];
+  for (let i = 0; i < physical.length; i++) {
+    const row = physical[i]!;
+    const previous = lines.at(-1);
+    if (row.wrapped && previous !== undefined) {
+      const offset = previous.text.length + (physical[i - 1]!.wrapPadding ?? 0);
+      previous.text = previous.text.padEnd(offset) + row.text;
+      previous.spans.push(...row.spans.map(span => ({ ...span, from: span.from + offset, to: span.to + offset })));
+    } else {
+      lines.push({ ...row, spans: [...row.spans] });
+      starts.push(i);
+    }
+  }
+  return { lines, starts };
+}
+
+/** Discovery requires the complete live-turn context. */
+export function detectStall(physical: readonly StyledLine[], signature: CompiledSignature, prompt: boolean, firstVisible = 0): StallCandidate | null {
+  const result = validateStall(physical, signature, prompt, firstVisible);
+  return result === null || 'inconclusive' in result ? null : result;
+}
+
+/** Validate the visible shape independently of whether the turn boundary is available. */
+export function validateStall(physical: readonly StyledLine[], signature: CompiledSignature, prompt: boolean, firstVisible = 0): StallValidation {
+  const signatures = moduleFor(signature.name)?.stalls;
+  if (prompt || signatures === undefined || setAside(signature)) return null;
+  return guarded(signature, () => {
+    const { lines, starts } = logicalStallLines(physical);
+    const composer = composerAt(lines, signature);
+    if (composer === null || starts[composer.line]! < firstVisible) return null;
+    let turnStart = 0;
+    for (let i = composer.chrome - 1; i >= 0; i--) {
+      if (signature.turn !== undefined && lineFits(lines[i]!, signature.turn)) { turnStart = i + 1; break; }
+    }
+    if (turnBusy(lines, signature, turnStart, composer.chrome)) return null;
+    for (const shape of signatures) {
+      const tests = stallTests(shape);
+      // Tidy only the module's known sidebar/copy chrome. Preserve spans.
+      const tidy = (line: StyledLine): StyledLine => ({ ...line,
+        text: signature.tidy === undefined ? line.text : line.text.replace(signature.tidy, '') });
+      if (!lineFits(tidy(lines[composer.line]!), tests.composer)) continue;
+      if (lines.slice(composer.line + 1).some(line =>
+        !blank(line) && !tests.bottom.some(test => lineFits(tidy(line), test)))) continue;
+      const rules = moduleFor(signature.name)?.readingRules;
+      const rawInput = lines.slice(composer.chrome, composer.line + 1);
+      const input = rules?.inputRegion?.(rawInput, rawInput.length - 1) ?? rawInput;
+      if (input.some(line =>
+        !blank(line) && !tests.idle.some(test => lineFits(line, test)))) continue;
+      let end = composer.chrome - 1;
+      while (end >= turnStart && blank(lines[end], signature.tidy)) end--;
+      if (end < turnStart || !lineFits(tidy(lines[end]!), tests.footer)) continue;
+      let row = end - 1;
+      while (row >= turnStart && blank(lines[row], signature.tidy)) row--;
+      let matches = true;
+      for (let n = tests.rows.length - 1; n >= 0; n--, row--) {
+        if (row < turnStart || !lineFits(tidy(lines[row]!), tests.rows[n]!)) { matches = false; break; }
+      }
+      if (!matches) continue;
+      while (row >= turnStart && blank(lines[row], signature.tidy)) row--;
+      if (row < turnStart || !lineFits(tidy(lines[row]!), tests.before)) continue;
+      const live = rules?.liveContent?.(lines, turnStart, row, readingContext);
+      if (live !== true && live !== 'inconclusive') continue;
+      // The same semantic identity drives both settlement and suppression.
+      // Styles prove the shape above, but do not identify an occurrence.
+      const semantic = (line: StyledLine): string => {
+        const text = tidy(line).text;
+        return (shape.cosmetic === undefined ? text : text.replace(shape.cosmetic, '')).trim().replace(/\s+/gu, ' ');
+      };
+      const block = lines.slice(row, end + 1).map(semantic).filter(Boolean);
+      const blockIdentity = JSON.stringify([shape.reason, block]);
+      if (live === 'inconclusive') return { inconclusive: true as const, blockIdentity };
+      return { reason: shape.reason, description: shape.description, blockIdentity,
+        identity: JSON.stringify([shape.reason, turnStart > 0 ? semantic(lines[turnStart - 1]!) : '',
+          block]) };
+    }
+    return null;
+  });
+}

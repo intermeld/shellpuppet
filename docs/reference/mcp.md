@@ -1,4 +1,4 @@
-# MCP start reference
+# MCP reference
 
 Pass `waitReady: true` to `terminal_start` when starting an agent CLI to
 delegate work to. Waiting is off by default. The daemon uses the resolved
@@ -64,3 +64,77 @@ data. A disconnected caller cancels its wait (`aborted` internally) without
 stopping the session or its readiness tracking. A missing signal or malformed
 wait field is HTTP 400 and creates no session. A failed process start keeps
 the existing failure response.
+
+## Listing and waiting for stalled sessions
+
+`terminal_list` includes a `STALLED` state with the reason code, fixed product
+description and ISO since time. `waitingOnly: true` still selects permission
+prompts only. A stall does not change the session's startup readiness fields.
+
+`terminal_wait` accepts `stalled: true`, alone or with `prompt: true`. A string
+`session` watches one session; an array watches those sessions; omitting it
+watches all live sessions. `now: true` polls the compact multi-session form.
+Text, regex and quiet are separate conditions and cannot be combined with
+prompt or stalled. Bare `prompt: true` keeps its existing behaviour.
+
+HTTP `GET /sessions/<id>/wait?stalled=true` returns, on a match:
+
+```json
+{
+  "matched": true,
+  "reason": "stalled",
+  "waitedMs": 1040,
+  "screen": "",
+  "stalled": {
+    "reason": "provider-refused",
+    "description": "The model provider refused the turn.",
+    "since": "2026-11-07T12:00:00.000Z"
+  }
+}
+```
+
+The response also carries `id`, `exited` and `exitCode`. The MCP result says
+which condition matched and gives only the fixed stall metadata for a stall.
+A wait for stalled alone never returns terminal text, including on timeout.
+`GET /sessions/wait?prompt=true&stalled=true` returns compact `sessions` rows
+with `reason: "prompt"` or `reason: "stalled"`; stalled rows carry `id`,
+`label` and `stalled`. The top-level reason is `prompt` when any prompt rows
+are present, otherwise `stalled` when any stalled rows are present, otherwise
+`timeout`. Ended sessions are omitted. `GET /sessions` includes the same
+`stalled` metadata in full session summaries.
+
+Only MiMo's refusal shape, measured from a real screen, is supported, at and
+above the 80x24 floor. It is recognised by its shape on screen. The error must belong to the live
+turn outside MiMo's recognised tool panels and quotations, with a completed
+turn footer, a visible idle composer and only recognised bottom chrome below
+it. Indented unsent input does not qualify. Detection needs a known turn
+boundary within the bounded context to establish a new notice.
+The same semantic refusal must persist for one second,
+with no prompt or busy indication. Copy and recovery controls, sidebar changes,
+resize reflow and cursor-only writes preserve its identity and original time.
+Composer frames repainted to the new width and accepted grey suggestions
+arriving or leaving preserve the notice while the canonical refusal identity
+is unchanged, with no clear or further announcement. Presentation changes are
+validated on a coalesced timer. Resize restarts its 250 ms window so a preliminary
+native redraw can finish reconstructing the user turn before its identity is
+compared. Output does not extend that window. If only the user-turn boundary is
+outside the viewport plus 128 preceding rows, an established notice keeps its identity and
+time while the available content, same refusal block, footer and idle composer
+still qualify. An incomplete leading wrapped row has unknown context; it cannot
+set quotation, fence or tool-panel state. Every complete available content row
+is still checked. Missing context cannot finish settling a new notice. A changed
+identity or invalid visible shape clears the notice.
+Non-empty real input, newer transcript output, busy output, a prompt or exit
+clears it. Empty writes and
+terminal reports do not. Real input suppresses the unchanged refusal across
+control changes. A program that paints the same shape is reported the same
+way, including forged MiMo bars, headers, footers or `Build ·` status rows.
+The state is a notice and nothing acts on it. No automatic input is sent.
+
+`/events` sends `session-stalled` with `session`, `at` and `stalled`, then
+`session-stall-clear` with `session` and `at` when cleared. The daemon records
+each transition in its audit log and warns once per stall. Viewer control
+messages use the same types and metadata, and the dashboard feed tracks
+`stalled`. None of this metadata contains screen text; `hideReasoning`
+readers receive the same fixed description without a screen-content side
+channel.
