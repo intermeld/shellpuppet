@@ -662,6 +662,11 @@ disappears or is replaced.
 
 Discovery and revalidation share a coalesced path of at most four checks per
 second. Known cosmetic controls and cursor-only repaints skip full validation.
+Semantic viewport rows are cached. A restored validated frame cancels obsolete
+presentation checks, while a still-invalid frame keeps its confirmation deadline.
+An untracked screen without candidate ink cannot queue validation. Marker rows
+match completely; footer controls and right-hand panel chrome are anchored to
+their screen positions so ordinary user text containing their symbols remains text.
 A different viewport retains the candidate and its clock pending validation
 unless cheap text comparison finds a transcript change, busy marker or prompt.
 This comparison excludes possible composer presentation using the module's

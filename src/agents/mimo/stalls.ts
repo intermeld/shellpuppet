@@ -7,8 +7,10 @@ const bar = { text: '^ {2}┃\\s*$', lead: error };
 export const stalls: StallSignature[] = [{
   reason: 'provider-refused',
   description: 'The model provider refused the turn.',
-  marker: { text: '✗ Error', fg: error.fg },
-  cosmetic: /\s+(?:[⎘█].*|↻ \/recover(?=\s*(?:[⎘█]|$)))/gu,
+  marker: { text: '  ┃     ✗ Error', fg: error.fg },
+  // Controls belong to the completed footer or the framed right-hand panel.
+  // The same symbols inside ordinary transcript text are still output.
+  cosmetic: /^( {5}▣ {2}Build · [^·]+ · (?:\d+m )?\d+(?:\.\d+)?s)\s+(?:[⎘█].*|↻ \/recover(?:\s+[⎘█].*)?\s*$)|^(?=.{60,}█)(.*?\S) {2,}█.*$/gu,
   before: { text: '^ {5}The request was rejected because it was considered high risk\\s*$' },
   rows: [
     bar,

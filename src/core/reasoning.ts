@@ -936,10 +936,21 @@ function stallTests(shape: StallSignature) {
 export function stallScreenContent(lines: readonly string[], shapes: readonly StallSignature[]): string {
   return lines.map(line => {
     for (const shape of shapes) {
-      if (shape.cosmetic !== undefined) line = line.replace(shape.cosmetic, '');
+      if (shape.cosmetic !== undefined) line = line.replace(shape.cosmetic, '$1$2');
     }
     return line.trimEnd();
   }).join('\n').trimEnd();
+}
+
+/** Cache physical semantic rows; a repaint usually changes only a control. */
+export class StallScreenCache {
+  private rows: { raw: string; semantic: string }[] = [];
+
+  content(lines: readonly string[], shapes: readonly StallSignature[]): string {
+    this.rows = lines.map((raw, row) => this.rows[row]?.raw === raw ? this.rows[row] :
+      { raw, semantic: stallScreenContent([raw], shapes) });
+    return this.rows.map(row => row.semantic).join('\n').trimEnd();
+  }
 }
 
 /**
@@ -956,7 +967,7 @@ export function stallTranscriptContent(lines: readonly string[], shapes: readonl
     // walk never proves a live refusal; styled validation still does that.
     const block = content.findIndex(line => shapes.some(shape => {
       const tests = stallTests(shape);
-      return tests.before.text?.test(line) || line.includes(shape.marker.text) || tests.footer.text?.test(line);
+      return tests.before.text?.test(line) || tests.footer.text?.test(line);
     }));
     for (let i = (block < 0 ? content.length : block) - 1; i >= 0; i--) {
       const line = content[i]!;
@@ -992,17 +1003,18 @@ export function stallPresentationRows(lines: readonly string[], signature: Compi
   return result;
 }
 
-/** Reject ordinary/busy screens before styled context and prompt detection. */
+/** Reject ordinary screens before styled context and prompt detection. */
 export function possibleStall(lines: readonly string[], signature: CompiledSignature): boolean {
   if (setAside(signature)) return false;
   const shapes = moduleFor(signature.name)?.stalls;
   // This literal check also avoids arming the regex watchdog on ordinary
   // repaints. Configured patterns still run under their existing budget.
-  if (!shapes?.some(shape => lines.some(line => line.includes(shape.marker.text)))) return false;
+  if (!shapes?.some(shape => lines.some(line => line.trimEnd() === shape.marker.text))) return false;
   return guarded(signature, () => {
-    if (signature.busy.some(test => test.text !== undefined && lines.some(line => test.text!.test(line)))) return false;
+    // Busy rules run within the turn during validation. Testing the entire
+    // viewport here would also reject an ordinary user echo quoting a rule.
     return shapes.some(shape => {
-      if (!lines.some(line => line.includes(shape.marker.text))) return false;
+      if (!lines.some(line => line.trimEnd() === shape.marker.text)) return false;
       // Stall closing edges are narrower than the reading composer's rule.
       const test = compiledStalls.get(shape)?.composer ?? compileLine(shape.composer, 'stall.composer');
       return test.text !== undefined && lines.some(line => test.text!.test(line));
@@ -1079,7 +1091,7 @@ export function validateStall(physical: readonly StyledLine[], signature: Compil
       // Styles prove the shape above, but do not identify an occurrence.
       const semantic = (line: StyledLine): string => {
         const text = tidy(line).text;
-        return (shape.cosmetic === undefined ? text : text.replace(shape.cosmetic, '')).trim().replace(/\s+/gu, ' ');
+        return (shape.cosmetic === undefined ? text : text.replace(shape.cosmetic, '$1$2')).trim().replace(/\s+/gu, ' ');
       };
       const block = lines.slice(row, end + 1).map(semantic).filter(Boolean);
       const blockIdentity = JSON.stringify([shape.reason, block]);
