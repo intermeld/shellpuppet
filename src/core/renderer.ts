@@ -85,8 +85,8 @@ export interface RenderedScreen {
 
 export class ScreenRenderer {
   private readonly agent: string;
-  private readonly term: XtermTerminal;
-  private readonly serializer: XtermSerializeAddon;
+  private term: XtermTerminal;
+  private serializer: XtermSerializeAddon;
   /** Chain of pending writes, so `flush()` can await parser completion. */
   private pending: Promise<void> = Promise.resolve();
   private readonly foregroundReflows: (() => void)[] = [];
@@ -154,6 +154,7 @@ export class ScreenRenderer {
     const resize = (): void => {
       if (this.closed) return;
       this.term.resize(cols, rows);
+      this.repairViewport();
       for (const reflow of this.foregroundReflows) reflow();
     };
     // Preserve the order of output, geometry and the next replay marker.
@@ -214,6 +215,27 @@ export class ScreenRenderer {
         if (!active) possible = this.hasForeground(Array.from({ length: this.rows }, (_, row) => row), colours);
       },
     };
+  }
+
+  /** xterm 6.0.0 may recycle rows without allocating their backing lines. */
+  private repairViewport(): void {
+    const active = this.term.buffer.active;
+    if (active.length >= active.baseY + this.term.rows &&
+        active.length > active.baseY + active.cursorY) return;
+    // The public buffer API is read-only. Keep this one private repair pinned
+    // to the installed release; the regression test checks its version.
+    const core = (this.term as unknown as { _core: {
+      buffer: { lines: { length: number; push: (line: unknown) => void };
+        ybase: number; getBlankLine: () => unknown };
+    } })._core;
+    const buffer = core.buffer;
+    while (buffer.lines.length < buffer.ybase + this.term.rows) {
+      buffer.lines.push(buffer.getBlankLine());
+    }
+    if (active.length < active.baseY + this.term.rows ||
+        active.length <= active.baseY + active.cursorY) {
+      throw new Error('xterm viewport repair failed');
+    }
   }
 
   /**
