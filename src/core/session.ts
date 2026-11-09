@@ -721,6 +721,10 @@ export class Session implements WaitTarget {
   // One second covers the measured delayed ConPTY growth redraws under load.
   // Only a new geometry change can renew it; output and duplicate requests cannot.
   private stallResizeUntil = 0;
+  // The PTY size last accounted for, so a size we requested is not counted
+  // again when the PTY reports it with the program's first later output.
+  private stallPtyCols = 0;
+  private stallPtyRows = 0;
   private readonly stallScreen = new StallScreenCache();
   private readonly stallInk: ReturnType<ScreenRenderer['watchForeground']> | undefined;
 
@@ -887,13 +891,13 @@ export class Session implements WaitTarget {
       });
     }
 
-    let ptyCols = this.pty.cols;
-    let ptyRows = this.pty.rows;
+    this.stallPtyCols = this.pty.cols;
+    this.stallPtyRows = this.pty.rows;
     this.pty.onData((data) => {
       // node-pty can apply a requested resize later, after its first output.
       // Observe the dimensions it reports as well as our explicit requests.
-      if (this.pty.cols !== ptyCols || this.pty.rows !== ptyRows) {
-        ptyCols = this.pty.cols; ptyRows = this.pty.rows;
+      if (this.pty.cols !== this.stallPtyCols || this.pty.rows !== this.stallPtyRows) {
+        this.stallPtyCols = this.pty.cols; this.stallPtyRows = this.pty.rows;
         this.noteStallResize(true);
       }
       // Track bracketed-paste mode from the app's own output (see PASTE_START).
@@ -1275,6 +1279,7 @@ export class Session implements WaitTarget {
     const ended = recordedExitCode(this.pty);
     if (ended !== undefined) throw new SessionProgramEndedError(this.id, ended);
     this.pty.resize(cols, rows);
+    this.stallPtyCols = this.pty.cols; this.stallPtyRows = this.pty.rows;
     this.noteStallResize(cols !== this.renderer.cols || rows !== this.renderer.rows);
     this.renderer.resize(cols, rows);
     // Unsettled candidates rebase on local reflow. Established notices keep
