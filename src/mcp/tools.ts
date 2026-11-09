@@ -344,7 +344,9 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
       title: 'Read the rendered screen',
       description:
         'Return the current screen as plain text. Use lastLines to reach back into scrollback ' +
-        'when output has scrolled past the viewport. Pass hideReasoning to leave out an agent ' +
+        'when output has scrolled past the viewport. Pass wider to enlarge the grid temporarily ' +
+        'for a clipped dialog; it waits for redraw and restores the grid and its controller. ' +
+        'Pass hideReasoning to leave out an agent ' +
         'CLI\'s reasoning. A uniquely selected menu row shown only by inverse video or a ' +
         'background colour starts with ⟦SP:selected⟧ in this text; the marker is added by ' +
         'ShellPuppet and is not sent to the terminal. ' +
@@ -360,16 +362,22 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
           .describe('Also return the last N lines including scrollback, not just the visible viewport.'),
         hideReasoning: z.boolean().optional()
           .describe('Leave out the reasoning an agent CLI draws on screen (default false).'),
+        wider: z.object({ cols: z.number().int().min(2).max(1000), rows: z.number().int().min(2).max(500) }).optional()
+          .describe('Temporarily enlarge the grid for this read, then restore its size and controller.'),
+        widerTimeout: z.number().int().min(250).max(30_000).optional()
+          .describe('Maximum redraw wait in ms for wider reads (default 1500, maximum 30000).'),
       }),
     },
-    async ({ session, lastLines, hideReasoning }) =>
+    async ({ session, lastLines, hideReasoning, wider, widerTimeout }, { signal }) =>
       run(async () => {
         const query = [
           ...(lastLines !== undefined ? [`lastLines=${String(lastLines)}`] : []),
           ...(hideReasoning === true ? ['hideReasoning=1'] : []),
+          ...(wider !== undefined ? [`wider=${String(wider.cols)}x${String(wider.rows)}`] : []),
+          ...(widerTimeout !== undefined ? [`widerTimeout=${String(widerTimeout)}`] : []),
         ];
         const suffix = query.length > 0 ? `?${query.join('&')}` : '';
-        const { payload, warnings } = await call('GET', `/sessions/${session}/snapshot${suffix}`);
+        const { payload, warnings } = await call('GET', `/sessions/${session}/snapshot${suffix}`, undefined, signal);
         const reasoning = payload['reasoning'] as
           | { agent: string; hiddenLines: number; hiddenBlocks: number; lastLinesHiddenLines?: number }
           | undefined;
@@ -377,6 +385,7 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
           `Session ${String(payload['id'])}: ${String(payload['cols'])}x${String(payload['rows'])}, ` +
           `cursor ${JSON.stringify(payload['cursor'])}, exited: ${String(payload['exited'])}` +
           (payload['exited'] === true ? ` (${howSessionEnded(payload['exitCode'] as number | null)})` : '') +
+          (payload['restored'] === false ? '\nGrid changed during the wider read; the original grid was not restored.' : '') +
           (reasoning !== undefined
             ? `\nReasoning hidden (read as ${reasoning.agent}): ` +
               `${String(lastLines !== undefined ? (reasoning.lastLinesHiddenLines ?? 0) : reasoning.hiddenLines)} line(s).`

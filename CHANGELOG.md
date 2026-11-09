@@ -9,6 +9,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Added
 
+- Read a clipped terminal dialog at a wider grid with `terminal_snapshot` or `snap --wider`, then return the grid and dashboard control to their previous state.
 - Show a session that stops on a refusal from its model provider as stalled, in session lists and the dashboard, wake `--stalled` / `stalled: true` waits for it and tell its supervisor; MiMo's refusal is the first one recognised. After a resize, a stalled session's notice waits up to one second for the program to redraw before it decides the stall has ended, so an end during a resize can take about 1.25 seconds to clear; typing into the session or its exit still clears it at once.
 - Opt in to waiting for a delegate agent's known ready signals at start, with early returns for questions and exits and a time limit that leaves the session running.
 

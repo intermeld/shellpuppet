@@ -642,6 +642,9 @@ export class Daemon {
   private readonly geometryController = new Map<string, WebSocket>();
   /** A dashboard document keeps its grid while a covered pane reconnects. */
   private readonly dashboardGeometryOwner = new Map<string, string>();
+  /** External geometry acts invalidate a temporary wider read's restoration. */
+  private readonly geometryEpoch = new Map<string, number>();
+  private readonly widerReads = new Map<string, { abort: AbortController; done: Promise<void>; finish: () => void }>();
   /** Subscribers to the daemon-wide event stream (`/events`). */
   private readonly eventSockets = new Set<WebSocket>();
   /**
@@ -1077,6 +1080,8 @@ export class Daemon {
     for (const timer of this.promptGraceTimers.values()) clearTimeout(timer);
     this.promptGraceTimers.clear();
     this.folderPickerAbort?.abort(new FolderPickerFailureError('The folder picker was stopped.'));
+    for (const read of this.widerReads.values()) read.abort.abort();
+    await Promise.allSettled([...this.widerReads.values()].map((read) => read.done));
 
     // Stop LISTENING first, before tearing down session trees. Killing process
     // trees is not fast (`taskkill /T` on a loaded machine can take seconds
@@ -2597,42 +2602,134 @@ export class Daemon {
           json(res, 400, { error: BAD_HIDE_REASONING });
           return;
         }
-        if (!hide) {
-          const snapshot = await session.snapshot();
-          json(res, 200, count === undefined ? snapshot : { ...snapshot, lastLines: await session.lastLines(count) });
-          return;
-        }
         // Fails closed: without a signature to read the screen by, nothing
         // is returned, never the screen unfiltered.
-        const signature = this.readerFor(session, res);
-        if (signature === null) return;
-        const snapshot = await session.snapshot();
-        const view = await session.styledScreen(REASONING_CONTEXT_LINES);
-        const screen = hideReasoning(view.lines, signature, view.firstVisible);
-        let tail: ReturnType<typeof hideReasoning> | undefined;
-        let tailSource: Awaited<ReturnType<Session['styledTail']>> | undefined;
-        if (count !== undefined) {
-          tailSource = await session.styledTail(count, REASONING_CONTEXT_LINES);
-          tail = hideReasoning(tailSource.lines, signature, tailSource.firstVisible);
-        }
-        if (screen === null || tail === null) {
-          json(res, 400, { error: overBudgetMessage(signature) });
+        const signature = hide ? this.readerFor(session, res) : null;
+        if (hide && signature === null) return;
+        const read = async (): Promise<Record<string, unknown> | null> => {
+          const snapshot = await session.snapshot();
+          if (signature === null) return count === undefined ? { ...snapshot } : { ...snapshot, lastLines: await session.lastLines(count) };
+          const view = await session.styledScreen(REASONING_CONTEXT_LINES);
+          const screen = hideReasoning(view.lines, signature, view.firstVisible);
+          let tail: ReturnType<typeof hideReasoning> | undefined;
+          let tailSource: Awaited<ReturnType<Session['styledTail']>> | undefined;
+          if (count !== undefined) {
+            tailSource = await session.styledTail(count, REASONING_CONTEXT_LINES);
+            tail = hideReasoning(tailSource.lines, signature, tailSource.firstVisible);
+          }
+          if (screen === null || tail === null) {
+            json(res, 400, { error: overBudgetMessage(signature) });
+            return null;
+          }
+          return {
+            ...snapshot,
+            screen: markFilteredSelectedOption(screen.lines, view.lines, session.agent).join('\n'),
+            cursor: filteredCursor(snapshot.cursor, screen),
+            ...(tail !== undefined && tailSource !== undefined
+              ? { lastLines: markFilteredSelectedOption(tail.lines, tailSource.lines, session.agent) }
+              : {}),
+            reasoning: {
+              agent: signature.name,
+              hiddenLines: screen.hiddenLines,
+              hiddenBlocks: screen.hiddenBlocks,
+              ...(tail !== undefined ? { lastLinesHiddenLines: tail.hiddenLines } : {}),
+            },
+          };
+        };
+        const wider = url.searchParams.get('wider');
+        if (wider === null) {
+          const payload = await read();
+          if (payload !== null) json(res, 200, payload);
           return;
         }
-        json(res, 200, {
-          ...snapshot,
-          screen: markFilteredSelectedOption(screen.lines, view.lines, session.agent).join('\n'),
-          cursor: filteredCursor(snapshot.cursor, screen),
-          ...(tail !== undefined && tailSource !== undefined
-            ? { lastLines: markFilteredSelectedOption(tail.lines, tailSource.lines, session.agent) }
-            : {}),
-          reasoning: {
-            agent: signature.name,
-            hiddenLines: screen.hiddenLines,
-            hiddenBlocks: screen.hiddenBlocks,
-            ...(tail !== undefined ? { lastLinesHiddenLines: tail.hiddenLines } : {}),
-          },
-        });
+        const match = /^(\d+)x(\d+)$/.exec(wider);
+        const cols = match === null ? undefined : Number(match[1]);
+        const rows = match === null ? undefined : Number(match[2]);
+        if (cols === undefined || rows === undefined || gridOutOfBounds(cols, rows)) {
+          json(res, 400, { error: `wider must be COLSxROWS. ${GRID_BOUNDS_ERROR}` });
+          return;
+        }
+        const timeoutParam = url.searchParams.get('widerTimeout');
+        const timeout = timeoutParam === null ? 1500 : Number(timeoutParam);
+        if (!Number.isInteger(timeout) || timeout < 250 || timeout > 30_000) {
+          json(res, 400, { error: 'widerTimeout must be an integer from 250 to 30000 ms.' });
+          return;
+        }
+        if (session.geometryHeld) {
+          json(res, 409, { error: 'The grid is held by its owner; a wider read cannot resize it.' });
+          return;
+        }
+        if (session.exited) {
+          json(res, 409, { error: endedRefusal(id, session.exitCode) });
+          return;
+        }
+        if (this.widerReads.has(id)) {
+          json(res, 409, { error: 'A wider read is already in progress for this session.' });
+          return;
+        }
+        const abort = new AbortController();
+        let finish = (): void => undefined;
+        const done = new Promise<void>((resolve) => { finish = resolve; });
+        this.widerReads.set(id, { abort, done, finish });
+        const onClose = (): void => { if (!res.writableEnded) abort.abort(); };
+        res.on('close', onClose);
+        const original = { cols: session.cols, rows: session.rows };
+        const requested = { cols, rows };
+        const target = { cols: Math.max(cols, original.cols), rows: Math.max(rows, original.rows) };
+        const controller = this.geometryController.get(id);
+        const owner = this.dashboardGeometryOwner.get(id);
+        const epoch = this.geometryEpoch.get(id) ?? 0;
+        let payload: Record<string, unknown> | null = null;
+        let restored = true;
+        let readError: unknown;
+        this.audit.record(actor, 'wider-read', id, { requested, original });
+        try {
+          if (target.cols !== original.cols || target.rows !== original.rows) {
+            await session.resize(target.cols, target.rows);
+            this.announceGeometry(id, session, { temporary: true });
+          }
+          const settled = await session.waitFor({ quiet: 250 }, {
+            timeout,
+            quietSince: Date.now(),
+            signal: abort.signal,
+          });
+          if (settled.reason === 'exited' || session.exited) {
+            readError = new SessionProgramEndedError(id, session.exitCode);
+          } else if (!abort.signal.aborted) {
+            payload = await read();
+          }
+        } catch (error) {
+          readError = error;
+        } finally {
+          try {
+            // A deliberate resize or takeover, including one to the same size,
+            // wins. Socket departure also changes the controller's identity.
+            restored = (this.geometryEpoch.get(id) ?? 0) === epoch &&
+              this.geometryController.get(id) === controller &&
+              this.dashboardGeometryOwner.get(id) === owner &&
+              !session.geometryHeld && !session.exited &&
+              session.cols === target.cols && session.rows === target.rows;
+            if (restored && (target.cols !== original.cols || target.rows !== original.rows)) {
+              await session.resize(original.cols, original.rows);
+              this.announceGeometry(id, session);
+            }
+          } catch (error) {
+            if (!(error instanceof SessionProgramEndedError)) readError ??= error;
+            restored = false;
+          } finally {
+            res.off('close', onClose);
+            this.widerReads.delete(id);
+            finish();
+          }
+        }
+        if (abort.signal.aborted) return;
+        if (session.exited || readError instanceof SessionProgramEndedError) {
+          json(res, 409, { error: endedRefusal(id, session.exitCode) });
+        } else if (readError !== undefined) {
+          throw readError instanceof Error ? readError : new Error('Wider read failed with a non-Error value.');
+        } else if (payload !== null) {
+          json(res, 200, { ...payload, restored });
+        }
         return;
       }
 
@@ -2946,6 +3043,7 @@ export class Daemon {
           return;
         }
         this.audit.record(actor, 'resize', id, { cols, rows, hold });
+        this.geometryEpoch.set(id, (this.geometryEpoch.get(id) ?? 0) + 1);
         // An API resize takes the grid away from whichever viewport had it, so
         // nobody is left believing they still drive it. It does NOT hold
         // unless asked: a human whose window is now the wrong shape gets it
@@ -3311,6 +3409,7 @@ export class Daemon {
     this.sessionSockets.delete(id);
     this.geometryController.delete(id);
     this.dashboardGeometryOwner.delete(id);
+    this.geometryEpoch.delete(id);
   }
 
   /** Whether a live viewport is currently driving this session's grid. */
@@ -3852,11 +3951,11 @@ export class Daemon {
   private announceGeometry(
     sessionId: string,
     session: Session,
-    options: { resync?: boolean } = {},
+    options: { resync?: boolean; temporary?: boolean } = {},
   ): void {
     for (const [ws, sync] of this.sessionSockets.get(sessionId) ?? []) {
       if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify(this.geometryFrame(session, ws)));
+        ws.send(JSON.stringify({ ...this.geometryFrame(session, ws), ...(options.temporary ? { temporary: true } : {}) }));
       }
       if (options.resync !== false) sync.resync();
     }
@@ -4001,6 +4100,7 @@ export class Daemon {
       !this.hasGeometryController(session.id)
     ) {
       this.geometryController.set(session.id, ws);
+      this.geometryEpoch.set(session.id, (this.geometryEpoch.get(session.id) ?? 0) + 1);
     } else if (
       !session.geometryHeld &&
       !readOnly &&
@@ -4009,6 +4109,7 @@ export class Daemon {
     ) {
       this.geometryController.set(session.id, ws);
       this.dashboardGeometryOwner.delete(session.id);
+      this.geometryEpoch.set(session.id, (this.geometryEpoch.get(session.id) ?? 0) + 1);
     }
     ws.send(JSON.stringify(options.frozen === undefined
       ? this.geometryFrame(session, ws)
@@ -4152,6 +4253,7 @@ export class Daemon {
             // the grid actually moves: a viewport that already fits is still
             // the one driving.
             this.geometryController.set(session.id, ws);
+            this.geometryEpoch.set(session.id, (this.geometryEpoch.get(session.id) ?? 0) + 1);
             if (credential.kind === 'dashboard') this.dashboardGeometryOwner.set(session.id, ws.protocol);
             else this.dashboardGeometryOwner.delete(session.id);
             // A geometry change is a geometry change whoever made it, and
@@ -4270,6 +4372,7 @@ export class Daemon {
       // connected does not inherit it.
       if (this.geometryController.get(session.id) === ws) {
         this.geometryController.delete(session.id);
+        this.geometryEpoch.set(session.id, (this.geometryEpoch.get(session.id) ?? 0) + 1);
       }
       this.lastActivity = Date.now();
       this.audit.record(actor, 'ws-close', session.id);

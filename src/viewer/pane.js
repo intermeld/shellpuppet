@@ -119,6 +119,7 @@ window.ShellPuppetPane = (() => {
     let reconnectTimer = null;
     let pendingTakeGrid = false;
     let followingExternal = false;
+    let temporaryGeometry = false;
     let dashboardFontLimit = null;
     let fontScale = 1;
     const fittingFonts = new Map();
@@ -780,6 +781,7 @@ window.ShellPuppetPane = (() => {
             const firstGeometry = !geometryDecided;
             geometryDecided = true;
             controlMode = captureMode ? 'adopt' : control.control || 'adopt';
+            temporaryGeometry = control.temporary === true;
             if (dashboardProof !== null && firstGeometry && controlMode === 'yours') {
               followingExternal = false;
               pendingTakeGrid = false;
@@ -798,7 +800,7 @@ window.ShellPuppetPane = (() => {
             }
             applyGeometry(control.cols, control.rows, control.max);
             if (firstGeometry) onGeometryReady();
-            if (controlMode === 'yours' && !captureMode && dashboardProof === null) requestFit();
+            if (controlMode === 'yours' && !temporaryGeometry && !captureMode && dashboardProof === null) requestFit();
           } else if (control && control.type === 'identity') {
             showIdentity(control);
           } else if (control && control.type === 'exited') {
@@ -902,7 +904,8 @@ window.ShellPuppetPane = (() => {
       },
       autoFitGrid(floorCols = 80, floorRows = 24, force = false) {
         if (destroyed) return false;
-        if (dashboardProof === null || controlMode === 'held' || (followingExternal && !force) || !geometryDecided ||
+        if (dashboardProof === null || controlMode === 'held' || (temporaryGeometry && !force) ||
+            (followingExternal && !force) || !geometryDecided ||
             !ws || ws.readyState !== 1 || sessionEnded) return false;
         if (force) {
           followingExternal = false;

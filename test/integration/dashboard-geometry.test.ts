@@ -41,6 +41,37 @@ async function openDashboard(width: number, height: number, interact: Parameters
   return { id, daemon, result: shot.probe };
 }
 
+it('keeps a dashboard pane in control after a wider read and still auto fits', async (context) => {
+  if (!browser) { context.skip(); return; }
+  const { result } = await openDashboard(1400, 900, async ({ evaluate }) => {
+    const id = String(await evaluate(`document.querySelector('.pane').dataset.session`));
+    await evaluate(`document.querySelector('.pane button[aria-label="Fit"]').click()`);
+    await eventually(async () => String(await evaluate(`document.querySelector('.pane-size').textContent`)).includes('×') &&
+      !String(await evaluate(`document.querySelector('.pane-size').textContent`)).includes('following'), 10_000);
+    const before = String(await evaluate(`document.querySelector('.pane-size').textContent`));
+    const counts = async (): Promise<{ geometry: number; resizes: number }> => await evaluate(`(() => {
+      const stream = window.__dashboardDiagnostics.streams.find(entry => entry.url.includes('/sessions/${id}/stream'));
+      return { geometry: stream.geometry.length, resizes: stream.resizes.length };
+    })()`) as { geometry: number; resizes: number };
+    const initialCounts = await counts();
+    const read = await api(running!.port, running!.token, `/sessions/${id}/snapshot?wider=180x60&widerTimeout=1000`);
+    expect(read.status, JSON.stringify(read.body)).toBe(200);
+    expect(read.body['restored']).toBe(true);
+    await eventually(async () => (await counts()).geometry >= initialCounts.geometry + 2, 10_000);
+    const finalCounts = await counts();
+    expect(finalCounts.geometry - initialCounts.geometry).toBe(2);
+    expect(finalCounts.resizes).toBe(initialCounts.resizes);
+    await eventually(async () => String(await evaluate(`document.querySelector('.pane-size').textContent`)) === before, 10_000);
+    const after = String(await evaluate(`document.querySelector('.pane-size').textContent`));
+    await evaluate(`document.getElementById('text-smaller').click()`);
+    await eventually(async () => String(await evaluate(`document.querySelector('.pane-size').textContent`)) !== after, 10_000);
+    return { before, after, fitted: String(await evaluate(`document.querySelector('.pane-size').textContent`)) };
+  });
+  const measured = result as { before: string; after: string; fitted: string };
+  expect(measured.after).toBe(measured.before);
+  expect(measured.fitted).not.toContain('following');
+}, 150_000);
+
 it('shows the short coloured TUI text boundary inside the same grid and canvas as a full field', async (context) => {
   if (!browser) { context.skip(); return; }
   const urls: string[] = [];
