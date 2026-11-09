@@ -28,6 +28,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Detect MiMo provider refusals on narrower screens with modern status footers, grey suggestions and expandable tool panels.
 - Keep ending sessions and closing dashboard panes safe while their last
   output is still being drawn, and ignore output arriving after a session ends.
 - Repair missing screen rows after a scrolled session screen grows, a known

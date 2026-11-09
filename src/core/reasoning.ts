@@ -1118,18 +1118,30 @@ export function possibleStall(lines: readonly string[], signature: CompiledSigna
 }
 
 /** Keep the physical origin for visibility, but match soft wraps as one line. */
-function logicalStallLines(physical: readonly StyledLine[]): { lines: StyledLine[]; starts: number[] } {
+function logicalStallLines(physical: readonly StyledLine[], shapes: readonly StallSignature[]): { lines: StyledLine[]; starts: number[] } {
   const lines: StyledLine[] = [];
   const starts: number[] = [];
   for (let i = 0; i < physical.length; i++) {
     const row = physical[i]!;
     const previous = lines.at(-1);
-    if (row.wrapped && previous !== undefined) {
+    // A captured full-width MiMo footer makes xterm mark subsequent, separately
+    // painted interface rows as wraps. Their own styled anchors restore the
+    // boundaries; ordinary wrapped transcript text is still joined.
+    const frameAnchor = /^ {2}[┃╹]/u.test(row.text);
+    const footerAnchor = /^ {5}▣ {2}Build · /u.test(row.text);
+    const first = frameAnchor ? 2 : footerAnchor ? 5 : -1;
+    const firstInk = first < 0 ? undefined : row.spans.find(span => span.from <= first && span.to > first)?.fg;
+    const framed = frameAnchor && (firstInk === '#fb8147' || firstInk === '#ff8040');
+    const footer = footerAnchor && firstInk === '#fb8147';
+    const belowEdge = previous !== undefined && /^ {2}╹▀+/u.test(previous.text) &&
+      /^ {3}(?:ctrl\+p settings|[\d.]+[KMG]?\/[\d.]+[KMG]?↓)/u.test(row.text);
+    const ownRow = shapes.length > 0 && (framed || footer || belowEdge);
+    if (row.wrapped && previous !== undefined && !ownRow) {
       const offset = previous.text.length + (physical[i - 1]!.wrapPadding ?? 0);
       previous.text = previous.text.padEnd(offset) + row.text;
       previous.spans.push(...row.spans.map(span => ({ ...span, from: span.from + offset, to: span.to + offset })));
     } else {
-      lines.push({ ...row, spans: [...row.spans] });
+      lines.push({ ...row, ...(ownRow ? { wrapped: false } : {}), spans: [...row.spans] });
       starts.push(i);
     }
   }
@@ -1147,7 +1159,7 @@ export function validateStall(physical: readonly StyledLine[], signature: Compil
   const signatures = moduleFor(signature.name)?.stalls;
   if (prompt || signatures === undefined || setAside(signature)) return null;
   return guarded(signature, () => {
-    const logical = logicalStallLines(physical);
+    const logical = logicalStallLines(physical, signatures);
     const lines = stallRegion(logical.lines, signatures);
     const starts = logical.starts;
     const composer = stallComposer(lines, signatures);
@@ -1180,8 +1192,10 @@ export function validateStall(physical: readonly StyledLine[], signature: Compil
       }
       if (!matches) continue;
       while (row >= turnStart && blank(lines[row])) row--;
-      if (row < turnStart || !lineFits(lines[row]!, tests.before)) continue;
-      const live = rules?.liveContent?.(lines, turnStart, row, readingContext);
+      const hasBefore = row >= turnStart && lineFits(lines[row]!, tests.before);
+      if (!hasBefore && !shape.beforeOptional) continue;
+      const blockStart = hasBefore ? row : end - tests.rows.length;
+      const live = rules?.liveContent?.(lines, turnStart, blockStart, readingContext);
       if (live !== true && live !== 'inconclusive') continue;
       // The same semantic identity drives both settlement and suppression.
       // Styles prove the shape above, but do not identify an occurrence.
@@ -1189,9 +1203,10 @@ export function validateStall(physical: readonly StyledLine[], signature: Compil
         const text = line.text;
         return (line === lines[end] ? footer.text : text).trim().replace(/\s+/gu, ' ');
       };
-      const block = lines.slice(row, end + 1).map(semantic).filter(Boolean);
+      const block = lines.slice(blockStart, end + 1).map(semantic).filter(Boolean);
       const blockIdentity = JSON.stringify([shape.reason, block]);
-      if (live === 'inconclusive') return { inconclusive: true as const, blockIdentity };
+      if (live === 'inconclusive' && !(firstVisible === 0 && lines[0]?.text.startsWith('  ┃') &&
+        inkStyles(lines[0])[0]?.fg === '#0a0a0a')) return { inconclusive: true as const, blockIdentity };
       return { reason: shape.reason, description: shape.description, blockIdentity,
         identity: JSON.stringify([shape.reason, turnStart > 0 ? semantic(lines[turnStart - 1]!) : '',
           block]) };

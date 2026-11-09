@@ -64,6 +64,8 @@ export interface StallSignature {
   /** Columns whose ink establishes row ownership for cheap invalidation. */
   frameColumns: number[];
   before: LineTest;
+  /** Some versions omit the neutral introduction above the coloured error. */
+  beforeOptional?: boolean;
   rows: LineTest[];
   footer: LineTest;
   composer: LineTest;

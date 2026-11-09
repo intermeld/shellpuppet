@@ -44,6 +44,7 @@ export const readingRules: ReadingRules = {
     // Check all available content even when the user-turn boundary is clipped.
     // Missing context cannot establish a new live answer.
     let tool = false;
+    let expandablePanel = false;
     for (let i = turnStart; i < candidate; i++) {
       const line = lines[i]!;
       // A leading soft-wrap continuation has no known origin. Its prompt
@@ -53,6 +54,8 @@ export const readingRules: ReadingRules = {
       const lead = context.ink(line)[0]?.fg;
       if (/^ {2}┃/u.test(line.text) && lead === '#0a0a0a') tool = true;
       if (/^ {2}╹▀/u.test(line.text) && lead === '#0a0a0a') tool = false;
+      if (tool && /^ {2}┃ {2}Click to expand\s*$/u.test(line.text) && context.ink(line)[1]?.fg === '#808080') expandablePanel = true;
+      if (expandablePanel && line.text.trim() === '') { tool = false; expandablePanel = false; }
     }
     // Punctuation in a file or answer is content. Only the module's gutter
     // and closing frame establish a tool region; error ink proves the refusal.

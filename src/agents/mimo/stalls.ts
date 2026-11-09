@@ -16,6 +16,7 @@ export const stalls: StallSignature[] = [{
   // The same symbols inside ordinary transcript text are still output.
   cosmetic: /^( {5}▣ {2}Build · [^·]+ · (?:\d+m )?\d+(?:\.\d+)?s)\s+(?:⎘.*|↻ \/recover(?:\s+⎘.*)?\s*$)/u,
   before: { text: '^ {5}The request was rejected because it was considered high risk\\s*$' },
+  beforeOptional: true,
   rows: [
     bar,
     { text: '^ {2}┃ {5}✗ Error\\s*$', lead: error, body: error },
@@ -30,8 +31,11 @@ export const stalls: StallSignature[] = [{
     { text: '^ {2}┃\\s*$' },
     { text: '^ {2}┃ {2}Build · ' },
     // MiMo can offer a grey suggestion in an otherwise idle composer.
-    { text: '^ {2}┃ {2}.+\\(Tab to accept\\)\\s*$', word: { fg: ['#808080'] } },
+    { text: '^ {2}┃ {2}.+\\(Tab to(?: accept\\))?\\s*$', word: { fg: ['#808080'] } },
     { text: '^ {2}╹▀+\\s*$' },
   ],
-  bottom: [{ text: '^ {3}ctrl\\+p settings\\s*$' }],
+  bottom: [
+    { text: '^(?: {3}ctrl\\+p settings| {3}[\\d.]+[KMG]?/[\\d.]+[KMG]?↓ \\(\\d+%\\) · \\$[\\d.]+\\s+tab switch\\s+ctrl\\+p\\s+@ attach file\\s*\\$ subagent\\s+/ commands(?:\\s+mode\\s+settings)?)\\s*$' },
+    { text: '^\\s+mode\\s+settings\\s*$' },
+  ],
 }];

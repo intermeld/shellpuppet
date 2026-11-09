@@ -642,11 +642,13 @@ Detection recognises the refusal by its shape on screen, at and above the
 composer, latest user-turn boundary and module busy rules. MiMo's content walk
 uses its own panel framing and error ink to distinguish tool listings and
 quoted text from the live answer. Punctuation in ordinary content does not
-establish a tool, quotation or interface region. A clipped context without a known turn boundary cannot
-establish a new stall. The last transcript block must have the red
+establish a tool, quotation or interface region. A clipped bounded history without a known turn boundary cannot
+establish a new stall. A self-contained captured frame beginning with a styled
+expandable tool panel can establish one after the panel visibly closes. The last transcript block must have the red
 left bar and red `✗ Error` marker, the provider refusal message and the
 completed `Build · <model> · <time>` footer directly above a current visible
-idle composer. Only recognised bottom chrome may follow it. The input region
+idle composer. The neutral high-risk introduction may be absent. Only recognised
+bottom chrome, including MiMo's usage and shortcut footer, may follow it. The input region
 comes from the composer frame and independently repeated panel dividers;
 indentation alone never makes typed text a sidebar. Text before a proven
 divider remains input, including text beyond the closing frame's edge.
@@ -654,7 +656,9 @@ The grey suggestion has a separate style rule.
 No detected prompt or busy indication may be present.
 
 The same semantic refusal and user turn must remain for one second. Logical
-lines join terminal wraps before matching; copy labels, the `↻ /recover`
+lines join terminal wraps before matching; independently styled interface anchors
+restore row boundaries after a full-width footer marks following rows as wrapped.
+Copy labels, the `↻ /recover`
 control, sidebar chrome and irrelevant styles are excluded from identity.
 Resize reflow, composer frames repainted to the new width, and accepted grey
 suggestions arriving or leaving preserve the original `since` time and produce

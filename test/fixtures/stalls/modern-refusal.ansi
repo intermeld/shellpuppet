@@ -1,0 +1,21 @@
+[2J[H  [38;2;10;10;10m┃[0m  Sample tool output
+  [38;2;10;10;10m┃[0m
+  [38;2;10;10;10m┃[0m      Example record
+  [38;2;10;10;10m┃[0m
+  [38;2;10;10;10m┃[0m      Example summary
+  [38;2;10;10;10m┃[0m
+  [38;2;10;10;10m┃[0m      Example note
+  [38;2;10;10;10m┃[0m
+  [38;2;10;10;10m┃[0m
+  [38;2;10;10;10m┃[0m  [38;2;128;128;128mClick to expand[0m
+  [38;2;10;10;10m┃[0m
+
+     The request was rejected because it was considered high risk
+
+  [38;2;251;113;133m┃[0m
+  [38;2;251;113;133m┃[0m     [38;2;251;113;133m✗ Error[0m
+  [38;2;251;113;133m┃[0m
+  [38;2;251;113;133m┃[0m     The response was withheld by the model provider's content safety filter.
+  [38;2;251;113;133m┃[0m
+
+     [38;2;251;129;71m▣  [0mBuild [38;2;128;128;128m· Example Model · 18m 59s[0m          [38;2;128;128;128m↻ /recover[0m          [38;2;128;128;128m⎘ copy[0m  [38;2;10;10;10m▄[0m                                                                                                                    [38;2;251;129;71m┃[0m                                                                                               [38;2;251;129;71m┃[0m  [38;2;128;128;128mReview the sample task. (Tab to[0m                                                              [38;2;251;129;71m┃[0m                                                                                               [38;2;251;129;71m┃[0m  [38;2;251;129;71mBuild[0m · Example Model Example Co                                                             [38;2;251;129;71m╹[0m[38;2;30;30;30m▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀[0m     [38;2;128;128;128m42.1K/661K↓ (6%) · $0.01[0m  tab [38;2;128;128;128mswitch[0m    ctrl+p          @ [38;2;128;128;128mattach file[0m$ [38;2;128;128;128msubagent[0m  / [38;2;128;128;128mcommands[0m                                mode          settings                                            
