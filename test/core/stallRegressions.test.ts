@@ -555,7 +555,7 @@ describe('live refusal regressions', () => {
     await sleep(1400);
     expect(session.getStalled()).toBeDefined();
   });
-  it('preserves a known stall when a resize clips its context, until new output', async () => {
+  it('confirms persistent frame loss after resizing below the supported floor', async () => {
     const { session, transitions, draw } = make();
     await draw(refusal);
     await sleep(1400);
@@ -564,7 +564,7 @@ describe('live refusal regressions', () => {
     await session.resize(40, 10);
     expect(session.getStalled()).toEqual(state);
     await sleep(1400);
-    expect(transitions).toEqual([state]);
+    expect(transitions).toEqual([state, undefined]);
     await draw('\r\n     New ordinary output.');
     expect(session.getStalled()).toBeUndefined();
   });

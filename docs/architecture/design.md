@@ -713,11 +713,25 @@ Reflow and native redraws can change that text for an
 arbitrary duration. Changes or loss of the refusal, completed footer or valid
 composer must survive two coalesced validations before clearing; restoration
 between checks preserves the original time. Checks stay 250 ms apart, and
-neither output nor resize extends a pending confirmation deadline. Real input
-suppresses the refusal and footer across user-turn text changes until that
-block disappears or is replaced.
-Non-empty real input, new transcript text, busy markers and prompts clear the
-state immediately. Busy screens, missing composer edges and absent candidate
+output cannot extend a pending confirmation deadline. After a resize request,
+changed dimensions reported by the PTY, or a renderer resize, an established
+notice has one 1,000 ms redraw allowance. Delayed ConPTY growth redraws under
+integration-suite load took more than 500 ms with a 450 ms application delay
+and split writes. The allowance covers loss of composer, footer, marker ink
+and framing anchors together. It retains the validated transcript baseline;
+neither repeated output nor duplicate same-size requests renews an outstanding
+allowance or its subsequent confirmation. A later geometry change or changed
+PTY size report starts its own full allowance. An early restored frame does not
+cancel the allowance, because the application's delayed redraw may still be due.
+At the deadline, full validation checks even a text-identical screen. A
+persistent loss clears by the next 250 ms confirmation, at most 1,250 ms
+after the latest geometry change or resize report, subject to event-loop
+scheduling. A genuine screen end during the allowance can incur that bounded
+delay; real input and exit still clear immediately. A restored identity keeps
+its original notice. Real input suppresses the refusal and footer across
+user-turn text changes until that block disappears or is replaced.
+Outside the resize allowance, new transcript text, busy markers and prompts
+clear the state immediately. Busy screens, missing composer edges and absent candidate
 ink are rejected before styled history or prompt scans. Context reads are
 limited to the viewport and 128 preceding rows. Styled reads stop attribute
 extraction at each row's right-trimmed text boundary; discarded padding has

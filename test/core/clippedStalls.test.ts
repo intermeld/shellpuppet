@@ -92,7 +92,9 @@ for (const end of ['refusal replaced', 'new footer', 'busy', 'prompt', 'new tran
     };
     const composer = row('╹');
     await draw(edge(composer));
-    await sleep(400);
+    // Exercise the existing immediate-end guards after the resize allowance.
+    // Ends during that allowance have their own bounded-delay regressions.
+    await sleep(1400);
     expect(session.getStalled()).toEqual(state);
     if (end === 'input') await session.write('x');
     else if (end === 'refusal replaced') await draw(`\x1b[${row('✗ Error')};1H\x1b[2K     An ordinary answer.`);

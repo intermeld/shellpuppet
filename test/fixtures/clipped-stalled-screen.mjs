@@ -22,7 +22,8 @@ const write = (text, growth = false) => {
 };
 process.stdout.on('resize', () => {
   if (process.stdout.columns >= 120) {
-    write(screen.replace('╹' + '▀'.repeat(20), '╹' + '▀'.repeat(process.stdout.columns - 5)), true);
+    write(screen.replace('╹' + '▀'.repeat(20), process.argv.includes('--end-on-growth') ? '' :
+      '╹' + '▀'.repeat(process.stdout.columns - 5)), true);
   } else {
     write(`\x1b[${process.stdout.rows - 1};1H  \x1b[38;2;255;128;64m╹` +
       '▀'.repeat(process.stdout.columns - 5) + '\x1b[0m\x1b[K');
