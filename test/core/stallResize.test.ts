@@ -106,6 +106,20 @@ describe('bounded resize redraws of an established refusal', () => {
     });
   }
 
+  it('does not count its own requested size as a second change when the first output arrives late', async () => {
+    const h = await setup();
+    const composer = h.row('╹');
+    await h.session.resize(120, 32);
+    h.check(500);
+    // Unix PTYs report the requested size at once, but the program may write
+    // nothing until its redraw. That first late chunk is not a new geometry change.
+    await h.draw(erase(composer));
+    h.check(500);
+    expect(h.transitions).toEqual([h.original]);
+    h.check(250);
+    expect(h.transitions).toEqual([h.original, undefined]);
+  });
+
   it('validates marker ink even when the resized screen has identical text', async () => {
     const h = await setup();
     await h.session.resize(120, 32);
