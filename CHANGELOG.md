@@ -30,6 +30,8 @@ version may change behaviour, and every such change is listed here.
 
 - Keep ending sessions and closing dashboard panes safe while their last
   output is still being drawn, and ignore output arriving after a session ends.
+- Repair missing screen rows after a scrolled session screen grows, a known
+  terminal emulator fault that could stop the daemon on the next output.
 - Avoid a second real terminal resize when a viewer's fractional character
   width rounds differently after the first grid change.
 - Keep dashboard screens wholly visible with consistent text below the 80 by

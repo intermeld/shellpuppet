@@ -1282,10 +1282,13 @@ export class Session implements WaitTarget {
     if (this.exitedFlag || this.isKilled) throw new SessionProgramEndedError(this.id, this.exitCodeValue);
     const ended = recordedExitCode(this.pty);
     if (ended !== undefined) throw new SessionProgramEndedError(this.id, ended);
+    const oldCols = this.renderer.cols;
+    const oldRows = this.renderer.rows;
     this.pty.resize(cols, rows);
     this.stallPtyCols = this.pty.cols; this.stallPtyRows = this.pty.rows;
     this.noteStallResize(cols !== this.renderer.cols || rows !== this.renderer.rows);
     this.renderer.resize(cols, rows);
+    this.logger.debug('session resized', { id: this.id, oldCols, oldRows, cols, rows });
     // Unsettled candidates rebase on local reflow. Established notices keep
     // their validated baselines until the bounded native redraw finishes.
     if (this.agentModule?.stalls !== undefined && this.stallState === undefined) {
