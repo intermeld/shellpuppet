@@ -134,6 +134,11 @@ export class ScreenRenderer {
     for (const reflow of this.foregroundReflows) reflow();
   }
 
+  /** Includes geometry changes parsed from the program's terminal output. */
+  onResize(listener: () => void): void {
+    this.term.onResize(listener);
+  }
+
   /**
    * A conservative ink hint from xterm's already parsed colour operations.
    * It never proves a screen shape. Once absent ink is checked, ordinary

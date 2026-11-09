@@ -213,7 +213,37 @@ describe('provider stall supervision', () => {
       expect(audit.split('\n').filter(line => line.includes('"session-stalled"') && line.includes(clippedId))).toHaveLength(1);
       expect(live.controls().filter(control => control['type'] === 'session-stall-clear')).toHaveLength(0);
     } catch (error) { diagnostics.print(); throw error; }
-    finally { diagnostics.stop(); live?.close(); }
+    finally {
+      if (process.env['SP_STALL_TIMINGS'] === '1') diagnostics.print();
+      diagnostics.stop(); live?.close();
+    }
+  });
+  it('clears a genuine native composer loss during the delayed growth allowance', async () => {
+    const started = await api(td.port, td.token, '/sessions', {
+      body: { command: process.execPath, args: [path.join(repoRoot, 'test/fixtures/clipped-stalled-screen.mjs'),
+        '--chunk-delays', '--end-on-growth'], shell: false, agent: 'mimo', cols: 120, rows: 30 },
+    });
+    expect(started.status, JSON.stringify(started.body)).toBe(200);
+    const endedId = String(started.body['id']);
+    fs.writeFileSync(path.join(td.home, 'ended-fixture-pid.json'), JSON.stringify({ pid: started.body['pid'], id: endedId }));
+    const session = (td.daemon as unknown as { manager: SessionManager }).manager.get(endedId)!;
+    const diagnostics = stallDiagnostics(session);
+    let cleared = 0;
+    const off = session.onStall(state => { if (state === undefined) cleared = performance.now(); });
+    try {
+      await eventually(() => session.getStalled() !== undefined);
+      await session.resize(80, 24);
+      await new Promise(resolve => setTimeout(resolve, 1500));
+      expect(session.getStalled()).toBeDefined();
+      const requested = performance.now();
+      diagnostics.resize(120, 30, 'requested');
+      await session.resize(120, 30);
+      await eventually(() => session.getStalled() === undefined, 2000);
+      // 1,000 ms allowance plus 250 ms confirmation; 250 ms scheduling margin.
+      expect(cleared - requested).toBeLessThan(1500);
+      if (process.env['SP_STALL_TIMINGS'] === '1') console.log('Native genuine end timing:', JSON.stringify({ clearMs: cleared - requested }));
+    } catch (error) { diagnostics.print(); throw error; }
+    finally { off(); diagnostics.stop(); }
   });
   it('announces a responsive native composer once across resize and grey suggestions', async () => {
     const started = await api(td.port, td.token, '/sessions', {

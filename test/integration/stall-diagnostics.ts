@@ -9,7 +9,7 @@ import { moduleFor } from '../../src/agents/index.js';
 export function stallDiagnostics(session: Session) {
   const internal = session as unknown as { renderer: ScreenRenderer; refreshStall(): void;
     stallInk?: { possible: boolean }; stallTracker: { tracking: boolean }; stallTimer: unknown;
-    stallScheduled: unknown; stallNextCheck: number; stallValidationPending: boolean;
+    stallScheduled: unknown; stallNextCheck: number; stallValidationPending: boolean; stallResizeUntil?: number;
     stallTranscript?: string; stallValidatedTranscript?: string };
   const signature = signatureFor('mimo', 'mimo')!;
   const start = performance.now();
@@ -18,6 +18,7 @@ export function stallDiagnostics(session: Session) {
   const samples: unknown[] = [];
   const transitions: unknown[] = [];
   const resizes: unknown[] = [];
+  const chunks: unknown[] = [];
   let outputCount = 0;
   let lastOutputMs: number | null = null;
   let previous: { refusal: string; footer: string; userTurnTextLength: number | null; composer: string } | undefined;
@@ -54,6 +55,7 @@ export function stallDiagnostics(session: Session) {
       validatedTranscriptLength: internal.stallValidatedTranscript?.length,
       transcriptMatchesValidated: internal.stallTranscript === internal.stallValidatedTranscript,
       scheduled: internal.stallScheduled !== null, nextCheckInMs: internal.stallNextCheck - Date.now(),
+      redrawRemainingMs: Math.max(0, (internal.stallResizeUntil ?? 0) - Date.now()),
       confirmingLoss: internal.stallValidationPending, composerRow: edge, footerRow: footer,
       refusalBlockChanged: previous !== undefined && previous.refusal !== current.refusal,
       footerChanged: previous !== undefined && previous.footer !== current.footer,
@@ -63,15 +65,16 @@ export function stallDiagnostics(session: Session) {
   };
   const refresh = internal.refreshStall.bind(internal);
   internal.refreshStall = () => { sample('validation'); refresh(); };
-  const offData = session.onData(() => {
+  const offData = session.onData(data => {
     outputCount++; lastOutputMs = performance.now() - start;
+    chunks.push({ ...time(), sequence: outputCount, bytes: Buffer.byteLength(data), characters: data.length });
     void session.viewportLines().then(() => sample('output'));
   });
   const offStall = session.onStall(state => transitions.push({ ...time(), state: state ?? null }));
   sample('start');
   return {
     resize(cols: number, rows: number, phase: string) { resizes.push({ ...time(), cols, rows, phase }); sample(`resize ${phase}`); },
-    print() { console.error('Native stall lifecycle diagnostics (no screen text):', JSON.stringify({ samples, transitions, resizes })); },
+    print() { console.error('Native stall lifecycle diagnostics (no screen text):', JSON.stringify({ samples, transitions, resizes, chunks })); },
     stop() { offData(); offStall(); internal.refreshStall = refresh; },
   };
 }

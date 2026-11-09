@@ -120,8 +120,14 @@ every indented continuation behind its gutter, never end an established notice.
 Ordinary output keeps its marker characters and indentation; busy hints and
 cosmetic controls count only in their framed UI regions.
 Changes or loss of the refusal, completed footer or valid
-composer must persist across two checks 250 ms apart. Output and resize do not
-postpone confirmation. Partial grey suggestion paints also wait for validation
+composer must persist across two checks 250 ms apart. An established notice has
+a one-second allowance after a resize request or reported resize, covering all
+of its framing, footer and marker as well as the composer. Output and duplicate
+same-size requests cannot renew it or its confirmation; a later geometry change
+or changed PTY size report gets its own allowance. A genuine screen end
+during it clears within 1.25 seconds of the latest resize or size report, subject
+to event-loop scheduling; real input and exit still clear immediately. A restored
+identity keeps the original notice. Partial grey suggestion paints also wait for validation
 of the complete idle composer. If only the user-turn boundary is
 outside the viewport plus 128 preceding rows, an established notice keeps its identity and
 time while the available content, same refusal block, footer and idle composer

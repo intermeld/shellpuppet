@@ -718,6 +718,9 @@ export class Session implements WaitTarget {
   private stallTranscript: string | undefined;
   private stallValidatedTranscript: string | undefined;
   private stallValidationPending = false;
+  // One second covers the measured delayed ConPTY growth redraws under load.
+  // Only a new geometry change can renew it; output and duplicate requests cannot.
+  private stallResizeUntil = 0;
   private readonly stallScreen = new StallScreenCache();
   private readonly stallInk: ReturnType<ScreenRenderer['watchForeground']> | undefined;
 
@@ -801,6 +804,7 @@ export class Session implements WaitTarget {
     this.renderer = new ScreenRenderer({ cols, rows, scrollback: DEFAULT_SCROLLBACK, agent: this.agent });
     this.stallInk = this.agentModule?.stalls === undefined ? undefined :
       this.renderer.watchForeground(this.agentModule.stalls.flatMap(shape => shape.marker.fg));
+    if (this.agentModule?.stalls !== undefined) this.renderer.onResize(() => this.noteStallResize(true));
 
     // cols/rows say where to START, and nothing more: a size that also froze
     // the grid would leave a viewer with a grid it could not change, and a
@@ -883,7 +887,15 @@ export class Session implements WaitTarget {
       });
     }
 
+    let ptyCols = this.pty.cols;
+    let ptyRows = this.pty.rows;
     this.pty.onData((data) => {
+      // node-pty can apply a requested resize later, after its first output.
+      // Observe the dimensions it reports as well as our explicit requests.
+      if (this.pty.cols !== ptyCols || this.pty.rows !== ptyRows) {
+        ptyCols = this.pty.cols; ptyRows = this.pty.rows;
+        this.noteStallResize(true);
+      }
       // Track bracketed-paste mode from the app's own output (see PASTE_START).
       //
       // Scanned with a carry-over tail because PTY read boundaries are
@@ -1263,13 +1275,14 @@ export class Session implements WaitTarget {
     const ended = recordedExitCode(this.pty);
     if (ended !== undefined) throw new SessionProgramEndedError(this.id, ended);
     this.pty.resize(cols, rows);
+    this.noteStallResize(cols !== this.renderer.cols || rows !== this.renderer.rows);
     this.renderer.resize(cols, rows);
-    // Reflow is layout, including when it clips the recognised context. Take
-    // the new comparison baseline so a later cursor-only write stays layout.
-    if (this.agentModule?.stalls !== undefined) {
+    // Unsettled candidates rebase on local reflow. Established notices keep
+    // their validated baselines until the bounded native redraw finishes.
+    if (this.agentModule?.stalls !== undefined && this.stallState === undefined) {
       this.stallContent = this.stallScreen.content(this.renderer.plainViewport(), this.agentModule.stalls);
       this.stallTranscript = this.readStallTranscript();
-      if (this.stallState === undefined) this.scheduleStall();
+      this.scheduleStall();
     }
     if (options.hold !== undefined) this.geometryHeldFlag = options.hold;
   }
@@ -1304,6 +1317,13 @@ export class Session implements WaitTarget {
 
   getStalled(): StallState | undefined { return this.stallState; }
 
+  private noteStallResize(changed: boolean): void {
+    if (this.stallState === undefined || (this.stallResizeUntil !== 0 && !changed)) return;
+    this.stallResizeUntil = Date.now() + 1000;
+    this.clearStallTimer();
+    this.queueStallCheck(() => this.refreshStall(), 1000);
+  }
+
   /** Let PTY delivery finish before comparing a rendered batch. */
   private deferStall(): void {
     if (this.stallScheduled !== null) return;
@@ -1336,6 +1356,7 @@ export class Session implements WaitTarget {
   }
 
   private publishStall(state: StallState | undefined): void {
+    if (state === undefined) this.stallResizeUntil = 0;
     if (this.stallState === state) return;
     this.stallState = state;
     for (const listener of this.stallListeners) listener(state);
@@ -1361,6 +1382,10 @@ export class Session implements WaitTarget {
 
   private scheduleStall(): void {
     if (this.exitedFlag || this.isKilled) return;
+    // Framing anchors, marker ink, footer and transcript ownership can all
+    // disappear during a resize. Retain the validated comparison baselines
+    // until the fixed deadline, including if an early complete frame returns.
+    if (this.stallState !== undefined && this.stallResizeUntil !== 0) return;
     if (!this.stallTracker.tracking) {
       // Coalesce discovery screening too. An ordinary repaint must neither
       // rebuild viewport rows per chunk nor enter validation without ink.
@@ -1413,12 +1438,20 @@ export class Session implements WaitTarget {
   private refreshStall(): void {
     this.clearStallTimer();
     if (this.exitedFlag || this.isKilled) return;
+    const resized = this.stallState !== undefined && this.stallResizeUntil !== 0;
+    if (this.stallState !== undefined && this.stallResizeUntil !== 0) {
+      const remaining = this.stallResizeUntil - Date.now();
+      if (remaining > 0) {
+        this.queueStallCheck(() => this.refreshStall(), remaining);
+        return;
+      }
+    }
     this.stallNextCheck = Date.now() + 250;
     const signature = signatureForSession(this);
     if (signature === null) { this.publishStall(undefined); return; }
     const plain = this.renderer.plainViewport();
     const content = this.stallScreen.content(plain, this.agentModule!.stalls!);
-    if (this.stallState !== undefined && content === this.stallValidatedContent) {
+    if (!resized && this.stallState !== undefined && content === this.stallValidatedContent) {
       // A due validation can beat the deferred output task to a restored
       // frame. Cancel here too, before materialising its styled context.
       this.stallContent = content;
@@ -1454,6 +1487,7 @@ export class Session implements WaitTarget {
       return;
     }
     this.stallValidationPending = false;
+    this.stallResizeUntil = 0;
     this.publishStall(this.stallTracker.observe(candidate));
     if (!this.stallTracker.tracking) this.stallInk?.checkAbsent();
     const remaining = this.stallTracker.remaining();
