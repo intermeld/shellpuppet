@@ -296,7 +296,7 @@ ambiguous in clients that do not, so the prefix stays.
 | Tool | Purpose | Key args |
 |---|---|---|
 | `terminal_start` | Launch a program in a new PTY session | `command`, `args[]`, `cwd`, `cols`, `rows`, `hold`, `label`, `purpose`, `agent`, `waitReady`, `readyTimeout`, `readyText`, `readyQuiet`, `shell`, `envNames` |
-| `terminal_snapshot` | Read the rendered screen as plain text | `session`, `lastLines`, `hideReasoning` |
+| `terminal_snapshot` | Read the rendered screen as plain text | `session`, `lastLines`, `hideReasoning`, `wider`, `widerTimeout` |
 | `terminal_type` | Type text (optionally submit) | `session`, `text`, `submit`, `verify` |
 | `terminal_key` | Press a semantic key | `session`, `key` |
 | `terminal_wait` | Wait for a screen condition, prompt or supported provider stall | `session` (id, list of ids or omitted for supervision), `text`\|`regex`\|`quiet` or `prompt` and/or `stalled`, `timeout`, `debounce`, `matchAfterInput`, `now`, `hideReasoning` |
@@ -1252,6 +1252,23 @@ setting, never their values. Client-token starts do not use profiles.
     real grid, so the page stops asking for one it will never be given. Session state
     exposes the hold as `geometryHeld`. `terminal_resize` sets the grid without holding
     it unless asked, so the human's next window move takes it back.
+  - **A wider snapshot is temporary.** `terminal_snapshot` may request `wider:
+    { cols, rows }` to reveal a dialog clipped by its normal grid. Each side
+    may grow but never shrink. The request is refused outside the API grid
+    bounds of 2 to 1000 columns and 2 to 500 rows, when the geometry is held,
+    or while another wider read of the same session is in progress. After the
+    PTY and renderer resize, the read uses the ordinary quiet waiter: 250 ms
+    without output, counted from the resize, capped at 1500 ms by default.
+    `widerTimeout` may set that cap from 250 to 30000 ms. The snapshot reports
+    the grid at which it was read and `restored`. The daemon then restores the
+    original size and controller, including a dashboard's remembered owner or
+    the lack of an owner. A later resize, takeover or controller departure wins,
+    even if it asks for the same size: its geometry act prevents restoration.
+    A cancelled or failed read and daemon shutdown also restore before the
+    request finishes. Viewers receive the two real grid changes and keep their
+    controller. A wider read is audited with requested and original sizes,
+    without screen text. `terminal_find` remains a search over the current
+    viewport; callers widen a snapshot when they need to reveal clipped text.
   - **A held or adopted grid that does not match the window keeps bars on one axis.**
     That follows from the grid itself: a fixed grid cannot fill an arbitrary shape without
     changing the grid or stretching the characters. Both alternatives were rejected.

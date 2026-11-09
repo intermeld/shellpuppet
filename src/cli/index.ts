@@ -75,8 +75,11 @@ Usage:
       Options go BEFORE the command; everything after the command is passed
       to the daemon unchanged (so its own --flags survive).
   shellpuppet list [--waiting] [--hide-reasoning]   List sessions, or only waiting prompts
-  shellpuppet snap <id> [--last <n>] [--hide-reasoning]
+  shellpuppet snap <id> [--last <n>] [--hide-reasoning] [--wider COLSxROWS] [--wider-timeout <ms>]
                                                     Print the rendered screen
+      --wider temporarily enlarges the grid, waits 250 ms of quiet (at most
+      1500 ms by default), reads, then restores its size and controller.
+      --wider-timeout sets the redraw cap from 250 to 30000 ms.
       --hide-reasoning leaves out an agent CLI's reasoning, each block as one
       "[reasoning hidden: N lines]" line; a session whose agent has no
       signature is refused (exit 2), never printed unfiltered.
@@ -177,6 +180,8 @@ const VALUE_FLAGS = new Set([
   'ready-quiet',
   'ready-timeout',
   'last',
+  'wider',
+  'wider-timeout',
   'text',
   'regex',
   'quiet',
@@ -477,12 +482,17 @@ async function main(): Promise<void> {
     case 'snap': {
       const id = parsed.positionals[0] ?? fail(2, 'snap needs a session id.');
       const last = intFlag(parsed, 'last');
+      const wider = parsed.flags.get('wider');
+      if (wider !== undefined && (typeof wider !== 'string' || !/^\d+x\d+$/.test(wider))) fail(2, '--wider must be COLSxROWS.');
       const query = [
         ...(last !== undefined ? [`lastLines=${String(last)}`] : []),
         ...(parsed.flags.get('hide-reasoning') === true ? ['hideReasoning=1'] : []),
+        ...(wider !== undefined ? [`wider=${String(wider)}`] : []),
+        ...(intFlag(parsed, 'wider-timeout') !== undefined ? [`widerTimeout=${String(intFlag(parsed, 'wider-timeout'))}`] : []),
       ];
       const path = `/sessions/${id}/snapshot${query.length > 0 ? `?${query.join('&')}` : ''}`;
       const result = await call(connection, 'GET', path);
+      if (result['restored'] === false) console.error('Grid changed during the wider read; the original grid was not restored.');
       if (wantJson) printJson(result);
       else if (last !== undefined) console.log((result['lastLines'] as string[]).join('\n'));
       else console.log(String(result['screen']));

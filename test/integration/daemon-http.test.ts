@@ -30,10 +30,14 @@ import {
 import type { ApiResult, TestDaemon } from './helpers.js';
 
 let td: TestDaemon;
+const auditRecords: { actor: string; action: string; session?: string; meta?: Record<string, unknown> }[] = [];
 
 beforeAll(async () => {
   // No session cap unless configured; the configured cap is tested below.
-  td = await startTestDaemon({ policy: { mode: 'allow-all' } });
+  td = await startTestDaemon({ policy: { mode: 'allow-all' }, audit: {
+    captureContent: false,
+    record: (actor, action, session, meta) => { auditRecords.push({ actor, action, session, meta }); },
+  } });
 });
 afterEach(async () => {
   // These sessions belong to individual tests. Keeping their idle programs
@@ -1212,6 +1216,171 @@ describe('viewer assets and the WS frame protocol (§5)', () => {
     // it, so nobody is left believing they still are.
     expect(geometry['control']).toBe('adopt');
     watcher.close();
+  });
+
+  it('temporarily widens a snapshot and restores its grid and controller', async () => {
+    const session = await startNodeSession('wider-read');
+    const watcher = await connectWs(td.port, session.id, td.token);
+    const original = await watcher.waitForControl((c) => c['type'] === 'geometry');
+    expect(original['control']).toBe('yours');
+    const read = await api(td.port, td.token, `/sessions/${session.id}/snapshot?wider=140x40&widerTimeout=300`);
+    expect(read.status, JSON.stringify(read.body)).toBe(200);
+    expect(read.body).toMatchObject({ cols: 140, rows: 40, restored: true });
+    const enlarged = await watcher.waitForControl((c) => c['type'] === 'geometry' && c['cols'] === 140);
+    expect(enlarged['control']).toBe('yours');
+    const restored = await watcher.waitForControl((c) => c['type'] === 'geometry' && c['cols'] === original['cols'] && c['rows'] === original['rows']);
+    expect(restored['control']).toBe('yours');
+    expect(auditRecords.some((entry) => entry.action === 'wider-read' && entry.session === session.id &&
+      JSON.stringify(entry.meta).includes('140'))).toBe(true);
+
+    const competing = api(td.port, td.token, `/sessions/${session.id}/snapshot?wider=150x45&widerTimeout=1000`);
+    await watcher.waitForControl((c) => c['type'] === 'geometry' && c['cols'] === 150);
+    watcher.ws.send(JSON.stringify({ type: 'resize', cols: 150, rows: 45, take: true }));
+    expect((await competing).body['restored']).toBe(false);
+    expect((await api(td.port, td.token, `/sessions/${session.id}/snapshot`)).body).toMatchObject({ cols: 150, rows: 45 });
+    watcher.close();
+  });
+
+  it('reads text a program only draws at a wider grid', async () => {
+    const started = await api(td.port, td.token, '/sessions', { body: {
+      command: process.execPath,
+      args: [path.join(repoRoot, 'test', 'fixtures', 'wider-dialog.mjs')],
+      shell: false, openViewer: false, cols: 80, rows: 24,
+    } });
+    expect(started.status).toBe(200);
+    const id = String(started.body['id']);
+    await eventually(async () => String((await api(td.port, td.token, `/sessions/${id}/snapshot`)).body['screen']).includes('Run command:'), 10_000);
+    const before = await api(td.port, td.token, `/sessions/${id}/snapshot`);
+    expect(String(before.body['screen'])).not.toContain('VISIBLE-ONLY-WHEN-WIDE');
+    const wide = await api(td.port, td.token, `/sessions/${id}/snapshot?wider=140x40&widerTimeout=3000`);
+    expect(wide.status, JSON.stringify(wide.body)).toBe(200);
+    expect(String(wide.body['screen'])).toContain('VISIBLE-ONLY-WHEN-WIDE');
+    expect(wide.body).toMatchObject({ cols: 140, rows: 40, restored: true });
+    const after = await api(td.port, td.token, `/sessions/${id}/snapshot`);
+    expect(after.body).toMatchObject({ cols: 80, rows: 24 });
+  });
+
+  it('filters reasoning and scrollback in a wider snapshot', async () => {
+    const file = path.join(repoRoot, 'test', 'fixtures', 'reasoning', 'qoder-answered-after-reasoning.ansi');
+    const started = await api(td.port, td.token, '/sessions', { body: {
+      command: process.execPath,
+      args: ['-e', `process.stdout.write(require('fs').readFileSync(${JSON.stringify(file)}, 'utf8')); setInterval(() => {}, 500)`],
+      shell: false, agent: 'qoder', openViewer: false, cols: 194, rows: 101,
+    } });
+    expect(started.status).toBe(200);
+    const id = String(started.body['id']);
+    await eventually(async () => String((await api(td.port, td.token, `/sessions/${id}/snapshot`)).body['screen']).includes('Type your message'), 10_000);
+    const hidden = await api(td.port, td.token, `/sessions/${id}/snapshot?wider=210x110&widerTimeout=500&lastLines=200&hideReasoning=1`);
+    expect(hidden.status, JSON.stringify(hidden.body)).toBe(200);
+    expect(hidden.body).toMatchObject({ cols: 210, rows: 110, restored: true });
+    expect(String(hidden.body['screen'])).toMatch(/\[reasoning hidden: \d+ lines?\]/);
+    expect(String(hidden.body['screen'])).not.toMatch(/^ │ /m);
+    expect((hidden.body['lastLines'] as string[]).join('\n')).not.toMatch(/^ │ /m);
+  });
+
+  it('leaves an unowned grid unowned, and refuses held and overlapping wider reads', async () => {
+    const session = await startNodeSession('wider-unowned');
+    const path = `/sessions/${session.id}/snapshot?wider=130x35&widerTimeout=1000`;
+    const first = api(td.port, td.token, path);
+    await eventually(async () => (await api(td.port, td.token, '/sessions')).body['sessions'] !== undefined &&
+      ((await api(td.port, td.token, '/sessions')).body['sessions'] as { id: string; cols: number }[])
+        .some((s) => s.id === session.id && s.cols === 130), 10_000);
+    const overlap = await api(td.port, td.token, path);
+    expect(overlap.status).toBe(409);
+    expect(overlap.body['error']).toContain('already in progress');
+    expect((await first).body).toMatchObject({ restored: true });
+    const watcher = await connectWs(td.port, session.id, td.token);
+    expect((await watcher.waitForControl((c) => c['type'] === 'geometry'))['control']).toBe('yours');
+    watcher.close();
+
+    const held = await api(td.port, td.token, '/sessions', { body: {
+      command: process.execPath, args: ['-e', "setInterval(() => {}, 200)"], shell: false,
+      label: 'wider-held', hold: true,
+    } });
+    expect(held.status).toBe(200);
+    const heldId = String(held.body['id']);
+    const refusal = await api(td.port, td.token, `/sessions/${heldId}/snapshot?wider=130x35`);
+    expect(refusal.status).toBe(409);
+    expect(refusal.body['error']).toContain('held');
+  });
+
+  it('lets a later API resize keep the grid during a wider read', async () => {
+    const session = await startNodeSession('wider-override');
+    const read = api(td.port, td.token, `/sessions/${session.id}/snapshot?wider=140x40&widerTimeout=1000`);
+    await eventually(async () => ((await api(td.port, td.token, '/sessions')).body['sessions'] as { id: string; cols: number }[])
+      .some((s) => s.id === session.id && s.cols === 140), 10_000);
+    const resized = await api(td.port, td.token, `/sessions/${session.id}/resize`, { body: { cols: 90, rows: 28 } });
+    expect(resized.status).toBe(200);
+    const result = await read;
+    expect(result.status).toBe(200);
+    expect(result.body).toMatchObject({ restored: false });
+    expect(((await api(td.port, td.token, '/sessions')).body['sessions'] as { id: string; cols: number }[])
+      .find((s) => s.id === session.id)?.cols).toBe(90);
+  });
+
+  it('restores after a snapshot read error', async () => {
+    const session = await startNodeSession('wider-error');
+    const before = await api(td.port, td.token, `/sessions/${session.id}/snapshot`);
+    const live = (td.daemon as unknown as { manager: SessionManager }).manager.get(session.id)!;
+    const failing = vi.spyOn(live, 'lastLines').mockRejectedValueOnce(new Error('injected read failure'));
+    try {
+      const result = await api(td.port, td.token, `/sessions/${session.id}/snapshot?wider=140x40&widerTimeout=500&lastLines=2`);
+      expect(result.status).toBe(500);
+      const after = await api(td.port, td.token, `/sessions/${session.id}/snapshot`);
+      expect(after.body).toMatchObject({ cols: before.body['cols'], rows: before.body['rows'] });
+    } finally {
+      failing.mockRestore();
+    }
+  });
+
+  it('restores after redraw timeout and caller cancellation', async () => {
+    const started = await api(td.port, td.token, '/sessions', { body: {
+      command: process.execPath,
+      args: ['-e', "setInterval(() => process.stdout.write('.'), 40)"],
+      shell: false, openViewer: false, cols: 80, rows: 24,
+    } });
+    expect(started.status).toBe(200);
+    const id = String(started.body['id']);
+    const timed = await api(td.port, td.token, `/sessions/${id}/snapshot?wider=130x35&widerTimeout=300`);
+    expect(timed.status).toBe(200);
+    expect(timed.body).toMatchObject({ cols: 130, rows: 35, restored: true });
+    expect((await api(td.port, td.token, `/sessions/${id}/snapshot`)).body).toMatchObject({ cols: 80, rows: 24 });
+
+    const abort = new AbortController();
+    const pending = fetch(`http://127.0.0.1:${String(td.port)}/sessions/${id}/snapshot?wider=140x40&widerTimeout=3000`, {
+      headers: { authorization: `Bearer ${td.token}`, connection: 'close' }, signal: abort.signal,
+    }).catch(() => null);
+    await eventually(async () => ((await api(td.port, td.token, '/sessions')).body['sessions'] as { id: string; cols: number }[])
+      .some((s) => s.id === id && s.cols === 140), 10_000);
+    abort.abort();
+    await pending;
+    await eventually(async () => (await api(td.port, td.token, `/sessions/${id}/snapshot`)).body['cols'] === 80, 10_000);
+  });
+
+  it('restores before daemon shutdown ends a wider read', async () => {
+    const local = await startTestDaemon({ policy: { mode: 'allow-all' } });
+    try {
+      const started = await api(local.port, local.token, '/sessions', { body: {
+        command: process.execPath,
+        args: ['-e', "setInterval(() => process.stdout.write('.'), 40)"],
+        shell: false, openViewer: false, cols: 80, rows: 24,
+      } });
+      expect(started.status).toBe(200);
+      const id = String(started.body['id']);
+      const live = (local.daemon as unknown as { manager: SessionManager }).manager.get(id)!;
+      const resizes = vi.spyOn(live, 'resize');
+      const pending = fetch(`http://127.0.0.1:${String(local.port)}/sessions/${id}/snapshot?wider=140x40&widerTimeout=3000`, {
+        headers: { authorization: `Bearer ${local.token}`, connection: 'close' },
+      }).catch(() => null);
+      await eventually(async () => ((await api(local.port, local.token, '/sessions')).body['sessions'] as { id: string; cols: number }[])
+        .some((s) => s.id === id && s.cols === 140), 10_000);
+      await local.daemon.stop();
+      await pending;
+      expect(resizes.mock.calls.some(([cols, rows]) => cols === 80 && rows === 24)).toBe(true);
+      resizes.mockRestore();
+    } finally {
+      await local.stop();
+    }
   });
 
   it('tells each viewport whether the grid is theirs, adopted or held', async () => {

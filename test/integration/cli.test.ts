@@ -223,6 +223,10 @@ describe('shellpuppet CLI', () => {
     const json = await cli('snap', id, '--json');
     expect((JSON.parse(json.stdout) as { screen: string }).screen).toContain('cli-e2e-marker');
 
+    const wider = await cli('snap', id, '--wider', '140x40', '--wider-timeout', '500', '--json');
+    expect(wider.code, whatHappened(wider)).toBe(0);
+    expect(JSON.parse(wider.stdout)).toMatchObject({ cols: 140, rows: 40, restored: true });
+
     // The verb, not just the route: `--read-only` has to be a flag the CLI
     // knows, or it slides into the positionals.
     const link = await cli('viewer-url', id, '--read-only');

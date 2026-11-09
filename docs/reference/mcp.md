@@ -42,6 +42,22 @@ unchanged. `readyReason: not-tracked` is never evidence that typing is safe.
 
 ## HTTP representation
 
+`terminal_snapshot` accepts `wider: { cols, rows }` and optional
+`widerTimeout` in milliseconds. The HTTP spelling is
+`GET /sessions/<id>/snapshot?wider=200x80&widerTimeout=1500`.
+The requested sides may enlarge the current grid but never shrink it.
+The daemon waits for 250 ms of quiet after the resize, with a 1500 ms
+default cap that callers may lower to 250 ms or raise to 30000 ms. The
+returned `cols` and `rows` are the grid read, and `restored` says whether
+the original size and controller were restored. A person's later resize,
+takeover or controller departure wins and sets `restored: false`.
+Held grids and concurrent wider reads are refused with HTTP 409; sizes
+outside 2 to 1000 columns and 2 to 500 rows are refused with HTTP 400.
+`lastLines` and `hideReasoning` apply to the wider snapshot as usual.
+`terminal_find` searches only the current viewport; read a wider snapshot
+when the program has clipped a line before drawing it.
+
+
 `POST /sessions` accepts the same `waitReady` and `readyTimeout` fields.
 A successful start is HTTP 200 for all four outcomes, with its session id
 and existing viewer fields. Only an opted-in response adds `exited`,

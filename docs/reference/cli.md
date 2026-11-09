@@ -47,6 +47,17 @@ questions and verifying typed prompts.
 
 ## Listing and supervising sessions
 
+`shellpuppet snap <id> --wider 200x80` temporarily enlarges the terminal
+for a screen read, then restores the previous grid and its controller.
+It waits for 250 ms of quiet after the resize, capped at 1500 ms by
+default. `--wider-timeout <ms>` sets the cap from 250 to 30000 ms.
+Each requested side may grow the grid but cannot shrink it. The API
+refuses held grids, overlapping wider reads and sizes outside 2 to 1000
+columns and 2 to 500 rows. `--last`, `--hide-reasoning` and `--json`
+continue to work. JSON reports `cols`, `rows` and `restored`; plain output
+warns on stderr when a later geometry act prevents restoration.
+
+
 `shellpuppet list` shows `STALLED <reason> since <ISO time>: <description>`
 where readiness normally appears when a supported provider error has left
 the session idle. JSON lists include `stalled: { reason, description, since }`.

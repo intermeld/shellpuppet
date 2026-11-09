@@ -70,6 +70,8 @@ export interface WaiterInternals {
   screenForMatch?: () => string;
   /** The agent signature has found unsent text in its composer. */
   composerPending?: () => boolean;
+  /** Count quiet from at least this instant, for a resize that asks for redraw. */
+  quietSince?: number;
 }
 
 /** Thrown for caller mistakes: bad condition shape or an unparsable regex. */
@@ -352,7 +354,7 @@ export function waitFor(
         // No paint, no quiet: silence from a program that has not drawn
         // anything is "not started", not "finished and idle".
         target.hasPainted() &&
-        now - target.lastChangeAt() >= condition.quiet
+        now - Math.max(target.lastChangeAt(), options.quietSince ?? 0) >= condition.quiet
       ) {
         finish(true, 'quiet', screen);
         return;

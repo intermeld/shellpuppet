@@ -366,6 +366,13 @@ describe('MCP adapter', () => {
     expect(resultText(snapshot)).toContain('UNTRUSTED DATA');
     expectSingleFrame(resultText(snapshot), ['mcp-e2e-marker']);
 
+    const wider = await client.callTool({
+      name: 'terminal_snapshot',
+      arguments: { session: id, wider: { cols: 140, rows: 40 }, widerTimeout: 500, lastLines: 40 },
+    });
+    expect(resultText(wider)).toContain('140x40');
+    expectSingleFrame(resultText(wider), ['mcp-e2e-marker']);
+
     const typed = await client.callTool({
       name: 'terminal_type',
       arguments: { session: id, text: 'abc' },
