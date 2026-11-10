@@ -31,6 +31,7 @@ version may change behaviour, and every such change is listed here.
 
 - Keep Qoder message suggestions and drafts, including numbered and lettered text, from appearing as choices waiting for an answer.
 - Stop text from a wider layout lingering past the right edge after a full-screen program's grid narrows, in snapshots, filtered reads and screenshots.
+- Show Muse's two-choice command approval, "Yes, proceed" or "No, and tell Muse Code what to do differently", as waiting for an answer.
 - Keep a MiMo refusal marked as stalled when its screen narrows and widens, and recognise grey suggestions only when their whole text has suggestion styling.
 - Detect MiMo provider refusals on narrower screens with modern status footers, grey suggestions and expandable tool panels.
 - Keep ending sessions and closing dashboard panes safe while their last
