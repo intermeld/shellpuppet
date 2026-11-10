@@ -2703,13 +2703,13 @@ export class Daemon {
           try {
             // Only a deliberate geometry act wins. A departing controller does
             // not choose a new size; keep the control state its departure left.
-            restored = (this.geometryEpoch.get(id) ?? 0) === epoch &&
+            const mayRestore = (): boolean => (this.geometryEpoch.get(id) ?? 0) === epoch &&
               !session.geometryHeld && !session.exited &&
               session.cols === target.cols && session.rows === target.rows;
-            if (restored && (target.cols !== original.cols || target.rows !== original.rows)) {
-              await session.resize(original.cols, original.rows);
-              this.announceGeometry(id, session);
-            }
+            restored = target.cols === original.cols && target.rows === original.rows
+              ? mayRestore()
+              : await session.resizeIfCurrent(original.cols, original.rows, mayRestore,
+                () => this.announceGeometry(id, session));
           } catch (error) {
             if (!(error instanceof SessionProgramEndedError)) readError ??= error;
             restored = false;
@@ -3033,22 +3033,19 @@ export class Daemon {
         }
         const hold = body['hold'] === true;
         try {
-          await session.resize(cols, rows, { hold });
+          await session.resize(cols, rows, { hold, onApplied: () => {
+            this.audit.record(actor, 'resize', id, { cols, rows, hold });
+            this.geometryEpoch.set(id, (this.geometryEpoch.get(id) ?? 0) + 1);
+            // An API resize takes the grid away from whichever viewport had it.
+            this.geometryController.delete(id);
+            this.dashboardGeometryOwner.delete(id);
+            this.announceGeometry(id, session);
+          } });
         } catch (error) {
           if (!(error instanceof SessionProgramEndedError)) throw error;
           json(res, 409, { error: endedRefusal(id, error.exitCode) });
           return;
         }
-        this.audit.record(actor, 'resize', id, { cols, rows, hold });
-        this.geometryEpoch.set(id, (this.geometryEpoch.get(id) ?? 0) + 1);
-        // An API resize takes the grid away from whichever viewport had it, so
-        // nobody is left believing they still drive it. It does NOT hold
-        // unless asked: a human whose window is now the wrong shape gets it
-        // back by moving that window, which is the only escape they have while
-        // there is no takeover control to press (§5).
-        this.geometryController.delete(id);
-        this.dashboardGeometryOwner.delete(id);
-        this.announceGeometry(id, session);
         json(res, 200, { ok: true, cols, rows, geometryHeld: session.geometryHeld });
         return;
       }
@@ -4221,12 +4218,52 @@ export class Daemon {
               cols: Math.min(cols, MAX_VIEWPORT_COLS),
               rows: Math.min(rows, MAX_VIEWPORT_ROWS),
             };
-            const handedOver = this.geometryController.get(session.id) !== ws;
-            const changed = wanted.cols !== session.cols || wanted.rows !== session.rows;
-            let applied = false;
+            if (!this.widerReads.has(session.id)) {
+              // Keep the ordinary viewport path unchanged. Only a viewport
+              // competing with a wider restore needs a queued geometry act.
+              const handedOver = this.geometryController.get(session.id) !== ws;
+              const changed = wanted.cols !== session.cols || wanted.rows !== session.rows;
+              let applied = false;
+              try {
+                if (changed) await session.resize(wanted.cols, wanted.rows);
+                applied = true;
+              } catch (error) {
+                if (error instanceof SessionProgramEndedError) return;
+                this.logger.warn('viewer resize failed', { id: session.id, error: String(error) });
+              }
+              this.geometryController.set(session.id, ws);
+              this.geometryEpoch.set(session.id, (this.geometryEpoch.get(session.id) ?? 0) + 1);
+              if (credential.kind === 'dashboard') this.dashboardGeometryOwner.set(session.id, ws.protocol);
+              else this.dashboardGeometryOwner.delete(session.id);
+              if (changed && applied) {
+                this.audit.record(actor, 'resize', session.id, {
+                  cols: wanted.cols, rows: wanted.rows, hold: false,
+                });
+              }
+              if (changed) this.announceGeometry(session.id, session);
+              else if (handedOver) this.announceGeometry(session.id, session, { resync: false });
+              else if (take === true) ws.send(JSON.stringify(this.geometryFrame(session, ws)));
+              return;
+            }
             try {
-              if (changed) await session.resize(wanted.cols, wanted.rows);
-              applied = true;
+              const applied = await session.resizeIfCurrent(wanted.cols, wanted.rows,
+                () => !session.geometryHeld && !session.exited, (changed) => {
+                  const handedOver = this.geometryController.get(session.id) !== ws;
+                  // The controller change and epoch belong to the same queued
+                  // act as the resize, before a queued wider restore can run.
+                  this.geometryController.set(session.id, ws);
+                  this.geometryEpoch.set(session.id, (this.geometryEpoch.get(session.id) ?? 0) + 1);
+                  if (credential.kind === 'dashboard') this.dashboardGeometryOwner.set(session.id, ws.protocol);
+                  else this.dashboardGeometryOwner.delete(session.id);
+                  if (changed) {
+                    this.audit.record(actor, 'resize', session.id, {
+                      cols: wanted.cols, rows: wanted.rows, hold: false,
+                    });
+                    this.announceGeometry(session.id, session);
+                  } else if (handedOver) this.announceGeometry(session.id, session, { resync: false });
+                  else if (take === true) ws.send(JSON.stringify(this.geometryFrame(session, ws)));
+                }, true);
+              if (!applied && ws.readyState === ws.OPEN) ws.send(JSON.stringify(this.geometryFrame(session, ws)));
             } catch (error) {
               // The program has ended (a viewer fitting its window while
               // looking at a dying session), and the session's exit follows
@@ -4244,35 +4281,6 @@ export class Daemon {
                 error: String(error),
               });
             }
-            // Asking is the deliberate act that takes control, whether or not
-            // the grid actually moves: a viewport that already fits is still
-            // the one driving.
-            this.geometryController.set(session.id, ws);
-            this.geometryEpoch.set(session.id, (this.geometryEpoch.get(session.id) ?? 0) + 1);
-            if (credential.kind === 'dashboard') this.dashboardGeometryOwner.set(session.id, ws.protocol);
-            else this.dashboardGeometryOwner.delete(session.id);
-            // A geometry change is a geometry change whoever made it, and
-            // `resize` is on the list of audited actions the security page
-            // publishes. Only the ones that actually took: a proposal the
-            // grid already satisfied moved nothing, and one that failed moved
-            // nothing either, so neither is recorded as a success. `hold` is
-            // false because a viewport never holds: holding is asked for
-            // explicitly, over the API (§5).
-            if (changed && applied) {
-              this.audit.record(actor, 'resize', session.id, {
-                cols: wanted.cols,
-                rows: wanted.rows,
-                hold: false,
-              });
-            }
-            // Everyone sees the same grid, and each is told whether they are
-            // now driving it. A proposal that changed nothing needs no
-            // snapshot, because the page already shows this grid. But if the
-            // grid changed hands, everyone is told that much, or the old
-            // driver goes on believing it is theirs.
-            if (changed) this.announceGeometry(session.id, session);
-            else if (handedOver) this.announceGeometry(session.id, session, { resync: false });
-            else if (take === true) ws.send(JSON.stringify(this.geometryFrame(session, ws)));
           }
           return;
         }
