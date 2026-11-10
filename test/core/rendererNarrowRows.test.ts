@@ -83,6 +83,22 @@ describe('rows after the grid narrows', () => {
     } finally { await renderer.dispose(); }
   });
 
+  for (const method of ['getWidth', 'setCell'] as const) {
+    it(`leaves a row as xterm left it when its ${method} method is missing`, async () => {
+      const renderer = new ScreenRenderer({ cols: 200, rows: 10, scrollback: 0 });
+      try {
+        await renderer.write(ALT_ON + '\x1b[1;1H' + 'x'.repeat(79) + '中' + 'tail');
+        const core = (renderer as unknown as { term: { _core: { buffers: { alt: {
+          lines: { get(index: number): Record<string, unknown> } } } } } }).term._core;
+        core.buffers.alt.lines.get(0)[method] = undefined;
+        renderer.resize(80, 10);
+        await renderer.flush();
+        // Unchanged, as on a release without the trim: never a split wide character.
+        expect(renderer.snapshot().lines[0]).toBe('x'.repeat(79) + '中tail');
+      } finally { await renderer.dispose(); }
+    });
+  }
+
   it('still detects a MiMo refusal repainted on a narrowed alternate screen', async () => {
     const refusal = modernRefusal({ cols: 96 });
     // The synthetic refusal is taller than 30 rows; the alternate screen keeps no history.

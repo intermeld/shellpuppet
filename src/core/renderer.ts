@@ -260,10 +260,12 @@ export class ScreenRenderer {
       const blank: unknown = (buffer.getNullCell as () => unknown).call(buffer);
       for (let i = 0; i < lines.length; i++) {
         const line = (lines.get as (index: number) => Line | undefined).call(lines, i);
+        // Cut a row only with every method the cut needs, so a split wide
+        // character is never left behind.
         if (line === undefined || typeof line.length !== 'number' || line.length <= cols ||
-            typeof line.resize !== 'function') continue;
-        if (cols > 0 && typeof line.getWidth === 'function' && typeof line.setCell === 'function' &&
-            (line.getWidth as (index: number) => number).call(line, cols - 1) === 2) {
+            typeof line.resize !== 'function' || typeof line.getWidth !== 'function' ||
+            typeof line.setCell !== 'function') continue;
+        if (cols > 0 && (line.getWidth as (index: number) => number).call(line, cols - 1) === 2) {
           (line.setCell as (index: number, cell: unknown) => void).call(line, cols - 1, blank);
         }
         (line.resize as (cols: number, fill: unknown) => boolean).call(line, cols, blank);
