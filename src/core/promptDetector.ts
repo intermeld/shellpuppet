@@ -21,12 +21,14 @@
  * letter lists, and the steps `@clack/prompts` draws for the scaffolding
  * wizards of create-vite, `sv create` and others: a select, a multi-select or
  * a confirm under a `◆` headline, or `▲` while the step shows a validation
- * error. MiMo Code's folder-trust question is a clack select too. Two rules
+ * error. MiMo Code's folder-trust question is a clack select too. Several rules
  * keep out FALSE positives: a numbered findings list an agent printed above
  * its composer, under a line that happens to end in a question mark; and a
  * message Claude Code echoes into its transcript or holds in its composer,
  * whose `❯` and aligned lines look like a pointer chooser under a question
- * from an earlier message.
+ * from an earlier message. Qoder's composer, identified by its surrounding
+ * chrome, is excluded from chooser blocks, and keyboard hints cannot supply
+ * their question.
  *
  * A permission dialog drawn with its choices as one row of buttons
  * (OpenCode, MiMo Code) is recognised by its signature (`dialogs.ts`),
@@ -37,6 +39,7 @@
 import type { StyledLine } from './renderer.js';
 import { dialogPrompt } from './dialogs.js';
 import { AGENT_MODULES, moduleFor, promptShapesFor, MuseMenuSettler } from '../agents/index.js';
+import { reading as qoderReading } from '../agents/qoder/reading.js';
 import type { PromptRows } from '../agents/types.js';
 import { normalise } from './promptText.js';
 export { MUSE_MENU_SETTLE_MS } from '../agents/index.js';
@@ -133,6 +136,11 @@ const YES_NO_TAIL =
 const LETTER_LIST_TAIL = /[[(]\s*([a-z?](?:\s*[/,|]\s*[a-z?])+)\s*[\])]\s*[?:]?\s*$/i;
 /** Horizontal rules and box-drawing rows (U+2500 to U+257F) carry no text content. */
 const RULE_LINE = /^[\s─-╿-]*$/;
+/** A keyboard hint is chrome, even when it sits directly below a question. */
+const KEY_HELP_HINT = /^\s*(?:press\s+)?\?\s+(?:for|to show)\s+(?:shortcuts|help|keybindings)\s*$/i;
+const QODER_COMPOSER = new RegExp(qoderReading.composer.text!);
+const QODER_MODE = /\bAuto Mode\b.*\bShift\+Tab\b|\bShift\+Tab to Accept Edits\b/i;
+const QODER_STATUS = /\bModel\s*·\s*ctx\b/i;
 /**
  * How far up from the bottom of the screen a live prompt can plausibly sit.
  * Codex's wrapped option text plus footers span a dozen lines on their own,
@@ -206,6 +214,7 @@ function detectPlainPrompt(screen: string, agent: string): DetectedPrompt | null
   const lines = contentLines(raw);
   if (lines.length === 0) return null;
   const tail = lines.slice(-TAIL_WINDOW);
+  const composerSpans = qoderComposerSpans(raw);
 
   const shapes = promptShapesFor(agent);
   const rows = shapes.filter((shape): shape is PromptRows => shape.kind === 'rows');
@@ -229,14 +238,19 @@ function detectPlainPrompt(screen: string, agent: string): DetectedPrompt | null
   // Four chooser shapes, most specific first. A block that is found but
   // not LIVE (a numbered list in the transcript, say) does not end the
   // search: the shapes below it, and the single-line tails after, may be.
+  // Builders never see Qoder's composer rows, so a draft drawn like a menu
+  // cannot displace a real menu above it as the latest block.
+  const inComposer = (index: number): boolean => composerSpans.some(([start, end]) => index >= start && index <= end);
+  const chooserTail = composerSpans.length === 0 ? tail : tail.filter((line) => !inComposer(line.index));
   const blocks = [
-    numberedBlock(tail, rows),
-    letterBlock(tail),
-    keyHintBlock(tail, rows),
-    pointerBlock(tail, raw, rows),
+    numberedBlock(chooserTail, rows),
+    letterBlock(chooserTail),
+    keyHintBlock(chooserTail, rows),
+    pointerBlock(chooserTail, raw, rows),
   ];
   for (const block of blocks) {
     if (block === null) continue;
+    if (block.rows.some(({ line }) => inComposer(line.index))) continue;
     const prompt = livePrompt(block, tail, raw, rows, busy);
     if (prompt !== null) return prompt;
   }
@@ -256,6 +270,24 @@ function detectPlainPrompt(screen: string, agent: string): DetectedPrompt | null
   }
 
   return null;
+}
+
+/** Qoder's input starts with ` > `; wrapped rows keep the text in column 4.
+ * Its mode line above or model status below distinguishes this input from a
+ * chooser with the same pointer. A key-help hint alone is shared with other
+ * choosers, so it cannot establish the composer frame.
+ */
+function qoderComposerSpans(raw: string[]): [number, number][] {
+  const spans: [number, number][] = [];
+  for (let start = 0; start < raw.length; start++) {
+    if (!QODER_COMPOSER.test(raw[start] ?? '')) continue;
+    let end = start;
+    while (!QODER_STATUS.test(raw[end + 1] ?? '') && /^ {3}\S/.test(raw[end + 1] ?? '')) end++;
+    const modeAbove = raw.slice(Math.max(0, start - 3), start).some((line) => QODER_MODE.test(line));
+    const statusBelow = QODER_STATUS.test(raw[end + 1] ?? '');
+    if (modeAbove || statusBelow) spans.push([start, end]);
+  }
+  return spans;
 }
 
 /**
@@ -422,7 +454,8 @@ function keyHintBlock(tail: Line[], shapes: PromptRows[]): Block | null {
  * means adjacent: a blank line or a rule ends the block, which is what keeps
  * a composer line (`❯ Try "…"`) apart from the status lines drawn under its
  * rule. Claude Code's idle screen would otherwise read as a three-option
- * chooser.
+ * chooser. The Qoder composer is excluded when a block overlaps its framed
+ * span, along with the other chooser shapes.
  */
 function pointerBlock(tail: Line[], raw: string[], shapes: PromptRows[]): Block | null {
   let pointer: { line: Line; textCol: number } | null = null;
@@ -599,7 +632,8 @@ export class StalePromptGuard {
  * misattribute ordinary transcript text. A question mark anywhere counts,
  * not only at the end: Claude Code's trust prompt asks "…one you trust?
  * (Like your own code…" and inquirer's `? Select a template: (Use arrow keys)`
- * leads with it. Returns the line, its text normalised.
+ * leads with it. Keyboard-help hints are skipped. Returns the line, its
+ * text normalised.
  */
 function findQuestion(tail: Line[], blockStart: number, shapes: PromptRows[]): Line | null {
   const above = tail.filter((line) => line.index < blockStart);
@@ -607,6 +641,7 @@ function findQuestion(tail: Line[], blockStart: number, shapes: PromptRows[]): L
   for (let i = above.length - 1; i >= 0 && inspected < QUESTION_SEARCH_BUDGET; i--) {
     const line = above[i]!;
     if (RULE_LINE.test(line.text)) continue;
+    if (KEY_HELP_HINT.test(line.text)) continue;
     inspected++;
     // Only Grok's exact box prefix is chrome. A question may itself begin
     // with `>` or a box character, so leave everything after that prefix.

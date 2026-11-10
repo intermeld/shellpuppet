@@ -15,6 +15,8 @@ export interface PromptRows {
   styledHeading?: RegExp;
   numbered?: RegExp;
   pointer?: RegExp;
+  /** A module's input row, which must not seed a pointer chooser. */
+  composer?: RegExp;
   footer?: RegExp;
   marker?: RegExp;
   busy?: RegExp;
