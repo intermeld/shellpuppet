@@ -29,6 +29,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Keep Qoder message suggestions and drafts, including numbered and lettered text, from appearing as choices waiting for an answer.
 - Stop text from a wider layout lingering past the right edge after a full-screen program's grid narrows, in snapshots, filtered reads and screenshots.
 - Keep a MiMo refusal marked as stalled when its screen narrows and widens, and recognise grey suggestions only when their whole text has suggestion styling.
 - Detect MiMo provider refusals on narrower screens with modern status footers, grey suggestions and expandable tool panels.

@@ -717,6 +717,18 @@ describe('detectPrompt: marker-only choosers', () => {
     expect(prompt!.options).toEqual(['minimal', 'full']);
   });
 
+  it('detects a pointer chooser whose focused row wraps', () => {
+    const screen = '? Which option should be used? (Use arrow keys)\n> A longer option that continues\n  on this row\n  Short option';
+    expect(detectPrompt(screen)?.options).toEqual([
+      'A longer option that continues', 'on this row', 'Short option',
+    ]);
+  });
+
+  it.each(['? for shortcuts', 'Press ? for help'])('takes the inquirer question above the %s hint', (hint) => {
+    const screen = `? Which option should be used? (Use arrow keys)\n${hint}\n> First option\n  Second option`;
+    expect(detectPrompt(screen)?.question).toBe('? Which option should be used? (Use arrow keys)');
+  });
+
   /** A current inquirer select (@inquirer/demo 2.0.22), captured verbatim: a key-help line under the choices. */
   const INQUIRER_SELECT = `
 ? Which prompt demo do you want to run?
@@ -806,6 +818,124 @@ npm is the most popular package manager
   ? for shortcuts
 `;
     expect(detectPrompt(idle)).toBeNull();
+  });
+});
+
+/** An idle Qoder screen with neutral composer text wrapped at the grid width. */
+function qoderComposer(cols: number, rows: number, message: string | string[]): string {
+  const words = typeof message === 'string' ? message.split(' ') : [];
+  const composed: string[] = [];
+  let line = '';
+  for (const word of words) {
+    if (line !== '' && `${line} ${word}`.length > cols - 3) {
+      composed.push(line);
+      line = word;
+    } else {
+      line = line === '' ? word : `${line} ${word}`;
+    }
+  }
+  if (line !== '') composed.push(line);
+  if (Array.isArray(message)) composed.push(...message);
+  const bottom = [
+    ' ▪ Finished the neutral example.',
+    '',
+    ` ${'─'.repeat(cols - 2)}`,
+    `${' '.repeat(cols - 16)}? for shortcuts`,
+    ' Auto Mode Shift+Tab to Accept Edits',
+    ...composed.map((text, index) => `${index === 0 ? ' > ' : '   '}${text}`),
+    ' Efficient Model · ctx ▓▓▓▓░░ 79%',
+  ];
+  return [...Array.from({ length: rows - bottom.length }, () => ''), ...bottom]
+    .map((text) => text.padEnd(cols, ' ')).join('\n');
+}
+
+describe('detectPrompt: wrapped Qoder composer', () => {
+  const suggestion = Array(4).fill('Please continue the neutral example and write a short summary.').join(' ');
+
+  it.each([[194, 100, 'qoder'], [194, 100, 'generic'], [80, 24, 'qoder'], [80, 24, 'generic']] as const)(
+    'ignores a grey suggestion at %ix%i for %s', (cols, rows, agent) => {
+      const screen = qoderComposer(cols, rows, suggestion);
+      expect(detectPrompt(screen, agent)).toBeNull();
+    },
+  );
+
+  it.each(['qoder', 'generic'])('ignores a typed multi-row question for %s', (agent) => {
+    const screen = qoderComposer(80, 24, 'Can you check this neutral draft? ' + suggestion);
+    expect(detectPrompt(screen, agent)).toBeNull();
+  });
+
+  it.each(['qoder', 'generic'])('ignores a three-row composer for %s', (agent) => {
+    const screen = qoderComposer(80, 24, Array(3).fill('Please continue the neutral example and write a short summary.').join(' '));
+    const lines = screen.split('\n');
+    expect(lines.findIndex((line) => line.includes('Efficient Model')) - lines.findIndex((line) => line.startsWith(' > '))).toBe(3);
+    expect(detectPrompt(screen, agent)).toBeNull();
+  });
+
+  it.each([[80, 24, 'qoder'], [80, 24, 'generic'], [194, 100, 'qoder'], [194, 100, 'generic']] as const)(
+    'ignores a numbered draft at %ix%i for %s', (cols, rows, agent) => {
+      const screen = qoderComposer(cols, rows, ['1. Yes', '2. No']);
+      expect(detectPrompt(screen, agent)).toBeNull();
+    },
+  );
+
+  it.each(['qoder', 'generic'])('ignores a lettered draft for %s', (agent) => {
+    const screen = qoderComposer(80, 24, ['(a) First option', '(b) Second option']);
+    expect(detectPrompt(screen, agent)).toBeNull();
+  });
+
+  // No chooser shape reads bare `a)` rows today; this keeps such a draft quiet if one ever does.
+  it.each(['qoder', 'generic'])('ignores a plain a) draft for %s', (agent) => {
+    const screen = qoderComposer(80, 24, ['a) First option', 'b) Second option']);
+    expect(detectPrompt(screen, agent)).toBeNull();
+  });
+
+  it.each(['qoder', 'generic'])('ignores a composer beneath a question for %s', (agent) => {
+    const draft = Array(2).fill('Please continue the neutral example and write a short summary.').join(' ');
+    const screen = `? Which option should be used?\n${qoderComposer(80, 24, draft).split('\n').slice(-5).join('\n')}`;
+    expect(detectPrompt(screen, agent)).toBeNull();
+  });
+
+  it.each(['mode', 'status'] as const)('recognises Qoder chrome with only the %s line', (chrome) => {
+    const screen = qoderComposer(80, 24, ['1. Yes', '2. No']).split('\n')
+      .filter((line) => chrome === 'mode' ? !line.includes('Model · ctx') : !line.includes('Auto Mode'))
+      .join('\n');
+    expect(detectPrompt(screen)).toBeNull();
+  });
+
+  it.each(['qoder', 'generic'])('retains a plain pointer chooser without Qoder chrome for %s', (agent) => {
+    const screen = '? Which option should be used? (Use arrow keys)\n > First option\n   Second option';
+    expect(detectPrompt(screen, agent)?.options).toEqual(['First option', 'Second option']);
+  });
+
+  it('retains a pointer chooser with a key-help hint but no Qoder mode or status', () => {
+    const screen = '? Which option should be used? (Use arrow keys)\n? for shortcuts\n > First option\n   Second option';
+    expect(detectPrompt(screen)?.options).toEqual(['First option', 'Second option']);
+  });
+
+  it.each(['qoder', 'generic'])('retains a numbered pointer menu without Qoder chrome for %s', (agent) => {
+    const screen = 'Which option should be used?\n > 1. Yes\n   2. No';
+    expect(detectPrompt(screen, agent)?.options).toEqual(['1. Yes', '2. No']);
+  });
+
+  it.each(['qoder', 'generic'])('retains a Qoder permission menu above composer chrome for %s', (agent) => {
+    const screen = `${QODER_BASH_PROMPT}\n? for shortcuts\n Auto Mode Shift+Tab to Accept Edits\n > Type your message\n Efficient Model · ctx 79%`;
+    expect(detectPrompt(screen, agent)?.options).toEqual([
+      '1. Allow once', '2. Always allow this exact command for future sessions [local]',
+      '3. Reject and type something', '4. No',
+    ]);
+  });
+
+  it.each([
+    ['qoder', ' > 1. Yes\n   2. No'],
+    ['generic', ' > 1. Yes\n   2. No'],
+    ['qoder', ' > (a) Yes\n   (b) No'],
+    ['generic', ' > (a) Yes\n   (b) No'],
+  ])('retains a Qoder permission menu above a chooser-shaped draft for %s: %j', (agent, draft) => {
+    const screen = `${QODER_BASH_PROMPT}\n? for shortcuts\n Auto Mode Shift+Tab to Accept Edits\n${draft}\n Efficient Model · ctx 79%`;
+    expect(detectPrompt(screen, agent)?.options).toEqual([
+      '1. Allow once', '2. Always allow this exact command for future sessions [local]',
+      '3. Reject and type something', '4. No',
+    ]);
   });
 });
 
