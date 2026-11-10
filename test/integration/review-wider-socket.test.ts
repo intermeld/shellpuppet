@@ -14,6 +14,63 @@ function injectPty(td: TestDaemon, pty: IPty): SessionManager {
   return manager;
 }
 
+it.each(['before', 'after'] as const)('serialises a deliberate resize queued %s the wider restore', async (order) => {
+  const td = await startTestDaemon({ policy: { mode: 'allow-all' } });
+  let output: (data: string) => void = () => {};
+  const pty = {
+    pid: 0, cols: 80, rows: 24, process: 'synthetic', handleFlowControl: false,
+    onData: (fn: (data: string) => void) => { output = fn; return { dispose() {} }; },
+    onExit: () => ({ dispose() {} }),
+    resize(cols: number, rows: number) { Object.assign(this, { cols, rows }); },
+    write() {}, clear() {}, kill() {}, pause() {}, resume() {},
+  } satisfies IPty;
+  let release: (() => void) | undefined;
+  try {
+    const session = injectPty(td, pty).create({ command: process.execPath, agent: 'muse', cols: 80, rows: 24 });
+    output('ready');
+    const watcher = await connectWs(td.port, session.id, td.token);
+    await watcher.waitForControl(c => c['type'] === 'geometry');
+    const wider = api(td.port, td.token, `/sessions/${session.id}/snapshot?wider=140x40&widerTimeout=1000`);
+    await watcher.waitForControl(c => c['type'] === 'geometry' && c['cols'] === 140 && c['temporary'] === true);
+    const state = session as unknown as { writeChain: Promise<void>; submissionsQueued: number };
+    state.writeChain = new Promise<void>(resolve => { release = resolve; });
+    state.submissionsQueued = 1;
+    const blocked = state.writeChain;
+    const deliberateResize = () => api(td.port, td.token, `/sessions/${session.id}/resize`, {
+      method: 'POST', body: { cols: 150, rows: 45 },
+    });
+    let deliberate: ReturnType<typeof deliberateResize>;
+    if (order === 'before') {
+      deliberate = deliberateResize();
+      for (let i = 0; i < 100 && state.writeChain === blocked; i++) await new Promise(r => setTimeout(r, 10));
+      expect(state.writeChain).not.toBe(blocked);
+      const apiChain = state.writeChain;
+      for (let i = 0; i < 100 && state.writeChain === apiChain; i++) await new Promise(r => setTimeout(r, 10));
+      expect(state.writeChain).not.toBe(apiChain);
+    } else {
+      for (let i = 0; i < 150 && state.writeChain === blocked; i++) await new Promise(r => setTimeout(r, 10));
+      expect(state.writeChain).not.toBe(blocked);
+      const restoreChain = state.writeChain;
+      deliberate = deliberateResize();
+      for (let i = 0; i < 100 && state.writeChain === restoreChain; i++) await new Promise(r => setTimeout(r, 10));
+      expect(state.writeChain).not.toBe(restoreChain);
+    }
+    release?.(); release = undefined;
+    expect((await deliberate).status).toBe(200);
+    const result = await wider;
+    const after = await api(td.port, td.token, `/sessions/${session.id}/snapshot`);
+    expect(after.body).toMatchObject({ cols: 150, rows: 45 });
+    expect(result.body).toMatchObject({ restored: order === 'after' });
+    const frames = watcher.controls().filter(c => c['type'] === 'geometry');
+    expect(frames.at(-1)).toMatchObject({ cols: 150, rows: 45 });
+    expect(frames.at(-1)?.['temporary']).not.toBe(true);
+    watcher.close();
+  } finally {
+    release?.();
+    await td.stop();
+  }
+});
+
 it('restores the original grid if its controlling socket closes during a wider read', async () => {
   const td = await startTestDaemon({ policy: { mode: 'allow-all' } });
   let output: (data: string) => void = () => {};

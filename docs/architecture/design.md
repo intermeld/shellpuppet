@@ -1264,7 +1264,11 @@ setting, never their values. Client-token starts do not use profiles.
     original size and any controller still connected, including a dashboard's
     remembered owner or the lack of an owner. A later resize, takeover or hold
     wins, even if it asks for the same size: its deliberate geometry act prevents
-    restoration. A controller's departure does not change the chosen grid;
+    restoration. The restore decision and resize execute together in the
+    session's resize queue. A deliberate resize updates its geometry choice in
+    that same queued step, so a choice queued before restore wins and one
+    queued after restore applies to the restored grid. A controller's departure
+    does not change the chosen grid;
     the original size is restored while control stays as the departure left it.
     A cancelled or failed read and daemon shutdown also restore before the
     request finishes. Viewers receive the two real grid changes and keep their

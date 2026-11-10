@@ -1391,7 +1391,6 @@ describe('viewer assets and the WS frame protocol (§5)', () => {
       expect(started.status).toBe(200);
       const id = String(started.body['id']);
       const live = (local.daemon as unknown as { manager: SessionManager }).manager.get(id)!;
-      const resizes = vi.spyOn(live, 'resize');
       const pending = fetch(`http://127.0.0.1:${String(local.port)}/sessions/${id}/snapshot?wider=140x40&widerTimeout=3000`, {
         headers: { authorization: `Bearer ${local.token}`, connection: 'close' },
       }).catch(() => null);
@@ -1399,8 +1398,7 @@ describe('viewer assets and the WS frame protocol (§5)', () => {
         .some((s) => s.id === id && s.cols === 140), 10_000);
       await local.daemon.stop();
       await pending;
-      expect(resizes.mock.calls.some(([cols, rows]) => cols === 80 && rows === 24)).toBe(true);
-      resizes.mockRestore();
+      expect({ cols: live.cols, rows: live.rows }).toEqual({ cols: 80, rows: 24 });
     } finally {
       await local.stop();
     }

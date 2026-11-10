@@ -1269,13 +1269,32 @@ export class Session implements WaitTarget {
    * by node-pty and run later; one that finds the program ended by then is
    * dropped (`windowsPtyStart.ts`).
    */
-  resize(cols: number, rows: number, options: { hold?: boolean } = {}): void | Promise<void> {
+  resize(cols: number, rows: number, options: { hold?: boolean; onApplied?: () => void } = {}): void | Promise<void> {
     if (this.agentModule?.input?.resizeBehindSubmit === true && this.submissionsQueued > 0) {
-      const queued = this.writeChain.then(() => this.resizeNow(cols, rows, options));
+      const queued = this.writeChain.then(() => { this.resizeNow(cols, rows, options); options.onApplied?.(); });
       this.writeChain = queued.then(() => undefined, () => undefined);
       return queued;
     }
     this.resizeNow(cols, rows, options);
+    options.onApplied?.();
+  }
+
+  /** Decide and apply a geometry act together at its place in the submit queue. */
+  resizeIfCurrent(cols: number, rows: number, shouldApply: () => boolean,
+    onApplied: (changed: boolean) => void, skipIfSame = false): boolean | Promise<boolean> {
+    const apply = (): boolean => {
+      if (!shouldApply()) return false;
+      const changed = cols !== this.renderer.cols || rows !== this.renderer.rows;
+      if (changed || !skipIfSame) this.resizeNow(cols, rows, {});
+      onApplied(changed);
+      return true;
+    };
+    if (this.agentModule?.input?.resizeBehindSubmit === true && this.submissionsQueued > 0) {
+      const queued = this.writeChain.then(apply);
+      this.writeChain = queued.then(() => undefined, () => undefined);
+      return queued;
+    }
+    return apply();
   }
 
   private resizeNow(cols: number, rows: number, options: { hold?: boolean }): void {
