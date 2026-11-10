@@ -16,7 +16,7 @@
 
 import { moduleFor } from '../agents/index.js';
 import type { AgentModule, AgentSource } from '../agents/types.js';
-import { validateStall, possibleStall, resolveSessionAgent, signatureForSession, stallTranscriptContent, StallScreenCache, StallTracker } from './reasoning.js';
+import { validateStall, possibleStall, resolveSessionAgent, signatureForSession, stallTranscriptContent, stallTurnVisible, StallScreenCache, StallTracker } from './reasoning.js';
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -1381,8 +1381,7 @@ export class Session implements WaitTarget {
   }
 
   /** Both output tasks and due timers must compare before rebasing. */
-  private compareStallTranscript(): void {
-    const transcript = this.readStallTranscript();
+  private compareStallTranscript(transcript = this.readStallTranscript()): void {
     if (transcript !== '' && transcript !== this.stallTranscript && transcript !== this.stallValidatedTranscript) {
       this.stallTracker.invalidate();
       this.publishStall(undefined);
@@ -1436,22 +1435,19 @@ export class Session implements WaitTarget {
         return;
       }
       this.stallContent = content;
-      // Once the resize allowance expires, a later clipped repaint can still
-      // have the same refusal block. Check that block before a text comparison
-      // can mistake newly visible panel rows for a new turn.
-      if (this.stallState !== undefined && this.hasStallInk(plain)) {
-        const signature = signatureForSession(this);
-        if (signature !== null && possibleStall(plain, signature)) {
-          const { lines, firstVisible } = this.renderer.styledLines({ above: 128, extendWrapped: false });
-          const candidate = validateStall(lines, signature, false, firstVisible);
-          if (candidate !== null && 'inconclusive' in candidate && this.stallTracker.matchesBlock(candidate) &&
-            detectPrompt(plain.join('\n'), this.agent) === null) {
-            this.stallTranscript = this.readStallTranscript();
-            return;
-          }
-        }
+      // A visible turn boundary makes changed transcript text an immediate
+      // end. A clipped repaint can expose different panel rows while retaining
+      // the same refusal block; leave that case to bounded styled validation.
+      const signature = signatureForSession(this);
+      const framed = this.renderer.framedViewport(this.agentModule!.stalls!.flatMap(shape => shape.frameColumns));
+      const transcript = stallTranscriptContent(framed, this.agentModule!.stalls!, signature ?? undefined);
+      const baseline = this.stallValidatedTranscript;
+      const completeTurn = signature !== null && stallTurnVisible(framed, this.agentModule!.stalls!, signature);
+      if (completeTurn || (baseline !== undefined && baseline !== '' && transcript.startsWith(`${baseline}\n`))) {
+        this.compareStallTranscript(transcript);
+      } else if (transcript === this.stallTranscript || transcript === baseline) {
+        this.stallTranscript = transcript;
       }
-      this.compareStallTranscript();
     }
     if (this.stallTimer !== null) return;
     this.queueStallCheck(() => this.refreshStall(), Math.max(0, this.stallNextCheck - Date.now()));

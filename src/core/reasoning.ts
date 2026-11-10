@@ -1101,6 +1101,14 @@ export function stallTranscriptContent(lines: readonly (string | StyledLine)[], 
     .map(line => line.text.trimEnd()).filter(text => text !== '').join('\n');
 }
 
+/** A clipped viewport cannot prove that a changed transcript is new output. */
+export function stallTurnVisible(lines: readonly StyledLine[], shapes: readonly StallSignature[], signature: CompiledSignature): boolean {
+  if (signature.turn === undefined) return true;
+  const content = stallRegion(lines, shapes);
+  const limit = stallComposer(content, shapes, true)?.chrome ?? content.length;
+  return content.slice(0, limit).some(line => lineFits(line, signature.turn!));
+}
+
 /** Reject ordinary screens before styled context and prompt detection. */
 export function possibleStall(lines: readonly string[], signature: CompiledSignature): boolean {
   if (setAside(signature)) return false;

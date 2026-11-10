@@ -705,6 +705,10 @@ inside prompt, answer or tool text. Real output retains its indentation and
 internal spaces; only terminal padding and empty rows are ignored.
 A different viewport retains the candidate and its clock pending validation
 unless cheap text comparison finds a transcript change, busy marker or prompt.
+When the user-turn boundary is clipped, newly visible panel rows can look like
+changed transcript text. The output batch defers that ambiguous comparison to
+the coalesced block check; a clear append after the validated transcript still
+ends the notice at once.
 This comparison applies the module's idle and bottom-row rules only inside
 their established composer and status regions, and joins terminal wraps. It omits a leading
 wrapped continuation whose length changes as native redraws scroll the viewport;
