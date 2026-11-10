@@ -52,8 +52,8 @@ for a screen read, then restores the previous grid and its controller.
 It waits for 250 ms of quiet after the resize, capped at 1500 ms by
 default. `--wider-timeout <ms>` sets the cap from 250 to 30000 ms.
 Each requested side may grow the grid but cannot shrink it. The API
-refuses held grids, overlapping wider reads and sizes outside 2 to 1000
-columns and 2 to 500 rows. `--last`, `--hide-reasoning` and `--json`
+refuses held grids, overlapping wider reads and sizes outside 2 to 400
+columns and 2 to 150 rows. `--last`, `--hide-reasoning` and `--json`
 continue to work. JSON reports `cols`, `rows` and `restored`; plain output
 warns on stderr when a later geometry act prevents restoration.
 

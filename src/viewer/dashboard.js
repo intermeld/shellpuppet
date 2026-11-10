@@ -1430,6 +1430,12 @@
       if (name === 'focus') focusId = selected;
       if (name === 'auto' || name === 'grid') resetTracks();
       mode = name; enlarged = null; persist(); arrange('mode');
+      if (name === 'focus' && autoFit) {
+        const primary = pins.find((id) => shown().some((item) => item.id === id)) || focusId;
+        if (panes.get(primary)?.client?.isTemporaryGeometry()) {
+          window.requestAnimationFrame(() => panes.get(primary)?.client?.autoFitGrid(80, 24, true));
+        }
+      }
       if (name === 'focus' && !autoFit) {
         const items = shown();
         const primary = pins.find((id) => items.some((item) => item.id === id)) || focusId;

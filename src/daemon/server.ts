@@ -2645,8 +2645,9 @@ export class Daemon {
         const match = /^(\d+)x(\d+)$/.exec(wider);
         const cols = match === null ? undefined : Number(match[1]);
         const rows = match === null ? undefined : Number(match[2]);
-        if (cols === undefined || rows === undefined || gridOutOfBounds(cols, rows)) {
-          json(res, 400, { error: `wider must be COLSxROWS. ${GRID_BOUNDS_ERROR}` });
+        if (cols === undefined || rows === undefined || !Number.isInteger(cols) || !Number.isInteger(rows) ||
+            cols < MIN_GRID_SIDE || rows < MIN_GRID_SIDE || cols > MAX_VIEWPORT_COLS || rows > MAX_VIEWPORT_ROWS) {
+          json(res, 400, { error: `wider must be COLSxROWS with 2 to ${MAX_VIEWPORT_COLS} columns and 2 to ${MAX_VIEWPORT_ROWS} rows.` });
           return;
         }
         const timeoutParam = url.searchParams.get('widerTimeout');
@@ -2676,8 +2677,6 @@ export class Daemon {
         const original = { cols: session.cols, rows: session.rows };
         const requested = { cols, rows };
         const target = { cols: Math.max(cols, original.cols), rows: Math.max(rows, original.rows) };
-        const controller = this.geometryController.get(id);
-        const owner = this.dashboardGeometryOwner.get(id);
         const epoch = this.geometryEpoch.get(id) ?? 0;
         let payload: Record<string, unknown> | null = null;
         let restored = true;
@@ -2702,11 +2701,9 @@ export class Daemon {
           readError = error;
         } finally {
           try {
-            // A deliberate resize or takeover, including one to the same size,
-            // wins. Socket departure also changes the controller's identity.
+            // Only a deliberate geometry act wins. A departing controller does
+            // not choose a new size; keep the control state its departure left.
             restored = (this.geometryEpoch.get(id) ?? 0) === epoch &&
-              this.geometryController.get(id) === controller &&
-              this.dashboardGeometryOwner.get(id) === owner &&
               !session.geometryHeld && !session.exited &&
               session.cols === target.cols && session.rows === target.rows;
             if (restored && (target.cols !== original.cols || target.rows !== original.rows)) {
@@ -4100,7 +4097,6 @@ export class Daemon {
       !this.hasGeometryController(session.id)
     ) {
       this.geometryController.set(session.id, ws);
-      this.geometryEpoch.set(session.id, (this.geometryEpoch.get(session.id) ?? 0) + 1);
     } else if (
       !session.geometryHeld &&
       !readOnly &&
@@ -4109,7 +4105,6 @@ export class Daemon {
     ) {
       this.geometryController.set(session.id, ws);
       this.dashboardGeometryOwner.delete(session.id);
-      this.geometryEpoch.set(session.id, (this.geometryEpoch.get(session.id) ?? 0) + 1);
     }
     ws.send(JSON.stringify(options.frozen === undefined
       ? this.geometryFrame(session, ws)
@@ -4372,7 +4367,6 @@ export class Daemon {
       // connected does not inherit it.
       if (this.geometryController.get(session.id) === ws) {
         this.geometryController.delete(session.id);
-        this.geometryEpoch.set(session.id, (this.geometryEpoch.get(session.id) ?? 0) + 1);
       }
       this.lastActivity = Date.now();
       this.audit.record(actor, 'ws-close', session.id);

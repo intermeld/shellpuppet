@@ -203,10 +203,11 @@ export function connectWs(
   sessionId: string,
   token: string,
   headers: Record<string, string> = {},
+  options: { drive?: boolean } = {},
 ): Promise<WsClient> {
   return new Promise((resolve, reject) => {
     const ws = new WebSocket(
-      `ws://127.0.0.1:${String(port)}/sessions/${sessionId}/stream?token=${token}`,
+      `ws://127.0.0.1:${String(port)}/sessions/${sessionId}/stream?token=${token}${options.drive === false ? '&drive=0' : ''}`,
       { headers },
     );
     let buffer = '';

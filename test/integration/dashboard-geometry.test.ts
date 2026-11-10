@@ -9,7 +9,7 @@ let running: TestDaemon | null = null;
 beforeAll(async () => { browser = await findBrowser(); }, 60_000);
 afterEach(async () => { await running?.stop(); running = null; }, 120_000);
 
-async function openDashboard(width: number, height: number, interact: Parameters<typeof captureDashboard>[0]['interact'], script = 'setInterval(() => {}, 1000)') {
+async function openDashboard(width: number, height: number, interact: Parameters<typeof captureDashboard>[0]['interact'], script = 'setInterval(() => {}, 1000)', extraSession = false) {
   const urls: string[] = [];
   const daemon = running = await startTestDaemon({
     launcher: (url) => { urls.push(url); return Promise.resolve({ launched: true, mode: 'isolated-app', browser: 'mock' }); },
@@ -21,6 +21,13 @@ async function openDashboard(width: number, height: number, interact: Parameters
   } });
   expect(started.status).toBe(200);
   const id = String(started.body['id']);
+  if (extraSession) {
+    const second = await api(daemon.port, daemon.token, '/sessions', { body: {
+      command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], shell: false,
+      openViewer: false, cols: 100, rows: 30,
+    } });
+    expect(second.status).toBe(200);
+  }
   expect((await api(daemon.port, daemon.token, '/dashboard/open', { method: 'POST', body: {} })).status).toBe(200);
   const shot = await captureDashboard({ browser: browser!, viewerUrl: urls.at(-1)!, width, height,
     drive: true, timeoutMs: 120_000,
@@ -70,6 +77,71 @@ it('keeps a dashboard pane in control after a wider read and still auto fits', a
   const measured = result as { before: string; after: string; fitted: string };
   expect(measured.after).toBe(measured.before);
   expect(measured.fitted).not.toContain('following');
+}, 150_000);
+
+for (const action of ['Enlarge', 'Focus']) {
+it(`lets a deliberate ${action} take the grid during a wider read`, async (context) => {
+  if (!browser) { context.skip(); return; }
+  const { result } = await openDashboard(1400, 900, async ({ evaluate }) => {
+    await eventually(async () => Number(await evaluate(`document.querySelectorAll('.pane').length`)) === 2, 10_000);
+    const id = String(await evaluate(`document.querySelector('.pane').dataset.session`));
+    await evaluate(`document.querySelector('.pane button[aria-label="Fit"]').click()`);
+    await eventually(async () => (await evaluate(`(() => {
+      const stream = window.__dashboardDiagnostics.streams.find(entry => entry.url.includes('/sessions/${id}/stream'));
+      return stream?.geometry.at(-1)?.control === 'yours';
+    })()`)) === true, 10_000);
+    const pending = api(running!.port, running!.token,
+      `/sessions/${id}/snapshot?wider=300x120&widerTimeout=3000`);
+    await eventually(async () => (await evaluate(`(() => {
+      const stream = window.__dashboardDiagnostics.streams.find(entry => entry.url.includes('/sessions/${id}/stream'));
+      return stream?.geometry.some(frame => frame.cols === 300 && frame.temporary === true);
+    })()`)) === true, 10_000);
+    await evaluate(action === 'Enlarge'
+      ? `document.querySelector('.pane button[aria-label="Enlarge"]').click()`
+      : `(() => { document.querySelector('.pane').click(); document.getElementById('focus').click(); })()`);
+    const read = await pending;
+    expect(read.status, JSON.stringify(read.body)).toBe(200);
+    expect(read.body['restored']).toBe(false);
+    return await evaluate(`(() => {
+      const stream = window.__dashboardDiagnostics.streams.find(entry => entry.url.includes('/sessions/${id}/stream'));
+      return { takes: stream.resizes.filter(frame => frame.take === true).length,
+        last: stream.geometry.at(-1), size: document.querySelector('.pane-size')?.textContent };
+    })()`);
+  }, "setInterval(() => process.stdout.write('.'), 80)", true);
+  const measured = result as { takes: number; last: { control: string }; size: string };
+  expect(measured.takes).toBeGreaterThanOrEqual(2);
+  expect(measured.last.control).toBe('yours');
+  expect(measured.size).not.toContain('following');
+}, 150_000);
+}
+
+it('lets a Pop out window take the grid during a wider read', async (context) => {
+  if (!browser) { context.skip(); return; }
+  const { result } = await openDashboard(1400, 900, async ({ evaluate, send }) => {
+    const id = String(await evaluate(`document.querySelector('.pane').dataset.session`));
+    await evaluate(`document.querySelector('.pane button[aria-label="Fit"]').click()`);
+    await eventually(async () => (await evaluate(`(() => {
+      const stream = window.__dashboardDiagnostics.streams.find(entry => entry.url.includes('/sessions/${id}/stream'));
+      return stream?.geometry.at(-1)?.control === 'yours';
+    })()`)) === true, 10_000);
+    const before = await api(running!.port, running!.token, `/sessions/${id}/snapshot`);
+    const pending = api(running!.port, running!.token,
+      `/sessions/${id}/snapshot?wider=300x120&widerTimeout=3000`);
+    await eventually(async () => (await evaluate(`(() => {
+      const stream = window.__dashboardDiagnostics.streams.find(entry => entry.url.includes('/sessions/${id}/stream'));
+      return stream?.geometry.some(frame => frame.cols === 300 && frame.temporary === true);
+    })()`)) === true, 10_000);
+    await send('Runtime.evaluate', { expression: `document.querySelector('.pane [data-action="pop"]').click()`,
+      returnByValue: true, userGesture: true });
+    const read = await pending;
+    expect(read.status, JSON.stringify(read.body)).toBe(200);
+    expect(read.body['restored']).toBe(false);
+    const after = await api(running!.port, running!.token, `/sessions/${id}/snapshot`);
+    expect(after.status).toBe(200);
+    expect(after.body['cols']).not.toBe(before.body['cols']);
+    return { restored: read.body['restored'], cols: after.body['cols'] };
+  }, "setInterval(() => process.stdout.write('.'), 80)");
+  expect(result).toMatchObject({ restored: false });
 }, 150_000);
 
 it('shows the short coloured TUI text boundary inside the same grid and canvas as a full field', async (context) => {

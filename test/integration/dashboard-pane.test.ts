@@ -489,6 +489,68 @@ describe('the echoed subprotocol names the dashboard credential', () => {
 });
 
 describe('Fit, Enlarge and Restore are the resize', () => {
+  it('restores the grid but preserves a departed dashboard owner for reconnect', async () => {
+    const daemon = await startPane();
+    const id = await startGrid(daemon, 'wider-dashboard-departure');
+    const { cookie, proof } = await openDashboard(daemon);
+    const passive = await connectWs(daemon.port, id, daemon.token, {}, { drive: false });
+    await passive.waitForControl(c => c['type'] === 'geometry');
+    const pane = await connectDash(daemon.port, id, cookie, proof);
+    pane.send(JSON.stringify({ type: 'resize', cols: 120, rows: 34, take: true }));
+    await pane.waitForControl(c => c['type'] === 'geometry' && c['control'] === 'yours');
+    const pending = api(daemon.port, daemon.token, `/sessions/${id}/snapshot?wider=140x40&widerTimeout=1000`);
+    await passive.waitForControl(c => c['type'] === 'geometry' && c['cols'] === 140 && c['temporary'] === true);
+    pane.close();
+    const result = await pending;
+    expect(result.status).toBe(200);
+    expect(result.body['restored']).toBe(true);
+    expect(await passive.waitForControl(c => c['type'] === 'geometry' && c['cols'] === 120 && c['temporary'] !== true))
+      .toMatchObject({ rows: 34, control: 'adopt', owned: false });
+    const remembered = await connectDash(daemon.port, id, cookie, proof);
+    expect(await remembered.waitForControl(c => c['type'] === 'geometry')).toMatchObject({
+      cols: 120, rows: 34, control: 'yours', owned: true,
+    });
+    remembered.close();
+    passive.close();
+  });
+
+  it.each(['dashboard take', 'viewer resize', 'pop-out handover'])('keeps a %s made during a wider read', async (action) => {
+    const daemon = await startPane();
+    const id = await startGrid(daemon, `wider-${action.replace(' ', '-')}`);
+    const { cookie, proof } = await openDashboard(daemon);
+    const viewer = await connectWs(daemon.port, id, daemon.token);
+    expect(await viewer.waitForControl(c => c['type'] === 'geometry')).toMatchObject({ control: 'yours' });
+    const pane = await connectDash(daemon.port, id, cookie, proof);
+    expect(await pane.waitForControl(c => c['type'] === 'geometry')).toMatchObject({ control: 'adopt' });
+    if (action === 'pop-out handover') {
+      pane.send(JSON.stringify({ type: 'resize', cols: 120, rows: 34, take: true }));
+      await pane.waitForControl(c => c['type'] === 'geometry' && c['control'] === 'yours');
+    }
+    const pending = api(daemon.port, daemon.token, `/sessions/${id}/snapshot?wider=140x40&widerTimeout=1000`);
+    await pane.waitForControl(c => c['type'] === 'geometry' && c['cols'] === 140 && c['temporary'] === true);
+    let popped: PaneClient | undefined;
+    if (action === 'dashboard take') pane.send(JSON.stringify({ type: 'resize', cols: 140, rows: 40, take: true }));
+    else if (action === 'viewer resize') viewer.ws.send(JSON.stringify({ type: 'resize', cols: 150, rows: 45 }));
+    else {
+      pane.close();
+      popped = await connectDash(daemon.port, id, cookie, proof);
+      popped.send(JSON.stringify({ type: 'resize', cols: 150, rows: 45, take: true }));
+      await popped.waitForControl(c => c['type'] === 'geometry' && c['cols'] === 150 && c['control'] === 'yours');
+    }
+    const result = await pending;
+    expect(result.status).toBe(200);
+    expect(result.body['restored']).toBe(false);
+    expect(await gridOf(daemon, id)).toMatchObject(action === 'dashboard take'
+      ? { cols: 140, rows: 40 } : { cols: 150, rows: 45 });
+    if (action === 'dashboard take') {
+      expect(await pane.waitForControl(c => c['type'] === 'geometry' && c['control'] === 'yours' && c['cols'] === 140))
+        .toMatchObject({ rows: 40 });
+    }
+    viewer.close();
+    pane.close();
+    popped?.close();
+  });
+
   it('take changes the PTY, tells every watcher, restores, and clamps above 400 by 150', async () => {
     const daemon = await startPane();
     const id = await startGrid(daemon, 'take-pane');
