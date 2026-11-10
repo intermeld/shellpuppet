@@ -153,8 +153,10 @@ export class ScreenRenderer {
     this.height = rows;
     const resize = (): void => {
       if (this.closed) return;
+      const narrowed = cols < this.term.cols;
       this.term.resize(cols, rows);
       this.repairViewport();
+      if (narrowed) this.trimNarrowedRows(cols);
       for (const reflow of this.foregroundReflows) reflow();
     };
     // Preserve the order of output, geometry and the next replay marker.
@@ -235,6 +237,37 @@ export class ScreenRenderer {
     if (active.length < active.baseY + this.term.rows ||
         active.length <= active.baseY + active.cursorY) {
       throw new Error('xterm viewport repair failed');
+    }
+  }
+
+  /**
+   * xterm 6.0.0 cuts rows to a narrower grid only when it reflows them, and
+   * it never reflows the alternate screen that full-screen programs use. Cells
+   * past the new right edge would stay in every read and in the replay bytes,
+   * which a viewer of the real width then wraps. Cut them here, with a wide
+   * character split by the edge blanked. Same pinned release as the repair
+   * above; if a private field is missing, rows stay as xterm left them rather
+   * than failing inside its parser callback.
+   */
+  private trimNarrowedRows(cols: number): void {
+    type Line = { length?: unknown; resize?: unknown; getWidth?: unknown; setCell?: unknown };
+    type Buffer = { lines?: { length?: unknown; get?: unknown }; getNullCell?: unknown };
+    const buffers = (this.term as unknown as { _core?: { buffers?: { normal?: Buffer; alt?: Buffer } } })._core?.buffers;
+    for (const buffer of [buffers?.normal, buffers?.alt]) {
+      const lines = buffer?.lines;
+      if (lines === undefined || typeof lines.length !== 'number' || typeof lines.get !== 'function' ||
+          typeof buffer?.getNullCell !== 'function') continue;
+      const blank: unknown = (buffer.getNullCell as () => unknown).call(buffer);
+      for (let i = 0; i < lines.length; i++) {
+        const line = (lines.get as (index: number) => Line | undefined).call(lines, i);
+        if (line === undefined || typeof line.length !== 'number' || line.length <= cols ||
+            typeof line.resize !== 'function') continue;
+        if (cols > 0 && typeof line.getWidth === 'function' && typeof line.setCell === 'function' &&
+            (line.getWidth as (index: number) => number).call(line, cols - 1) === 2) {
+          (line.setCell as (index: number, cell: unknown) => void).call(line, cols - 1, blank);
+        }
+        (line.resize as (cols: number, fill: unknown) => boolean).call(line, cols, blank);
+      }
     }
   }
 
