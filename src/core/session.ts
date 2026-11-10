@@ -1436,6 +1436,21 @@ export class Session implements WaitTarget {
         return;
       }
       this.stallContent = content;
+      // Once the resize allowance expires, a later clipped repaint can still
+      // have the same refusal block. Check that block before a text comparison
+      // can mistake newly visible panel rows for a new turn.
+      if (this.stallState !== undefined && this.hasStallInk(plain)) {
+        const signature = signatureForSession(this);
+        if (signature !== null && possibleStall(plain, signature)) {
+          const { lines, firstVisible } = this.renderer.styledLines({ above: 128, extendWrapped: false });
+          const candidate = validateStall(lines, signature, false, firstVisible);
+          if (candidate !== null && 'inconclusive' in candidate && this.stallTracker.matchesBlock(candidate) &&
+            detectPrompt(plain.join('\n'), this.agent) === null) {
+            this.stallTranscript = this.readStallTranscript();
+            return;
+          }
+        }
+      }
       this.compareStallTranscript();
     }
     if (this.stallTimer !== null) return;
@@ -1471,10 +1486,6 @@ export class Session implements WaitTarget {
       this.stallValidationPending = false;
       return;
     }
-    if (this.stallTracker.tracking && content !== this.stallContent && content !== this.stallValidatedContent) {
-      this.compareStallTranscript();
-    }
-    this.stallContent = content;
     const ink = this.hasStallInk(plain) && possibleStall(plain, signature);
     let candidate = null;
     if (ink) {
@@ -1482,11 +1493,27 @@ export class Session implements WaitTarget {
       candidate = validateStall(lines, signature, false, firstVisible);
       if (candidate !== null && detectPrompt(plain.join('\n'), this.agent) !== null) candidate = null;
     }
+    // A narrow redraw can clip the user turn and expose only a tail of the
+    // earlier transcript. The same styled block then owns that visible tail.
+    // A new paragraph cannot pass this comparison, and missing ink or a
+    // changed block still goes through bounded invalidation below.
+    const sameClippedBlock = candidate !== null && 'inconclusive' in candidate &&
+      this.stallTracker.matchesBlock(candidate);
+    const currentTranscript = this.stallTracker.matchesBlock(candidate) && resized
+      ? this.readStallTranscript() : undefined;
+    const normaliseTranscript = (value: string) => value.replace(/\s+/gu, ' ').trim();
+    const visibleTail = currentTranscript !== undefined && currentTranscript !== '' &&
+      this.stallValidatedTranscript !== undefined && normaliseTranscript(this.stallValidatedTranscript)
+        .endsWith(normaliseTranscript(currentTranscript));
+    if (this.stallTracker.tracking && content !== this.stallContent && content !== this.stallValidatedContent &&
+      !sameClippedBlock && !visibleTail) this.compareStallTranscript();
+    this.stallContent = content;
     if (candidate !== null) {
       this.stallTranscript = this.readStallTranscript();
       // Keep the complete-context baselines across an inconclusive read: a
       // native redraw on growth can restore that viewport after clipped reflow.
-      if (!('inconclusive' in candidate) && (this.stallState === undefined || this.stallTracker.matchesBlock(candidate))) {
+      if (!('inconclusive' in candidate) && (this.stallState === undefined || this.stallTracker.matchesBlock(candidate)) &&
+        !(resized && visibleTail)) {
         this.stallValidatedContent = this.stallContent;
         this.stallValidatedTranscript = this.stallTranscript;
       }

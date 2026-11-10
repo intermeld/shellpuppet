@@ -1087,7 +1087,8 @@ export function stallTranscriptContent(lines: readonly (string | StyledLine)[], 
         const row = content[i]!;
         // Suggestion ink belongs to the framed input row, including its
         // terminal wraps. Physical-row text equality cannot establish that.
-        const presentation = tests.idle.some(test => test.word !== undefined && lineFits(row, { word: test.word }));
+        const presentation = tests.idle.some(test => test.body !== undefined &&
+          lineFits(row, { lead: test.lead, body: test.body }));
         if (tests.idle.some(test => test.text?.test(row.text)) || presentation || blank(row)) omitted.add(i);
       }
       for (let n = 0; n < tests.bottom.length; n++) {

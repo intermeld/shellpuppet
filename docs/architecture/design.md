@@ -652,7 +652,7 @@ bottom chrome, including MiMo's usage and shortcut footer, may follow it. The in
 comes from the composer frame and independently repeated panel dividers;
 indentation alone never makes typed text a sidebar. Text before a proven
 divider remains input, including text beyond the closing frame's edge.
-The grey suggestion has a separate style rule.
+The grey suggestion has a separate style rule: its composer gutter must use MiMo's orange or grey ink and every visible character of the suggestion, including its shortcut suffix, must be grey. A resize can expose only a tail of an established refusal's earlier transcript; matching styled refusal blocks retain the notice when that tail belongs to the validated transcript. New transcript text and a persistently missing block still clear it within the existing resize allowance and confirmation.
 No detected prompt or busy indication may be present.
 
 The same semantic refusal and user turn must remain for one second. Logical

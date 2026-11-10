@@ -38,6 +38,18 @@ describe('modern MiMo refusal', () => {
       '\x1b[38;2;128;128;128mReview the sample task. (Tab to\x1b[0m', 'Draft text');
     expect(await detect(screen)).toBeNull();
   });
+  it('does not count a mixed-ink draft as a grey suggestion', async () => {
+    const screen = modernRefusal().replace(
+      '\x1b[38;2;128;128;128mReview the sample task. (Tab to\x1b[0m',
+      '\x1b[38;2;128;128;128mR\x1b[0meview the sample task. (Tab to');
+    expect(await detect(screen)).toBeNull();
+  });
+  it('rejects a dark tool gutter on a grey composer phrase', async () => {
+    const screen = modernRefusal().replace(
+      '  \x1b[38;2;251;129;71m┃\x1b[0m  \x1b[38;2;128;128;128mReview the sample task. (Tab to',
+      '  \x1b[38;2;10;10;10m┃\x1b[0m  \x1b[38;2;128;128;128mReview the sample task. (Tab to');
+    expect(await detect(screen)).toBeNull();
+  });
   it('does not report a historical refusal followed by another turn', async () => {
     const screen = modernRefusal().replace('  \x1b[38;2;251;129;71m┃\x1b[0m\r\n',
       '  \x1b[38;2;255;128;64m┃\x1b[0m  Continue the task.\r\n     New output.\r\n  \x1b[38;2;251;129;71m┃\x1b[0m\r\n');

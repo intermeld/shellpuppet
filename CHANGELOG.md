@@ -28,6 +28,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Keep a MiMo refusal marked as stalled when its screen narrows and widens, and recognise grey suggestions only when their whole text has suggestion styling.
 - Detect MiMo provider refusals on narrower screens with modern status footers, grey suggestions and expandable tool panels.
 - Keep ending sessions and closing dashboard panes safe while their last
   output is still being drawn, and ignore output arriving after a session ends.
