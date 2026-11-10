@@ -1254,16 +1254,18 @@ setting, never their values. Client-token starts do not use profiles.
     it unless asked, so the human's next window move takes it back.
   - **A wider snapshot is temporary.** `terminal_snapshot` may request `wider:
     { cols, rows }` to reveal a dialog clipped by its normal grid. Each side
-    may grow but never shrink. The request is refused outside the API grid
-    bounds of 2 to 1000 columns and 2 to 500 rows, when the geometry is held,
+    may grow but never shrink. The request is refused outside the viewport grid
+    bounds of 2 to 400 columns and 2 to 150 rows, when the geometry is held,
     or while another wider read of the same session is in progress. After the
     PTY and renderer resize, the read uses the ordinary quiet waiter: 250 ms
     without output, counted from the resize, capped at 1500 ms by default.
     `widerTimeout` may set that cap from 250 to 30000 ms. The snapshot reports
     the grid at which it was read and `restored`. The daemon then restores the
-    original size and controller, including a dashboard's remembered owner or
-    the lack of an owner. A later resize, takeover or controller departure wins,
-    even if it asks for the same size: its geometry act prevents restoration.
+    original size and any controller still connected, including a dashboard's
+    remembered owner or the lack of an owner. A later resize, takeover or hold
+    wins, even if it asks for the same size: its deliberate geometry act prevents
+    restoration. A controller's departure does not change the chosen grid;
+    the original size is restored while control stays as the departure left it.
     A cancelled or failed read and daemon shutdown also restore before the
     request finishes. Viewers receive the two real grid changes and keep their
     controller. A wider read is audited with requested and original sizes,

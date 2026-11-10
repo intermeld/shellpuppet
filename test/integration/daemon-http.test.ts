@@ -1280,18 +1280,32 @@ describe('viewer assets and the WS frame protocol (§5)', () => {
 
   it('leaves an unowned grid unowned, and refuses held and overlapping wider reads', async () => {
     const session = await startNodeSession('wider-unowned');
+    const passive = await connectWs(td.port, session.id, td.token, {}, { drive: false });
+    const ownership = td.daemon as unknown as {
+      geometryController: Map<string, unknown>;
+      dashboardGeometryOwner: Map<string, unknown>;
+    };
+    const before = await passive.waitForControl((c) => c['type'] === 'geometry');
+    expect(before).toMatchObject({ control: 'adopt', owned: false });
+    expect(ownership.geometryController.has(session.id)).toBe(false);
+    expect(ownership.dashboardGeometryOwner.has(session.id)).toBe(false);
     const path = `/sessions/${session.id}/snapshot?wider=130x35&widerTimeout=1000`;
     const first = api(td.port, td.token, path);
-    await eventually(async () => (await api(td.port, td.token, '/sessions')).body['sessions'] !== undefined &&
-      ((await api(td.port, td.token, '/sessions')).body['sessions'] as { id: string; cols: number }[])
-        .some((s) => s.id === session.id && s.cols === 130), 10_000);
+    const temporary = await passive.waitForControl((c) => c['type'] === 'geometry' && c['cols'] === 130);
+    expect(temporary).toMatchObject({ control: 'adopt', owned: false, temporary: true });
     const overlap = await api(td.port, td.token, path);
     expect(overlap.status).toBe(409);
     expect(overlap.body['error']).toContain('already in progress');
     expect((await first).body).toMatchObject({ restored: true });
+    const after = await passive.waitForControl((c) => c['type'] === 'geometry' && c['cols'] === before['cols'] &&
+      c['rows'] === before['rows'] && c !== before);
+    expect(after).toMatchObject({ control: 'adopt', owned: false });
+    expect(ownership.geometryController.has(session.id)).toBe(false);
+    expect(ownership.dashboardGeometryOwner.has(session.id)).toBe(false);
     const watcher = await connectWs(td.port, session.id, td.token);
     expect((await watcher.waitForControl((c) => c['type'] === 'geometry'))['control']).toBe('yours');
     watcher.close();
+    passive.close();
 
     const held = await api(td.port, td.token, '/sessions', { body: {
       command: process.execPath, args: ['-e', "setInterval(() => {}, 200)"], shell: false,
@@ -1302,6 +1316,15 @@ describe('viewer assets and the WS frame protocol (§5)', () => {
     const refusal = await api(td.port, td.token, `/sessions/${heldId}/snapshot?wider=130x35`);
     expect(refusal.status).toBe(409);
     expect(refusal.body['error']).toContain('held');
+  });
+
+  it('refuses a wider grid above the viewport maximum', async () => {
+    const session = await startNodeSession('wider-limit');
+    for (const size of ['401x40', '140x151']) {
+      const result = await api(td.port, td.token, `/sessions/${session.id}/snapshot?wider=${size}`);
+      expect(result.status).toBe(400);
+      expect(result.body['error']).toMatch(/400.*150/);
+    }
   });
 
   it('lets a later API resize keep the grid during a wider read', async () => {

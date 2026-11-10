@@ -49,10 +49,12 @@ The requested sides may enlarge the current grid but never shrink it.
 The daemon waits for 250 ms of quiet after the resize, with a 1500 ms
 default cap that callers may lower to 250 ms or raise to 30000 ms. The
 returned `cols` and `rows` are the grid read, and `restored` says whether
-the original size and controller were restored. A person's later resize,
-takeover or controller departure wins and sets `restored: false`.
+the original size was restored without overriding a later geometry act. A
+person's later resize, takeover or hold wins and sets `restored: false`.
+A departing controller leaves control unowned, or with a remembered dashboard
+owner, while the original size is restored.
 Held grids and concurrent wider reads are refused with HTTP 409; sizes
-outside 2 to 1000 columns and 2 to 500 rows are refused with HTTP 400.
+outside 2 to 400 columns and 2 to 150 rows are refused with HTTP 400.
 `lastLines` and `hideReasoning` apply to the wider snapshot as usual.
 `terminal_find` searches only the current viewport; read a wider snapshot
 when the program has clipped a line before drawing it.

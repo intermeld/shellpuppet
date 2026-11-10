@@ -921,6 +921,7 @@ window.ShellPuppetPane = (() => {
         if (cols === gridCols && rows === gridRows && !force) return false;
         return this.takeGrid(cols, rows);
       },
+      isTemporaryGeometry() { return temporaryGeometry; },
       takeGrid(cols, rows) {
         if (destroyed) return false;
         if (dashboardProof === null || !ws || ws.readyState !== 1 || !geometryDecided) return false;
