@@ -31,7 +31,7 @@ export const stalls: StallSignature[] = [{
     { text: '^ {2}┃\\s*$' },
     { text: '^ {2}┃ {2}Build · ' },
     // MiMo can offer a grey suggestion in an otherwise idle composer.
-    { text: '^ {2}┃ {2}.+\\(Tab to(?: accept\\))?\\s*$', word: { fg: ['#808080'] } },
+    { text: '^ {2}┃ {2}.+\\(Tab to(?: accept\\))?\\s*$', lead: { fg: ['#fb8147', '#ff8040', '#808080'] }, body: { fg: ['#808080'] } },
     { text: '^ {2}╹▀+\\s*$' },
   ],
   bottom: [
