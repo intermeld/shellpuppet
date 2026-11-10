@@ -4247,7 +4247,11 @@ export class Daemon {
             }
             try {
               const applied = await session.resizeIfCurrent(wanted.cols, wanted.rows,
-                () => !session.geometryHeld && !session.exited, (changed) => {
+                // A viewport that left while its take waited in the queue made
+                // no lasting choice: skip it so the pending wider restore runs.
+                () => !session.geometryHeld && !session.exited && ws.readyState === ws.OPEN &&
+                  (this.sessionSockets.get(session.id)?.has(ws) ?? false),
+                (changed) => {
                   const handedOver = this.geometryController.get(session.id) !== ws;
                   // The controller change and epoch belong to the same queued
                   // act as the resize, before a queued wider restore can run.
