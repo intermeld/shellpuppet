@@ -63,7 +63,7 @@ export function musePrompt(raw: string[], tail: Line[]): DetectedPrompt | null {
   if (before.slice(border + 1).some((line) => /^\s*◆/.test(line))) return null;
   // Every live plain approval sits directly under that border; a quotation
   // whose answer marker has scrolled away does not.
-  if (plainDecline && border !== question.index - 1) return null;
+  if (plainDecline && (border < 0 || border !== question.index - 1)) return null;
   const stage = approval ? raw.slice(question.index, first).find((line) => /^ {2}Stage \d+\/\d+$/.test(line.trimEnd())) : undefined;
   // Only this menu's hint and footer, blank rows and Muse's status footer
   // belong below its options. Other output means the menu is historical.
