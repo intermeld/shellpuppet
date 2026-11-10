@@ -61,6 +61,10 @@ describe('Muse approval with a decline choice', () => {
     expect(detectPrompt(`${declineMenu}\n◇ Calling tools (1s · esc to interrupt)`, 'muse')).toBeNull();
   });
 
+  it('does not treat a plain approval at the top of the screen with no border as live', () => {
+    expect(detectPrompt(declineMenu.split('\n').slice(3).join('\n'), 'muse')).toBeNull();
+  });
+
   it('does not treat a quoted plain approval as live once its answer marker has scrolled away', () => {
     const quoted = ['Show a menu example', 'Here is the menu:',
       ...declineMenu.split('\n').slice(3, 10)].join('\n');
