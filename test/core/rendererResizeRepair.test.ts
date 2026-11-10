@@ -15,6 +15,23 @@ it('pins the private buffer repair to the audited xterm release', () => {
   expect((require('@xterm/headless/package.json') as { version: string }).version).toBe('6.0.0');
 });
 
+it('finds the private row fields the narrowing trim relies on', async () => {
+  const renderer = new ScreenRenderer({ cols: 20, rows: 4, scrollback: 0 });
+  try {
+    await renderer.write('\x1b[?1049h');
+    type Line = { length: number; resize: unknown; getWidth: unknown; setCell: unknown };
+    type Buffer = { lines: { length: number; get: (index: number) => Line }; getNullCell: unknown };
+    const core = (terminal(renderer) as unknown as { _core: { buffers: { normal: Buffer; alt: Buffer } } })._core;
+    for (const buffer of [core.buffers.normal, core.buffers.alt]) {
+      expect(typeof buffer.getNullCell).toBe('function');
+      expect(typeof buffer.lines.get).toBe('function');
+      const line = buffer.lines.get(0);
+      expect(typeof line.length).toBe('number');
+      for (const method of [line.resize, line.getWidth, line.setCell]) expect(typeof method).toBe('function');
+    }
+  } finally { await renderer.dispose(); }
+});
+
 it('backfills #6063 missing viewport lines before the next parser timer', async () => {
   vi.useFakeTimers();
   const renderer = new ScreenRenderer({ cols: 39, rows: 18, scrollback: 100 });
