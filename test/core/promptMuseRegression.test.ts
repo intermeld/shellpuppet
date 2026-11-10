@@ -46,8 +46,25 @@ describe('Muse approval with a decline choice', () => {
     expect(detectPrompt(three, 'muse')?.options).toHaveLength(3);
   });
 
+  for (const selected of [1, 3]) {
+    it(`keeps three choices when the second ends in (esc), with choice ${String(selected)} selected`, () => {
+      const rows = ['1. Run it (y)', '2. Skip it (esc)', '3. Stop (n)']
+        .map((label, index) => `${index + 1 === selected ? '⟩ ' : '  '}${label}`);
+      const prompt = detectPrompt(['── Voice input (Alt+V to start) ──',
+        'Would you like to run the following command?', '  $ npm test', ...rows].join('\n'), 'muse');
+      expect(prompt?.options).toEqual(['1. Run it (y)', '2. Skip it (esc)', '3. Stop (n)']);
+      expect(prompt?.selectedOption).toBe(selected - 1);
+    });
+  }
+
   it('does not offer the menu once the program has resumed work below it', () => {
     expect(detectPrompt(`${declineMenu}\n◇ Calling tools (1s · esc to interrupt)`, 'muse')).toBeNull();
+  });
+
+  it('does not treat a quoted plain approval as live once its answer marker has scrolled away', () => {
+    const quoted = ['Show a menu example', 'Here is the menu:',
+      ...declineMenu.split('\n').slice(3, 10)].join('\n');
+    expect(detectPrompt(quoted, 'muse')).toBeNull();
   });
 });
 

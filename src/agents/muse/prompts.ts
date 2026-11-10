@@ -21,9 +21,13 @@ export function musePrompt(raw: string[], tail: Line[]): DetectedPrompt | null {
   const approval = marker[2] === '. ';
   const first = selected.index - selectedOption;
   // Muse omits the workspace-wide choice for script blocks and some commands.
-  // Its decline choice, answered with Esc, is always the last one, whatever
-  // its label, so a second row ending in (esc) identifies the two-choice form.
-  const twoOptionApproval = approval && /^(?:⟩ | {2})2\. \S.*\(esc\)\s*$/.test(raw[first + 1] ?? '');
+  // The staged form says "Abort the entire command"; the plain form ends with
+  // another decline answered with Esc. A visible third choice keeps three.
+  const second = raw[first + 1] ?? '';
+  const staged = /^(?:⟩ | {2})2\. Abort the entire command\s*\(esc\)/.test(second);
+  const plainDecline = !staged && /^(?:⟩ | {2})2\. \S.*\(esc\)\s*$/.test(second) &&
+    !/^(?:⟩ | {2})3\. \S/.test(raw[first + 2] ?? '');
+  const twoOptionApproval = approval && (staged || plainDecline);
   const count = approval && !twoOptionApproval ? 3 : 2;
   if (selectedOption >= count) return null;
   const options: string[] = [];
@@ -57,6 +61,9 @@ export function musePrompt(raw: string[], tail: Line[]): DetectedPrompt | null {
     if (/^\s*── .*Voice input/.test(before[index]!)) { border = index; break; }
   }
   if (before.slice(border + 1).some((line) => /^\s*◆/.test(line))) return null;
+  // Every live plain approval sits directly under that border; a quotation
+  // whose answer marker has scrolled away does not.
+  if (plainDecline && border !== question.index - 1) return null;
   const stage = approval ? raw.slice(question.index, first).find((line) => /^ {2}Stage \d+\/\d+$/.test(line.trimEnd())) : undefined;
   // Only this menu's hint and footer, blank rows and Muse's status footer
   // belong below its options. Other output means the menu is historical.
