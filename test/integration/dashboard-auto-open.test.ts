@@ -9,8 +9,8 @@ import type { TestDaemon } from './helpers.js';
 
 const running: TestDaemon[] = [];
 afterEach(async () => {
-  for (const daemon of running.splice(0)) await daemon.stop();
-});
+  await Promise.all(running.splice(0).map((daemon) => daemon.stop()));
+}, 120_000);
 
 const startBody = {
   command: process.execPath,

@@ -29,6 +29,8 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Let a dashboard pane take its grid when the controlling window releases it during a roster move to another window, while keeping the human's grid through socket loss, reload, pane dismissal, window close, Pop out, controller reconnect and a viewer link or another client connecting meanwhile.
+- Retry a dashboard Auto fit after its pending grid request is lost when the connection closes.
 - Keep Qoder message suggestions and drafts, including numbered and lettered text, from appearing as choices waiting for an answer.
 - Stop text from a wider layout lingering past the right edge after a full-screen program's grid narrows, in snapshots, filtered reads and screenshots.
 - Show Muse's two-choice command approval, "Yes, proceed" or "No, and tell Muse Code what to do differently", as waiting for an answer.

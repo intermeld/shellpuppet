@@ -5,8 +5,234 @@ import { parseDaemonConfig } from '../../src/daemon/config.js';
 import { api, eventually, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 
-let browser: string | null = null;
 let running: TestDaemon | null = null;
+
+it('retries an initial fit lost on socket close', async (context) => {
+  const found = await findBrowser();
+  if (!found) { context.skip(); return; }
+  const urls: string[] = [];
+  const daemon = running = await startTestDaemon({
+    launcher: (url) => { urls.push(url); return Promise.resolve({ launched: true, mode: 'isolated-app', browser: 'mock' }); },
+    idleCheckIntervalMs: 600_000,
+  });
+  const started = await api(daemon.port, daemon.token, '/sessions', { body: {
+    command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], shell: false,
+    openViewer: false, cols: 129, rows: 49,
+  } });
+  expect(started.status).toBe(200);
+  expect((await api(daemon.port, daemon.token, '/dashboard/open', { method: 'POST', body: {} })).status).toBe(200);
+  const shot = await captureDashboard({ browser: found, viewerUrl: urls.at(-1)!, width: 1400, height: 900,
+    drive: true, probeOnly: true, timeoutMs: 30_000,
+    beforeNavigateScript: `(() => {
+      window.__droppedTakes = 0;
+      const send = WebSocket.prototype.send;
+      WebSocket.prototype.send = function(data) {
+        if (typeof data === 'string' && data.includes('"type":"resize"') && data.includes('"take":true')) {
+          window.__droppedTakes++;
+          if (window.__droppedTakes === 1) { this.close(); return; }
+        }
+        return send.call(this, data);
+      };
+    })()`,
+    probe: `(() => document.getElementById('connection')?.textContent === 'Connected' &&
+      document.querySelector('.pane-size')?.textContent.includes('×') ? true : null)()`,
+    interact: async ({ evaluate }) => {
+      await eventually(async () => Number(await evaluate('window.__droppedTakes')) >= 1, 10_000);
+      await new Promise(resolve => setTimeout(resolve, 5_000));
+      return await evaluate(`({ takes: window.__droppedTakes, size: document.querySelector('.pane-size')?.textContent })`);
+    },
+  });
+  const result = shot.probe as { takes: number; size: string };
+  expect(result.takes, JSON.stringify(result)).toBeGreaterThanOrEqual(2);
+  expect(result.size).not.toContain('following');
+}, 60_000);
+
+it('retries the same Auto fit size after a held take is refused', async (context) => {
+  const found = await findBrowser();
+  if (!found) { context.skip(); return; }
+  const urls: string[] = [];
+  const daemon = running = await startTestDaemon({
+    launcher: (url) => { urls.push(url); return Promise.resolve({ launched: true, mode: 'isolated-app', browser: 'mock' }); },
+    idleCheckIntervalMs: 600_000,
+  });
+  const started = await api(daemon.port, daemon.token, '/sessions', { body: {
+    command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], shell: false,
+    openViewer: false, cols: 129, rows: 49,
+  } });
+  expect(started.status).toBe(200);
+  const id = String(started.body['id']);
+  expect((await api(daemon.port, daemon.token, '/dashboard/open', { method: 'POST', body: {} })).status).toBe(200);
+  const shot = await captureDashboard({ browser: found, viewerUrl: urls.at(-1)!, width: 1400, height: 900,
+    drive: true, probeOnly: true, timeoutMs: 60_000,
+    beforeNavigateScript: `(() => {
+      window.__heldAttempts = [];
+      window.__paneClients = [];
+      let paneApi;
+      Object.defineProperty(window, 'ShellPuppetPane', {
+        configurable: true,
+        get: () => paneApi,
+        set: (value) => {
+          paneApi = value;
+          const create = value.create;
+          value.create = (...args) => {
+            const client = create(...args);
+            window.__paneClients.push(client);
+            return client;
+          };
+        },
+      });
+      const send = WebSocket.prototype.send;
+      WebSocket.prototype.send = function(data) {
+        if (typeof data === 'string' && data.includes('"type":"resize"') && data.includes('"take":true')) {
+          window.__heldAttempts.push(JSON.parse(data));
+          if (window.__holdNextTake) {
+            window.__holdNextTake = false;
+            window.__heldRequest = { socket: this, data, send };
+            return;
+          }
+        }
+        return send.call(this, data);
+      };
+    })()`,
+    probe: `(() => document.getElementById('connection')?.textContent === 'Connected' &&
+      document.querySelector('.pane-size')?.textContent.includes('×') ? true : null)()`,
+    interact: async ({ evaluate }) => {
+      await eventually(async () => (await evaluate('window.__heldAttempts?.length')) === 1 &&
+        !String(await evaluate(`document.querySelector('.pane-size')?.textContent`)).includes('following'), 10_000);
+      expect((await api(daemon.port, daemon.token, `/sessions/${id}/resize`,
+        { body: { cols: 129, rows: 49, hold: false } })).status).toBe(200);
+      await eventually(async () => String(await evaluate(`document.querySelector('.pane-size')?.textContent`)).includes('following'),
+        10_000);
+      await evaluate(`(() => {
+        window.__holdNextTake = true;
+        window.__paneClients.at(-1).takeGrid(window.__heldAttempts[0].cols, window.__heldAttempts[0].rows);
+      })()`);
+      await eventually(async () => (await evaluate('window.__heldAttempts?.length')) === 2, 10_000);
+      expect((await api(daemon.port, daemon.token, `/sessions/${id}/resize`,
+        { body: { cols: 129, rows: 49, hold: true } })).status).toBe(200);
+      await eventually(async () => String(await evaluate(`document.querySelector('.pane-size')?.textContent`)).includes('fixed'),
+        10_000);
+      const beforeRefusal = Number(await evaluate(`window.__dashboardDiagnostics.streams.find(x =>
+        x.url.includes('/sessions/${id}/stream')).geometry.length`));
+      await evaluate('window.__heldRequest.send.call(window.__heldRequest.socket, window.__heldRequest.data)');
+      await eventually(async () => Number(await evaluate(`window.__dashboardDiagnostics.streams.find(x =>
+        x.url.includes('/sessions/${id}/stream')).geometry.length`)) > beforeRefusal, 10_000);
+      expect((await api(daemon.port, daemon.token, `/sessions/${id}/resize`,
+        { body: { cols: 129, rows: 49, hold: false } })).status).toBe(200);
+      await eventually(async () => String(await evaluate(`document.querySelector('.pane-size')?.textContent`)).includes('following'),
+        10_000);
+      const retried = await evaluate(`(() => {
+        window.__paneClients.at(-1).autoFitGrid(80, 24, true);
+        return window.__heldAttempts.slice();
+      })()`);
+      return retried;
+    },
+  });
+  const attempts = shot.probe as { cols: number; rows: number }[];
+  expect(attempts.length, JSON.stringify(attempts)).toBeGreaterThanOrEqual(3);
+  expect(attempts[2]).toEqual(attempts[1]);
+}, 120_000);
+
+it.for(['keep', 'drop', 'dismiss', 'reload', 'pop'])(
+  'a second dashboard pane follows a human fit after %s', { timeout: 120_000 }, async (action, context) => {
+  const found = await findBrowser();
+  if (!found) { context.skip(); return; }
+  const urls: string[] = [];
+  const daemon = running = await startTestDaemon({
+    launcher: (url) => { urls.push(url); return Promise.resolve({ launched: true, mode: 'isolated-app', browser: 'mock' }); },
+    idleCheckIntervalMs: 600_000,
+  });
+  const started = await api(daemon.port, daemon.token, '/sessions', { body: {
+    command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], shell: false,
+    openViewer: false, cols: 129, rows: 49,
+  } });
+  expect(started.status).toBe(200);
+  const id = String(started.body['id']);
+  expect((await api(daemon.port, daemon.token, '/dashboard/open', { method: 'POST', body: {} })).status).toBe(200);
+  const shot = await captureDashboard({ browser: found, viewerUrl: urls.at(-1)!, width: 1400, height: 900,
+    drive: true, probeOnly: true, timeoutMs: 80_000,
+    probe: `(() => document.getElementById('connection')?.textContent === 'Connected' &&
+      document.querySelector('.pane-size')?.textContent.includes('×') ? true : null)()`,
+    interact: async ({ evaluate, send }) => {
+      await evaluate(`document.querySelector('.pane button[aria-label="Fit"]').click()`);
+      await eventually(async () => !String(await evaluate(`document.querySelector('.pane-size')?.textContent`)).includes('following'), 10_000);
+      const target = await send('Target.createTarget', { url: 'about:blank' }, true) as { targetId: string };
+      const attached = await send('Target.attachToTarget', { targetId: target.targetId, flatten: true }, true) as { sessionId: string };
+      const second = async (expression: string): Promise<unknown> => {
+        const response = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true },
+          attached.sessionId) as { result: { value?: unknown }; exceptionDetails?: { text: string } };
+        if (response.exceptionDetails) throw new Error(response.exceptionDetails.text);
+        return response.result.value;
+      };
+      await send('Page.enable', {}, attached.sessionId);
+      await send('Page.addScriptToEvaluateOnNewDocument', { source: dashboardDiagnosticsScript }, attached.sessionId);
+      await send('Emulation.setDeviceMetricsOverride',
+        { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false }, attached.sessionId);
+      await send('Page.navigate', { url: `${new URL(urls.at(-1)!).origin}/dashboard` }, attached.sessionId);
+      await eventually(async () => (await second(`!!window.ShellPuppetPane &&
+        !!document.querySelector('meta[name="sp-csrf"]')`)) === true, 10_000);
+      await second(`(() => {
+        window.__secondPaneTakes = 0;
+        const send = WebSocket.prototype.send;
+        WebSocket.prototype.send = function(data) {
+          if (typeof data === 'string' && data.includes('"type":"resize"') && data.includes('"take":true'))
+            window.__secondPaneTakes++;
+          return send.call(this, data);
+        };
+        const box = document.createElement('div');
+        box.style.cssText = 'position:fixed;left:0;top:0;width:350px;height:250px';
+        document.body.append(box);
+        window.__secondPane = ShellPuppetPane.create({ container: box, sessionId: '${id}',
+          dashboardProof: document.querySelector('meta[name="sp-csrf"]').content,
+          onGeometryReady: () => setTimeout(() => {
+            window.__secondPaneAuto = window.__secondPane.autoFitGrid();
+          }, 300) });
+      })()`);
+      await new Promise(resolve => setTimeout(resolve, 2_000));
+      if (action !== 'keep') {
+        const controller = (daemon.daemon as unknown as {
+          geometryController: Map<string, { close: () => void; readyState: number }>;
+        }).geometryController.get(id);
+        expect(controller).toBeDefined();
+        if (action === 'drop') controller!.close();
+        if (action === 'dismiss') await evaluate(`document.querySelector('.pane [data-action="dismiss"]').click()`);
+        if (action === 'reload') await send('Page.reload');
+        if (action === 'pop') await evaluate(`(() => {
+          window.__releaseFrames = 0;
+          const send = WebSocket.prototype.send;
+          WebSocket.prototype.send = function(data) {
+            if (typeof data === 'string' && data.includes('"type":"release-grid"')) window.__releaseFrames++;
+            return send.call(this, data);
+          };
+        })()`);
+        if (action === 'pop') await send('Runtime.evaluate', {
+          expression: 'document.querySelector(\'.pane [data-action="pop"]\').click()',
+          returnByValue: true, userGesture: true,
+        });
+        await eventually(() => controller!.readyState === 3, 10_000);
+        await new Promise(resolve => setTimeout(resolve, 3_000));
+        if (action === 'pop') expect(await evaluate('window.__releaseFrames')).toBe(0);
+      }
+      return await second(`({ auto: window.__secondPaneAuto, takes: window.__secondPaneTakes,
+        geometry: window.__dashboardDiagnostics?.streams?.filter(x => x.url.includes('/sessions/${id}/stream'))
+          .flatMap(x => x.geometry).find(x => x.control === 'adopt'),
+        latest: window.__dashboardDiagnostics?.streams?.filter(x => x.url.includes('/sessions/${id}/stream'))
+          .flatMap(x => x.geometry).at(-1),
+        streams: window.__dashboardDiagnostics?.streams?.filter(x => x.url.includes('/sessions/${id}/stream')).map(x => x.geometry),
+        panes: document.querySelectorAll('.pane').length })`);
+    },
+  });
+  const result = shot.probe as { auto: boolean; takes: number;
+    geometry?: { dashboardTransferable?: boolean; control: string };
+    latest?: { dashboardTransferable?: boolean; control: string } };
+  expect(result.geometry?.control, JSON.stringify(result)).toBe('adopt');
+  expect(result.geometry?.dashboardTransferable, JSON.stringify(result)).toBe(false);
+  expect(result.auto, JSON.stringify(result)).toBe(false);
+  expect(result.takes).toBe(0);
+  expect(result.latest?.dashboardTransferable, JSON.stringify(result)).toBe(false);
+});
+
+let browser: string | null = null;
 const FIT_SETTLE_MS = 3000 + 250 + 100;
 beforeAll(async () => { browser = await findBrowser(); }, 60_000);
 afterEach(async () => { await running?.stop(); running = null; }, 120_000);
@@ -31,7 +257,7 @@ it('fits a settled layout once per free pane, keeps the floor, and stops when sw
     { body: { cols: 100, rows: 30, hold: true } })).status).toBe(200);
   expect((await api(daemon.port, daemon.token, '/dashboard/open', { method: 'POST', body: {} })).status).toBe(200);
   const shot = await captureDashboard({ browser, viewerUrl: urls.at(-1)!, width: 1920, height: 1080,
-    drive: true, timeoutMs: 120_000,
+    drive: true, probeOnly: true, timeoutMs: 120_000,
     beforeNavigateScript: `(() => {
       window.__resizes = [];
       const send = WebSocket.prototype.send;
@@ -351,7 +577,7 @@ it('keeps pane control through Enlarge, a closed session, and Restore in two win
   }
   expect((await api(daemon.port, daemon.token, '/dashboard/open', { method: 'POST', body: {} })).status).toBe(200);
   const shot = await captureDashboard({ browser, viewerUrl: urls.at(-1)!, width: 1920, height: 1080,
-    drive: true, timeoutMs: 120_000,
+    drive: true, probeOnly: true, timeoutMs: 120_000,
     beforeNavigateScript: `(() => {
       window.__resizes = [];
       const send = WebSocket.prototype.send;
@@ -404,6 +630,7 @@ it('keeps pane control through Enlarge, a closed session, and Restore in two win
           return secondSend.call(this, data);
         };
       })()`);
+      await send('Page.bringToFront');
       await evaluate(`document.querySelector('.pane[data-session="${ids[1]}"] button[aria-label="Enlarge"]').click()`);
       await waitFor('Enlarge', () => evaluate(`({ count: document.querySelectorAll('.pane').length,
         restore: !!document.querySelector('.pane button[aria-label="Restore"]') })`),
@@ -427,6 +654,7 @@ it('keeps pane control through Enlarge, a closed session, and Restore in two win
         const state = value as { panes?: { id: string; size: string }[] };
         return state?.panes?.length === 4 && state.panes.every(pane => !pane.size.includes('following'));
       });
+      await send('Page.bringToFront', {}, attached.sessionId);
       await waitFor('second window pane take', readSecond, value => {
         const state = value as { share?: string; panes?: { size: string }[] };
         return state?.share === '1 of 5 here, 2 windows' && state.panes?.length === 1 &&
@@ -474,7 +702,7 @@ it('takes only the final grid when two window assignments arrive in separate ste
   for (let index = 0; index < 6; index++) await startSession();
   expect((await api(daemon.port, daemon.token, '/dashboard/open', { method: 'POST', body: {} })).status).toBe(200);
   const shot = await captureDashboard({ browser, viewerUrl: urls.at(-1)!, width: 1920, height: 1080,
-    drive: true, timeoutMs: 120_000,
+    drive: true, probeOnly: true, timeoutMs: 120_000,
     probe: `(() => document.getElementById('connection')?.textContent === 'Connected' &&
       document.querySelectorAll('.pane-size').length === 6 &&
       [...document.querySelectorAll('.pane-size')].every(node => node.textContent.includes('×')) ? true : null)()`,
@@ -519,8 +747,26 @@ it('takes only the final grid when two window assignments arrive in separate ste
           entry.url.includes(`/sessions/${pane.id}/stream`)).at(-1)?.geometry.at(-1);
         return geometry?.control === 'yours' && pane.size === `${geometry.cols}×${geometry.rows}`;
       });
-      await waitFor('initial fits', async () => [await read(evaluate), await read(evaluateSecond)],
-        value => (value as WindowState[]).every(fitted));
+      const waitForQuietFit = async (step: string, run: (expression: string) => Promise<unknown>) => {
+        let last: WindowState | undefined;
+        let signature = '';
+        let quietSince = Date.now();
+        await eventually(async () => {
+          last = await read(run);
+          const current = JSON.stringify({ share: last.share, panes: last.panes.map(pane => [pane.id, pane.size]),
+            geometry: last.streams.map(entry => [entry.url, entry.readyState, entry.geometry.at(-1)]) });
+          if (current !== signature) { signature = current; quietSince = Date.now(); }
+          // Assignment settling is bounded at 900 ms; this quiet period means
+          // no earlier fit can arrive after the test clears the traffic log.
+          return fitted(last) && Date.now() - quietSince >= 1100;
+        }, 20_000, 100, step, () => last);
+      };
+      // Chromium pauses animation frames in the background document. Give each
+      // window foreground time to finish its own fit before checking both.
+      await send('Page.bringToFront');
+      await waitForQuietFit('settled initial primary fit', evaluate);
+      await send('Page.bringToFront', {}, attached.sessionId);
+      await waitForQuietFit('settled initial second fit', evaluateSecond);
       const assignment = await evaluate(`(() => {
         const post = BroadcastChannel.prototype.postMessage;
         let published;
@@ -541,6 +787,17 @@ it('takes only the final grid when two window assignments arrive in separate ste
       await evaluate(`(() => {
         const layout = ShellPuppetDashboardLayout;
         const assign = layout.assign;
+        // Keep the old window's controller alive while the transferred pane
+        // connects, so its first geometry explicitly reports that owner.
+        const close = WebSocket.prototype.close;
+        WebSocket.prototype.close = function(...args) {
+          if (this.url.includes('/sessions/${ids[3]}/stream') && !this.__delayedClose) {
+            this.__delayedClose = true;
+            setTimeout(() => close.apply(this, args), 2500);
+            return;
+          }
+          return close.apply(this, args);
+        };
         const first = { '${assignment.owner}': ${JSON.stringify(ids.slice(0, 5))},
           '${secondId}': ${JSON.stringify(ids.slice(5))} };
         const final = { '${assignment.owner}': ${JSON.stringify([...ids.slice(0, 3), ids[4]])},
@@ -564,6 +821,7 @@ it('takes only the final grid when two window assignments arrive in separate ste
           return state?.share === '4 of 6 here, 2 windows' &&
             JSON.stringify(state.panes?.map(pane => pane.id)) === JSON.stringify([...ids.slice(0, 3), ids[4]]);
         });
+      await waitForQuietFit('settled final primary fit', evaluate);
       await send('Page.bringToFront', {}, attached.sessionId);
       // Assignment is synchronous, but a take needs a daemon round trip. A
       // fitted second window says nothing about the primary window's reply.

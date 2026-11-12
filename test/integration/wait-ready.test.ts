@@ -62,18 +62,20 @@ beforeAll(async () => {
   }));
 });
 
+// DELETE waits for the process-tree stop; loaded Windows runs can exceed the
+// default 60-second hook budget even when independent sessions end in parallel.
 afterEach(async () => {
   duringViewerOpening = undefined;
   vi.restoreAllMocks();
   const listed = await api(td.port, td.token, '/sessions');
-  for (const session of listed.body['sessions'] as { id: string; exited: boolean }[]) {
-    if (!session.exited) {
-      await api(td.port, td.token, `/sessions/${session.id}/key`, { body: { key: 'ctrl+c' } });
-      await eventually(async () => (await api(td.port, td.token, `/sessions/${session.id}/snapshot`)).body['exited'] === true, 10_000);
-    }
-    await api(td.port, td.token, `/sessions/${session.id}`, { method: 'DELETE' });
-  }
-});
+  await Promise.all((listed.body['sessions'] as { id: string; exited: boolean }[]).map(async (session) => {
+    // A never-ready fixture has no reason to handle Ctrl+C. The kill endpoint
+    // owns process-tree teardown, so cleanup must not wait for the programme.
+    const removed = await api(td.port, td.token, `/sessions/${session.id}`, { method: 'DELETE' });
+    // An exited session may disappear between listing and deletion.
+    expect([200, 404]).toContain(removed.status);
+  }));
+}, 120_000);
 
 afterAll(async () => { await client?.close(); await td?.stop(); });
 

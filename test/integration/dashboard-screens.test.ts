@@ -343,6 +343,25 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
         watched: { before: initial, ...(left ? { left } : {}), ...(returned ? { returned } : {}),
           after: afterChild, afterLate, afterLateShare, childRoster, diagnostics, observed } };
     }
+    // These long-lived sessions may have a grid retained from an earlier
+    // dashboard document. Give this document control before testing a live
+    // assignment handover to the second window.
+    for (const id of sessions) {
+      await waitFor(async () => await evaluate(primary.sessionId, `(() => {
+        const stream = window.__dashboardDiagnostics.streams.find(entry =>
+          entry.url.includes('/sessions/${id}/stream') && entry.socket.readyState === 1);
+        return !!stream?.geometry.length && !!document.querySelector('.pane[data-session=${id}] button[aria-label="Fit"]');
+      })()`) === true, `pane ${id} geometry`);
+      if (String(await evaluate(primary.sessionId,
+        `document.querySelector('.pane[data-session=${id}] .pane-size')?.textContent`)).includes('fixed')) continue;
+      await evaluate(primary.sessionId,
+        `document.querySelector('.pane[data-session=${id}] button[aria-label="Fit"]').click()`);
+      await waitFor(async () => await evaluate(primary.sessionId, `(() => {
+        const stream = window.__dashboardDiagnostics.streams.find(entry =>
+          entry.url.includes('/sessions/${id}/stream') && entry.socket.readyState === 1);
+        return stream?.geometry.at(-1)?.control === 'yours';
+      })()`) === true, `pane ${id} Fit`);
+    }
     await waitFor(async () => String(await evaluate(primary.sessionId,
       "document.querySelector('.pane[data-session=s3] .pane-size')?.textContent")).includes('×'));
     const initialSize = String(await evaluate(primary.sessionId,

@@ -325,14 +325,20 @@
     lastSeen.set(ownPair(), Date.now());
     channel.postMessage({ type: 'window-roster', window: ownWindow(), token: windowToken });
   }
-  function applyAssignment(ids) {
+  function applyAssignment(ids, byWindow) {
     const next = new Set(ids);
     if (assigned !== null && next.size === assigned.size && [...next].every((id) => assigned.has(id))) return;
     settleAssignmentFits();
-    const previous = assigned === null ? new Set() : assigned;
+    const previous = assigned === null ? new Set(sorted().filter((item) => !popped.has(item.id)).map((item) => item.id)) : assigned;
     assigned = next;
     for (const id of next) if (!previous.has(id)) incomingFits.add(id);
-    for (const id of previous) if (!next.has(id)) incomingFits.delete(id);
+    for (const id of previous) if (!next.has(id)) {
+      incomingFits.delete(id);
+      const item = panes.get(id);
+      const successor = Object.entries(byWindow).some(([window, sessions]) =>
+        window !== ownPair() && Array.isArray(sessions) && sessions.includes(id));
+      if (item) deactivate(item, successor);
+    }
     arrange('assignment');
   }
   function publishAssignment() {
@@ -347,7 +353,7 @@
       ...entry, id: windowPair(entry.id, entry.instance),
     })));
     channel.postMessage({ type: 'window-assignment', owner: ownPair(), byWindow, token: windowToken });
-    applyAssignment(byWindow[ownPair()] || []);
+    applyAssignment(byWindow[ownPair()] || [], byWindow);
   }
   function removeWindow(id, instance) {
     const pair = windowPair(id, instance);
@@ -659,11 +665,11 @@
       onGridTaken: () => { focusOpenFits.delete(item.id); incomingFits.delete(item.id); },
     });
   }
-  function deactivate(item) {
+  function deactivate(item, reassigned = false) {
     if (!item.client) return;
     const client = item.client;
     item.client = null;
-    client.destroy();
+    client.destroy(reassigned);
     item.term.textContent = '';
   }
   function visible(item) {
@@ -1409,7 +1415,7 @@
     if (data.type === 'window-assignment' && popSelf === null && windows.size > 1 &&
         data.owner === windowPair(orderedWindows()[0]?.id, orderedWindows()[0]?.instance) &&
         Array.isArray(data.byWindow?.[ownPair()])) {
-      applyAssignment(data.byWindow[ownPair()]);
+      applyAssignment(data.byWindow[ownPair()], data.byWindow);
       return;
     }
     if (typeof data.id !== 'string') return;

@@ -367,6 +367,8 @@ describe('the cookie kills only with the proof and the right origin', () => {
     expect(killLines).toEqual([]);
   });
 
+  // Two sequential DELETEs each wait for a Windows process-tree stop, which
+  // can take 30 seconds under load before the assertions can finish.
   it('kills with one DELETE when the cookie, proof and origin all match, and a client token stays a client kill', async () => {
     const daemon = await startPageDaemon();
     const id = await startLive(daemon, 'target');
@@ -397,7 +399,7 @@ describe('the cookie kills only with the proof and the right origin', () => {
     expect(await sessionIds(daemon)).toEqual([]);
     const clientKills = auditEntries(daemon.home).filter((line) => line.action === 'kill' && line.session === other);
     expect(clientKills).toEqual([expect.objectContaining({ actor: 'client', action: 'kill', session: other })]);
-  });
+  }, 120_000);
 });
 
 describe('human controls in the browser', () => {
@@ -475,13 +477,14 @@ describe('human controls in the browser', () => {
             shortcut: document.getElementById('shortcut-help')?.textContent || '',
           };
           state.acted = true;
-          state.at = Date.now();
           if (kill) kill.click();
           else return JSON.stringify(Object.assign({ ok: true, deletes: 0, paneGone: false, confirms: window.__confirms.slice() }, state.stash));
           return null;
         }
         const gone = card(firstId) === null;
-        if (!gone && Date.now() - state.at < 25000) return null;
+        // The capture's deadline bounds this wait. The pane leaves after the
+        // process tree is stopped and the roster event reaches this document.
+        if (!gone) return null;
         if (gone && state.goneAt === undefined) { state.goneAt = Date.now(); return null; }
         if (gone && Date.now() - state.goneAt < 500) return null;
         const deletes = window.__fetches.filter((entry) => entry.method === 'DELETE' && entry.url.indexOf('/sessions/') !== -1);

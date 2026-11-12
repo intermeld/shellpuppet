@@ -118,6 +118,8 @@ window.ShellPuppetPane = (() => {
     let destroyed = false;
     let reconnectTimer = null;
     let pendingTakeGrid = false;
+    let pendingTakeSize = null;
+    let pendingTakeSocket = null;
     let followingExternal = false;
     let temporaryGeometry = false;
     let dashboardFontLimit = null;
@@ -741,6 +743,7 @@ window.ShellPuppetPane = (() => {
       if (destroyed) return;
       ws = new WebSocket(`ws://${location.host}/sessions/${encodeURIComponent(sessionId)}/stream`,
         dashboardProof === null ? undefined : [`sp-csrf.${dashboardProof}`]);
+      const socket = ws;
       ws.binaryType = 'arraybuffer';
 
       ws.onopen = () => {
@@ -751,6 +754,11 @@ window.ShellPuppetPane = (() => {
         if (elements.banner) elements.banner.hidden = true;
         retriesLeft = 8;
         geometryDecided = false;
+        if (pendingTakeSocket !== socket) {
+          pendingTakeGrid = false;
+          pendingTakeSize = null;
+          pendingTakeSocket = null;
+        }
       };
 
       ws.onmessage = (event) => {
@@ -782,20 +790,40 @@ window.ShellPuppetPane = (() => {
             geometryDecided = true;
             controlMode = captureMode ? 'adopt' : control.control || 'adopt';
             temporaryGeometry = control.temporary === true;
+            if (pendingTakeSocket !== null && pendingTakeSocket !== socket) {
+              pendingTakeGrid = false;
+              pendingTakeSize = null;
+              pendingTakeSocket = null;
+            }
+            if (controlMode === 'held') {
+              pendingTakeGrid = false;
+              pendingTakeSize = null;
+              pendingTakeSocket = null;
+            }
             if (dashboardProof !== null && firstGeometry && controlMode === 'yours') {
               followingExternal = false;
               pendingTakeGrid = false;
+              pendingTakeSize = null;
+              pendingTakeSocket = null;
               onGridTaken();
             }
             if (dashboardProof !== null && (!firstGeometry || control.owned === true)) {
               if (controlMode === 'yours' && pendingTakeGrid) {
                 followingExternal = false;
                 pendingTakeGrid = false;
+                pendingTakeSize = null;
+                pendingTakeSocket = null;
                 onGridTaken();
-              } else if (controlMode === 'adopt' && !followingExternal) {
+              } else if (controlMode === 'adopt' && !followingExternal &&
+                  control.dashboardTransferable !== true) {
                 pendingTakeGrid = false;
+                pendingTakeSize = null;
+                pendingTakeSocket = null;
                 followingExternal = true;
                 onOutsideGeometry();
+              } else if (controlMode === 'adopt' && control.dashboardTransferable === true && followingExternal) {
+                followingExternal = false;
+                onGeometryReady();
               }
             }
             applyGeometry(control.cols, control.rows, control.max);
@@ -804,6 +832,9 @@ window.ShellPuppetPane = (() => {
           } else if (control && control.type === 'identity') {
             showIdentity(control);
           } else if (control && control.type === 'exited') {
+            pendingTakeGrid = false;
+            pendingTakeSize = null;
+            pendingTakeSocket = null;
             showEnded(control.exitCode);
           } else if (control && control.type === 'input-refused') {
             if (control.reason === 'exited') showEnded(control.exitCode);
@@ -823,6 +854,11 @@ window.ShellPuppetPane = (() => {
       };
 
       ws.onclose = () => {
+        if (pendingTakeSocket === socket) {
+          pendingTakeGrid = false;
+          pendingTakeSize = null;
+          pendingTakeSocket = null;
+        }
         if (destroyed) return;
         if (elements.dot) elements.dot.classList.add('off');
         if (retriesLeft-- > 0) {
@@ -844,7 +880,7 @@ window.ShellPuppetPane = (() => {
     connect();
 
     return {
-      destroy() {
+      destroy(reassigned = false) {
         if (destroyed) return;
         destroyed = true;
         fontListeners.delete(refreshFontMetrics);
@@ -854,7 +890,11 @@ window.ShellPuppetPane = (() => {
         for (const type of scaledMouseEvents) document.removeEventListener(type, scaleMouseEvent, true);
         outerScroll?.removeEventListener('wheel', scrollOversizedPane, true);
         clearTimeout(reconnectTimer);
-        if (ws) ws.close();
+        if (ws) {
+          if (reassigned && dashboardProof !== null && ws.readyState === 1)
+            ws.send(JSON.stringify({ type: 'release-grid' }));
+          ws.close();
+        }
         if (redactedCapture) delete window.__shellpuppetCoverRows;
         if (pendingWrites === 0) releaseTerminal();
       },
@@ -919,6 +959,7 @@ window.ShellPuppetPane = (() => {
         const cols = Math.min(gridMax.cols, belowFloor ? floorCols : Math.max(floorCols, proposed.cols));
         const rows = Math.min(gridMax.rows, belowFloor ? floorRows : Math.max(floorRows, proposed.rows));
         if (cols === gridCols && rows === gridRows && !force) return false;
+        if (pendingTakeSocket === ws && pendingTakeSize?.cols === cols && pendingTakeSize?.rows === rows) return false;
         return this.takeGrid(cols, rows);
       },
       isTemporaryGeometry() { return temporaryGeometry; },
@@ -927,6 +968,8 @@ window.ShellPuppetPane = (() => {
         if (dashboardProof === null || !ws || ws.readyState !== 1 || !geometryDecided) return false;
         const wanted = { cols: Math.max(2, Math.min(400, cols)), rows: Math.max(2, Math.min(150, rows)) };
         pendingTakeGrid = true;
+        pendingTakeSize = wanted;
+        pendingTakeSocket = ws;
         ws.send(JSON.stringify({ type: 'resize', ...wanted, take: true }));
         return true;
       },

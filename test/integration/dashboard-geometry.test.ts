@@ -115,7 +115,7 @@ it(`lets a deliberate ${action} take the grid during a wider read`, async (conte
 }, 150_000);
 }
 
-it('lets a Pop out window take the grid during a wider read', async (context) => {
+it('keeps the grid through Pop out during a wider read', async (context) => {
   if (!browser) { context.skip(); return; }
   const { result } = await openDashboard(1400, 900, async ({ evaluate, send }) => {
     const id = String(await evaluate(`document.querySelector('.pane').dataset.session`));
@@ -135,13 +135,13 @@ it('lets a Pop out window take the grid during a wider read', async (context) =>
       returnByValue: true, userGesture: true });
     const read = await pending;
     expect(read.status, JSON.stringify(read.body)).toBe(200);
-    expect(read.body['restored']).toBe(false);
+    expect(read.body['restored']).toBe(true);
     const after = await api(running!.port, running!.token, `/sessions/${id}/snapshot`);
     expect(after.status).toBe(200);
-    expect(after.body['cols']).not.toBe(before.body['cols']);
+    expect(after.body['cols']).toBe(before.body['cols']);
     return { restored: read.body['restored'], cols: after.body['cols'] };
   }, "setInterval(() => process.stdout.write('.'), 80)");
-  expect(result).toMatchObject({ restored: false });
+  expect(result).toMatchObject({ restored: true });
 }, 150_000);
 
 it('shows the short coloured TUI text boundary inside the same grid and canvas as a full field', async (context) => {
