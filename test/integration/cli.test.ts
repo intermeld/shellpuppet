@@ -325,13 +325,13 @@ describe('shellpuppet CLI', () => {
     // Options go before the command; everything after passes through
     // verbatim, so `start goose --version` hands --version to Goose rather
     // than booting a full interactive Goose with its MCP fleet.
-    const started = await cli('start', '--no-shell', '--label', 'passthrough', process.execPath, '--version');
+    const started = await cli('start', '--no-shell', '--label', 'passthrough', process.execPath,
+      path.join(repoRoot, 'test', 'fixtures', 'passthrough-flag.mjs'), '--version');
     expect(started.code, whatHappened(started)).toBe(0);
     const id = /^(s\d+)/m.exec(started.stdout)?.[1] ?? '';
-    const wait = await cli('wait', id, '--text', 'v', '--timeout', '15000', '--debounce', '300');
+    const wait = await cli('wait', id, '--text', 'argument: --version', '--timeout', '15000', '--debounce', '300');
     expect(wait.code, whatHappened(wait)).toBe(0);
-    // node --version printed its version: proof the flag reached node.
-    expect(wait.stdout).toMatch(/v\d+\.\d+\.\d+/);
+    expect(wait.stdout).toContain('argument: --version');
     await cli('kill', id);
   });
 

@@ -642,6 +642,10 @@ export class Daemon {
   private readonly geometryController = new Map<string, WebSocket>();
   /** A dashboard document keeps its grid while a covered pane reconnects. */
   private readonly dashboardGeometryOwner = new Map<string, string>();
+  /** The credential shared by that dashboard's windows, for transfers between documents. */
+  private readonly dashboardCredentialOwner = new Map<string, string>();
+  private readonly dashboardTransferable = new Set<string>();
+  private readonly dashboardSocketCredential = new WeakMap<WebSocket, string>();
   /** External geometry acts invalidate a temporary wider read's restoration. */
   private readonly geometryEpoch = new Map<string, number>();
   private readonly widerReads = new Map<string, { abort: AbortController; done: Promise<void>; finish: () => void }>();
@@ -1981,6 +1985,8 @@ export class Daemon {
     session.onExit(() => {
       this.geometryController.delete(session.id);
       this.dashboardGeometryOwner.delete(session.id);
+      this.dashboardCredentialOwner.delete(session.id);
+      this.dashboardTransferable.delete(session.id);
       this.updateFeedSession(session.id);
     });
     session.onReady(() => this.updateFeedSession(session.id));
@@ -2152,7 +2158,7 @@ export class Daemon {
     url: URL,
     sessionId: string,
   ):
-    | { ok: true; credential: { kind: 'client' | 'viewer' | 'dashboard'; readOnly: boolean }; frozen?: { bytes: string; cols: number; rows: number } }
+    | { ok: true; credential: { kind: 'client' | 'viewer' | 'dashboard'; readOnly: boolean; dashboardToken?: string }; frozen?: { bytes: string; cols: number; rows: number } }
     | { ok: false; code: number; reason: string; audit: string | null } {
     const client = this.tokens.verify(url.searchParams.get('token'));
     if (client?.kind === 'client') {
@@ -2164,7 +2170,8 @@ export class Daemon {
 
     const dashboard = this.dashboardUpgradeRefusal(req);
     if (dashboard === null) {
-      return { ok: true, credential: { kind: 'dashboard', readOnly: false } };
+      return { ok: true, credential: { kind: 'dashboard', readOnly: false,
+        dashboardToken: this.dashboardCookieToken(req.headers.cookie)! } };
     }
 
     const viewer = cookieValues(req.headers.cookie, VIEWER_COOKIE)
@@ -3039,6 +3046,8 @@ export class Daemon {
             // An API resize takes the grid away from whichever viewport had it.
             this.geometryController.delete(id);
             this.dashboardGeometryOwner.delete(id);
+            this.dashboardCredentialOwner.delete(id);
+            this.dashboardTransferable.delete(id);
             this.announceGeometry(id, session);
           } });
         } catch (error) {
@@ -3193,6 +3202,8 @@ export class Daemon {
       this.promptStates.delete(session.id);
       this.geometryController.delete(session.id);
       this.dashboardGeometryOwner.delete(session.id);
+      this.dashboardCredentialOwner.delete(session.id);
+      this.dashboardTransferable.delete(session.id);
       this.updateFeedSession(session.id);
     });
     session.onReady(() => this.updateFeedSession(session.id));
@@ -3403,6 +3414,8 @@ export class Daemon {
     this.sessionSockets.delete(id);
     this.geometryController.delete(id);
     this.dashboardGeometryOwner.delete(id);
+    this.dashboardCredentialOwner.delete(id);
+    this.dashboardTransferable.delete(id);
     this.geometryEpoch.delete(id);
   }
 
@@ -3968,7 +3981,14 @@ export class Daemon {
       max: { cols: MAX_VIEWPORT_COLS, rows: MAX_VIEWPORT_ROWS },
       // An adopting dashboard must distinguish a fresh session from one
       // already taken in another window before scheduling its initial fit.
-      owned: this.hasGeometryController(session.id),
+      owned: this.hasGeometryController(session.id) ||
+        (this.dashboardSocketCredential.has(ws) && this.dashboardGeometryOwner.has(session.id)),
+      // Only a controller's explicit assignment handover offers its grid to
+      // another dashboard pane while the old socket is closing.
+      dashboardTransferable: this.dashboardTransferable.has(session.id) &&
+        this.dashboardCredentialOwner.has(session.id) &&
+        this.dashboardSocketCredential.has(ws) &&
+        tokensEqual(this.dashboardCredentialOwner.get(session.id)!, this.dashboardSocketCredential.get(ws)!),
       control: session.geometryHeld
         ? 'held'
         : this.geometryController.get(session.id) === ws
@@ -4009,7 +4029,7 @@ export class Daemon {
   private attachSocket(
     ws: WebSocket,
     session: Session,
-    credential: { kind: 'client' | 'viewer' | 'dashboard'; readOnly: boolean },
+    credential: { kind: 'client' | 'viewer' | 'dashboard'; readOnly: boolean; dashboardToken?: string },
     options: { passive?: boolean; frozen?: { bytes: string; cols: number; rows: number } } = {},
   ): void {
     const { readOnly } = credential;
@@ -4027,6 +4047,7 @@ export class Daemon {
     // or program behind it.
     const actor = credential.kind;
     this.sockets.add(ws);
+    if (credential.dashboardToken !== undefined) this.dashboardSocketCredential.set(ws, credential.dashboardToken);
     let watchers = this.sessionSockets.get(session.id);
     if (watchers === undefined) {
       watchers = new Map();
@@ -4083,7 +4104,8 @@ export class Daemon {
     // never picks it up by connecting, whatever the query says, and neither
     // does a `drive=0` socket. Neither inherits a controller that has left:
     // this is the only place a socket becomes the controller without sending
-    // `take`.
+    // `take`. While a dashboard's grid is remembered for its absent socket,
+    // a viewer or client socket follows it too, until a deliberate resize.
     if (
       credential.kind === 'dashboard' &&
       // The remembered proof identifies the dashboard credential, not a browser window;
@@ -4094,14 +4116,19 @@ export class Daemon {
       !this.hasGeometryController(session.id)
     ) {
       this.geometryController.set(session.id, ws);
+      this.dashboardTransferable.delete(session.id);
+      this.announceGeometry(session.id, session, { resync: false });
     } else if (
       !session.geometryHeld &&
       !readOnly &&
       !passive &&
-      !this.hasGeometryController(session.id)
+      !this.hasGeometryController(session.id) &&
+      !this.dashboardGeometryOwner.has(session.id)
     ) {
       this.geometryController.set(session.id, ws);
       this.dashboardGeometryOwner.delete(session.id);
+      this.dashboardCredentialOwner.delete(session.id);
+      this.dashboardTransferable.delete(session.id);
     }
     ws.send(JSON.stringify(options.frozen === undefined
       ? this.geometryFrame(session, ws)
@@ -4184,6 +4211,17 @@ export class Daemon {
       const text = typeof message === 'string' ? message : message.toString('utf8');
       try {
         const parsed: unknown = JSON.parse(text);
+        if (typeof parsed === 'object' && parsed !== null &&
+            (parsed as { type?: string }).type === 'release-grid') {
+          // Only the current controller can give up a dashboard grid. Another
+          // document with the same cookie cannot make a live controller yield.
+          if (credential.kind === 'dashboard' && !session.exited && !session.geometryHeld &&
+              this.geometryController.get(session.id) === ws) {
+            this.dashboardTransferable.add(session.id);
+            this.announceGeometry(session.id, session, { resync: false });
+          }
+          return;
+        }
         if (
           typeof parsed === 'object' &&
           parsed !== null &&
@@ -4232,9 +4270,15 @@ export class Daemon {
                 this.logger.warn('viewer resize failed', { id: session.id, error: String(error) });
               }
               this.geometryController.set(session.id, ws);
+              this.dashboardTransferable.delete(session.id);
               this.geometryEpoch.set(session.id, (this.geometryEpoch.get(session.id) ?? 0) + 1);
-              if (credential.kind === 'dashboard') this.dashboardGeometryOwner.set(session.id, ws.protocol);
-              else this.dashboardGeometryOwner.delete(session.id);
+              if (credential.kind === 'dashboard') {
+                this.dashboardGeometryOwner.set(session.id, ws.protocol);
+                this.dashboardCredentialOwner.set(session.id, credential.dashboardToken!);
+              } else {
+                this.dashboardGeometryOwner.delete(session.id);
+                this.dashboardCredentialOwner.delete(session.id);
+              }
               if (changed && applied) {
                 this.audit.record(actor, 'resize', session.id, {
                   cols: wanted.cols, rows: wanted.rows, hold: false,
@@ -4256,9 +4300,15 @@ export class Daemon {
                   // The controller change and epoch belong to the same queued
                   // act as the resize, before a queued wider restore can run.
                   this.geometryController.set(session.id, ws);
+                  this.dashboardTransferable.delete(session.id);
                   this.geometryEpoch.set(session.id, (this.geometryEpoch.get(session.id) ?? 0) + 1);
-                  if (credential.kind === 'dashboard') this.dashboardGeometryOwner.set(session.id, ws.protocol);
-                  else this.dashboardGeometryOwner.delete(session.id);
+                  if (credential.kind === 'dashboard') {
+                    this.dashboardGeometryOwner.set(session.id, ws.protocol);
+                    this.dashboardCredentialOwner.set(session.id, credential.dashboardToken!);
+                  } else {
+                    this.dashboardGeometryOwner.delete(session.id);
+                    this.dashboardCredentialOwner.delete(session.id);
+                  }
                   if (changed) {
                     this.audit.record(actor, 'resize', session.id, {
                       cols: wanted.cols, rows: wanted.rows, hold: false,
@@ -4373,12 +4423,15 @@ export class Daemon {
       this.sockets.delete(ws);
       this.sessionSockets.get(session.id)?.delete(ws);
       this.updateFeedSession(session.id);
-      // The grid stays where it is; it simply no longer belongs to anyone.
-      // The next single-session viewport to arrive, or a `take`, picks it
-      // up. A dashboard socket, and a `drive=0` socket, that is already
-      // connected does not inherit it.
+      // The grid stays where it is. A dashboard's grid stays remembered for
+      // that dashboard document, which takes it back when it reconnects; any
+      // other socket follows it until a deliberate resize. Otherwise the next
+      // single-session viewport to arrive, or a `take`, picks it up. A
+      // dashboard socket, and a `drive=0` socket, that is already connected
+      // does not inherit it.
       if (this.geometryController.get(session.id) === ws) {
         this.geometryController.delete(session.id);
+        this.announceGeometry(session.id, session, { resync: false });
       }
       this.lastActivity = Date.now();
       this.audit.record(actor, 'ws-close', session.id);

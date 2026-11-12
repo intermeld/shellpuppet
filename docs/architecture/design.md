@@ -1464,6 +1464,10 @@ client alone. The first takeover in another window or viewer makes the pane
 follow that grid until Fit, Enlarge or a drag on that pane with Auto fit on
 takes it back. The initial geometry frame distinguishes an unowned session,
 which still receives its initial fit, from one already owned elsewhere. A
+dashboard follower fits automatically only after the controlling window hands
+the pane over because it was moved to another window; a reload, reconnect,
+closed pane, closed window or Pop out does not give another window or viewer
+the grid. A
 drag changes only the page during pointer movement. On release, panes that
 grew fit their real terminal under the same Auto fit and geometry ownership
 rules; panes that shrank below the floor also fit to exactly 80 by 24. Panes

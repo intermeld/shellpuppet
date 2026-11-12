@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { captureDashboard } from './dashboardCapture.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
-import { api, connectWs, startTestDaemon } from './helpers.js';
+import { api, connectWs, eventually, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 
 let browser: string | null = null;
@@ -295,7 +295,14 @@ it('fits equal grids after a local font loads while respecting Auto fit, hidden,
         for (const session of sessions) { session.resize.mockClear(); session.nativeResize.mockClear(); }
         await evaluate('__reset()');
         const loaded = await loadFont(evaluate);
-        expect(loaded.panes.every(pane => pane.below && pane.whole)).toBe(true);
+        let settled = { panes: loaded.panes, frames: loaded.frames };
+        await eventually(async () => {
+          settled = { panes: await evaluate('__views()') as PaneView[], frames: await evaluate('__frames()') as unknown[] };
+          return settled.panes.length === 2 && settled.panes.every(pane => pane.below && pane.whole);
+        }, 10_000, 100, 'font-loaded floor fit', () => ({ ...loaded, ...settled }));
+        loaded.panes = settled.panes;
+        loaded.frames = settled.frames;
+        expect(loaded.panes.every(pane => pane.below && pane.whole), JSON.stringify(loaded)).toBe(true);
         expect.soft(loaded.panes.map(pane => pane.grid)).toEqual(autoFit ?
           [{ cols: 80, rows: 24 }, { cols: 80, rows: 24 }] : before.map(pane => pane.grid));
         expect(loaded.panes[0]!.font).toBe(loaded.panes[1]!.font);

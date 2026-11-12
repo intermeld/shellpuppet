@@ -61,8 +61,8 @@ const running: PaneDaemon[] = [];
 
 afterEach(async () => {
   const pending = running.splice(0);
-  for (const daemon of pending) await daemon.stop();
-});
+  await Promise.all(pending.map((daemon) => daemon.stop()));
+}, 120_000);
 
 async function startPane(): Promise<PaneDaemon> {
   const home = makeTempHome('dash-pane-');
@@ -147,7 +147,7 @@ async function startGrid(daemon: PaneDaemon, label: string, echo = false): Promi
       rows: 34,
     },
   });
-  expect(started.status).toBe(200);
+  expect(started.status, JSON.stringify(started.body)).toBe(200);
   return String(started.body['id']);
 }
 
@@ -291,6 +291,132 @@ async function gridOf(daemon: PaneDaemon, id: string): Promise<{ cols: number; r
     screen: String(snapshot.body['screen']),
   };
 }
+
+it('transfers a dashboard grid only after its controller releases it', async () => {
+  const daemon = await startPane();
+  const id = await startGrid(daemon, 'window-transfer');
+  const heldId = await startGrid(daemon, 'held-transfer');
+  const foreignId = await startGrid(daemon, 'foreign-transfer');
+  const { cookie, proof } = await openDashboard(daemon);
+  const sockets: { close: () => void }[] = [];
+  try {
+    const first = await connectDash(daemon.port, id, cookie, proof);
+    sockets.push(first);
+    first.send(JSON.stringify({ type: 'resize', cols: 101, rows: 31, take: true }));
+    await first.waitForControl(frame => frame.type === 'geometry' && frame.control === 'yours' && frame.cols === 101);
+
+    const second = await connectDash(daemon.port, id, cookie, proof);
+    sockets.push(second);
+    const adopted = await second.waitForControl(frame => frame.type === 'geometry' && frame.cols === 101);
+    expect(adopted).toMatchObject({ control: 'adopt', owned: true, dashboardTransferable: false });
+    second.send(JSON.stringify({ type: 'release-grid' }));
+    first.send(JSON.stringify({ type: 'resize', cols: 102, rows: 32, take: true }));
+    const stillOwned = await second.waitForControl(frame => frame.type === 'geometry' && frame.cols === 102);
+    expect(stillOwned).toMatchObject({ control: 'adopt', dashboardTransferable: false });
+
+    first.send(JSON.stringify({ type: 'release-grid' }));
+    const offered = await second.waitForControl(frame => frame.type === 'geometry' &&
+      frame.cols === 102 && frame.dashboardTransferable === true);
+    expect(offered).toMatchObject({ control: 'adopt', owned: true });
+    second.send(JSON.stringify({ type: 'resize', cols: 103, rows: 33, take: true }));
+    const taken = await second.waitForControl(frame => frame.type === 'geometry' && frame.cols === 103);
+    expect(taken).toMatchObject({ control: 'yours', dashboardTransferable: false });
+
+    expect((await api(daemon.port, daemon.token, `/sessions/${heldId}/resize`,
+      { body: { cols: 120, rows: 34, hold: true } })).status).toBe(200);
+    const held = await connectDash(daemon.port, heldId, cookie, proof);
+    sockets.push(held);
+    expect(await held.waitForControl(frame => frame.type === 'geometry')).toMatchObject({
+      control: 'held', dashboardTransferable: false,
+    });
+    const beforeRefusal = held.controls().length;
+    held.send(JSON.stringify({ type: 'resize', cols: 110, rows: 30, take: true }));
+    await eventually(() => held.controls().length > beforeRefusal, 10_000);
+    expect(held.controls().at(-1)).toMatchObject({ type: 'geometry', control: 'held', cols: 120 });
+    expect((await gridOf(daemon, heldId))).toMatchObject({ cols: 120, rows: 34 });
+
+    const viewer = await connectWs(daemon.port, foreignId, daemon.token);
+    sockets.push(viewer);
+    await viewer.waitForControl(frame => frame.type === 'geometry' && frame.control === 'yours');
+    const other = await connectDash(daemon.port, foreignId, cookie, proof);
+    sockets.push(other);
+    expect(await other.waitForControl(frame => frame.type === 'geometry')).toMatchObject({
+      control: 'adopt', owned: true, dashboardTransferable: false,
+    });
+  } finally {
+    for (const socket of sockets) socket.close();
+  }
+}, 120_000);
+
+it('keeps a follower on the human grid when the controller socket drops', async () => {
+  const daemon = await startPane();
+  const id = await startGrid(daemon, 'dropped-controller');
+  const { cookie, proof } = await openDashboard(daemon);
+  const first = await connectDash(daemon.port, id, cookie, proof);
+  const follower = await connectDash(daemon.port, id, cookie, proof);
+  try {
+    first.send(JSON.stringify({ type: 'resize', cols: 178, rows: 52, take: true }));
+    await first.waitForControl(frame => frame.type === 'geometry' && frame.control === 'yours' && frame.cols === 178);
+    await follower.waitForControl(frame => frame.type === 'geometry' && frame.control === 'adopt' && frame.cols === 178);
+    first.close();
+    await eventually(() => !(daemon.daemon as unknown as { geometryController: Map<string, unknown> })
+      .geometryController.has(id), 10_000);
+    expect(follower.controls().filter(frame => frame.type === 'geometry').at(-1)).toMatchObject({
+      cols: 178, rows: 52, control: 'adopt', dashboardTransferable: false,
+    });
+    expect(await gridOf(daemon, id)).toMatchObject({ cols: 178, rows: 52 });
+    const page = await raw(daemon.port, 'GET', '/dashboard', {
+      'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document', 'sec-fetch-site': 'same-origin', cookie,
+    });
+    expect(page.status).toBe(200);
+    const newcomer = await connectDash(daemon.port, id, cookie, csrfMeta(page.body));
+    try {
+      expect(await newcomer.waitForControl(frame => frame.type === 'geometry')).toMatchObject({
+        cols: 178, rows: 52, control: 'adopt', owned: true, dashboardTransferable: false,
+      });
+    } finally { newcomer.close(); }
+    const restored = await connectDash(daemon.port, id, cookie, proof);
+    try {
+      expect(await restored.waitForControl(frame => frame.type === 'geometry')).toMatchObject({
+        cols: 178, rows: 52, control: 'yours', dashboardTransferable: false,
+      });
+      expect(follower.controls().filter(frame => frame.type === 'geometry').at(-1))
+        .toMatchObject({ control: 'adopt', dashboardTransferable: false });
+    } finally { restored.close(); }
+  } finally { first.close(); follower.close(); }
+}, 120_000);
+
+it('does not offer a transferred grid after the original controller returns', async () => {
+  const daemon = await startPane();
+  const id = await startGrid(daemon, 'restored-controller');
+  const { cookie, proof } = await openDashboard(daemon);
+  const first = await connectDash(daemon.port, id, cookie, proof);
+  const follower = await connectDash(daemon.port, id, cookie, proof);
+  try {
+    first.send(JSON.stringify({ type: 'resize', cols: 101, rows: 31, take: true }));
+    await first.waitForControl(frame => frame.type === 'geometry' && frame.control === 'yours' && frame.cols === 101);
+    await follower.waitForControl(frame => frame.type === 'geometry' && frame.control === 'adopt' && frame.cols === 101);
+    first.send(JSON.stringify({ type: 'release-grid' }));
+    await follower.waitForControl(frame => frame.type === 'geometry' && frame.dashboardTransferable === true);
+    first.close();
+    await eventually(() => !(daemon.daemon as unknown as { geometryController: Map<string, unknown> })
+      .geometryController.has(id), 10_000);
+    const restored = await connectDash(daemon.port, id, cookie, proof);
+    try {
+      expect(await restored.waitForControl(frame => frame.type === 'geometry')).toMatchObject({
+        control: 'yours', dashboardTransferable: false,
+      });
+      await eventually(() => follower.controls().filter(frame => frame.type === 'geometry').at(-1)
+        ?.dashboardTransferable === false, 10_000);
+      const later = await connectDash(daemon.port, id, cookie, proof);
+      try {
+        expect(await later.waitForControl(frame => frame.type === 'geometry')).toMatchObject({
+          cols: 101, rows: 31, control: 'adopt', dashboardTransferable: false,
+        });
+      } finally { later.close(); }
+    } finally { restored.close(); }
+  } finally { first.close(); follower.close(); }
+}, 120_000);
 
 function resizes(home: string, id: string): AuditLine[] {
   return auditOf(home).filter((line) => line.action === 'resize' && line.session === id);
@@ -836,4 +962,38 @@ describe('the cookie still opens nothing else', () => {
     const ids = ((list.body['sessions'] as { id: string }[] | undefined) ?? []).map((session) => session.id);
     expect(ids).toEqual([]);
   });
+});
+
+describe('a remembered dashboard grid stays with its dashboard while the socket is away', () => {
+  for (const kind of ['client', 'viewer'] as const) {
+    it(`a ${kind} socket that arrives follows it until a deliberate resize`, async () => {
+      const daemon = await startPane();
+      const id = await startGrid(daemon, `remembered-${kind}`);
+      const { cookie, proof } = await openDashboard(daemon);
+      const owner = await connectDash(daemon.port, id, cookie, proof);
+      owner.send(JSON.stringify({ type: 'resize', cols: 178, rows: 52, take: true }));
+      await owner.waitForControl((frame) => frame['type'] === 'geometry' && frame['control'] === 'yours' &&
+        frame['cols'] === 178);
+      owner.close();
+      await eventually(() => !(daemon.daemon as unknown as { geometryController: Map<string, unknown> })
+        .geometryController.has(id), 10_000);
+      let arrival;
+      if (kind === 'client') {
+        arrival = await connectWs(daemon.port, id, daemon.token);
+      } else {
+        const minted = await api(daemon.port, daemon.token, `/sessions/${id}/viewer`, { body: {} });
+        arrival = await connectWsWithCookie(daemon.port, id, await redeemViewerUrl(String(minted.body['viewerUrl'])));
+      }
+      try {
+        expect(await arrival.waitForControl((frame) => frame['type'] === 'geometry')).toMatchObject({
+          cols: 178, rows: 52, control: 'adopt',
+        });
+        // A resize the arriving page sends is its deliberate act, and still wins.
+        arrival.ws.send(JSON.stringify({ type: 'resize', cols: 100, rows: 30 }));
+        await eventually(async () => (await gridOf(daemon, id)).cols === 100);
+        expect(await arrival.waitForControl((frame) => frame['type'] === 'geometry' &&
+          frame['control'] === 'yours')).toMatchObject({ cols: 100, rows: 30 });
+      } finally { arrival.close(); }
+    }, 120_000);
+  }
 });

@@ -39,6 +39,31 @@ async function settleFocusGrid(evaluate: (expression: string) => Promise<unknown
   throw new Error(`Focus pane grids did not settle within ${String(limitMs)} ms: ${previous}`);
 }
 
+/** Let the initial five pane takes finish before measuring traffic caused by a drag. */
+async function settleGrid(evaluate: (expression: string) => Promise<unknown>, limitMs = 20_000) {
+  const deadline = Date.now() + limitMs;
+  let last: unknown;
+  while (Date.now() < deadline) {
+    const state = await evaluate(`(() => {
+      const d = window.__dashboardDiagnostics;
+      const panes = [...document.querySelectorAll('#panes .pane')].map(pane => {
+        const stream = d.streams.filter(entry => entry.url.includes('/sessions/' + pane.dataset.session + '/stream')).at(-1);
+        const geometry = stream?.geometry.at(-1);
+        return { label: pane.querySelector('.pane-size')?.textContent, geometry };
+      });
+      return { layout: document.getElementById('panes').dataset.layout, panes,
+        pendingFrames: d.pendingFrames, pendingAnimationFrames: d.pendingAnimationFrames };
+    })()`) as { layout: string; panes: { label?: string; geometry?: { cols: number; rows: number; control: string } }[];
+      pendingFrames: number; pendingAnimationFrames: number };
+    last = state;
+    if (state.layout === 'grid' && state.panes.length === 5 && state.pendingFrames === 0 &&
+        state.pendingAnimationFrames === 0 && state.panes.every(pane => pane.geometry?.control === 'yours' &&
+          pane.label === `${pane.geometry.cols}×${pane.geometry.rows}`)) return;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  throw new Error(`Grid pane fits did not settle within ${String(limitMs)} ms: ${JSON.stringify(last)}`);
+}
+
 async function exercise(count: number, interact: Parameters<typeof captureDashboard>[0]['interact'], probeOnly = false) {
   const urls: string[] = [];
   daemon = await startTestDaemon({
@@ -184,7 +209,7 @@ it('drags uneven Grid columns and rows with minimums and keyboard steps, then re
   if (!browser) { context.skip(); return; }
   const shot = await exercise(5, async ({ evaluate, send }) => {
     await evaluate(`document.getElementById('grid').click()`);
-    await new Promise(resolve => setTimeout(resolve, 500));
+    await settleGrid(evaluate);
     const first = await evaluate(`(() => {
       const d = document.querySelector('.pane-divider[data-axis="column"]');
       window.__resizes.length = 0;
