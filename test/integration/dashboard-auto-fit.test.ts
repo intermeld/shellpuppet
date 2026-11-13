@@ -707,6 +707,15 @@ it('takes only the final grid when two window assignments arrive in separate ste
       document.querySelectorAll('.pane-size').length === 6 &&
       [...document.querySelectorAll('.pane-size')].every(node => node.textContent.includes('×')) ? true : null)()`,
     interact: async ({ evaluate, send }) => {
+      // Capture the real assignment published when the second window joins.
+      await evaluate(`(() => {
+        const post = BroadcastChannel.prototype.postMessage;
+        BroadcastChannel.prototype.postMessage = function(data) {
+          if (data.type === 'window-assignment') window.__publishedAssignment = data;
+          return post.call(this, data);
+        };
+        window.__restoreAssignmentCapture = () => { BroadcastChannel.prototype.postMessage = post; };
+      })()`);
       const target = await send('Target.createTarget', { url: 'about:blank' }, true) as { targetId: string };
       const attached = await send('Target.attachToTarget', { targetId: target.targetId, flatten: true }, true) as { sessionId: string };
       const evaluateSecond = async (expression: string): Promise<unknown> => {
@@ -768,15 +777,8 @@ it('takes only the final grid when two window assignments arrive in separate ste
       await send('Page.bringToFront', {}, attached.sessionId);
       await waitForQuietFit('settled initial second fit', evaluateSecond);
       const assignment = await evaluate(`(() => {
-        const post = BroadcastChannel.prototype.postMessage;
-        let published;
-        BroadcastChannel.prototype.postMessage = function(data) {
-          if (data.type === 'window-assignment') published = data;
-          return post.call(this, data);
-        };
-        window.dispatchEvent(new Event('resize'));
-        BroadcastChannel.prototype.postMessage = post;
-        return published;
+        __restoreAssignmentCapture();
+        return window.__publishedAssignment;
       })()`) as { owner: string; byWindow: Record<string, string[]> };
       expect(assignment?.owner).toBeTruthy();
       const secondId = Object.keys(assignment.byWindow).find(id => id !== assignment.owner);

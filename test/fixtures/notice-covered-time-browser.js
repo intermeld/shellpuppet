@@ -1,0 +1,125 @@
+// Real xterm cursor events with the product styles, without PTY timer jitter.
+window.noticeCoveredTimeCases = async (mode, kind) => {
+  const results = [];
+  for (const rows of [24, 150]) for (const initial of kind === 'equal' ? [1, rows - 2] : [0]) {
+    const p = makeNoticePane(mode, rows);
+    try {
+      await p.move(1); await p.move(initial);
+      await noticePause(1100); p.show(); await noticePause(50);
+      const expectedSide = kind === 'equal' ? p.side() : 'top';
+      const restRows = kind === 'adjacent' ? [rows - 4, rows - 3, rows - 2] :
+        kind === 'equal' && initial === 1 ? [0] : [rows - 2];
+      const start = performance.now(), visits = [], placements = new Set();
+      const subscription = p.term.onCursorMove(() => visits.push({ row: p.term.buffer.active.cursorY, at: performance.now() }));
+      let samples = 0, covered = 0, follow = null, frame = 0, rects = null;
+      try {
+        while (performance.now() - start < 4200) {
+          if (kind === 'equal') {
+            await p.move(0); await noticePause(30);
+            placements.add(p.side());
+            await p.move(rows - 2); await noticePause(30);
+          } else if (kind === 'adjacent') {
+            await p.move(0); await noticePause(12);
+            for (const row of restRows) { await p.move(row); await noticePause(16); }
+          } else {
+            for (const row of [0, Math.floor(rows / 3), Math.floor(rows / 2)]) {
+              await p.move(row); await noticePause(5);
+            }
+            await p.move(rows - 2); await noticePause(35);
+          }
+          const overlap = restRows.some(row => p.measure(row).overlap);
+          if (!overlap) follow ??= performance.now() - start;
+          if (performance.now() - start > 1700) {
+            rects ??= p.rects(); samples++; if (overlap) covered++;
+            placements.add(p.side());
+          }
+          frame++;
+        }
+      } finally { subscription.dispose(); }
+      const end = performance.now(), weights = {};
+      for (let i = 0; i < visits.length; i++) {
+        const visit = visits[i];
+        const duration = Math.max(0, (visits[i + 1]?.at ?? end) - Math.max(start + 1700, visit.at));
+        weights[visit.row] = (weights[visit.row] || 0) + duration;
+      }
+      results.push({ rows, kind, initial, expectedSide, restRows, samples, covered, follow, weights, frame,
+        placements: [...placements], rects: p.rects() - rects });
+    } finally { p.destroy(); }
+  }
+  return results;
+};
+
+window.noticeMovingRestCases = async (mode, checkSustained = false,
+  intervals = [500, 750, 1000, 1500, 2000]) => {
+  const results = [];
+  for (const rows of [24, 150]) for (const interval of intervals) {
+    for (const excursion of [0, Math.floor(rows / 2)]) {
+      const p = makeNoticePane(mode, rows);
+      let observer;
+      try {
+        await p.move(1); await p.move(0); await noticePause(650); p.show();
+        await noticePause(1100);
+        observer = observeDeliveredNotice(p.term, p.notices, performance.now(), rows - 2);
+        const legs = [], sustained = [];
+        const follow = async (row, duration) => {
+          const start = performance.now();
+          let follow = null, samples = 0, covered = 0;
+          while (performance.now() - start < duration) {
+            await p.move(excursion); await noticePause(5);
+            await p.move(row); await noticePause(23);
+            const overlap = p.measure(row).overlap;
+            if (!overlap) follow ??= performance.now() - start;
+            if (performance.now() - start >= Math.min(duration - 70, checkSustained ? 1500 : 650)) {
+              samples++; if (overlap) covered++;
+            }
+          }
+          return { row, follow, samples, covered };
+        };
+        for (let leg = 0; leg < 4; leg++) {
+          legs.push(await follow(leg % 2 ? 1 : rows - 2, interval));
+        }
+        // These phases still contain short excursions. Their observations
+        // remain repaint evidence, even when the dominant row stays for a
+        // long phase. Only the final uninterrupted row is a genuine rest.
+        if (checkSustained) for (const row of [rows - 2, 1]) {
+          sustained.push(await follow(row, 1700));
+        }
+        await p.move(rows - 2); await noticePause(1050);
+        results.push({ rows, interval, excursion, legs, sustained, final: p.measure(), cadence: observer.stop() });
+      } finally { observer?.stop(); p.destroy(); }
+    }
+  }
+  return results;
+};
+
+window.noticeEndedLayoutCases = async mode => {
+  const results = [];
+  for (const rows of [24, 150]) for (const row of [0, rows - 2]) {
+    for (const end of ['exited', 'identity', 'input-refused']) {
+      const p = makeNoticePane(mode, rows);
+      try {
+        await p.move(1); await p.move(row); await noticePause(650); p.show();
+        p.notices.firstChild.style.minHeight = '1000px'; p.pane.relayout(false);
+        const steps = [];
+        const measure = name => {
+          const screen = p.term.element.querySelector('.xterm-screen').getBoundingClientRect();
+          const box = p.notices.getBoundingClientRect();
+          steps.push({ name, anchorError: Math.abs(p.side() === 'top' ? box.top - screen.top : box.bottom - screen.bottom),
+            capError: Math.abs(parseFloat(p.notices.style.maxHeight) - screen.height / 3),
+            heightError: Math.max(0, box.height - screen.height / 3) });
+        };
+        measure('before');
+        p.control(end === 'identity' ? { type: end, exited: true, exitCode: 0 } :
+          { type: end, reason: 'exited', exitCode: 0 });
+        p.pane.setFontOverride(8); measure('font');
+        p.wrap.style.height = '300px'; p.pane.relayout(false); measure('resize');
+        p.pane.setDashboardFontLimit(7); measure('font limit');
+        p.pane.relayout(true); measure('fit');
+        p.show(); measure('alert');
+        await noticePause(700); measure('settled');
+        results.push({ rows, row, end, steps });
+      } finally { p.destroy(); }
+    }
+  }
+  return results;
+};
