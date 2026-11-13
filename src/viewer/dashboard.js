@@ -117,6 +117,8 @@
     if (diagnostics.arrangeTriggers.length > 20) diagnostics.arrangeTriggers.shift();
   }
   let lastLayout = null;
+  let lastArrangedWidth = null;
+  let lastArrangedHeight = null;
   let lastStructure = null;
   let lastVisibilityGeometry = null;
   if (popSelf === null) windows.set(ownPair(), { id: windowId, instance: windowInstance, rank: windowRank, openedAt, loadAt, key: screenKey,
@@ -949,6 +951,8 @@
       renderShareCount();
       const width = root.clientWidth - 12;
       const height = root.clientHeight - 12;
+      lastArrangedWidth = width;
+      lastArrangedHeight = height;
       const columns = Math.ceil(Math.sqrt(items.length));
       const rows = Math.ceil(items.length / Math.max(1, columns));
       if (items.length > 0) clampTracks(width, height, columns, rows);
@@ -1481,7 +1485,11 @@
     void Promise.resolve(next).catch(() => showError('The browser did not make this window full screen.'));
   });
   if (channel !== null) channel.onmessage = onWindowMessage;
-  window.addEventListener('resize', () => { advertise(); arrange('window resize'); });
+  window.addEventListener('resize', () => {
+    advertise();
+    if (root.clientWidth - 12 !== lastArrangedWidth || root.clientHeight - 12 !== lastArrangedHeight)
+      arrange('window resize');
+  });
   window.addEventListener('beforeunload', () => {
     endActiveDivider?.();
     leaveWindow();

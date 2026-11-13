@@ -68,7 +68,7 @@ button.active { background: #3d2c14; border-color: #8a6d3b; color: #e8c284; }
   overflow: hidden; position: relative;
 }
 /* Notices paint above the terminal and never participate in its fit box.
-   The pane places them in the half away from the cursor. */
+   The pane keeps the cursor's resting row clear. */
 #notices {
   position: absolute; z-index: 2; left: 8px; right: 8px;
   box-sizing: border-box; overflow-y: auto; pointer-events: none;
