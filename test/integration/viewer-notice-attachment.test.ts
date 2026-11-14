@@ -5,6 +5,7 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { captureViewer } from '../../src/daemon/screenshot.js';
 import type { CaptureOptions } from '../../src/daemon/screenshot.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
+import { noticeFrameLimitScript } from './noticeFrameLimit.js';
 import { api, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 import { assessDeliveredCadence, deliveredNoticeScript, recordDeliveredCadence } from './noticeCadence.js';
@@ -76,6 +77,7 @@ const observe = `(() => {
     const gaps = times.slice(1).map((time, index) => time - times[index]).sort((a, b) => a - b);
     return { frames: gaps.length, samples: gaps.length,
       frameInterval: gaps[Math.floor(gaps.length / 2)] ?? null,
+      maxFrameGap: gaps.at(-1) ?? null,
       frameSpan: times.length < 2 ? 0 : times.at(-1) - times[0], observedMs: end - start };
   };
   window.__showEndBanner = () => {
@@ -122,7 +124,7 @@ async function withPage(mode: string, rows: number,
   await captureViewer({ browser: browser!, viewerUrl, width: 1000, height: 900,
     cpuThrottlingRate: Number(process.env['NOTICE_CPU_RATE'] ?? 1),
     drive: true, probeOnly: true, timeoutMs: 90_000,
-    beforeNavigateScript: observe + ';window.open = url => { window.__openedURL = url; return window.__openedHandle = { closed: false }; };',
+    beforeNavigateScript: noticeFrameLimitScript + ';' + observe + ';window.open = url => { window.__openedURL = url; return window.__openedHandle = { closed: false }; };',
     probe: ['long', 'staged', 'spinner', 'equal', 'rword', 'rlong', 'rrest', 'rchange'].includes(cadence) ?
       'window.__notice && window.__noticeSnapshotParsed && !__notice.alert.hidden' :
       'window.__notice && !__notice.alert.hidden && __notice.term.buffer.active.cursorY > 0',
@@ -194,26 +196,41 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
       const result = await evaluate(`(async () => {
         const start = performance.now(), prompt = __notice.term.rows - 2;
         let firstClear = null, changes = 0, coveredAtRest = 0, restSamples = 0, last = __measure().side;
+        let firstRestAt = null, lastRestAt = null;
         while (performance.now() - start < 10000) {
           const now = performance.now() - start, measure = __measure(prompt);
           if (measure.side !== last) { changes++; last = measure.side; }
           if (!measure.overlap) firstClear ??= now;
           if (now >= 2500 && __notice.term.buffer.active.cursorY === prompt) {
+            firstRestAt ??= now; lastRestAt = now;
             restSamples++; if (measure.overlap) coveredAtRest++;
           }
           await __pause(4);
         }
         const vertical = __visits.filter((visit, i) => i === 0 || visit.row !== __visits[i - 1].row);
         const legs = vertical.slice(1).map((visit, i) => visit.at - vertical[i].at);
-        return { firstClear, changes, restSamples, coveredAtRest, maxLeg: Math.max(...legs), visits: __visits.length,
+        return { firstClear, changes, restSamples, coveredAtRest, firstRestAt, lastRestAt,
+          restTiming: __noticeFrameSummary(start + 2500, performance.now()),
+          maxLeg: Math.max(...legs), visits: __visits.length,
           cadence: __delivered.stop() };
       })()`) as { firstClear: number | null; changes: number; restSamples: number; coveredAtRest: number;
-        maxLeg: number; visits: number; cadence: DeliveredCadence };
+        firstRestAt: number | null; lastRestAt: number | null; maxLeg: number; visits: number;
+        restTiming: { frames: number; frameInterval: number; maxFrameGap: number; frameSpan: number; observedMs: number };
+        cadence: DeliveredCadence };
       const assessment = assessDeliveredCadence(result.cadence);
       recordDeliveredCadence(`${mode}-${String(rows)}-${cadence}`, result.cadence);
       const details = JSON.stringify({ ...result, cadence: assessment,
         timing: await evaluate('__noticeFrameSummary(0)') });
-      expect.soft(result.restSamples, details).toBeGreaterThan(100);
+      expect.soft(result.firstRestAt, details).not.toBeNull();
+      expect.soft(result.lastRestAt! - result.firstRestAt!, details).toBeGreaterThan(2000);
+      expect.soft(result.restSamples, details).toBeGreaterThanOrEqual(
+        Math.floor((result.lastRestAt! - result.firstRestAt!) / 200));
+      expect.soft(result.restTiming.frameSpan, details).toBeGreaterThan(6000);
+      expect.soft(result.restTiming.frames, details).toBeGreaterThanOrEqual(
+        Math.floor(result.restTiming.frameSpan / 200));
+      expect.soft(result.restTiming.frameInterval, details).toBeLessThan(200);
+      expect.soft(result.restTiming.maxFrameGap, details).toBeLessThan(500);
+      expect.soft(result.restTiming.observedMs - result.restTiming.frameSpan, details).toBeLessThan(500);
       expect.soft(result.cadence.legs.length, details).toBeGreaterThan(4);
       expect.soft(assessment.violations, details).toEqual([]);
       if (!assessment.rests.length) {
@@ -255,15 +272,17 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
           firstRestAt, lastRestAt, ...__noticeFrameSummary(start, performance.now()) };
       })()`) as { firstClear: number | null; changes: number; restSamples: number;
         coveredAtRest: number; side: string; firstRestAt: number | null; lastRestAt: number | null;
-        frames: number; frameInterval: number; frameSpan: number; observedMs: number };
+        frames: number; frameInterval: number; maxFrameGap: number; frameSpan: number; observedMs: number };
       if (process.env['NOTICE_DIAGNOSTICS']) process.stderr.write(JSON.stringify({ mode, rows, result }) + '\n');
       const details = JSON.stringify(result);
       expect.soft(result.firstClear, details).not.toBeNull();
       expect.soft(result.firstClear!, details).toBeLessThan(2500);
       expect.soft(result.changes, details).toBe(1);
-      expect.soft(result.restSamples, details).toBeGreaterThan(5);
-      expect.soft(result.frames, details).toBeGreaterThan(20);
+      expect.soft(result.restSamples, details).toBeGreaterThanOrEqual(
+        Math.floor((result.lastRestAt! - result.firstRestAt!) / 200));
+      expect.soft(result.frames, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
       expect.soft(result.frameInterval, details).toBeLessThan(200);
+      expect.soft(result.maxFrameGap, details).toBeLessThan(500);
       expect.soft(result.frameSpan, details).toBeGreaterThan(5500);
       expect.soft(result.observedMs - result.frameSpan, details).toBeLessThan(500);
       expect.soft(result.firstRestAt, details).not.toBeNull();
@@ -310,11 +329,12 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
           initialSide, finalSide: last,
           maxGap, longGaps: gaps.filter(gap => gap.ms > 500), weights, phases: __noticePhases.length,
           phaseMismatches: __noticePhases.filter(phase => phase.observedRow !== phase.row).length, hidden: __notice.alert.hidden,
-          cadence: __delivered.stop() };
+          cadence: __delivered.stop(), ...__noticeFrameSummary(start + 1700, end) };
       })()`) as { samples: number; restSamples: number; covered: number; coveredAtRest: number;
         changes: number; changeTimes: number[]; maxGap: number; phases: number; phaseMismatches: number;
         longGaps: { row: number; at: number; ms: number }[];
-        weights: Record<string, number>; hidden: boolean; cadence: DeliveredCadence };
+        weights: Record<string, number>; hidden: boolean; cadence: DeliveredCadence;
+        frames: number; frameInterval: number; maxFrameGap: number; frameSpan: number; observedMs: number };
       // The first header follows the preceding lower phase; its inner return
       // is not a cycle boundary. Complete delivered words determine the ratio.
       // All samples, including the unfinished final cycle, still face every
@@ -324,8 +344,13 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
       recordDeliveredCadence(`${mode}-${String(rows)}-${cadence}`, result.cadence);
       const details = JSON.stringify({ ...result, cadence: assessment,
         timing: await evaluate('__noticeFrameSummary(0)') });
-      expect.soft(result.samples, details).toBeGreaterThan(100);
-      expect.soft(result.restSamples, details).toBeGreaterThan(100);
+      expect.soft(result.samples, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
+      expect.soft(result.restSamples, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
+      expect.soft(result.frames, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
+      expect.soft(result.frameInterval, details).toBeLessThan(200);
+      expect.soft(result.maxFrameGap, details).toBeLessThan(500);
+      expect.soft(result.frameSpan, details).toBeGreaterThan(4000);
+      expect.soft(result.observedMs - result.frameSpan, details).toBeLessThan(500);
       expect.soft(result.hidden, details).toBe(false);
       expect.soft(assessment.violations, details).toEqual([]);
       if (!assessment.rests.length) {
