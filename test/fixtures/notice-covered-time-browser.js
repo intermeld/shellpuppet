@@ -47,9 +47,15 @@ window.noticeCoveredTimeCases = async (mode, kind) => {
             await p.move(0); await noticePause(12);
             for (const row of restRows) { await p.move(row); await noticePause(16); }
           } else {
+            // The resting row's hold follows the delivered time of the rest of
+            // the cycle, so it stays the plurality without becoming a single
+            // majority at any frame rate.
+            const cycleAt = performance.now();
             await p.move(0); await waitFrames(1);
             await p.move(Math.floor(rows / 2)); await waitFrames(1);
-            await p.move(rows - 2); await waitFrames(2);
+            await p.move(rows - 2);
+            const restAt = performance.now();
+            do { await waitFrames(1); } while (performance.now() - restAt < (restAt - cycleAt) * 0.6);
           }
           frame++;
         }
