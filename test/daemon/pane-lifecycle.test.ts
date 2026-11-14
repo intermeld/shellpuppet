@@ -12,6 +12,7 @@ function fixture(captureMode = false) {
     rows = 24;
     options = { fontSize: 13 };
     element = { querySelector: () => null, style: {} };
+    buffer = { active: { cursorX: 0, cursorY: 0, baseY: 0, viewportY: 0 } };
     _core = {
       _coreBrowserService: { onDprChange: () => ({ dispose() {} }) },
       _viewport: { queueSync() {} },
@@ -19,7 +20,7 @@ function fixture(captureMode = false) {
     };
     open() {}
     attachCustomKeyEventHandler() {}
-    onCursorMove() {}
+    onCursorMove() { return { dispose() {} }; }
     onData() {}
     write(data: string | Uint8Array, done: () => void) {
       calls.push(data.length === 0 ? 'marker' : 'write');
@@ -42,6 +43,9 @@ function fixture(captureMode = false) {
     queueMicrotask,
     requestAnimationFrame: (callback: () => void) => { frames.push(callback); },
     cancelAnimationFrame() {},
+    // Browser APIs the pane uses for notice placement.
+    performance: { now: () => Date.now() },
+    ResizeObserver: class { observe() {} disconnect() {} },
   };
   vm.runInNewContext(fs.readFileSync('src/viewer/pane.js', 'utf8'), {
     window, document: { addEventListener() {}, removeEventListener() {} },
