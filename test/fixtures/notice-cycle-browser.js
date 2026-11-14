@@ -16,7 +16,12 @@ window.noticeEqualLayoutCases = async (mode, kind) => {
       try {
         // Start with an actual row change after the preparation rest.
         const alternatingRows = initial === 0 ? [rows - 1, 0] : [0, rows - 1];
+        // A slow runner can stretch one leg; the next leg of the other row
+        // catches up on delivered time, staying under a one-second rest.
+        const total = row => visits.reduce((sum, visit, i) => visit.row === row ?
+          sum + (visits[i + 1]?.at ?? performance.now() - start) - visit.at : sum, 0);
         for (let cycle = 0; cycle < 6; cycle++) for (const row of alternatingRows) {
+          const legAt = performance.now(), other = alternatingRows.find(candidate => candidate !== row);
           await p.move(row); await noticePause(385);
           if (kind === 'height') {
             p.control({ type: 'prompt-stall', waitingMs: 900,
@@ -30,6 +35,7 @@ window.noticeEqualLayoutCases = async (mode, kind) => {
             anchorError: Math.abs(p.side() === 'top' ? box.top - screen.top : box.bottom - screen.bottom),
             capError: Math.abs(parseFloat(p.notices.style.maxHeight) - screen.height / 3) });
           await noticePause(65);
+          while (total(row) < total(other) && performance.now() - legAt < 900) await noticePause(16);
         }
       } finally { clearInterval(watch); subscription.dispose(); }
       results.push({ rows, initial, before, changes, layouts, visits, elapsed: performance.now() - start });
