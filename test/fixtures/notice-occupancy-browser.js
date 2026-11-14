@@ -96,9 +96,11 @@ window.noticeOccupancyCases = async (mode, kind) => {
         // Establish the old edge first. A clearly leading lower rest must
         // win whether the previous resting row is still visited or gone.
         // Equal replacements retain their edge in noticeCoveredTimeCases.
-        while (performance.now() - start < 3200) {
+        // Cover and steadiness count after the documented startup deadline for
+        // a repaint-driven change: a clearly leading edge within 2.5 s.
+        while (performance.now() - start < 4000) {
           await p.move(rows - 1); await noticePause(100);
-          if (performance.now() - start > 1700) {
+          if (performance.now() - start > 2517) {
             measuredAt ??= p.rects();
             placements.add(p.side()); samples++;
             if (p.measure(rows - 1).overlap) covered++;
