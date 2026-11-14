@@ -42,9 +42,15 @@ window.noticeCoveredTimeCases = async (mode, kind) => {
         }
         while (performance.now() - start < 4200) {
           if (kind === 'equal') {
-            await p.move(0); await noticePause(30);
+            // Each leg holds until its row's delivered time catches up with the
+            // other's, so the two edges stay equal at any frame rate.
+            const total = row => visits.reduce((sum, visit, i) => visit.row === row ?
+              sum + (visits[i + 1]?.at ?? performance.now()) - visit.at : sum, 0);
+            await p.move(0);
+            do { await waitFrames(1); } while (total(0) < total(rows - 2));
             placements.add(p.side());
-            await p.move(rows - 2); await noticePause(30);
+            await p.move(rows - 2);
+            do { await waitFrames(1); } while (total(rows - 2) < total(0));
           } else if (kind === 'adjacent') {
             await p.move(0); await noticePause(12);
             for (const row of restRows) { await p.move(row); await noticePause(16); }
