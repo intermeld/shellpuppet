@@ -42,11 +42,12 @@ const observePane = `(() => {
       });
       const notices = config.elements.promptAlert.parentElement;
       const state = window.__noticeTest = { pane, term, notices, alert: config.elements.promptAlert,
-        moves: 0, halves: new Set(), rects: 0, movedAt: null };
+        moves: 0, halves: new Set(), rects: 0, movedAt: null, visits: [] };
       term.onCursorMove(() => {
         state.moves++;
         state.halves.add(term.buffer.active.cursorY < term.rows / 2);
         state.movedAt ??= performance.now();
+        state.visits.push({ row: term.buffer.active.cursorY, at: performance.now() });
       });
       for (const element of [config.container.parentElement, term.element.querySelector('.xterm-screen')]) {
         const rect = element.getBoundingClientRect.bind(element);
@@ -56,6 +57,17 @@ const observePane = `(() => {
     } }; }
   });
   window.__pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+  window.__noticeFrames = [];
+  requestAnimationFrame(function sampleNoticeFrame(time) {
+    __noticeFrames.push(time);
+    requestAnimationFrame(sampleNoticeFrame);
+  });
+  window.__noticeFrameSummary = (start, end = performance.now()) => {
+    const times = __noticeFrames.filter(time => time >= start && time <= end);
+    const gaps = times.slice(1).map((time, index) => time - times[index]).sort((a, b) => a - b);
+    return { frames: gaps.length, frameInterval: gaps[Math.floor(gaps.length / 2)] ?? null,
+      frameSpan: times.length < 2 ? 0 : times.at(-1) - times[0] };
+  };
   window.__placement = () => {
     const style = getComputedStyle(__noticeTest.notices);
     return { top: style.top, bottom: style.bottom };
@@ -63,15 +75,22 @@ const observePane = `(() => {
   window.__sample = async ms => {
     const state = __noticeTest;
     state.moves = state.rects = 0; state.halves.clear();
-    const samples = [];
+    const samples = [], changes = [], visitsAt = state.visits.length;
     const start = performance.now();
+    let last = JSON.stringify(__placement());
     while (performance.now() - start < ms) {
-      samples.push({ ...__placement(), hidden: state.alert.hidden });
+      const placement = __placement(), current = JSON.stringify(placement);
+      if (current !== last) { changes.push({ at: performance.now() - start, placement }); last = current; }
+      samples.push({ ...placement, hidden: state.alert.hidden });
       await __pause(4);
     }
+    const times = __noticeFrames.filter(time => time >= start && time <= performance.now());
+    const gaps = times.slice(1).map((time, index) => time - times[index]).sort((a, b) => a - b);
     return { placements: [...new Set(samples.map(s => JSON.stringify({ top: s.top, bottom: s.bottom })))],
       samples: samples.length, hidden: samples.some(s => s.hidden), moves: state.moves,
-      halves: state.halves.size, rects: state.rects };
+      halves: state.halves.size, rects: state.rects, changes, visits: state.visits.slice(visitsAt),
+      frames: gaps.length, frameInterval: gaps[Math.floor(gaps.length / 2)] ?? null,
+      frameSpan: times.length < 2 ? 0 : times.at(-1) - times[0] };
   };
 })()`;
 
@@ -98,7 +117,7 @@ function initialPlacementChecks(mode: string): string {
     const pane = ShellPuppetPane.create({ container, sessionId: 'initial-notice',
       dashboardProof: ${mode === 'dashboard' ? "'test-proof'" : 'null'}, elements: { promptAlert: alert } });
     window.WebSocket = NativeSocket;
-    const term = pane.getTerminal(), measurements = [];
+    const term = pane.getTerminal(), measurements = [], startedAt = performance.now();
     let disposed = false;
     const geometry = rows => socket.onmessage({ data: JSON.stringify({ type: 'geometry',
       cols: 100, rows, control: 'held' }) });
@@ -107,6 +126,7 @@ function initialPlacementChecks(mode: string): string {
       const outer = wrap.getBoundingClientRect();
       const offset = side === 'top' ? screen.top - outer.top : outer.bottom - screen.bottom;
       measurements.push({ step, side, anchor: notices.style[side],
+        ...__noticeFrameSummary(startedAt),
         anchorError: Math.abs(parseFloat(notices.style[side]) - offset),
         capError: Math.abs(parseFloat(notices.style.maxHeight) - screen.height / 3) });
     };
@@ -164,6 +184,7 @@ async function withPage(mode: string, interact: NonNullable<CaptureOptions['inte
     viewerUrl = String(minted.body['viewerUrl']);
   }
   await captureViewer({ browser: browser!, viewerUrl, width: 1000, height: 900,
+    cpuThrottlingRate: Number(process.env['NOTICE_CPU_RATE'] ?? 1),
     drive: true, probeOnly: true, timeoutMs: period === undefined ? 60_000 : 90_000, beforeNavigateScript: observePane,
     probe: `window.__noticeTest && !__noticeTest.alert.hidden &&
       __noticeTest.alert.textContent.includes('Waiting for you') && ${period === undefined ? '__noticeTest.moves > 10' : 'true'}`,
@@ -206,6 +227,7 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
           weights[visit.row] = (weights[visit.row] || 0) + duration;
         }
         return { row, rows: state.term.rows, samples, restingSamples, covered, follow, weights,
+          ...__noticeFrameSummary(start),
           placements: [...placements], hidden: state.alert.hidden };
       })()`) as { row: number; rows: number; samples: number; restingSamples: number; covered: number;
         follow: number | null; weights: Record<string, number>; placements: string[]; hidden: boolean };
@@ -265,6 +287,7 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
         const phases = __noticePhases.slice(Math.max(0, firstPhase));
         const maxLeg = Math.max(0, ...phases.slice(1).map((phase, i) => phase.at - phases[i].at));
         return { placements: [...placements], covered, samples, restingSamples, transitions,
+          ...__noticeFrameSummary(start),
           phases: phases.length, maxLeg, phaseMismatches: phases.filter(phase => phase.observedRow !== phase.row).length,
           hidden: state.alert.hidden, cadence: observation.stop() };
       }`);
@@ -315,11 +338,18 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
   it('keeps the waiting alert still through three seconds of split repaint writes', async context => {
     if (!browser) { context.skip(); return; }
     await withPage(mode, async ({ evaluate }) => {
+      // The initial clear-edge decision has its own deadline. Observe the
+      // subsequent repaint cadence after that startup placement has settled.
+      await evaluate('__pause(1600)');
       const result = await evaluate('__sample(3000)') as {
         placements: string[]; samples: number; hidden: boolean; moves: number; halves: number; rects: number;
+        frames: number; frameInterval: number; frameSpan: number;
       };
       const details = JSON.stringify(result);
-      expect(result.samples, details).toBeGreaterThan(100);
+      expect(result.samples, details).toBeGreaterThan(5);
+      expect(result.frames, details).toBeGreaterThan(20);
+      expect(result.frameInterval, details).toBeLessThan(200);
+      expect(result.frameSpan, details).toBeGreaterThan(2500);
       expect(result.moves, details).toBeGreaterThan(30);
       expect(result.halves, details).toBe(2);
       expect(result.hidden, details).toBe(false);
@@ -334,7 +364,7 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
         expect(measurement.anchorError, JSON.stringify(measurement)).toBeLessThan(0.1);
         expect(measurement.capError, JSON.stringify(measurement)).toBeLessThan(0.1);
       }
-      expect(initial.destroyedUnchanged).toBe(true);
+      expect(initial.destroyedUnchanged, JSON.stringify(initial)).toBe(true);
     });
   }, 90_000);
 

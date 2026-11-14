@@ -129,6 +129,11 @@ window.noticeHorizontalRestCases = async mode => {
     try {
       await p.move(1); await p.move(0); await noticePause(650); p.show(); await noticePause(100);
       const start = performance.now(), visits = [], rects = p.rects();
+      let deadlineFrame = null, clearFrame = null;
+      const stopFrames = noticeFrameTiming((_time, index) => {
+        if (visits.length && performance.now() - start - visits[0].at >= 1000) deadlineFrame ??= index;
+        if (!p.measure(rows - 2).overlap) clearFrame ??= index;
+      });
       const subscription = p.term.onCursorMove(() => visits.push({ row: p.term.buffer.active.cursorY, at: performance.now() - start }));
       let frame = 0, samples = 0, covered = 0, follow = null;
       try {
@@ -140,7 +145,8 @@ window.noticeHorizontalRestCases = async mode => {
           await noticePause(20);
         }
       } finally { subscription.dispose(); }
-      results.push({ rows, samples, covered, follow, visits, rects: p.rects() - rects });
+      results.push({ rows, samples, covered, follow, visits, rects: p.rects() - rects,
+        deadlineFrame, clearFrame, ...stopFrames() });
     } finally { p.destroy(); }
   }
   return results;
