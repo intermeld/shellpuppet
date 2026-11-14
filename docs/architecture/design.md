@@ -359,7 +359,19 @@ the question. A one-line reasoning summary drawn between a question and its
 options stays hidden. The older Grok box keeps a run of plain bar text above
 its radios when a bare bar, or a line that starts the reasoning, closes that
 run off and the run carries command evidence: the box's `│  > ` question row,
-a `$`, or a `:` continuation. The limits: a row shaped as a Grok option stays
+a `$`, or a `:` continuation. When its question has scrolled away, Grok's
+`1/3:select` footer and three radio choices identify a live permission box;
+the filter then keeps every bar row from the top of the box's bar down to the
+choices, including plain command rows, wraps and expansion hints. The footer
+must be the live bottom row. That claim is made only when no question-shaped
+(`│  > `) row and no reasoning start is left in the run, and only when the run
+begins with a command's first-row marker (`│` inside the bar): reasoning sits
+above the question and its text can read `> ` or begin with a colon, so with
+any other row at the top the ordinary rules above decide, unchanged. Hiding wins over showing when reasoning
+and command text cannot be told apart, so plain command rows near `> ` command
+text, or a command whose footer a redraw has not yet painted, can stay hidden;
+rows carrying the box's own command marker always stay. The limits: a row
+shaped as a Grok option stays
 even when the reasoning drew it, because that shape is also a real option and
 the signature keeps it when detection claims nothing; a filled radio inside
 another program's reasoning stays, because that glyph is what shows a selector

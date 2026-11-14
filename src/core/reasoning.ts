@@ -600,6 +600,11 @@ function claimedRows(
   while (top > 0 && BORDER_ROW.test(lines[top - 1]!.text)) top--;
   let bottom = last;
   while (bottom + 1 < lines.length && BORDER_ROW.test(lines[bottom + 1]!.text)) bottom++;
+  const claim = moduleFor(signature.name)?.readingRules?.claimPromptRows?.(lines, prompt);
+  if (claim !== undefined && claim !== null) {
+    top = claim[0];
+    bottom = claim[1];
+  }
   const rows = new Set<number>();
   for (let i = top; i <= bottom; i++) {
     // A one-line reasoning summary drawn between the question and the last
