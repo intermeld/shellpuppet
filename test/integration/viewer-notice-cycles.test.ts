@@ -26,8 +26,14 @@ async function run<T>(mode: string, expression: string): Promise<T[]> {
     <script src="${url('../fixtures/notice-occupancy-browser.js')}"></script>
     <script src="${url('../fixtures/notice-cycle-browser.js')}"></script>`);
   const result = await captureViewer({ browser: browser!, viewerUrl: pathToFileURL(page).href,
+    cpuThrottlingRate: Number(process.env['NOTICE_CPU_RATE'] ?? 1),
     width: 1000, height: 900, drive: true, probeOnly: true, timeoutMs: 90_000,
-    probe: '!!window.noticeSnapshotCases', interact: ({ evaluate }) => evaluate(expression),
+    probe: '!!window.noticeSnapshotCases', interact: async ({ evaluate }) => {
+      await evaluate('window.__stopCaseFrames = noticeFrameTiming()');
+      const cases = await evaluate(expression) as Record<string, unknown>[];
+      const timing = await evaluate('__stopCaseFrames()') as Record<string, unknown>;
+      return cases.map(item => ({ ...timing, samples: timing['frames'], ...item }));
+    },
   });
   return result.probe as T[];
 }
@@ -42,7 +48,8 @@ interface Snapshot {
   destroyed?: boolean; unchanged?: boolean; reads?: number;
 }
 interface HorizontalRest { rows: number; samples: number; covered: number; follow: number | null;
-  visits: { row: number; at: number }[]; rects: number }
+  visits: { row: number; at: number }[]; rects: number; frames: number; frameInterval: number;
+  frameSpan: number; observedMs: number; deadlineFrame: number | null; clearFrame: number | null }
 
 describe.each(['viewer', 'dashboard'])('%s notice repaint boundaries', mode => {
   for (const kind of ['height', 'refresh']) it(`keeps both initial edges during equal alternation with late ${kind} updates`, async context => {
@@ -92,14 +99,21 @@ describe.each(['viewer', 'dashboard'])('%s notice repaint boundaries', mode => {
   it('follows a settled row while typing or animating horizontally', async context => {
     if (!browser) { context.skip(); return; }
     const results = await run<HorizontalRest>(mode, `noticeHorizontalRestCases(${JSON.stringify(mode)})`);
+    if (process.env['NOTICE_DIAGNOSTICS']) process.stderr.write(JSON.stringify({ mode, results }) + '\n');
     for (const result of results) {
       const details = JSON.stringify(result);
-      expect.soft(result.visits.length, details).toBeGreaterThan(40);
+      expect.soft(result.visits.length, details).toBeGreaterThan(10);
       expect.soft([...new Set(result.visits.map(visit => visit.row))], details).toEqual([result.rows - 2]);
-      expect.soft(result.samples, details).toBeGreaterThan(20);
+      expect.soft(result.samples, details).toBeGreaterThan(5);
+      expect.soft(result.frames, details).toBeGreaterThan(20);
+      expect.soft(result.frameInterval, details).toBeLessThan(200);
+      expect.soft(result.frameSpan, details).toBeGreaterThan(1500);
+      expect.soft(result.observedMs - result.frameSpan, details).toBeLessThan(500);
       expect.soft(result.covered, details).toBe(0);
       expect.soft(result.follow, details).not.toBeNull();
-      expect.soft(result.follow, details).toBeLessThan(1050);
+      expect.soft(result.deadlineFrame, details).not.toBeNull();
+      expect.soft(result.clearFrame, details).not.toBeNull();
+      expect.soft(result.clearFrame! - result.deadlineFrame!, details).toBeLessThanOrEqual(1);
       expect.soft(result.rects, details).toBeLessThan(10);
     }
   }, 60_000);

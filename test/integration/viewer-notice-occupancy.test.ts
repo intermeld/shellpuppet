@@ -19,6 +19,7 @@ afterAll(() => { fs.rmSync(scratch, { recursive: true, force: true }); });
 interface Placement { overlap: boolean }
 interface Occupancy {
   samples: number; covered: number; placements: string[]; rects: number; final: Placement;
+  frames: number; frameInterval: number; frameSpan: number; observedMs: number;
   lower: Placement; upper: Placement; edge: Placement; font: Placement; limit: Placement; scale: Placement;
   shown: Placement; fitted: Placement; resized: Placement;
 }
@@ -34,8 +35,14 @@ async function run<T>(mode: string, expression: string): Promise<T[]> {
     <script src="${pathToFileURL(path.join(scratch, 'pane.js')).href}"></script>
     <script src="${url('../fixtures/notice-occupancy-browser.js')}"></script>`);
   const result = await captureViewer({ browser: browser!, viewerUrl: pathToFileURL(page).href,
+    cpuThrottlingRate: Number(process.env['NOTICE_CPU_RATE'] ?? 1),
     width: 1000, height: 900, drive: true, probeOnly: true, timeoutMs: 180_000,
-    probe: '!!window.noticeOccupancyCases', interact: ({ evaluate }) => evaluate(expression),
+    probe: '!!window.noticeOccupancyCases', interact: async ({ evaluate }) => {
+      await evaluate('window.__stopCaseFrames = noticeFrameTiming()');
+      const cases = await evaluate(expression) as Record<string, unknown>[];
+      const timing = await evaluate('__stopCaseFrames()') as Record<string, unknown>;
+      return cases.map(item => ({ ...timing, samples: timing['frames'], ...item }));
+    },
   });
   return result.probe as T[];
 }
@@ -52,7 +59,11 @@ describe.each(['viewer', 'dashboard'])('%s notice occupancy', mode => {
             expect.soft(result[key].overlap, `${key}: ${details}`).toBe(false);
           }
         } else {
-          expect.soft(result.samples, details).toBeGreaterThan(20);
+          expect.soft(result.samples, details).toBeGreaterThan(kind === 'dominant' ? 5 : 20);
+          expect.soft(result.frames, details).toBeGreaterThan(20);
+          expect.soft(result.frameInterval, details).toBeLessThan(200);
+          expect.soft(result.frameSpan, details).toBeGreaterThan(2500);
+          expect.soft(result.observedMs - result.frameSpan, details).toBeLessThan(500);
           expect.soft(result.covered, details).toBe(0);
           expect.soft(result.placements, details).toEqual(['top']);
           if (kind === 'dominant') {

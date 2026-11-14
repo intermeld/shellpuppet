@@ -66,6 +66,18 @@ const observe = `(() => {
     } }; }
   });
   window.__pause = ms => new Promise(resolve => setTimeout(resolve, ms));
+  window.__noticeFrames = [];
+  requestAnimationFrame(function sampleNoticeFrame(time) {
+    __noticeFrames.push(time);
+    requestAnimationFrame(sampleNoticeFrame);
+  });
+  window.__noticeFrameSummary = (start, end = performance.now()) => {
+    const times = __noticeFrames.filter(time => time >= start && time <= end);
+    const gaps = times.slice(1).map((time, index) => time - times[index]).sort((a, b) => a - b);
+    return { frames: gaps.length, samples: gaps.length,
+      frameInterval: gaps[Math.floor(gaps.length / 2)] ?? null,
+      frameSpan: times.length < 2 ? 0 : times.at(-1) - times[0], observedMs: end - start };
+  };
   window.__showEndBanner = () => {
     const s = __notice, text = s.banner.querySelector('.pane-banner-message') || s.banner;
     text.textContent = 'Session ended'; s.banner.hidden = false; s.pane.relayout(true);
@@ -75,6 +87,7 @@ const observe = `(() => {
     const screen = s.term.element.querySelector('.xterm-screen').getBoundingClientRect();
     const cell = screen.height / s.term.rows, bottom = s.notices.style.top === 'auto';
     return { row, rows: s.term.rows, hidden: s.alert.hidden && s.banner.hidden, height: box.height, side: bottom ? 'bottom' : 'top',
+      ...__noticeFrameSummary(0),
       overlap: box.top < screen.top + (row + 1) * cell && box.bottom > screen.top + row * cell,
       anchorError: Math.abs(bottom ? box.bottom - screen.bottom : box.top - screen.top),
       capError: Math.abs(parseFloat(s.notices.style.maxHeight) - screen.height / 3) };
@@ -107,6 +120,7 @@ async function withPage(mode: string, rows: number,
     viewerUrl = String(minted.body['viewerUrl']);
   }
   await captureViewer({ browser: browser!, viewerUrl, width: 1000, height: 900,
+    cpuThrottlingRate: Number(process.env['NOTICE_CPU_RATE'] ?? 1),
     drive: true, probeOnly: true, timeoutMs: 90_000,
     beforeNavigateScript: observe + ';window.open = url => { window.__openedURL = url; return window.__openedHandle = { closed: false }; };',
     probe: ['long', 'staged', 'spinner', 'equal', 'rword', 'rlong', 'rrest', 'rchange'].includes(cadence) ?
@@ -143,7 +157,7 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
         const cadence = await evaluate(`(async () => { await __pause(${kind === 'rlong' ? 45500 : 24500}); return __delivered.stop(); })()`) as DeliveredCadence;
         const assessment = assessDeliveredCadence(cadence);
         recordDeliveredCadence(`${mode}-24-${kind}`, cadence);
-        const details = JSON.stringify(assessment);
+        const details = JSON.stringify({ ...assessment, timing: await evaluate('__noticeFrameSummary(0)') });
         expect.soft(cadence.legs.length, details).toBeGreaterThan(20);
         expect.soft(assessment.violations, details).toEqual([]);
       }, kind);
@@ -159,7 +173,7 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
       cadence.cycleRows = [0, 22, 0, 22, 23, 22, 23, 0, 8, 9, 10, 11, 12];
       const assessment = assessDeliveredCadence(cadence);
       recordDeliveredCadence(`${mode}-24-rword`, cadence);
-      const details = JSON.stringify(assessment);
+      const details = JSON.stringify({ ...assessment, timing: await evaluate('__noticeFrameSummary(0)') });
       expect.soft(assessment.legs.length, details).toBeGreaterThan(13);
       expect.soft(assessment.rests.some(rest => (rest as { edge?: string }).edge === 'bottom'), details).toBe(true);
       expect.soft(assessment.violations, details).toEqual([]);
@@ -197,7 +211,8 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
         maxLeg: number; visits: number; cadence: DeliveredCadence };
       const assessment = assessDeliveredCadence(result.cadence);
       recordDeliveredCadence(`${mode}-${String(rows)}-${cadence}`, result.cadence);
-      const details = JSON.stringify({ ...result, cadence: assessment });
+      const details = JSON.stringify({ ...result, cadence: assessment,
+        timing: await evaluate('__noticeFrameSummary(0)') });
       expect.soft(result.restSamples, details).toBeGreaterThan(100);
       expect.soft(result.cadence.legs.length, details).toBeGreaterThan(4);
       expect.soft(assessment.violations, details).toEqual([]);
@@ -219,29 +234,40 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
     await withPage(mode, rows, async ({ evaluate }, input) => {
       await evaluate('__pause(1100)');
       const initial = await evaluate('__measure()') as { side: string; overlap: boolean };
-      expect(initial.side).toBe('bottom');
+      expect(initial.side, JSON.stringify(initial)).toBe('bottom');
       await input('r');
       const result = await evaluate(`(async () => {
         const start = performance.now(), prompt = __notice.term.rows - 2;
         let firstClear = null, changes = 0, coveredAtRest = 0, restSamples = 0;
+        let firstRestAt = null, lastRestAt = null;
         let last = __measure(prompt).side;
         while (performance.now() - start < 6500) {
           const now = performance.now() - start, measure = __measure(prompt);
           if (measure.side !== last) { changes++; last = measure.side; }
           if (!measure.overlap && firstClear === null) firstClear = now;
           if (now > 2500 && __notice.term.buffer.active.cursorY === prompt) {
+            firstRestAt ??= now; lastRestAt = now;
             restSamples++; if (measure.overlap) coveredAtRest++;
           }
           await __pause(4);
         }
-        return { firstClear, changes, restSamples, coveredAtRest, side: last };
+        return { firstClear, changes, restSamples, coveredAtRest, side: last,
+          firstRestAt, lastRestAt, ...__noticeFrameSummary(start, performance.now()) };
       })()`) as { firstClear: number | null; changes: number; restSamples: number;
-        coveredAtRest: number; side: string };
+        coveredAtRest: number; side: string; firstRestAt: number | null; lastRestAt: number | null;
+        frames: number; frameInterval: number; frameSpan: number; observedMs: number };
+      if (process.env['NOTICE_DIAGNOSTICS']) process.stderr.write(JSON.stringify({ mode, rows, result }) + '\n');
       const details = JSON.stringify(result);
       expect.soft(result.firstClear, details).not.toBeNull();
       expect.soft(result.firstClear!, details).toBeLessThan(2500);
       expect.soft(result.changes, details).toBe(1);
-      expect.soft(result.restSamples, details).toBeGreaterThan(100);
+      expect.soft(result.restSamples, details).toBeGreaterThan(5);
+      expect.soft(result.frames, details).toBeGreaterThan(20);
+      expect.soft(result.frameInterval, details).toBeLessThan(200);
+      expect.soft(result.frameSpan, details).toBeGreaterThan(5500);
+      expect.soft(result.observedMs - result.frameSpan, details).toBeLessThan(500);
+      expect.soft(result.firstRestAt, details).not.toBeNull();
+      expect.soft(result.lastRestAt! - result.firstRestAt!, details).toBeGreaterThan(2000);
       expect.soft(result.coveredAtRest, details).toBe(0);
       expect.soft(result.side, details).toBe('top');
     }, 'long');
@@ -296,7 +322,8 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
       result.cadence.cycleRows = [0, Math.floor(rows / 2), 0, rows - 2];
       const assessment = assessDeliveredCadence(result.cadence);
       recordDeliveredCadence(`${mode}-${String(rows)}-${cadence}`, result.cadence);
-      const details = JSON.stringify({ ...result, cadence: assessment });
+      const details = JSON.stringify({ ...result, cadence: assessment,
+        timing: await evaluate('__noticeFrameSummary(0)') });
       expect.soft(result.samples, details).toBeGreaterThan(100);
       expect.soft(result.restSamples, details).toBeGreaterThan(100);
       expect.soft(result.hidden, details).toBe(false);

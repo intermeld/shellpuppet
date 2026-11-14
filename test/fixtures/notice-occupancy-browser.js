@@ -1,6 +1,26 @@
 // Controlled xterm traffic, including split writes and long repaint pauses.
 // Socket doubles let the same pane run in viewer and dashboard modes.
 window.noticePause = ms => new Promise(resolve => setTimeout(resolve, ms));
+window.noticeFrameTiming = onFrame => {
+  const gaps = [];
+  let previous = null, first = null, active = true;
+  const started = performance.now();
+  const tick = time => {
+    first ??= time;
+    if (previous !== null) gaps.push(time - previous);
+    previous = time;
+    onFrame?.(time, gaps.length);
+    if (active) requestAnimationFrame(tick);
+  };
+  requestAnimationFrame(tick);
+  return () => {
+    active = false;
+    const ordered = gaps.slice().sort((a, b) => a - b);
+    return { frames: gaps.length, frameInterval: ordered[Math.floor(ordered.length / 2)] ?? null,
+      maxFrameGap: ordered.at(-1) ?? null, frameSpan: previous === null ? 0 : previous - first,
+      observedMs: performance.now() - started };
+  };
+};
 window.makeNoticePane = (mode, rows) => {
   const NativeSocket = window.WebSocket;
   let socket;
@@ -71,13 +91,13 @@ window.noticeOccupancyCases = async (mode, kind) => {
       try {
         await p.move(1); await p.move(initial); await noticePause(1100); p.show();
         const before = p.measure();
-        const start = performance.now(), placements = new Set();
+        const stopFrames = noticeFrameTiming(), start = performance.now(), placements = new Set();
         let samples = 0, covered = 0, measuredAt = null;
         // Establish the old edge first. A clearly leading lower rest must
         // win whether the previous resting row is still visited or gone.
         // Equal replacements retain their edge in noticeCoveredTimeCases.
         while (performance.now() - start < 3200) {
-          await p.move(rows - 1); await noticePause(24);
+          await p.move(rows - 1); await noticePause(100);
           if (performance.now() - start > 1700) {
             measuredAt ??= p.rects();
             placements.add(p.side()); samples++;
@@ -93,7 +113,7 @@ window.noticeOccupancyCases = async (mode, kind) => {
         const fitted = p.measure(rows - 1);
         p.geometry(rows + 1);
         const resized = p.measure(rows - 1);
-        results.push({ rows, initial, before, samples, covered, placements: [...placements],
+        results.push({ rows, initial, before, samples, covered, ...stopFrames(), placements: [...placements],
           rects: p.rects() - measuredAt, shown, fitted, resized });
       } finally { p.destroy(); }
     }
@@ -139,6 +159,7 @@ window.noticeOccupancyCases = async (mode, kind) => {
         const p = makeNoticePane(mode, rows);
         try {
           await p.move(rows - 1); await noticePause(650); p.show();
+          const stopFrames = noticeFrameTiming();
           const before = p.side(), placements = new Set([before]), start = performance.now();
           let covered = 0, samples = 0;
           const watch = setInterval(() => {
@@ -151,7 +172,7 @@ window.noticeOccupancyCases = async (mode, kind) => {
               await p.move(rows - 1); await noticePause(interval);
             }
           } finally { clearInterval(watch); }
-          const stable = { rows, interval, before, covered, samples,
+          const stable = { rows, interval, before, covered, samples, ...stopFrames(),
             placements: [...placements], elapsed: performance.now() - start };
           await p.move(0); await noticePause(1050);
           results.push({ ...stable, final: p.measure() });

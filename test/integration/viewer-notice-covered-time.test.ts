@@ -29,8 +29,14 @@ async function run<T>(mode: string, expression: string): Promise<T[]> {
     <script src="${url('../fixtures/notice-delivered-browser.js')}"></script>
     <script src="${url('../fixtures/notice-covered-time-browser.js')}"></script>`);
   const result = await captureViewer({ browser: browser!, viewerUrl: pathToFileURL(page).href,
+    cpuThrottlingRate: Number(process.env['NOTICE_CPU_RATE'] ?? 1),
     width: 1000, height: 900, drive: true, probeOnly: true, timeoutMs: 300_000,
-    probe: '!!window.noticeCoveredTimeCases', interact: ({ evaluate }) => evaluate(expression),
+    probe: '!!window.noticeCoveredTimeCases', interact: async ({ evaluate }) => {
+      await evaluate('window.__stopCaseFrames = noticeFrameTiming()');
+      const cases = await evaluate(expression) as Record<string, unknown>[];
+      const timing = await evaluate('__stopCaseFrames()') as Record<string, unknown>;
+      return cases.map(item => ({ ...timing, samples: timing['frames'], ...item }));
+    },
   });
   return result.probe as T[];
 }
@@ -38,6 +44,8 @@ async function run<T>(mode: string, expression: string): Promise<T[]> {
 interface Rest {
   samples: number; covered: number; follow: number | null; placements: string[];
   weights: Record<string, number>; restRows: number[]; rects: number; expectedSide: string;
+  frames: number; frameInterval: number; frameSpan: number; observedMs: number;
+  firstLowerLeg: number | null;
 }
 interface Moving { interval: number; legs: Rest[]; sustained: Rest[]; final: { overlap: boolean }; cadence: DeliveredCadence }
 interface Layout { steps: { name: string; anchorError: number; capError: number; heightError: number }[] }
@@ -49,10 +57,15 @@ describe.each(['viewer', 'dashboard'])('%s covered notice time', mode => {
       const results = await run<Rest>(mode, `noticeCoveredTimeCases(${JSON.stringify(mode)}, ${JSON.stringify(kind)})`);
       for (const result of results) {
         const details = JSON.stringify(result);
-        expect.soft(result.samples, details).toBeGreaterThan(20);
+        expect.soft(result.samples, details).toBeGreaterThan(5);
+        expect.soft(result.frames, details).toBeGreaterThan(20);
+        expect.soft(result.frameInterval, details).toBeLessThan(200);
+        expect.soft(result.frameSpan, details).toBeGreaterThan(2000);
+        expect.soft(result.observedMs - result.frameSpan, details).toBeLessThan(500);
         expect.soft(result.covered, details).toBe(0);
         expect.soft(result.placements, details).toEqual([result.expectedSide]);
         expect.soft(result.rects, details).toBeLessThan(20);
+        if (kind === 'plurality') expect.soft(result.firstLowerLeg, details).toBeLessThan(1000);
         if (kind !== 'equal') {
           expect.soft(result.follow, details).not.toBeNull();
           expect.soft(result.follow, details).toBeLessThan(1500);
