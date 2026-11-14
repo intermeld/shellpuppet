@@ -68,7 +68,11 @@ describe.each(['viewer', 'dashboard'])('%s covered notice time', mode => {
         if (kind === 'plurality') expect.soft(result.firstLowerLeg, details).toBeLessThan(1000);
         if (kind !== 'equal') {
           expect.soft(result.follow, details).not.toBeNull();
-          expect.soft(result.follow, details).toBeLessThan(1500);
+          // The documented startup deadline: a clearly leading edge within 2.5 s of
+          // the notice appearing (start is 50 ms after it). follow is sampled once
+          // per repaint cycle, and slower platforms deliver fewer frames per cycle,
+          // so it can lag the move itself.
+          expect.soft(result.follow, details).toBeLessThan(2450);
           // Verify the actual xterm event durations, not just timer requests.
           const total = Object.values(result.weights).reduce((sum, duration) => sum + duration, 0);
           const rest = result.restRows.reduce((sum, row) => sum + (result.weights[String(row)] ?? 0), 0);
