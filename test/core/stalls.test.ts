@@ -166,7 +166,7 @@ describe('evidenced provider stall', () => {
     expect(detect(lines)).toBeNull();
   });
   it('seeds only MiMo, whose footer and error ink have evidence', () => {
-    expect(moduleFor('mimo')?.stalls).toHaveLength(1);
+    expect(moduleFor('mimo')?.stalls?.map(shape => shape.reason)).toEqual(['provider-refused', 'request-failed']);
     expect(moduleFor('opencode')?.stalls).toBeUndefined();
   });
 });

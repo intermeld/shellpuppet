@@ -1395,7 +1395,7 @@ export class Session implements WaitTarget {
 
   private readStallTranscript(): string {
     const signature = signatureForSession(this) ?? undefined;
-    return stallTranscriptContent(this.renderer.framedViewport(this.agentModule!.stalls!.flatMap(shape => shape.frameColumns)),
+    return stallTranscriptContent(this.renderer.framedViewport([...new Set(this.agentModule!.stalls!.flatMap(shape => shape.frameColumns))]),
       this.agentModule!.stalls!, signature);
   }
 
@@ -1458,7 +1458,7 @@ export class Session implements WaitTarget {
       // end. A clipped repaint can expose different panel rows while retaining
       // the same refusal block; leave that case to bounded styled validation.
       const signature = signatureForSession(this);
-      const framed = this.renderer.framedViewport(this.agentModule!.stalls!.flatMap(shape => shape.frameColumns));
+      const framed = this.renderer.framedViewport([...new Set(this.agentModule!.stalls!.flatMap(shape => shape.frameColumns))]);
       const transcript = stallTranscriptContent(framed, this.agentModule!.stalls!, signature ?? undefined);
       const baseline = this.stallValidatedTranscript;
       const completeTurn = signature !== null && stallTurnVisible(framed, this.agentModule!.stalls!, signature);
@@ -1474,7 +1474,8 @@ export class Session implements WaitTarget {
 
   private hasStallInk(plain: readonly string[]): boolean {
     return this.agentModule!.stalls!.some(shape => this.renderer.hasForeground(
-      plain.flatMap((line, row) => line.trimEnd() === shape.marker.text ? [row] : []), shape.marker.fg));
+      plain.flatMap((line, row) => (typeof shape.marker.text === 'string' ? line.trimEnd() === shape.marker.text :
+        shape.marker.text.test(line.trimEnd())) ? [row] : []), shape.marker.fg));
   }
 
   private refreshStall(): void {

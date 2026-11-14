@@ -88,6 +88,8 @@ the existing failure response.
 `terminal_list` includes a `STALLED` state with the reason code, fixed product
 description and ISO since time. `waitingOnly: true` still selects permission
 prompts only. A stall does not change the session's startup readiness fields.
+MiMo reports `provider-refused` for a provider refusal and `request-failed` for
+an idle completed turn whose model request failed.
 
 `terminal_wait` accepts `stalled: true`, alone or with `prompt: true`. A string
 `session` watches one session; an array watches those sessions; omitting it
@@ -121,17 +123,17 @@ are present, otherwise `stalled` when any stalled rows are present, otherwise
 `timeout`. Ended sessions are omitted. `GET /sessions` includes the same
 `stalled` metadata in full session summaries.
 
-Only MiMo's refusal shape, measured from a real screen, is supported, at and
-above the 80x24 floor. It is recognised by its shape on screen. The error must belong to the live
+Two MiMo error shapes, measured from real screens, are supported at and above
+the 80x24 floor: the provider refusal and a failed model request. It is recognised by its shape on screen. The error must belong to the live
 turn with MiMo's error ink outside recognised tool panels, with a completed
 turn footer, a visible idle composer and only recognised bottom chrome below
 it. Indented unsent input does not qualify. Detection needs a known turn
 boundary within the bounded context to establish a new notice.
-The same semantic refusal must persist for one second,
+The same error must persist for one second,
 with no prompt or busy indication. Copy and recovery controls, sidebar changes,
 resize reflow and cursor-only writes preserve its identity and original time.
 Composer frames repainted to the new width and accepted grey suggestions
-arriving or leaving preserve the notice while the canonical refusal identity
+arriving or leaving preserve the notice while the canonical error identity
 is unchanged, with no clear or further announcement. Presentation changes are
 validated on a coalesced timer. Changes confined to user-turn text, including
 every indented continuation behind its gutter, never end an established notice.

@@ -627,17 +627,19 @@ configurable 300 s. A wrongly low timeout is indistinguishable from a hard failu
 
 ### 3.2 Sessions that stall, noticed
 
-A supported provider refusal at the end of an idle turn is `stalled`, distinct
+A supported error block at the end of an idle turn (a provider refusal or a
+failed model request) is `stalled`, distinct
 from a session waiting for an answer. `AgentModule.stalls` is an optional list
 of signatures, separate from the reserved `safety` adapter. Each has a stable
 reason code, fixed product description, a cheap visible marker, styled row
 tests for the error, its preceding line, closing footer and idle composer,
-and the allowed bottom chrome. Only MiMo's measured
-`provider-refused` shape is seeded. OpenCode has a different measured footer
-and no refusal capture proving the same shape. Other errors and agents need
+and the allowed bottom chrome. MiMo has measured `provider-refused` and
+`request-failed` shapes, with distinct fixed reasons. A retryable error qualifies
+only after the turn finishes with an idle composer; a visible retry is busy.
+OpenCode has a different measured footer and no capture proving the same shape. Other errors and agents need
 real screen fixtures before they gain signatures.
 
-Detection recognises the refusal by its shape on screen, at and above the
+Detection recognises these errors by their shape on screen, at and above the
 80x24 floor in ADR-009. It uses the existing reading engine's styled rows,
 composer, latest user-turn boundary and module busy rules. MiMo's content walk
 uses its own panel framing and error ink to distinguish tool listings and
@@ -645,30 +647,31 @@ quoted text from the live answer. Punctuation in ordinary content does not
 establish a tool, quotation or interface region. A clipped bounded history without a known turn boundary cannot
 establish a new stall. A self-contained captured frame beginning with a styled
 expandable tool panel can establish one after the panel visibly closes. The last transcript block must have the red
-left bar and red `✗ Error` marker, the provider refusal message and the
-completed `Build · <model> · <time>` footer directly above a current visible
-idle composer. The neutral high-risk introduction may be absent. Only recognised
-bottom chrome, including MiMo's usage and shortcut footer, may follow it. The input region
+left bar and red `✗ Error` marker, the reason's own message and the
+completed `Build · <model>` footer, with or without a duration or recovery
+control, directly above a current visible idle composer. The neutral high-risk
+introduction may be absent. Only recognised bottom chrome, including MiMo's
+one-line or column-wrapped usage and shortcut footer, may follow it. The input region
 comes from the composer frame and independently repeated panel dividers;
 indentation alone never makes typed text a sidebar. Text before a proven
 divider remains input, including text beyond the closing frame's edge.
-The grey suggestion has a separate style rule: its composer gutter must use MiMo's orange or grey ink and every visible character of the suggestion, including its shortcut suffix, must be grey. A resize can expose only a tail of an established refusal's earlier transcript; matching styled refusal blocks retain the notice when that tail belongs to the validated transcript. New transcript text and a persistently missing block still clear it within the existing resize allowance and confirmation.
+The grey suggestion has a separate style rule: its composer gutter must use MiMo's orange or grey ink and every visible character of the suggestion, including its shortcut suffix, must be grey. A resize can expose only a tail of an established error's earlier transcript; matching styled error blocks retain the notice when that tail belongs to the validated transcript. New transcript text and a persistently missing block still clear it within the existing resize allowance and confirmation.
 No detected prompt or busy indication may be present.
 
-The same semantic refusal and user turn must remain for one second. Logical
+The same semantic error and user turn must remain for one second. Logical
 lines join terminal wraps before matching; independently styled interface anchors
 restore row boundaries after a full-width footer marks following rows as wrapped.
 Copy labels, the `↻ /recover`
 control, sidebar chrome and irrelevant styles are excluded from identity.
 Resize reflow, composer frames repainted to the new width, and accepted grey
 suggestions arriving or leaving preserve the original `since` time and produce
-no clear or further announcement while the canonical refusal identity is unchanged.
+no clear or further announcement while the canonical error identity is unchanged.
 If reflow clips the user-turn boundary beyond the bounded read, validation is
-inconclusive only when the available content walk, refusal block, footer and
+inconclusive only when the available content walk, error block, footer and
 idle composer still qualify. A leading incomplete wrapped logical row has
 unknown context: its text cannot open or close a tool panel.
 Every complete available row still contributes to the content walk.
-An already settled stall with the same refusal
+An already settled stall with the same error
 and footer keeps its full identity and original `since`. Missing context
 cannot create a new stall or finish settling one. Cursor-only writes do not
 end the observation.
@@ -693,7 +696,7 @@ An untracked screen without candidate ink cannot queue validation. The renderer
 observes xterm's parsed foreground operations to avoid even viewport reads until
 candidate ink is possible. Active colour, restored attributes, buffer changes
 and reflow retain a conservative hint; only a rendered absence check releases it.
-The hint cannot recognise a refusal or bypass styled validation. Marker rows
+The hint cannot recognise an error or bypass styled validation. Marker rows
 match completely; footer controls and right-hand panel chrome are anchored to
 their screen positions so ordinary user text containing their symbols remains text.
 The user-echo gutter owns its entire run, including indented hard-newline
@@ -721,16 +724,16 @@ If erasure leaves only the introduction and completed footer around empty error
 row slots, that loss also waits for confirmation. An introduction printed after
 a surviving error block remains new output.
 During a redraw, the styled mode row and input gutter retain ownership of the
-closing-edge slot and its single following status row. Discovery still requires
-the complete closing edge. The same settings phrase printed after that status
-row is transcript output.
-The same validated refusal and footer keep an established
+closing-edge slot and its recognised following status rows. Discovery still requires
+the complete closing edge. The same settings phrase printed after those status
+rows is transcript output.
+The same validated error and footer keep an established
 notice even when the complete user-turn text changes or its context is clipped.
 Reflowed text and the last fully validated turn provide comparison baselines for native
 repaints; inconclusive reads retain the latter for growth.
 User-turn text participates in discovery, but never ends an established notice.
 Reflow and native redraws can change that text for an
-arbitrary duration. Changes or loss of the refusal, completed footer or valid
+arbitrary duration. Changes or loss of the error, completed footer or valid
 composer must survive two coalesced validations before clearing; restoration
 between checks preserves the original time. Checks stay 250 ms apart, and
 output cannot extend a pending confirmation deadline. After a resize request,
@@ -748,7 +751,7 @@ persistent loss clears by the next 250 ms confirmation, at most 1,250 ms
 after the latest geometry change or resize report, subject to event-loop
 scheduling. A genuine screen end during the allowance can incur that bounded
 delay; real input and exit still clear immediately. A restored identity keeps
-its original notice. Real input suppresses the refusal and footer across
+its original notice. Real input suppresses the error and footer across
 user-turn text changes until that block disappears or is replaced.
 Outside the resize allowance, new transcript text, busy markers and prompts
 clear the state immediately. Busy screens, missing composer edges and absent candidate

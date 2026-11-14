@@ -59,11 +59,11 @@ warns on stderr when a later geometry act prevents restoration.
 
 
 `shellpuppet list` shows `STALLED <reason> since <ISO time>: <description>`
-where readiness normally appears when a supported provider error has left
+where readiness normally appears when a supported MiMo error has left
 the session idle. JSON lists include `stalled: { reason, description, since }`.
-The initial reason is `provider-refused`, with the fixed description
-"The model provider refused the turn." Only the MiMo error block,
-measured from a real screen, is supported. `list --waiting` continues to select permission prompts only.
+The reasons are `provider-refused` ("The model provider refused the turn.") and
+`request-failed` ("The model request failed."). Only measured MiMo error blocks
+are supported. `list --waiting` continues to select permission prompts only.
 
 ```text
 shellpuppet wait <id> --stalled [--timeout <ms>]
@@ -83,15 +83,15 @@ keeps its existing response. Text, regex and quiet cannot be combined with
 these supervision conditions. Exit code 3 means a wait did not match;
 `--now` returns normally even when no session needs attention.
 
-The refusal is recognised by its shape on screen, at and above the 80x24
+The error is recognised by its shape on screen, at and above the 80x24
 floor. It must finish the live turn with MiMo's error ink, outside recognised
 tool panels, with a visible idle composer and only recognised bottom chrome
-below it. The same refusal must persist for one second. Indented unsent input
+below it. The same error must persist for one second. Indented unsent input
 does not qualify; a clipped user-turn boundary prevents a new stall. Copy and recovery
 controls, sidebar changes, resize reflow and cursor-only writes preserve the
 stall and its original time. Composer frames repainted to the new width and
 accepted grey suggestions arriving or leaving also preserve it while the
-canonical refusal identity is unchanged, with no clear or further announcement.
+canonical error identity is unchanged, with no clear or further announcement.
 Presentation changes are validated on a coalesced timer. Changes confined to
 user-turn text, including every indented continuation behind its gutter, never
 end an established notice. Ordinary output keeps its marker characters and
