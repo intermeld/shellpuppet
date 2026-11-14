@@ -9,10 +9,18 @@ window.noticeCoveredTimeCases = async (mode, kind) => {
       const expectedSide = kind === 'equal' ? p.side() : 'top';
       const restRows = kind === 'adjacent' ? [rows - 4, rows - 3, rows - 2] :
         kind === 'equal' && initial === 1 ? [0] : [rows - 2];
-      const start = performance.now(), visits = [], placements = new Set();
+      const stopFrames = noticeFrameTiming(), start = performance.now(), visits = [], placements = new Set();
       const subscription = p.term.onCursorMove(() => visits.push({ row: p.term.buffer.active.cursorY, at: performance.now() }));
       let samples = 0, covered = 0, follow = null, frame = 0, rects = null;
+      let firstLowerLeg = null;
       try {
+        if (kind === 'plurality') {
+          await p.move(rows - 2);
+          const lowerAt = performance.now();
+          await noticePause(400);
+          await p.move(0);
+          firstLowerLeg = performance.now() - lowerAt;
+        }
         while (performance.now() - start < 4200) {
           if (kind === 'equal') {
             await p.move(0); await noticePause(30);
@@ -23,9 +31,9 @@ window.noticeCoveredTimeCases = async (mode, kind) => {
             for (const row of restRows) { await p.move(row); await noticePause(16); }
           } else {
             for (const row of [0, Math.floor(rows / 3), Math.floor(rows / 2)]) {
-              await p.move(row); await noticePause(5);
+              await p.move(row); await noticePause(25);
             }
-            await p.move(rows - 2); await noticePause(35);
+            await p.move(rows - 2); await noticePause(105);
           }
           const overlap = restRows.some(row => p.measure(row).overlap);
           if (!overlap) follow ??= performance.now() - start;
@@ -43,6 +51,8 @@ window.noticeCoveredTimeCases = async (mode, kind) => {
         weights[visit.row] = (weights[visit.row] || 0) + duration;
       }
       results.push({ rows, kind, initial, expectedSide, restRows, samples, covered, follow, weights, frame,
+        firstLowerLeg,
+        ...stopFrames(),
         placements: [...placements], rects: p.rects() - rects });
     } finally { p.destroy(); }
   }
