@@ -21,6 +21,28 @@ describe('delivered rest frame', () => {
     expect(assessDeliveredCadence(cadence).violations).toEqual([]);
   });
 
+  it('does not judge a deadline frame that the rest ends within', () => {
+    // A rest that ends before the next delivered frame cannot show a clear.
+    const cadence: DeliveredCadence = {
+      end: 1500,
+      legs: [{ row: 0, start: 0, end: 1163, top: true, bottom: false },
+        { row: 22, start: 1163, end: 1500, top: false, bottom: true }],
+      samples: [
+        { time: 600, row: 0, side: 'top', leg: 0, deadline: false, covered: true },
+        { time: 1162.4, row: 0, side: 'top', leg: 0, deadline: true, covered: true },
+        { time: 1195.8, row: 22, side: 'top', leg: 1, deadline: false, covered: false, evaluation: true },
+      ],
+    };
+    expect(assessDeliveredCadence(cadence).violations).toEqual([]);
+    // The same frame still counts when the rest outlasts it.
+    cadence.legs[0] = { ...cadence.legs[0]!, end: 1300 };
+    cadence.legs[1] = { ...cadence.legs[1]!, start: 1300 };
+    cadence.samples[2] = { ...cadence.samples[2]!, row: 0, leg: 0, side: 'top', covered: true };
+    expect(assessDeliveredCadence(cadence).violations).toEqual([
+      expect.objectContaining({ rule: 'rest clears on first completed frame at or after deadline' }),
+    ]);
+  });
+
   it('keeps a complete in-band prefix as a possible deadline veto', () => {
     const rows: [number, number, number, boolean, boolean][] = [
       [22, 0, 500, false, true], [0, 500, 1000, true, false],
