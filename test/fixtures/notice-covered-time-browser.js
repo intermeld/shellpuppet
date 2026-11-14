@@ -23,7 +23,9 @@ window.noticeCoveredTimeCases = async (mode, kind) => {
         const overlap = restRows.some(row => p.measure(row).overlap);
         if (now >= 2450) deadlineFrame ??= index;
         if (!overlap) { clearFrame ??= index; follow ??= now; }
-        if (now > 1700) {
+        // Steadiness and cover count after the documented startup deadline:
+        // a clearly leading edge within 2.5 s, plus one delivered frame.
+        if (deadlineFrame !== null && index > deadlineFrame + 1) {
           rects ??= p.rects(); samples++;
           if (overlap) covered++;
           placements.add(p.side());
