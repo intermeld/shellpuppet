@@ -129,10 +129,11 @@ window.noticeHorizontalRestCases = async mode => {
     try {
       await p.move(1); await p.move(0); await noticePause(650); p.show(); await noticePause(100);
       const start = performance.now(), visits = [], rects = p.rects();
-      let deadlineFrame = null, clearFrame = null;
+      let deadlineFrame = null, clearFrame = null, latestFrame = -1;
       const stopFrames = noticeFrameTiming((_time, index) => {
         if (visits.length && performance.now() - start - visits[0].at >= 1000) deadlineFrame ??= index;
         if (!p.measure(rows - 2).overlap) clearFrame ??= index;
+        latestFrame = index;
       });
       const subscription = p.term.onCursorMove(() => visits.push({ row: p.term.buffer.active.cursorY, at: performance.now() - start }));
       let frame = 0, samples = 0, covered = 0, follow = null;
@@ -141,7 +142,10 @@ window.noticeHorizontalRestCases = async mode => {
           await new Promise(resolve => p.term.write('\x1b[' + (rows - 1) + ';' + (frame++ % 2 + 1) + 'H*', resolve));
           const overlap = p.measure(rows - 2).overlap;
           if (!overlap) follow ??= performance.now() - start;
-          if (performance.now() - start > 1050) { samples++; if (overlap) covered++; }
+          // Late samples count once the deadline frame has been delivered: the
+          // rest must clear on that frame, and a sample taken before it is
+          // painted would only measure the frame interval.
+          if (deadlineFrame !== null && latestFrame > deadlineFrame) { samples++; if (overlap) covered++; }
           await noticePause(20);
         }
       } finally { subscription.dispose(); }
