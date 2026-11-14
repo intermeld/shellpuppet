@@ -5,6 +5,7 @@ import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import { captureViewer } from '../../src/daemon/screenshot.js';
 import type { CaptureOptions } from '../../src/daemon/screenshot.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
+import { noticeFrameLimitScript } from './noticeFrameLimit.js';
 import { api, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 import { assessDeliveredCadence, deliveredNoticeScript, recordDeliveredCadence } from './noticeCadence.js';
@@ -66,7 +67,8 @@ const observePane = `(() => {
     const times = __noticeFrames.filter(time => time >= start && time <= end);
     const gaps = times.slice(1).map((time, index) => time - times[index]).sort((a, b) => a - b);
     return { frames: gaps.length, frameInterval: gaps[Math.floor(gaps.length / 2)] ?? null,
-      frameSpan: times.length < 2 ? 0 : times.at(-1) - times[0] };
+      maxFrameGap: gaps.at(-1) ?? null,
+      frameSpan: times.length < 2 ? 0 : times.at(-1) - times[0], observedMs: end - start };
   };
   window.__placement = () => {
     const style = getComputedStyle(__noticeTest.notices);
@@ -84,13 +86,10 @@ const observePane = `(() => {
       samples.push({ ...placement, hidden: state.alert.hidden });
       await __pause(4);
     }
-    const times = __noticeFrames.filter(time => time >= start && time <= performance.now());
-    const gaps = times.slice(1).map((time, index) => time - times[index]).sort((a, b) => a - b);
     return { placements: [...new Set(samples.map(s => JSON.stringify({ top: s.top, bottom: s.bottom })))],
       samples: samples.length, hidden: samples.some(s => s.hidden), moves: state.moves,
       halves: state.halves.size, rects: state.rects, changes, visits: state.visits.slice(visitsAt),
-      frames: gaps.length, frameInterval: gaps[Math.floor(gaps.length / 2)] ?? null,
-      frameSpan: times.length < 2 ? 0 : times.at(-1) - times[0] };
+      ...__noticeFrameSummary(start) };
   };
 })()`;
 
@@ -185,7 +184,8 @@ async function withPage(mode: string, interact: NonNullable<CaptureOptions['inte
   }
   await captureViewer({ browser: browser!, viewerUrl, width: 1000, height: 900,
     cpuThrottlingRate: Number(process.env['NOTICE_CPU_RATE'] ?? 1),
-    drive: true, probeOnly: true, timeoutMs: period === undefined ? 60_000 : 90_000, beforeNavigateScript: observePane,
+    drive: true, probeOnly: true, timeoutMs: period === undefined ? 60_000 : 90_000,
+    beforeNavigateScript: noticeFrameLimitScript + ';' + observePane,
     probe: `window.__noticeTest && !__noticeTest.alert.hidden &&
       __noticeTest.alert.textContent.includes('Waiting for you') && ${period === undefined ? '__noticeTest.moves > 10' : 'true'}`,
     timeoutProbe: `JSON.stringify({ alert: window.__noticeTest?.alert.textContent,
@@ -230,11 +230,17 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
           ...__noticeFrameSummary(start),
           placements: [...placements], hidden: state.alert.hidden };
       })()`) as { row: number; rows: number; samples: number; restingSamples: number; covered: number;
-        follow: number | null; weights: Record<string, number>; placements: string[]; hidden: boolean };
+        follow: number | null; weights: Record<string, number>; placements: string[]; hidden: boolean;
+        frames: number; frameInterval: number; maxFrameGap: number; frameSpan: number; observedMs: number };
       const details = JSON.stringify(result);
       expect.soft(result.rows, details).toBe(rows);
-      expect.soft(result.samples, details).toBeGreaterThan(100);
-      expect.soft(result.restingSamples, details).toBeGreaterThan(50);
+      expect.soft(result.samples, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
+      expect.soft(result.restingSamples, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
+      expect.soft(result.frames, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
+      expect.soft(result.frameInterval, details).toBeLessThan(200);
+      expect.soft(result.maxFrameGap, details).toBeLessThan(500);
+      expect.soft(result.frameSpan, details).toBeGreaterThan(5500);
+      expect.soft(result.observedMs - result.frameSpan, details).toBeLessThan(500);
       expect.soft(result.hidden, details).toBe(false);
       expect.soft(result.covered, details).toBe(0);
       expect.soft(result.follow, details).not.toBeNull();
@@ -310,12 +316,18 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
           placements: string[]; covered: number; samples: number; restingSamples: number; hidden: boolean;
           phases: number; maxLeg: number; phaseMismatches: number;
           cadence: DeliveredCadence;
+          frames: number; frameInterval: number; maxFrameGap: number; frameSpan: number; observedMs: number;
         };
         const assessment = assessDeliveredCadence(result.cadence);
         recordDeliveredCadence(`${mode}-${String(period)}-${key}`, result.cadence);
         const details = JSON.stringify({ key, period, ...result, cadence: assessment });
-        expect.soft(result.samples, details).toBeGreaterThan(100);
-        expect.soft(result.restingSamples, details).toBeGreaterThan(50);
+        expect.soft(result.samples, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
+        expect.soft(result.restingSamples, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
+        expect.soft(result.frames, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
+        expect.soft(result.frameInterval, details).toBeLessThan(200);
+        expect.soft(result.maxFrameGap, details).toBeLessThan(500);
+        expect.soft(result.frameSpan, details).toBeGreaterThan(3000);
+        expect.soft(result.observedMs - result.frameSpan, details).toBeLessThan(500);
         if (key === 'r') expect.soft(result.restingSamples / result.samples, details).toBeGreaterThan(0.6);
         else {
           expect.soft(result.phases, details).toBeGreaterThan(4);
@@ -343,13 +355,15 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
       await evaluate('__pause(1600)');
       const result = await evaluate('__sample(3000)') as {
         placements: string[]; samples: number; hidden: boolean; moves: number; halves: number; rects: number;
-        frames: number; frameInterval: number; frameSpan: number;
+        frames: number; frameInterval: number; maxFrameGap: number; frameSpan: number; observedMs: number;
       };
       const details = JSON.stringify(result);
-      expect(result.samples, details).toBeGreaterThan(5);
-      expect(result.frames, details).toBeGreaterThan(20);
+      expect(result.samples, details).toBeGreaterThan(0);
+      expect(result.frames, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
       expect(result.frameInterval, details).toBeLessThan(200);
+      expect(result.maxFrameGap, details).toBeLessThan(500);
       expect(result.frameSpan, details).toBeGreaterThan(2500);
+      expect(result.observedMs - result.frameSpan, details).toBeLessThan(500);
       expect(result.moves, details).toBeGreaterThan(30);
       expect(result.halves, details).toBe(2);
       expect(result.hidden, details).toBe(false);

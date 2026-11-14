@@ -4,7 +4,7 @@ import type { DeliveredCadence } from './noticeCadence.js';
 
 describe('delivered rest frame', () => {
   it('rejects the missed first frame in the recorded 80x24 equal PTY leg', () => {
-    // Extracted from review8/cadences-attachment-lane1-1/viewer-24-equal.json.
+    // Extracted from a captured 80x24 equal PTY cadence.
     const cadence: DeliveredCadence = {
       end: 5938.1,
       legs: [{ row: 0, start: 4818.9, end: 5938.1, top: true, bottom: false }],
@@ -40,5 +40,24 @@ describe('delivered rest frame', () => {
     const result = assessDeliveredCadence(cadence);
     expect(result.repaints[0]?.target).toBe('top');
     expect(result.violations).toEqual([]);
+  });
+
+  it('keeps an equal cycle across a long uncovered leg', () => {
+    const rows: [number, number, number, boolean, boolean][] = [
+      [0, 0, 900, true, false], [50, 900, 1800, false, false],
+      [148, 1800, 2700, false, true], [0, 2700, 3600, true, false],
+      [50, 3600, 5200, false, false], [148, 5200, 6100, false, true],
+      [50, 6100, 7000, false, false], [148, 7000, 7950, false, true],
+    ];
+    const cadence: DeliveredCadence = {
+      end: 7950,
+      legs: rows.map(([row, start, end, top, bottom]) => ({ row, start, end, top, bottom })),
+      samples: [
+        { time: 0, row: 0, side: 'bottom', leg: 0, deadline: false, covered: false },
+        { time: 7940, row: 148, side: 'bottom', leg: 7, deadline: false,
+          covered: true, evaluation: true },
+      ],
+    };
+    expect(assessDeliveredCadence(cadence).violations).toEqual([]);
   });
 });

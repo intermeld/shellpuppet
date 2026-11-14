@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { captureViewer } from '../../src/daemon/screenshot.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
+import { noticeFrameLimitScript } from './noticeFrameLimit.js';
 import { assessDeliveredCadence, recordDeliveredCadence } from './noticeCadence.js';
 import type { DeliveredCadence } from './noticeCadence.js';
 
@@ -34,6 +35,7 @@ describe.each(['viewer', 'dashboard'])('%s recorded notice repaint', mode => {
       '"></script><script src="' + url('../fixtures/notice-recorded-browser.js') + '"></script>');
     const specs = [24, 150].flatMap(rows => Array.from({ length: periodic ? 1 : 3 }, (_, repeat) => ({ rows, repeat })));
     const result = await captureViewer({ browser, viewerUrl: pathToFileURL(page).href, width: 1000, height: 900,
+      beforeNavigateScript: noticeFrameLimitScript,
       drive: true, probeOnly: true, timeoutMs: 90000, probe: '!!window.replayRecordedNotice',
       interact: ({ evaluate }) => evaluate('Promise.all(' + JSON.stringify(specs) + '.map(spec=>replayRecordedNotice(' +
         JSON.stringify(mode) + ',spec.rows,' + JSON.stringify(recorded) + ',' + (periodic ? '2' : '1') + ')))'),

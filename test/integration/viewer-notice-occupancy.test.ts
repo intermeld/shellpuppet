@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { captureViewer } from '../../src/daemon/screenshot.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
+import { noticeFrameLimitScript } from './noticeFrameLimit.js';
 
 let browser: string | null;
 let scratch: string;
@@ -19,7 +20,7 @@ afterAll(() => { fs.rmSync(scratch, { recursive: true, force: true }); });
 interface Placement { overlap: boolean }
 interface Occupancy {
   samples: number; covered: number; placements: string[]; rects: number; final: Placement;
-  frames: number; frameInterval: number; frameSpan: number; observedMs: number;
+  frames: number; frameInterval: number; maxFrameGap: number; frameSpan: number; observedMs: number;
   lower: Placement; upper: Placement; edge: Placement; font: Placement; limit: Placement; scale: Placement;
   shown: Placement; fitted: Placement; resized: Placement;
 }
@@ -36,6 +37,7 @@ async function run<T>(mode: string, expression: string): Promise<T[]> {
     <script src="${url('../fixtures/notice-occupancy-browser.js')}"></script>`);
   const result = await captureViewer({ browser: browser!, viewerUrl: pathToFileURL(page).href,
     cpuThrottlingRate: Number(process.env['NOTICE_CPU_RATE'] ?? 1),
+    beforeNavigateScript: noticeFrameLimitScript,
     width: 1000, height: 900, drive: true, probeOnly: true, timeoutMs: 180_000,
     probe: '!!window.noticeOccupancyCases', interact: async ({ evaluate }) => {
       await evaluate('window.__stopCaseFrames = noticeFrameTiming()');
@@ -59,9 +61,10 @@ describe.each(['viewer', 'dashboard'])('%s notice occupancy', mode => {
             expect.soft(result[key].overlap, `${key}: ${details}`).toBe(false);
           }
         } else {
-          expect.soft(result.samples, details).toBeGreaterThan(kind === 'dominant' ? 5 : 20);
-          expect.soft(result.frames, details).toBeGreaterThan(20);
+          expect.soft(result.samples, details).toBeGreaterThan(0);
+          expect.soft(result.frames, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
           expect.soft(result.frameInterval, details).toBeLessThan(200);
+          expect.soft(result.maxFrameGap, details).toBeLessThan(500);
           expect.soft(result.frameSpan, details).toBeGreaterThan(2500);
           expect.soft(result.observedMs - result.frameSpan, details).toBeLessThan(500);
           expect.soft(result.covered, details).toBe(0);

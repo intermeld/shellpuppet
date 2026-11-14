@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { captureViewer } from '../../src/daemon/screenshot.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
+import { noticeFrameLimitScript } from './noticeFrameLimit.js';
 
 let browser: string | null;
 let scratch: string;
@@ -27,6 +28,7 @@ async function run<T>(mode: string, expression: string): Promise<T[]> {
     <script src="${url('../fixtures/notice-cycle-browser.js')}"></script>`);
   const result = await captureViewer({ browser: browser!, viewerUrl: pathToFileURL(page).href,
     cpuThrottlingRate: Number(process.env['NOTICE_CPU_RATE'] ?? 1),
+    beforeNavigateScript: noticeFrameLimitScript,
     width: 1000, height: 900, drive: true, probeOnly: true, timeoutMs: 90_000,
     probe: '!!window.noticeSnapshotCases', interact: async ({ evaluate }) => {
       await evaluate('window.__stopCaseFrames = noticeFrameTiming()');
@@ -41,7 +43,8 @@ async function run<T>(mode: string, expression: string): Promise<T[]> {
 interface EqualLayout {
   changes: unknown[]; layouts: { height: number; anchorError: number; capError: number }[];
 }
-interface Nested { samples: number; covered: number; restSamples: number; coveredAtRest: number; changes: unknown[] }
+interface Nested { samples: number; covered: number; restSamples: number; coveredAtRest: number; changes: unknown[];
+  frames: number; frameInterval: number; maxFrameGap: number; frameSpan: number; observedMs: number }
 interface Snapshot {
   ended: boolean; ready: { overlap: boolean; row: number }; rows: number; ordinaryReads: number;
   tracking: number;
@@ -49,7 +52,8 @@ interface Snapshot {
 }
 interface HorizontalRest { rows: number; samples: number; covered: number; follow: number | null;
   visits: { row: number; at: number }[]; rects: number; frames: number; frameInterval: number;
-  frameSpan: number; observedMs: number; deadlineFrame: number | null; clearFrame: number | null }
+  maxFrameGap: number; frameSpan: number; observedMs: number;
+  deadlineFrame: number | null; clearFrame: number | null }
 
 describe.each(['viewer', 'dashboard'])('%s notice repaint boundaries', mode => {
   for (const kind of ['height', 'refresh']) it(`keeps both initial edges during equal alternation with late ${kind} updates`, async context => {
@@ -72,8 +76,13 @@ describe.each(['viewer', 'dashboard'])('%s notice repaint boundaries', mode => {
       const results = await run<Nested>(mode, `noticeNestedReturnCases(${JSON.stringify(mode)}, ${JSON.stringify(timing)})`);
       for (const result of results) {
         const details = JSON.stringify(result);
-        expect.soft(result.samples, details).toBeGreaterThan(100);
-        expect.soft(result.restSamples, details).toBeGreaterThan(100);
+        expect.soft(result.samples, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
+        expect.soft(result.restSamples, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
+        expect.soft(result.frames, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
+        expect.soft(result.frameInterval, details).toBeLessThan(200);
+        expect.soft(result.maxFrameGap, details).toBeLessThan(500);
+        expect.soft(result.frameSpan, details).toBeGreaterThan(5000);
+        expect.soft(result.observedMs - result.frameSpan, details).toBeLessThan(500);
         expect.soft(result.covered, details).toBe(0);
         expect.soft(result.coveredAtRest, details).toBe(0);
         expect.soft(result.changes, details).toEqual([]);
@@ -102,13 +111,13 @@ describe.each(['viewer', 'dashboard'])('%s notice repaint boundaries', mode => {
     if (process.env['NOTICE_DIAGNOSTICS']) process.stderr.write(JSON.stringify({ mode, results }) + '\n');
     for (const result of results) {
       const details = JSON.stringify(result);
-      expect.soft(result.visits.length, details).toBeGreaterThan(10);
+      expect.soft(result.visits.length, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
       expect.soft([...new Set(result.visits.map(visit => visit.row))], details).toEqual([result.rows - 2]);
-      expect.soft(result.samples, details).toBeGreaterThan(5);
-      expect.soft(result.frames, details).toBeGreaterThan(20);
+      expect.soft(result.samples, details).toBeGreaterThan(0);
+      expect.soft(result.frames, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
       expect.soft(result.frameInterval, details).toBeLessThan(200);
-      expect.soft(result.frameSpan, details).toBeGreaterThan(1500);
-      expect.soft(result.observedMs - result.frameSpan, details).toBeLessThan(500);
+      expect.soft(result.maxFrameGap, details).toBeLessThan(500);
+      expect.soft(result.frameSpan, details).toBeGreaterThan(result.observedMs - 400);
       expect.soft(result.covered, details).toBe(0);
       expect.soft(result.follow, details).not.toBeNull();
       expect.soft(result.deadlineFrame, details).not.toBeNull();

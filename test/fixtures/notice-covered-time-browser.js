@@ -4,20 +4,37 @@ window.noticeCoveredTimeCases = async (mode, kind) => {
   for (const rows of [24, 150]) for (const initial of kind === 'equal' ? [1, rows - 2] : [0]) {
     const p = makeNoticePane(mode, rows);
     try {
+      const waitFrames = async count => {
+        for (let i = 0; i < count; i++) await new Promise(resolve => requestAnimationFrame(resolve));
+      };
       await p.move(1); await p.move(initial);
-      await noticePause(1100); p.show(); await noticePause(50);
+      await noticePause(1100);
+      const firstLowerMove = kind === 'plurality' ? p.move(rows - 2) : null;
+      p.show(); const initialSide = p.side(); await noticePause(50);
       const expectedSide = kind === 'equal' ? p.side() : 'top';
       const restRows = kind === 'adjacent' ? [rows - 4, rows - 3, rows - 2] :
         kind === 'equal' && initial === 1 ? [0] : [rows - 2];
-      const stopFrames = noticeFrameTiming(), start = performance.now(), visits = [], placements = new Set();
+      const start = performance.now(), visits = [], placements = new Set();
       const subscription = p.term.onCursorMove(() => visits.push({ row: p.term.buffer.active.cursorY, at: performance.now() }));
       let samples = 0, covered = 0, follow = null, frame = 0, rects = null;
+      let deadlineFrame = null, clearFrame = null;
+      const stopFrames = noticeFrameTiming((_time, index) => {
+        const now = performance.now() - start;
+        const overlap = restRows.some(row => p.measure(row).overlap);
+        if (now >= 2450) deadlineFrame ??= index;
+        if (!overlap) { clearFrame ??= index; follow ??= now; }
+        if (now > 1700) {
+          rects ??= p.rects(); samples++;
+          if (overlap) covered++;
+          placements.add(p.side());
+        }
+      });
       let firstLowerLeg = null;
       try {
         if (kind === 'plurality') {
-          await p.move(rows - 2);
+          await firstLowerMove;
           const lowerAt = performance.now();
-          await noticePause(400);
+          await waitFrames(4);
           await p.move(0);
           firstLowerLeg = performance.now() - lowerAt;
         }
@@ -30,16 +47,9 @@ window.noticeCoveredTimeCases = async (mode, kind) => {
             await p.move(0); await noticePause(12);
             for (const row of restRows) { await p.move(row); await noticePause(16); }
           } else {
-            for (const row of [0, Math.floor(rows / 3), Math.floor(rows / 2)]) {
-              await p.move(row); await noticePause(25);
-            }
-            await p.move(rows - 2); await noticePause(105);
-          }
-          const overlap = restRows.some(row => p.measure(row).overlap);
-          if (!overlap) follow ??= performance.now() - start;
-          if (performance.now() - start > 1700) {
-            rects ??= p.rects(); samples++; if (overlap) covered++;
-            placements.add(p.side());
+            await p.move(0); await waitFrames(1);
+            await p.move(Math.floor(rows / 2)); await waitFrames(1);
+            await p.move(rows - 2); await waitFrames(2);
           }
           frame++;
         }
@@ -50,7 +60,8 @@ window.noticeCoveredTimeCases = async (mode, kind) => {
         const duration = Math.max(0, (visits[i + 1]?.at ?? end) - Math.max(start + 1700, visit.at));
         weights[visit.row] = (weights[visit.row] || 0) + duration;
       }
-      results.push({ rows, kind, initial, expectedSide, restRows, samples, covered, follow, weights, frame,
+      results.push({ rows, kind, initial, initialSide, expectedSide, restRows, samples, covered, follow,
+        deadlineFrame, clearFrame, weights, frame,
         firstLowerLeg,
         ...stopFrames(),
         placements: [...placements], rects: p.rects() - rects });

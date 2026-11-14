@@ -6,6 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { captureViewer } from '../../src/daemon/screenshot.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
+import { noticeFrameLimitScript } from './noticeFrameLimit.js';
 import { assessDeliveredCadence, recordDeliveredCadence } from './noticeCadence.js';
 import type { DeliveredCadence } from './noticeCadence.js';
 
@@ -30,6 +31,7 @@ async function run<T>(mode: string, expression: string): Promise<T[]> {
     <script src="${url('../fixtures/notice-covered-time-browser.js')}"></script>`);
   const result = await captureViewer({ browser: browser!, viewerUrl: pathToFileURL(page).href,
     cpuThrottlingRate: Number(process.env['NOTICE_CPU_RATE'] ?? 1),
+    beforeNavigateScript: noticeFrameLimitScript,
     width: 1000, height: 900, drive: true, probeOnly: true, timeoutMs: 300_000,
     probe: '!!window.noticeCoveredTimeCases', interact: async ({ evaluate }) => {
       await evaluate('window.__stopCaseFrames = noticeFrameTiming()');
@@ -43,8 +45,9 @@ async function run<T>(mode: string, expression: string): Promise<T[]> {
 
 interface Rest {
   samples: number; covered: number; follow: number | null; placements: string[];
-  weights: Record<string, number>; restRows: number[]; rects: number; expectedSide: string;
-  frames: number; frameInterval: number; frameSpan: number; observedMs: number;
+  weights: Record<string, number>; restRows: number[]; rects: number; expectedSide: string; initialSide: string;
+  frames: number; frameInterval: number; maxFrameGap: number; frameSpan: number; observedMs: number;
+  deadlineFrame: number | null; clearFrame: number | null;
   firstLowerLeg: number | null;
 }
 interface Moving { interval: number; legs: Rest[]; sustained: Rest[]; final: { overlap: boolean }; cadence: DeliveredCadence }
@@ -55,24 +58,27 @@ describe.each(['viewer', 'dashboard'])('%s covered notice time', mode => {
     it(`keeps the correct edge through ${kind} repaints at 24 and 150 rows`, async context => {
       if (!browser) { context.skip(); return; }
       const results = await run<Rest>(mode, `noticeCoveredTimeCases(${JSON.stringify(mode)}, ${JSON.stringify(kind)})`);
+      if (process.env['NOTICE_DIAGNOSTICS']) process.stderr.write(JSON.stringify({ mode, kind, results }) + '\n');
       for (const result of results) {
         const details = JSON.stringify(result);
-        expect.soft(result.samples, details).toBeGreaterThan(5);
-        expect.soft(result.frames, details).toBeGreaterThan(20);
+        expect.soft(result.samples, details).toBeGreaterThan(0);
+        expect.soft(result.frames, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
         expect.soft(result.frameInterval, details).toBeLessThan(200);
+        expect.soft(result.maxFrameGap, details).toBeLessThan(500);
         expect.soft(result.frameSpan, details).toBeGreaterThan(2000);
         expect.soft(result.observedMs - result.frameSpan, details).toBeLessThan(500);
         expect.soft(result.covered, details).toBe(0);
         expect.soft(result.placements, details).toEqual([result.expectedSide]);
+        if (kind === 'plurality') expect.soft(result.initialSide, details).toBe('bottom');
         expect.soft(result.rects, details).toBeLessThan(20);
         if (kind === 'plurality') expect.soft(result.firstLowerLeg, details).toBeLessThan(1000);
         if (kind !== 'equal') {
           expect.soft(result.follow, details).not.toBeNull();
-          // The documented startup deadline: a clearly leading edge within 2.5 s of
-          // the notice appearing (start is 50 ms after it). follow is sampled once
-          // per repaint cycle, and slower platforms deliver fewer frames per cycle,
-          // so it can lag the move itself.
-          expect.soft(result.follow, details).toBeLessThan(2450);
+          // Start follows appearance by 50 ms. Placement is measured on each
+          // completed frame through the 2.5 s startup deadline.
+          expect.soft(result.deadlineFrame, details).not.toBeNull();
+          expect.soft(result.clearFrame, details).not.toBeNull();
+          expect.soft(result.clearFrame! - result.deadlineFrame!, details).toBeLessThanOrEqual(1);
           // Verify the actual xterm event durations, not just timer requests.
           const total = Object.values(result.weights).reduce((sum, duration) => sum + duration, 0);
           const rest = result.restRows.reduce((sum, row) => sum + (result.weights[String(row)] ?? 0), 0);

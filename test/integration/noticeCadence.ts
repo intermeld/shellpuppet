@@ -35,6 +35,8 @@ export function deliveredChanges(cadence: DeliveredCadence) {
 }
 export function assessDeliveredCadence(cadence: DeliveredCadence) {
   const violations: unknown[] = [], rests: unknown[] = [], repaints: RepaintAssessment[] = [];
+  const historyStart = cadence.legs[0]?.start ?? 0;
+  const retainedSummaries: { end: number; edge: string | null; validFor: number }[] = [];
   const changes = deliveredChanges(cadence);
   const between = (start: number, end: number) => changes.filter(change => change.time >= start && change.time < end);
   const runs: { edge: string; start: number; end: number }[] = [];
@@ -114,7 +116,8 @@ export function assessDeliveredCadence(cadence: DeliveredCadence) {
       const times = [change.earliest, change.time, ...legs.flatMap(leg => [leg.start, leg.end])
         .filter(time => time >= change.earliest && time <= change.time)];
       if (!times.some(time => {
-        const whole = deliveredWeights(legs, Math.max(evidenceStart(time, start), time - 10000), time);
+        const whole = deliveredWeights(cadence.legs,
+          Math.max(evidenceStart(time, historyStart), time - 10000), time);
         return clearEdge(whole.top, whole.bottom) === change.side;
       })) violations.push({ rule: 'whole retained history must clearly favour a repaint change', change });
     }
@@ -126,12 +129,13 @@ export function assessDeliveredCadence(cadence: DeliveredCadence) {
         if (prior && sample.time - prior.time < 10000) return false;
         const leg = cadence.legs[sample.leg];
         if (!leg || (target === 'top' ? leg.top : leg.bottom)) return false;
-        const whole = deliveredWeights(legs, Math.max(evidenceStart(sample.time, start), sample.time - 10000), sample.time);
+        const whole = deliveredWeights(cadence.legs,
+          Math.max(evidenceStart(sample.time, historyStart), sample.time - 10000), sample.time);
         const complete = returns.filter(time => time <= sample.time && time >= evidenceStart(sample.time, start));
         const cycleWeights = complete.length > 1 ? deliveredWeights(legs, complete[0]!, complete.at(-1)!) : null;
         const cycle = cycleWeights ? clearEdge(cycleWeights.top, cycleWeights.bottom) : undefined;
-        const summaryVeto = summaries.some(summary => summary.end <= sample.time &&
-          summary.end >= evidenceStart(sample.time, start) &&
+        const summaryVeto = [...retainedSummaries, ...summaries].some(summary => summary.end <= sample.time &&
+          summary.end >= evidenceStart(sample.time, historyStart) &&
           sample.time - summary.end < summary.validFor && summary.edge !== target);
         return sample.evaluation && clearEdge(whole.top, whole.bottom) === target &&
           (cycle === undefined || cycle === target) && !summaryVeto;
@@ -139,6 +143,7 @@ export function assessDeliveredCadence(cadence: DeliveredCadence) {
       if (wrong) violations.push({ rule: 'first eligible clear-edge deadline', target, clearBy, first: wrong.time });
     }
     repaints.push({ start, end, ...weights, target, firstCycle, clearBy, changes: localChanges.length });
+    retainedSummaries.push(...summaries);
   };
   let shortLegs: DeliveredCadence['legs'] = [];
   for (const leg of cadence.legs) {
@@ -147,6 +152,7 @@ export function assessDeliveredCadence(cadence: DeliveredCadence) {
     const duration = leg.end - leg.start;
     if (duration < 1000) { shortLegs.push(leg); continue; }
     inspectRepaint(shortLegs); shortLegs = [];
+    if (leg.top || leg.bottom) retainedSummaries.length = 0;
     // A long row outside either rectangle has no notice to clear. Rectangle
     // stays, including stays across adjacent rows, are assessed above.
   }

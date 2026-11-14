@@ -44,7 +44,7 @@ window.noticeNestedReturnCases = async (mode, timing = [30, 290, 30, 300]) => {
     const p = makeNoticePane(mode, rows);
     try {
       await p.move(rows - 2); await noticePause(650); p.show(); await noticePause(100);
-      const start = performance.now(), changes = [], visits = [];
+      const start = performance.now(), changes = [], visits = [], stopFrames = noticeFrameTiming();
       const subscription = p.term.onCursorMove(() => visits.push({ row: p.term.buffer.active.cursorY, at: performance.now() - start }));
       let last = p.side(), samples = 0, covered = 0, restSamples = 0, coveredAtRest = 0;
       const watch = setInterval(() => {
@@ -63,7 +63,7 @@ window.noticeNestedReturnCases = async (mode, timing = [30, 290, 30, 300]) => {
           }
         }
       } finally { clearInterval(watch); subscription.dispose(); }
-      results.push({ rows, samples, covered, restSamples, coveredAtRest, changes, visits });
+      results.push({ rows, samples, covered, restSamples, coveredAtRest, changes, visits, ...stopFrames() });
     } finally { p.destroy(); }
   }
   return results;
