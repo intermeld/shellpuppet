@@ -57,7 +57,7 @@ export interface StallSignature {
   /** Fixed product wording. Never supplied by the terminal. */
   description: string;
   /** Complete visible marker row, excluding trailing space, before styled reads. */
-  marker: { text: string; fg: string[] };
+  marker: { text: string | RegExp; fg: string[] };
   /** Controls on the completed footer only; group 1 retains its semantic prefix. */
   cosmetic?: RegExp;
   /** Framing shared with the module's answer reader, independent of body text. */

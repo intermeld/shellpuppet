@@ -1001,7 +1001,13 @@ export class StallScreenCache {
 
 function stallRegion(lines: readonly (string | StyledLine)[], shapes: readonly StallSignature[]): readonly StyledLine[] {
   let rows: readonly StyledLine[] = lines.map(line => typeof line === 'string' ? { text: line, spans: [] } : line);
-  for (const shape of shapes) rows = shape.contentRegion?.(rows) ?? rows;
+  const applied = new Set<StallSignature['contentRegion']>();
+  for (const shape of shapes) {
+    if (shape.contentRegion !== undefined && !applied.has(shape.contentRegion)) {
+      rows = shape.contentRegion(rows);
+      applied.add(shape.contentRegion);
+    }
+  }
   return rows;
 }
 
@@ -1115,15 +1121,20 @@ export function possibleStall(lines: readonly string[], signature: CompiledSigna
   const shapes = moduleFor(signature.name)?.stalls;
   // This hint uses only module-owned marker and closing-edge rules. No
   // configured pattern runs here; full validation retains its regex budget.
-  if (!shapes?.some(shape => lines.some(line => line.trimEnd() === shape.marker.text))) return false;
+  if (!shapes?.some(shape => lines.some(line => stallMarker(line, shape)))) return false;
   // Busy rules run within the turn during validation. Testing the entire
   // viewport here would also reject an ordinary user echo quoting a rule.
   return shapes.some(shape => {
-    if (!lines.some(line => line.trimEnd() === shape.marker.text)) return false;
+    if (!lines.some(line => stallMarker(line, shape))) return false;
     // Stall closing edges are narrower than the reading composer's rule.
     const test = stallTests(shape).composer;
     return test.text !== undefined && lines.some(line => test.text!.test(line));
   });
+}
+
+function stallMarker(line: string, shape: StallSignature): boolean {
+  const text = line.trimEnd();
+  return typeof shape.marker.text === 'string' ? text === shape.marker.text : shape.marker.text.test(text);
 }
 
 /** Keep the physical origin for visibility, but match soft wraps as one line. */
@@ -1142,9 +1153,12 @@ function logicalStallLines(physical: readonly StyledLine[], shapes: readonly Sta
     const firstInk = first < 0 ? undefined : row.spans.find(span => span.from <= first && span.to > first)?.fg;
     const framed = frameAnchor && (firstInk === '#fb8147' || firstInk === '#ff8040');
     const footer = footerAnchor && firstInk === '#fb8147';
-    const belowEdge = previous !== undefined && /^ {2}╹▀+/u.test(previous.text) &&
-      /^ {3}(?:ctrl\+p settings|[\d.]+[KMG]?\/[\d.]+[KMG]?↓)/u.test(row.text);
-    const ownRow = shapes.length > 0 && (framed || footer || belowEdge);
+    const belowEdge = previous !== undefined &&
+      (/^ {2}╹▀+/u.test(previous.text) || shapes.some(shape => stallTests(shape).bottom.some(test => test.text?.test(previous.text)))) &&
+      shapes.some(shape => stallTests(shape).bottom.some(test => test.text?.test(row.text)));
+    const busyBelowFooter = previous !== undefined && /^ {5}▣ {2}Build · /u.test(previous.text) &&
+      /^ {3}esc (?:to )?interrupt\s*$/u.test(row.text);
+    const ownRow = shapes.length > 0 && (framed || footer || belowEdge || busyBelowFooter);
     if (row.wrapped && previous !== undefined && !ownRow) {
       const offset = previous.text.length + (physical[i - 1]!.wrapPadding ?? 0);
       previous.text = previous.text.padEnd(offset) + row.text;
@@ -1177,7 +1191,14 @@ export function validateStall(physical: readonly StyledLine[], signature: Compil
     for (let i = composer.chrome - 1; i >= 0; i--) {
       if (signature.turn !== undefined && lineFits(lines[i]!, signature.turn)) { turnStart = i + 1; break; }
     }
-    if (turnBusy(lines, signature, turnStart, composer.chrome)) return null;
+    let lastOutput = composer.chrome - 1;
+    while (lastOutput >= turnStart && blank(lines[lastOutput])) lastOutput--;
+    const completedFooter = lastOutput >= turnStart && signatures.some(shape => {
+      const row = lines[lastOutput]!;
+      return lineFits({ ...row, text: row.text.replace(shape.cosmetic ?? /$^/u, '$1') }, stallTests(shape).footer);
+    });
+    const busyInComposer = lines.slice(composer.chrome).some(line => signature.busy.some(test => lineFits(line, test)));
+    if (turnBusy(lines, signature, turnStart, composer.chrome) && (!completedFooter || busyInComposer)) return null;
     for (const shape of signatures) {
       const tests = stallTests(shape);
       if (!lineFits(lines[composer.line]!, tests.composer)) continue;

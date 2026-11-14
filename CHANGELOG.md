@@ -29,6 +29,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Show idle MiMo sessions whose model request failed as stalled, including in session lists, supervisor events and stalled waits.
 - Let a dashboard pane take its grid when the controlling window releases it during a roster move to another window, while keeping the human's grid through socket loss, reload, pane dismissal, window close, Pop out, controller reconnect and a viewer link or another client connecting meanwhile.
 - Retry a dashboard Auto fit after its pending grid request is lost when the connection closes.
 - Keep Qoder message suggestions and drafts, including numbered and lettered text, from appearing as choices waiting for an answer.
