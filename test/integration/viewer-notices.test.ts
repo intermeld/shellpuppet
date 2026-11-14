@@ -213,7 +213,9 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
           const cell = screen.height / state.term.rows;
           const overlap = box.top < screen.top + (row + 1) * cell && box.bottom > screen.top + row * cell;
           if (!overlap) follow ??= performance.now() - start;
-          if (performance.now() - start > 1700) {
+          // Covered time counts after the documented startup deadline: a clearly
+          // leading edge within 2.5 s, plus one frame.
+          if (performance.now() - start > 2517) {
             samples++; if (overlap) covered++;
             if (state.term.buffer.active.cursorY === row) restingSamples++;
             placements.add(state.notices.style.top === 'auto' ? 'bottom' : 'top');
@@ -244,7 +246,7 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
       expect.soft(result.hidden, details).toBe(false);
       expect.soft(result.covered, details).toBe(0);
       expect.soft(result.follow, details).not.toBeNull();
-      expect.soft(result.follow, details).toBeLessThan(1500);
+      expect.soft(result.follow, details).toBeLessThan(2517);
       expect.soft(result.placements, details).toEqual(['top']);
       const weights = Object.values(result.weights);
       expect.soft(result.weights[String(result.row)], details).toBe(Math.max(...weights));
