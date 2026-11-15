@@ -16,6 +16,8 @@ version may change behaviour, and every such change is listed here.
 
 ### Changed
 
+- Bound retained mailbox history, protect claim ids, settle ended inboxes before events, and validate messaging configuration limits.
+
 - Agent-specific knowledge (reading signatures, prompt shapes and dialogs,
   Muse's input rules) now lives in one module per harness under
   `src/agents/`, as ADR-006 describes. Prompt detection still runs every

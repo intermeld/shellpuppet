@@ -301,18 +301,25 @@ message whom, and a clock.
   claim with a secret) holds a name unique among live participants. A message
   is bound to the recipient INSTANCE that held the name when it was sent: if
   that participant ends before reading, the message is `not-delivered`, and a
-  later holder of the same name never receives it.
+  later holder of the same name never receives it. Claims may hold names in
+  configured groups, including names a session may later want. The first live
+  participant to take a name holds it until it ends.
 - **Limits.** One message holds at most 16 KiB of UTF-8 text. One recipient
   holds at most 200 messages and 1 MiB of text; a send that would pass those
   first drops that recipient's oldest READ messages, never unread ones, and is
-  refused when it still does not fit.
+  refused when it still does not fit. Ending a recipient drops its read messages
+  and keeps at most 200 not-delivered messages per sender. Across the daemon,
+  at most 2,000 messages and 8 MiB of text are retained; the oldest
+  not-delivered messages go first, then the oldest read messages. Waiting and
+  nudged messages for live recipients are never evicted.
 - **Memory only.** Messages live in memory; a daemon restart clears every
   mailbox.
 - **The nudge.** The one line the daemon may type is fixed wording: the
   message id, the sender and how to read the mailbox, and nothing else. A
   sender's name appears only when it is a plain name (letters, digits, dots,
   underscores, hyphens, at most 40 characters); anything else is replaced by
-  the participant id, so nothing a sender wrote reaches the user's turn.
+  the participant id. A plain name may read like an instruction; the session
+  starter or claim holder sets it locally.
 
 Who may message whom is configuration (`messaging` in config.json): off by
 default, then a session and the sessions it started, or named groups. The

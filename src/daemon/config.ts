@@ -337,6 +337,8 @@ function parsePolicy(raw: unknown, problems: string[]): PolicyConfig {
 }
 
 const MESSAGING_KEYS = new Set(['enabled', 'allow']);
+const MAX_MESSAGING_ALLOW = 64;
+const MAX_MESSAGING_MEMBERS = 64;
 
 /**
  * The `messaging` section (design §2.5). A section whose shape cannot be read
@@ -361,12 +363,18 @@ function parseMessaging(raw: unknown, problems: string[]): MessagingConfig | und
   const enabled = enabledRaw === undefined ? false : enabledRaw;
   if (typeof enabled !== 'boolean') return off('enabled must be a boolean');
   const allowRaw = raw['allow'];
-  if (allowRaw === undefined) return { enabled, allow: [] };
+  if (allowRaw === undefined) {
+    if (enabled) problems.push('messaging is enabled without allow rules: no participants may message each other');
+    return { enabled, allow: [] };
+  }
   if (!Array.isArray(allowRaw)) {
     return off('allow must be a list of "parent-child" or group objects');
   }
+  if (allowRaw.length > MAX_MESSAGING_ALLOW) {
+    problems.push(`messaging.allow may contain at most ${String(MAX_MESSAGING_ALLOW)} entries: excess entries are ignored`);
+  }
   const allow: MessagingAllowRule[] = [];
-  for (let index = 0; index < allowRaw.length; index++) {
+  for (let index = 0; index < Math.min(allowRaw.length, MAX_MESSAGING_ALLOW); index++) {
     const entry: unknown = allowRaw[index];
     const where = `messaging.allow[${String(index)}]`;
     if (entry === 'parent-child') {
@@ -379,11 +387,11 @@ function parseMessaging(raw: unknown, problems: string[]): MessagingConfig | und
     }
     const group = entry['group'];
     const members = entry['members'];
-    if (typeof group !== 'string' || group === '' || group.length > 64) {
+    if (typeof group !== 'string' || !NAME_PATTERN.test(group)) {
       problems.push(`${where}.group must be a short name for the group: that entry is ignored`);
       continue;
     }
-    if (!Array.isArray(members) || members.length < 1) {
+    if (!Array.isArray(members) || members.length < 1 || members.length > MAX_MESSAGING_MEMBERS) {
       problems.push(`${where}.members must list the participant names that may message each other: that entry is ignored`);
       continue;
     }

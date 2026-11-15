@@ -24,6 +24,24 @@ const relations = {
 };
 
 describe('parseDaemonConfig: the messaging section', () => {
+  it('warns when messaging is enabled without allow rules', () => {
+    const result = parseDaemonConfig({ messaging: { enabled: true } });
+    expect(result.config.messaging).toEqual({ enabled: true, allow: [] });
+    expect(result.problems.join(' ')).toContain('without allow rules');
+  });
+
+  it('caps allow entries and group members, and validates group labels', () => {
+    const many = parseDaemonConfig({ messaging: { enabled: true, allow: Array(65).fill('parent-child') } });
+    expect(many.config.messaging?.allow).toHaveLength(64);
+    expect(many.problems.join(' ')).toContain('at most 64');
+
+    const members = parseDaemonConfig({ messaging: { enabled: true,
+      allow: [{ group: 'chairs', members: Array(65).fill('member') },
+        { group: 'bad label', members: ['member'] }] } });
+    expect(members.config.messaging?.allow).toEqual([]);
+    expect(members.problems.join(' ')).toContain('members');
+    expect(members.problems.join(' ')).toContain('group');
+  });
   it('an absent section means messaging is off, and is not a problem', () => {
     const { config, problems } = parseDaemonConfig({ idleMinutes: 5 });
     expect(config.messaging).toBeUndefined();
