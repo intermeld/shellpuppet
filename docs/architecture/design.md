@@ -757,10 +757,12 @@ on failed turns in the available captures, but its exclusivity is unproven; the
 coloured gutter and interface frame remain required.
 The grey suggestion has a separate style rule: its composer gutter must use MiMo's orange or grey ink and every visible character of the suggestion must be grey. It is idle when the visible shortcut includes `(Tab to`, or when the shortcut's opening `(` is visible at the composer's inset right edge. A grey fragment without the shortcut is not idle, even when it reaches that edge. A resize can expose only a tail of an established error's earlier transcript; matching styled error blocks retain the notice when that tail belongs to the validated transcript. New transcript text and a persistently missing block still clear it within the existing resize allowance and confirmation.
 No detected prompt or busy indication may be present for an idle error block.
-The OpenCode connection banner qualifies while its old busy row remains frozen.
+The OpenCode connection banner qualifies over a frozen busy row or a live dialog.
 Its two styled message rows, intervening blank row, modal background and centred
 viewport position establish a live overlay rather than transcript, file or input
-text. Its notice clears when the banner goes.
+text. A settled `server-lost` overlay takes precedence over a prompt beneath it:
+the prompt is not answerable until the banner goes. The notice then clears and
+the visible prompt can be reported again.
 
 The same semantic stall must remain for one second. Logical
 lines join terminal wraps before matching; independently styled interface anchors
@@ -780,8 +782,9 @@ and footer keeps its full identity and original `since`. Missing context
 cannot create a new stall or finish settling one unless the complete red body
 and recovery frame described above are visible. Cursor-only writes do not
 end the observation.
-New transcript output, a prompt, busy output, non-empty real input or exit
-clears the state. Automatic terminal reports and zero-byte writes do not.
+New transcript output, busy output, non-empty real input or exit clears the
+state. A live prompt clears every stall except `server-lost` while its banner
+persists. Automatic terminal reports and zero-byte writes do not.
 Real input also suppresses that same semantic identity until the block
 disappears or is replaced.
 

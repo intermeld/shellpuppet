@@ -3490,6 +3490,7 @@ export class Daemon {
   }
 
   private summaryWithPrompt(summary: SessionSummary, now = Date.now()): FeedSummary {
+    if (summary.stalled?.reason === 'server-lost') return summary;
     const state = this.promptStates.get(summary.id);
     if (state === undefined) return summary;
     return {
@@ -3512,6 +3513,17 @@ export class Daemon {
   /** One transition drives the feed, audit, log and both notification channels. */
   private watchStalls(session: Session): void {
     session.onStall((stalled) => {
+      if (stalled?.reason === 'server-lost') {
+        // The covered dialog cannot be answered. End its old alert now so the
+        // next scan cannot leave a waiting badge beside the stall notice.
+        const held = this.promptStates.get(session.id);
+        this.clearPromptGraceCheck(session.id);
+        this.promptStates.delete(session.id);
+        if (held?.alerted === true) {
+          this.emitEvent({ type: 'prompt-clear', session: session.id, label: session.label ?? null });
+          this.broadcastControl(session.id, { type: 'prompt-clear' });
+        }
+      }
       this.updateFeedSession(session.id);
       const type = stalled === undefined ? 'session-stall-clear' : 'session-stalled';
       const details = stalled === undefined ? {} : { stalled };

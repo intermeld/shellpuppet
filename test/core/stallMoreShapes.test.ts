@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { ScreenRenderer } from '../../src/core/renderer.js';
 import { detectStall, signatureFor, StallTracker } from '../../src/core/reasoning.js';
+import { detectPrompt } from '../../src/core/promptDetector.js';
 import { outputLimit } from '../fixtures/stalls/output-limit.mjs';
 import { serverLost } from '../fixtures/stalls/server-lost.mjs';
 import { clippedError } from '../fixtures/stalls/clipped-error.mjs';
@@ -19,6 +21,16 @@ async function reason(screen: string, agent: string, cols = 80, rows = 24) {
 }
 
 describe('MiMo error blocks', () => {
+  it('keeps output-limit below an answerable prompt', async () => {
+    const renderer = new ScreenRenderer({ cols: 80, rows: 24 });
+    try {
+      await renderer.write(outputLimit());
+      const view = renderer.styledLines({ above: 128, extendWrapped: false });
+      expect(detectStall(view.lines, signatureFor('mimo', 'mimo')!, false, view.firstVisible)?.reason)
+        .toBe('output-limit');
+      expect(detectStall(view.lines, signatureFor('mimo', 'mimo')!, true, view.firstVisible)).toBeNull();
+    } finally { await renderer.dispose(); }
+  });
   for (const [cols, rows] of [[80, 24], [120, 30]] as const) {
     it(`recognises a suggestion clipped at the composer edge at ${cols}x${rows}`, async () => {
       expect(await reason(clippedSuggestion({ cols }), 'mimo', cols, rows)).toBe('output-limit');
@@ -111,6 +123,30 @@ describe('MiMo error body with its marker above the viewport', () => {
 });
 
 describe('OpenCode connection banner', () => {
+  it('recognises a settled banner over a permission dialog even when a prompt is held', async () => {
+    const fixture = readFileSync(new URL('../fixtures/stalls/server-lost-over-permission.ansi', import.meta.url), 'utf8');
+    const renderer = new ScreenRenderer({ cols: 80, rows: 24 });
+    try {
+      await renderer.write(fixture);
+      const view = renderer.styledLines({ above: 128, extendWrapped: false });
+      expect(detectStall(view.lines, signatureFor('opencode', 'opencode')!, false, view.firstVisible)?.reason).toBe('server-lost');
+      const candidate = detectStall(view.lines, signatureFor('opencode', 'opencode')!, true, view.firstVisible);
+      const tracker = new StallTracker();
+      expect(tracker.observe(candidate, 1000)).toBeUndefined();
+      expect(tracker.observe(candidate, 2000)?.reason).toBe('server-lost');
+    } finally { await renderer.dispose(); }
+  });
+  it('detects the overlay when an uncovered part of the dialog remains answerable to the prompt reader', async () => {
+    const fixture = readFileSync(new URL('../fixtures/stalls/server-lost-over-permission.ansi', import.meta.url), 'utf8');
+    const renderer = new ScreenRenderer({ cols: 80, rows: 24 });
+    try {
+      await renderer.write(fixture + '\x1b[16;1H  ┃  △ Permission required\x1b[K');
+      const view = renderer.styledLines({ above: 128, extendWrapped: false });
+      expect(detectPrompt(renderer.snapshot().screen, 'opencode', 24)).not.toBeNull();
+      expect(detectStall(view.lines, signatureFor('opencode', 'opencode')!, true, view.firstVisible)?.reason)
+        .toBe('server-lost');
+    } finally { await renderer.dispose(); }
+  });
   for (const [cols, rows] of [[80, 24], [120, 30]] as const) {
     it(`recognises the live banner above a busy row at ${cols}x${rows}`, async () => {
       for (const agent of ['opencode', 'mimo'])

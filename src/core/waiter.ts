@@ -294,6 +294,14 @@ export function waitFor(
 
     const step = (): void => {
       const now = Date.now();
+      // A lost local server cannot accept the prompt still drawn beneath its banner.
+      if (condition.stalled === true && !target.isExited()) {
+        const stalled = target.getStalled?.();
+        if (stalled?.reason === 'server-lost') {
+          finishStalled(stalled);
+          return;
+        }
+      }
       const screen = metadataOnly ? '' : (pattern !== null || condition.prompt === true) && options.screenForMatch !== undefined
         ? options.screenForMatch()
         : target.getScreen();
