@@ -28,6 +28,7 @@ import { ScreenRenderer } from './renderer.js';
 import type { SerializeOptions, StyledLine } from './renderer.js';
 import { commandLine } from './policy.js';
 import { detectPrompt, createPromptReader, StalePromptGuard } from './promptDetector.js';
+import { hasClippedQuestionShape } from '../agents/opencode/prompts.js';
 import { waitFor } from './waiter.js';
 import { readinessFor, trackReadiness, waitUntilReady } from './readiness.js';
 import type { Readiness } from './readiness.js';
@@ -1319,8 +1320,9 @@ export class Session implements WaitTarget {
   }
 
   answerablePrompt(screen: string, now = Date.now()): ReturnType<typeof detectPrompt> {
-    const styled = this.agentModule?.createPromptSettler === undefined ? undefined : this.renderer.styledLines().lines;
-    return this.promptReader(screen, now, styled);
+    const styled = this.agentModule?.createPromptSettler !== undefined ||
+      hasClippedQuestionShape(screen.split('\n'), this.renderer.rows) ? this.renderer.styledLines().lines : undefined;
+    return this.promptReader(screen, now, styled, this.renderer.rows);
   }
 
   // ----------------------------------------------------------------- output
@@ -1590,7 +1592,8 @@ export class Session implements WaitTarget {
     // prompt with identical text count as new rather than as the one just
     // answered, and that includes the ones the daemon's stall scan and verify
     // take.
-    this.stalePrompts.observe(detectPrompt(rendered.screen, this.agent)?.signature ?? null);
+    const styled = hasClippedQuestionShape(rendered.lines, rendered.rows) ? this.renderer.styledLines().lines : undefined;
+    this.stalePrompts.observe(detectPrompt(rendered.screen, this.agent, rendered.rows, styled)?.signature ?? null);
     return {
       id: this.id,
       label: this.label,

@@ -1,0 +1,24 @@
+  ? Ask anything
+
+  ┃
+  ┃  Questions
+  ┃
+  ┃  Which release plan should the team use for
+  ┃  the next iteration? Consider the schedule,
+  ┃  available people and support work before
+  ┃  making a choice. The options below describe
+  ┃  three ways to organise the next set of tasks
+  ┃  so the team can begin.
+  ┃
+  ┃  1. Keep the current plan
+  ┃     Continue with the tasks already agreed.
+  ┃     Leave time for support requests and for
+  ┃     checking the results with the team.
+  ┃     Record any changes to the schedule.
+  ┃     Share the updated plan with everyone.
+  ┃  2. Reorder the work
+  ┃     Move urgent tasks earlier in the week.
+  ┃     Check that the team has enough time.
+  ┃  3. Split the work
+  ┃     Give each group a small set of tasks.
+  ┃     Confirm the groups can finish on time.
