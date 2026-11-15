@@ -551,6 +551,20 @@ describe('waitFor validation', () => {
  * needs me" rather than polling snapshots. These pin it.
  */
 describe('waitFor prompt', () => {
+  it('returns server-lost before a held prompt when both conditions are requested', async () => {
+    const target = Object.assign(new FakeTarget(), {
+      getStalled: () => ({ reason: 'server-lost', description: 'Local server lost.', since: new Date(0).toISOString() }),
+      answerablePrompt: () => ({ question: 'Permission required', options: ['Allow once', 'Reject'],
+        signature: 'permission', rows: [0, 1] as [number, number], basis: 'frame' as const }),
+    });
+    target.emit('  ┃  △ Permission required\n  ┃   Allow once   Reject');
+    expect(await waitFor(target, { prompt: true, stalled: true }, POLL))
+      .toMatchObject({ matched: true, reason: 'stalled', stalled: { reason: 'server-lost' }, screen: '' });
+    target.getStalled = () => ({ reason: 'error', description: 'An error appeared.', since: new Date(0).toISOString() });
+    expect(await waitFor(target, { prompt: true, stalled: true }, POLL))
+      .toMatchObject({ matched: true, reason: 'prompt' });
+  });
+
   /** A Qoder permission prompt. */
   const PROMPT_SCREEN = `
  Permission Required

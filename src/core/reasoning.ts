@@ -1192,13 +1192,14 @@ export function detectStall(physical: readonly StyledLine[], signature: Compiled
 /** Validate the visible shape independently of whether the turn boundary is available. */
 export function validateStall(physical: readonly StyledLine[], signature: CompiledSignature, prompt: boolean, firstVisible = 0): StallValidation {
   const signatures = moduleFor(signature.name)?.stalls;
-  if (prompt || signatures === undefined || setAside(signature)) return null;
+  if (signatures === undefined || setAside(signature)) return null;
   return guarded(signature, () => {
     for (const shape of signatures) {
       if (shape.overlay === undefined) continue;
       const candidate = validateOverlayStall(physical, shape, firstVisible);
-      if (candidate !== null) return candidate;
+      if (candidate !== null && (!prompt || candidate.reason === 'server-lost')) return candidate;
     }
+    if (prompt) return null;
     if (signatures.every(shape => shape.overlay !== undefined)) return null;
     const logical = logicalStallLines(physical, signatures);
     const lines = stallRegion(logical.lines, signatures);
@@ -1323,13 +1324,13 @@ function validateOverlayStall(lines: readonly StyledLine[], shape: StallSignatur
     if (column < 18 || title.text[column - 2] !== ' ' || title.text[column - 1] !== ' ') continue;
     if (Math.abs(column - 2 - (Math.floor((visibleWidth + 1) / 2) - 24)) > 2) continue;
     const detail = lines[i + 2]!;
-    if (lines[i + 1]!.text.trim() !== '' || !message?.test(detail.text)) continue;
+    // The dialog gutter can remain in the blank modal row; blank background
+    // cells themselves have no spans after the renderer trims the row.
+    if (!/^\s*(?:┃)?$/u.test(lines[i + 1]!.text) || !message?.test(detail.text.slice(column))) continue;
     const background = overlay.background;
     if (styleAt(title, column - 2)?.bg !== background || styleAt(title, column)?.fg !== shape.marker.fg[0] ||
       styleAt(title, column)?.bg !== background || styleAt(detail, column - 2)?.bg !== background ||
-      styleAt(detail, column)?.fg !== '#808080' || styleAt(detail, column)?.bg !== background ||
-      styleAt(lines[i + 3]!, column - 2)?.bg !== background ||
-      styleAt(lines[i + 3]!, column + 45)?.bg !== background) continue;
+      styleAt(detail, column)?.fg !== '#808080' || styleAt(detail, column)?.bg !== background) continue;
     const identity = JSON.stringify([shape.reason, 'live-overlay']);
     return { reason: shape.reason, description: shape.description, identity, blockIdentity: identity };
   }

@@ -1320,6 +1320,7 @@ export class Session implements WaitTarget {
   }
 
   answerablePrompt(screen: string, now = Date.now()): ReturnType<typeof detectPrompt> {
+    if (this.stallState?.reason === 'server-lost') return null;
     const styled = this.agentModule?.createPromptSettler !== undefined ||
       hasClippedQuestionShape(screen.split('\n'), this.renderer.rows) ? this.renderer.styledLines().lines : undefined;
     return this.promptReader(screen, now, styled, this.renderer.rows);
@@ -1458,7 +1459,8 @@ export class Session implements WaitTarget {
       // A live dialog can replace only rows inside the old error block. Its
       // text is then omitted from the transcript comparison, even when the
       // user-turn boundary has scrolled out of the viewport.
-      if (this.stallState !== undefined && detectPrompt(plain.join('\n'), this.agent) !== null) {
+      if (this.stallState !== undefined && this.stallState.reason !== 'server-lost' &&
+        detectPrompt(plain.join('\n'), this.agent) !== null) {
         this.stallTracker.invalidate();
         this.publishStall(undefined);
         this.stallValidationPending = false;
@@ -1519,7 +1521,8 @@ export class Session implements WaitTarget {
     if (ink) {
       const { lines, firstVisible } = this.renderer.styledLines({ above: 128, extendWrapped: false });
       candidate = validateStall(lines, signature, false, firstVisible);
-      if (candidate !== null && detectPrompt(plain.join('\n'), this.agent) !== null) candidate = null;
+      if (candidate !== null && (!('reason' in candidate) || candidate.reason !== 'server-lost') &&
+        detectPrompt(plain.join('\n'), this.agent) !== null) candidate = null;
     }
     // A narrow redraw can clip the user turn and expose only a tail of the
     // earlier transcript. The same styled block then owns that visible tail.
@@ -1603,7 +1606,8 @@ export class Session implements WaitTarget {
     // answered, and that includes the ones the daemon's stall scan and verify
     // take.
     const styled = hasClippedQuestionShape(rendered.lines, rendered.rows) ? this.renderer.styledLines().lines : undefined;
-    this.stalePrompts.observe(detectPrompt(rendered.screen, this.agent, rendered.rows, styled)?.signature ?? null);
+    this.stalePrompts.observe(this.stallState?.reason === 'server-lost' ? null :
+      detectPrompt(rendered.screen, this.agent, rendered.rows, styled)?.signature ?? null);
     return {
       id: this.id,
       label: this.label,

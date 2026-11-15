@@ -67,7 +67,8 @@ The reasons are `provider-refused` ("The model provider refused the turn."),
 reached its output length limit."), `error` ("The model reported an error.")
 and `server-lost` ("The local agent server connection was lost."). MiMo error
 blocks and the OpenCode connection banner, also used by MiMo Code, are supported.
-`list --waiting` continues to select permission prompts only.
+`list --waiting` selects answerable permission prompts only. A settled
+`server-lost` banner hides a prompt beneath it until the banner clears.
 
 ```text
 shellpuppet wait <id> --stalled [--timeout <ms>]
@@ -82,8 +83,9 @@ its screen is empty. A prompt match still reports `reason: "prompt"`.
 A wait for stalled alone also leaves the screen empty on timeout or exit.
 With `--stalled`, each compact session row names its matched condition too.
 The top-level reason names the first condition represented, with prompts
-first if both conditions are present in different sessions. Bare `--prompt`
-keeps its existing response. Text, regex and quiet cannot be combined with
+first if both conditions are present in different sessions. For the same session,
+`server-lost` takes precedence and a bare `--prompt` does not return the covered
+prompt. Text, regex and quiet cannot be combined with
 these supervision conditions. Exit code 3 means a wait did not match;
 `--now` returns normally even when no session needs attention.
 
@@ -122,8 +124,9 @@ footer and idle composer still qualify. An incomplete leading wrapped row has
 unknown context; it cannot set tool-panel state. Every complete
 available content row is still checked. Missing context cannot finish settling
 a new notice. A confirmed changed refusal or invalid visible shape clears the notice.
-Busy output, newer transcript output, a prompt,
-non-empty real input or exit clears it. Empty writes and terminal reports do not. Input
+Busy output, newer transcript output, non-empty real input or exit clears it.
+A live prompt clears other stalls, while `server-lost` remains until its banner
+disappears. Empty writes and terminal reports do not. Input
 suppresses the unchanged refusal even if its controls change. A program that
 paints the same shape is reported the same way, including forged MiMo bars,
 headers, footers or `Build ·` status rows. The state is a notice and nothing
