@@ -177,10 +177,18 @@ Antigravity's permission questions are numbered choosers, as are Codex's,
 Qoder's and Grok's; OpenCode and MiMo Code draw a bordered permission dialog
 that the daemon recognises by its title. Their question menu is recognised by
 its `↑↓ select  enter submit  esc dismiss` footer and `Type your own answer`
-choice. Every session runs every module's prompt shapes and dialogs in the
-existing detection order, including a known agent session forwarding a child
-program's prompt. Input, resize, settling and reading still follow the session's
-own resolved module.
+choice. When the panel exceeds the viewport, its `Questions` header, question
+and at least two numbered choices in the orange `┃` gutter are required. The
+option block must reach the physical bottom row. The clipped rule checks the
+panel's dark background, orange gutter, grey header and descriptions, and
+bright question and options; OpenCode's blue composer gutter has a different
+background. Earlier transcript and idle chrome may remain above it, while live
+busy chrome vetoes it. Only visible choices are reported. These colours are the
+default theme's; with another theme a clipped panel is not recognised, while a
+fitting one still is. Every session runs
+every module's prompt shapes and dialogs in the existing detection order,
+including a known agent session forwarding a child program's prompt. Input,
+resize, settling and reading still follow the session's own resolved module.
 
 Two Qoder specifics worth knowing:
 

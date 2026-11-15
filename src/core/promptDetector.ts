@@ -199,17 +199,17 @@ function isYesNo(text: string): boolean {
  */
 export const SELECTED_OPTION_MARKER = '⟦SP:selected⟧ ';
 
-export function detectPrompt(screen: string, agent = 'generic'): DetectedPrompt | null {
+export function detectPrompt(screen: string, agent = 'generic', viewportRows?: number, styled?: readonly StyledLine[]): DetectedPrompt | null {
   const original = screen.split('\n');
   const plain = original.map((line) => line.replace(/^⟦SP:selected⟧ /, ''));
-  const prompt = detectPlainPrompt(plain.join('\n'), agent);
+  const prompt = detectPlainPrompt(plain.join('\n'), agent, viewportRows, styled);
   if (prompt?.optionRows === undefined) return prompt;
   const selected = prompt.optionRows.flatMap((row, index) =>
     original[row]?.startsWith(SELECTED_OPTION_MARKER) ? [index] : []);
   return selected.length === 1 ? { ...prompt, selectedOption: selected[0] } : prompt;
 }
 
-function detectPlainPrompt(screen: string, agent: string): DetectedPrompt | null {
+function detectPlainPrompt(screen: string, agent: string, viewportRows?: number, styled?: readonly StyledLine[]): DetectedPrompt | null {
   const raw = screen.split('\n');
   const lines = contentLines(raw);
   if (lines.length === 0) return null;
@@ -221,7 +221,7 @@ function detectPlainPrompt(screen: string, agent: string): DetectedPrompt | null
   const busy = (text: string): boolean => rows.some(shape => shape.busy?.test(text));
   for (const shape of shapes) {
     if (shape.kind !== 'menu') continue;
-    const prompt = shape.detect(raw, lines, tail, busy);
+    const prompt = shape.detect(raw, lines, tail, busy, viewportRows, styled);
     if (prompt !== null) return prompt;
   }
 
@@ -679,11 +679,11 @@ function firstMatch(patterns: (RegExp | undefined)[], text: string): RegExpExecA
 }
 
 /** Each session owns its own settling clocks. A bare wait target retains the shared fallback. */
-export function createPromptReader(agent = 'generic', settleAll = false): (screen: string, now?: number, styled?: readonly StyledLine[]) => DetectedPrompt | null {
+export function createPromptReader(agent = 'generic', settleAll = false): (screen: string, now?: number, styled?: readonly StyledLine[], viewportRows?: number) => DetectedPrompt | null {
   const modules = settleAll ? AGENT_MODULES : [moduleFor(agent)];
   const settlers = modules.flatMap(module => module?.createPromptSettler === undefined ? [] : [module.createPromptSettler()]);
-  return (screen, now = Date.now(), styled) => {
-    let prompt = detectPrompt(screen, agent);
+  return (screen, now = Date.now(), styled, viewportRows) => {
+    let prompt = detectPrompt(screen, agent, viewportRows, styled);
     for (const settler of settlers) prompt = settler.settle(prompt, screen, now, styled);
     return prompt;
   };

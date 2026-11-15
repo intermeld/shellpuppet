@@ -2944,7 +2944,8 @@ export class Daemon {
           const marked = markFilteredSelectedOption(filtered.lines, view.lines, session.agent);
           const visiblePrompt = result.prompt === undefined
             ? null
-            : detectPrompt(marked.join('\n'), session.agent);
+            : detectPrompt(marked.join('\n'), session.agent, undefined,
+                view.lines.length === marked.length ? view.lines : undefined);
           const prompt = visiblePrompt !== null && visiblePrompt.signature === result.prompt?.signature
             ? {
                 question: visiblePrompt.question,
