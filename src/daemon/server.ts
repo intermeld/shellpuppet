@@ -9,6 +9,7 @@
 import { moduleFor } from '../agents/index.js';
 import * as fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import * as http from 'node:http';
 import { createRequire } from 'node:module';
 import * as os from 'node:os';
@@ -701,6 +702,7 @@ export class Daemon {
   private stopPromise: Promise<void> | null = null;
 
   private readonly audit: Auditor;
+  private readonly callerContext = new AsyncLocalStorage<string | undefined>();
   /**
    * What sessions get from the daemon's environment (ADR-008), resolved once so
    * that what the daemon reports is what its sessions get.
@@ -729,13 +731,24 @@ export class Daemon {
     delete process.env['SHELLPUPPET_DAEMON_STARTED_WRAPPED'];
     this.options = { ...options, startedWrapped: options.startedWrapped ?? startedWrapped };
     this.logger = options.logger;
-    this.audit = options.audit ?? NULL_AUDITOR;
+    const auditor = options.audit ?? NULL_AUDITOR;
+    this.audit = {
+      captureContent: auditor.captureContent,
+      record: (actor, action, session, meta) => auditor.record(
+        actor, action, session, meta, this.callerContext.getStore(),
+      ),
+    };
     this.sessionEnv = options.sessionEnv ?? DEFAULT_SESSION_ENV;
     this.launchProfiles = options.launchProfiles ?? { profiles: [], problems: [] };
     this.daemonEnv = options.daemonEnv ?? process.env;
     this.compiledPolicy = compilePolicy(options.policy);
     this.manager = new SessionManager(compilePolicy(options.policy), this.logger, {
       sessionEnv: this.sessionEnv,
+      identity: {
+        token: '',
+        instanceId: this.instanceId,
+        cliPath: fileURLToPath(new URL('../../dist/cli/index.js', import.meta.url)),
+      },
     }, (id) => this.sessionFeed.remove(id));
     this.sessionFeed = new SessionFeed(
       this.version,
@@ -1515,6 +1528,7 @@ export class Daemon {
       return;
     }
     this.lastActivity = Date.now();
+
     this.writeSessionList(res, url);
   }
 
@@ -2347,9 +2361,8 @@ export class Daemon {
     }
     this.lastActivity = Date.now();
 
-    // Audit actor (design §4.5): adapters self-identify via a header, the MCP
-    // adapter as `mcp:<clientInfo.name>` and the CLI as `cli`. Untrusted input,
-    // so sanitise; it labels log lines and nothing else.
+    // The adapter label remains the audit actor even when a session proves
+    // which session it is. It is still a client-supplied label.
     const actorHeader = req.headers['x-shellpuppet-actor'];
     const actor =
       (typeof actorHeader === 'string'
@@ -2357,6 +2370,28 @@ export class Daemon {
           actorHeader.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 64)
         : '') || 'client';
 
+    const callerId = req.headers['x-shellpuppet-session'];
+    const callerToken = req.headers['x-shellpuppet-session-token'];
+    const identityPresented = callerId !== undefined || callerToken !== undefined;
+    const callerSession = typeof callerId === 'string' && typeof callerToken === 'string'
+      && this.manager.recognisesCaller(callerId, callerToken) ? callerId : undefined;
+    if (identityPresented && callerSession === undefined) {
+      this.audit.record(actor, 'refuse', undefined, { reason: 'session identity not recognised' });
+      json(res, 403, { error: 'Session identity was not recognised.' });
+      return;
+    }
+
+    return this.callerContext.run(callerSession, () =>
+      this.handleClientRequest(req, res, url, segments, actor));
+  }
+
+  private async handleClientRequest(
+    req: http.IncomingMessage,
+    res: http.ServerResponse,
+    url: URL,
+    segments: string[],
+    actor: string,
+  ): Promise<void> {
     try {
       if (segments[0] === 'daemon' && segments[1] === 'shutdown' && req.method === 'POST') {
         const body = await readBody(req);
@@ -3142,6 +3177,7 @@ export class Daemon {
       // diverge from the audit trail. Self-declared, not authenticated: see
       // SessionOptions.startedBy.
       startedBy: actor,
+      ...(this.callerContext.getStore() !== undefined ? { parent: this.callerContext.getStore() } : {}),
       ...(body['waitReady'] === true ? { waitReady: true } : {}),
       ...(asNumber(body['readyTimeout']) !== undefined ? { readyTimeout: asNumber(body['readyTimeout']) } : {}),
       ...(asString(body['readyText']) !== undefined

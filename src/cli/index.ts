@@ -463,7 +463,8 @@ async function main(): Promise<void> {
           `${s.id}  ${listedState(s)}  ` +
             `${String(s.cols)}x${String(s.rows)}  watchers:${String(s.watchers)}  ` +
             `${s.stalled !== undefined ? stallLine(s.stalled) : s.ready ? 'ready' : 'NOT-READY'}  ${s.label}` +
-            (s.agent !== null && s.agent !== undefined ? `  agent:${s.agent}` : ''),
+            (s.agent !== null && s.agent !== undefined ? `  agent:${s.agent}` : '') +
+            (s.parent !== undefined ? `  parent:${s.parent}` : ''),
         );
         const waiting = (s as SessionSummary & {
           waitingOnPrompt?: { question: string; selectedOption?: number; waitingMs: number };

@@ -470,6 +470,12 @@ dashboard-started agent CLI to see is written in that profile's
 `envFromDaemon`. Once in the session, the value is as readable as any other
 variable there. A variable reserved for a connected feature's own credential
 and ShellPuppet's own `SHELLPUPPET_` variables are never copied by the profile.
+Each session instead receives its own `SHELLPUPPET_SESSION`,
+`SHELLPUPPET_SESSION_TOKEN`, `SHELLPUPPET_DAEMON_INSTANCE` and
+`SHELLPUPPET_CLI`. Clients present the id and token only to the matching
+daemon instance. An invalid or ended session identity is refused. This proof
+attributes calls and parent sessions; any process running as the same user can
+already read the daemon client token, so it is not a boundary against local code.
 `TERM` and `COLORTERM` take ShellPuppet's terminal values. Anyone able to use
 the dashboard credential can start an `"all"` profile and reach every other
 secret the daemon holds through its session. Client-token starts do not use

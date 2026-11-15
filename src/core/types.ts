@@ -107,6 +107,8 @@ export interface SessionOptions {
    * trail record the names alone.
    */
   env?: Record<string, string>;
+  /** The verified caller session, when a session starts another session. */
+  parent?: string;
 }
 
 /** One session's public state, as returned by `terminal_list`. */
@@ -117,6 +119,8 @@ export interface SessionSummary {
   purpose: string;
   /** The audit actor that started it, e.g. `mcp:claude-code`, `cli`. */
   startedBy: string;
+  /** The session that started this one, when known. */
+  parent?: string;
   /** The agent resolved at start, or generic for a shell or unknown program. */
   agent: string | null;
   command: string;
@@ -376,6 +380,14 @@ export const ENV_NAME_PATTERN = /^(?!__proto__$)[A-Za-z_][A-Za-z0-9_]*$/;
  * cannot copy it with `envFromDaemon` either.
  */
 export const RESERVED_FEATURE_CREDENTIALS: ReadonlySet<string> = new Set();
+
+/** Per-session values are assigned by the daemon, never copied from a caller. */
+export const SESSION_IDENTITY_ENV_NAMES: ReadonlySet<string> = new Set([
+  'SHELLPUPPET_SESSION',
+  'SHELLPUPPET_SESSION_TOKEN',
+  'SHELLPUPPET_DAEMON_INSTANCE',
+  'SHELLPUPPET_CLI',
+]);
 
 // ----------------------------------------------------------------------- defaults
 

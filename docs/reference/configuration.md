@@ -405,6 +405,12 @@ variables that toolchains look for) and, on POSIX, the login name and locale.
 The daemon reads `sessionEnv` when it starts, so a change takes effect at the
 next daemon start. `shellpuppet daemon status` shows the mode in use.
 
+Every started session also receives `SHELLPUPPET_SESSION`,
+`SHELLPUPPET_SESSION_TOKEN`, `SHELLPUPPET_DAEMON_INSTANCE` and
+`SHELLPUPPET_CLI`. The daemon assigns its own id, secret, instance and CLI path
+for that session. These four names cannot be inherited through `sessionEnv`,
+`envNames`, `agents.passEnv` or a dashboard profile's `envFromDaemon`.
+
 ## The variables each agent's sessions receive
 
 A session gets the environment `sessionEnv` gives it, and the daemon never
@@ -632,6 +638,8 @@ listing variables. The daemon's environment comes from whichever client
 started it. A listed name that is unset is skipped and does not refuse the
 start. Connected feature credentials reserved under ADR-007 and ShellPuppet's
 per-session variables, including `SHELLPUPPET_SESSION`, are excluded.
+This includes `SHELLPUPPET_SESSION_TOKEN`, `SHELLPUPPET_DAEMON_INSTANCE` and
+`SHELLPUPPET_CLI` for both an explicit list and `"all"`.
 `SHELLPUPPET_HOME` passes through so a launched process can find the same daemon.
 The `"all"` form excludes these known agent session markers:
 

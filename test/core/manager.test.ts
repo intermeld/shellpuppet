@@ -5,6 +5,29 @@ import { TREE_KILL_TIMEOUT_MS } from '../../src/core/session.js';
 import type { SessionDeps, TreeKiller } from '../../src/core/session.js';
 import type { Logger } from '../../src/core/types.js';
 
+describe('session identity errors', () => {
+  it('removes the secret if a spawn error includes its environment', () => {
+    let secret = '';
+    const manager = new SessionManager(compilePolicy(undefined), undefined, {
+      platform: 'linux',
+      identity: { token: '', instanceId: 'daemon', cliPath: '/dist/cli/index.js' },
+      spawn: (_file, _args, options) => {
+        secret = options.env['SHELLPUPPET_SESSION_TOKEN'] ?? '';
+        throw new Error(`spawn failed with ${secret}`);
+      },
+    });
+    let failure = '';
+    try {
+      manager.create({ command: 'node', shell: true });
+    } catch (error) {
+      failure = error instanceof Error ? (error.stack ?? error.message) : String(error);
+    }
+    expect(secret).toMatch(/^[A-Za-z0-9_-]{43}$/);
+    expect(failure).toContain('[redacted]');
+    expect(failure).not.toContain(secret);
+  });
+});
+
 /**
  * `killAll` must always complete, even when a session's teardown wedges.
  * A daemon that hangs mid-shutdown stays alive but undiscoverable.

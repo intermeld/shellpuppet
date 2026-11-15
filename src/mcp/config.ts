@@ -9,6 +9,7 @@
 import * as fs from 'node:fs';
 import { configPath } from '../daemon/paths.js';
 import type { Logger } from '../core/types.js';
+import { SESSION_IDENTITY_ENV_NAMES } from '../core/types.js';
 
 export interface McpConfig {
   /** §4.4 framing toggle: `{ "mcp": { "untrustedFraming": false } }` disables. */
@@ -49,7 +50,7 @@ export function resolvePassedEnv(
   const absent: string[] = [];
   const refused: string[] = [];
   for (const name of requested) {
-    if (!allowedSet.has(fold(name))) refused.push(name);
+    if (SESSION_IDENTITY_ENV_NAMES.has(name.toUpperCase()) || !allowedSet.has(fold(name))) refused.push(name);
     else if (lookup.has(fold(name))) env[name] = lookup.get(fold(name))!;
     else absent.push(name);
   }

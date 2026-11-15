@@ -530,6 +530,17 @@ describe('the daemon environment copy', () => {
       copied: ['WANTED'],
     });
   });
+  it('never copies any per-session identity even when a profile lists it', () => {
+    const source = {
+      SHELLPUPPET_SESSION: 's1',
+      SHELLPUPPET_SESSION_TOKEN: 'secret',
+      SHELLPUPPET_DAEMON_INSTANCE: 'old',
+      SHELLPUPPET_CLI: '/old/cli',
+      SAFE: 'yes',
+    };
+    expect(copyDaemonEnv(Object.keys(source), source)).toEqual({ env: { SAFE: 'yes' }, copied: ['SAFE'] });
+    expect(copyDaemonEnv('all', source)).toEqual({ env: { SAFE: 'yes' }, copied: ['SAFE'] });
+  });
 
   it('never copies a name reserved for a connected feature credential', () => {
     const source = { INTERMELD_TOKEN: 'secret', WANTED: 'value' } as NodeJS.ProcessEnv;

@@ -23,6 +23,7 @@ export interface Auditor {
     action: string,
     session?: string,
     meta?: Record<string, unknown>,
+    callerSession?: string,
   ): void;
 }
 
@@ -45,12 +46,13 @@ export function createAuditor(
   let warned = false;
   return {
     captureContent: options.captureContent ?? false,
-    record(actor, action, session, meta) {
+    record(actor, action, session, meta, callerSession) {
       try {
         const entry = {
           time: new Date().toISOString(),
           actor,
           action,
+          ...(callerSession !== undefined ? { callerSession } : {}),
           ...(session !== undefined ? { session } : {}),
           ...(meta !== undefined ? { meta } : {}),
         };

@@ -741,12 +741,21 @@ export async function request(
   const actor = typeof options.actor === 'function' ? options.actor() : options.actor;
   const attempt = async (conn: DaemonConnection): Promise<ApiResponse> => {
     options.signal?.throwIfAborted();
+    const session = process.env['SHELLPUPPET_SESSION'];
+    const sessionToken = process.env['SHELLPUPPET_SESSION_TOKEN'];
+    const sessionInstance = process.env['SHELLPUPPET_DAEMON_INSTANCE'];
+    const presentIdentity = session !== undefined && sessionToken !== undefined
+      && sessionInstance !== undefined && sessionInstance === conn.instanceId;
     const response = await fetch(`http://127.0.0.1:${String(conn.port)}${path}`, {
       method,
       signal: options.signal,
       headers: {
         authorization: `Bearer ${conn.token}`,
         ...(actor !== undefined ? { 'x-shellpuppet-actor': actor } : {}),
+        ...(presentIdentity ? {
+          'x-shellpuppet-session': session,
+          'x-shellpuppet-session-token': sessionToken,
+        } : {}),
         ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
@@ -780,6 +789,7 @@ export async function request(
     connection.token = fresh.token;
     connection.pid = fresh.pid;
     connection.version = fresh.version;
+    connection.instanceId = fresh.instanceId;
     return attempt(fresh);
   }
 }
