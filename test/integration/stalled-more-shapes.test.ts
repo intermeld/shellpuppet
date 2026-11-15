@@ -45,7 +45,9 @@ it('clears the parent prompt alert when the dialog is still detectable beneath a
     output(fixture + '\x1b[16;1H  ┃  △ Permission required\x1b[K');
     expect((await api(td.port, td.token, `/sessions/${id}/wait?stalled=true&timeout=5000`)).body)
       .toMatchObject({ matched: true, reason: 'stalled', stalled: { reason: 'server-lost' } });
-    await eventually(() => messages.some(m => m['type'] === 'prompt-clear' && m['session'] === id));
+    const stalledMatchedAt = Date.now();
+    await eventually(() => messages.some(m => m['type'] === 'prompt-clear' && m['session'] === id), 250, 20);
+    expect(Date.now() - stalledMatchedAt).toBeLessThan(300);
     const list = (await api(td.port, td.token, '/sessions')).body['sessions'] as Record<string, unknown>[];
     expect(list.find(s => s['id'] === id)?.['waitingOnPrompt']).toBeUndefined();
     output(prompt);

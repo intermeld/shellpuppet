@@ -1178,9 +1178,13 @@ export class Session implements WaitTarget {
         await this.renderer.flush();
         if (this.stallInk?.possible) this.refreshStall();
       }
-      this.stallTracker.noteInput();
-      this.clearStallTimer();
-      this.publishStall(undefined);
+      // A key cannot repair the local server. Keep a recognised banner and
+      // its settle timer until the rendered banner actually goes away.
+      if (this.stallTracker.reason !== 'server-lost' && this.stallState?.reason !== 'server-lost') {
+        this.stallTracker.noteInput();
+        this.clearStallTimer();
+        this.publishStall(undefined);
+      }
     }
     const { screen } = this.renderer.snapshot();
     this.stalePrompts.noteInput(screen, this.agent);

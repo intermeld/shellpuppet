@@ -36,6 +36,27 @@ it('clears on input and cannot reannounce the unchanged old block', () => {
   expect(state.observe(candidate, 12000)).toBeDefined();
 });
 
+it.each([
+  { settled: false, phase: 'during settle' },
+  { settled: true, phase: 'after settle' },
+])('does not suppress server-lost on input $phase', ({ settled }) => {
+  const tracker = new reading.StallTracker();
+  const lost = { ...candidate, reason: 'server-lost', identity: 'live banner', blockIdentity: 'live banner' };
+  tracker.observe(lost, 1000);
+  if (settled) expect(tracker.observe(lost, 2000)?.reason).toBe('server-lost');
+  tracker.noteInput();
+  expect(tracker.observe(lost, 2000)?.reason).toBe('server-lost');
+  tracker.observe(null, 2001);
+  expect(tracker.observe(lost, 2002)).toBeUndefined();
+  expect(tracker.observe(lost, 3002)?.reason).toBe('server-lost');
+  tracker.observe(null, 3003);
+  const error = { ...candidate, reason: 'error', identity: 'error block', blockIdentity: 'error block' };
+  tracker.observe(error, 3004);
+  expect(tracker.observe(error, 4004)?.reason).toBe('error');
+  tracker.noteInput();
+  expect(tracker.observe(error, 5004)).toBeUndefined();
+});
+
 it('retains an established refusal when only the user-turn text changes', () => {
   const tracker = new reading.StallTracker();
   tracker.observe(candidate, 1000);
