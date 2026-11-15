@@ -43,6 +43,13 @@ Releases carry npm provenance through trusted publishing from the first.
   session can record it as the parent of sessions it starts. The dashboard
   can group and tag those children and jump to a parent's waiting children,
   whichever agent supervises and without changes to agent CLIs.
+- **Messages between sessions.** Any session can message another by name,
+  whatever agent runs in either, so any agent can lead others. Messages wait
+  in a mailbox the daemon keeps and are read with an inbox tool, so their
+  text never reaches an agent as its user's words. An idle session gets one
+  fixed line saying a message is waiting. Off until you switch it on, with
+  who may message whom set in your configuration
+  ([ADR-010](docs/decisions/ADR-010-messages-between-sessions.md)).
 - **Named hosts for a tunnel you run.** The daemon stays on loopback. A tunnel
   that ends there and presents its own hostname, such as Tailscale Serve or a
   Cloudflare Tunnel, gets in once you name that host in your configuration:
@@ -91,6 +98,10 @@ Releases carry npm provenance through trusted publishing from the first.
   that it is still heading there; on a machine registered to Intermeld, one
   that Intermeld provides
   ([ADR-007](docs/decisions/ADR-007-connected-features.md)).
+- **Agent-specific ways to wake a session for a message.** Where an agent
+  CLI offers labelled input that is not its user's, its module uses that in
+  place of the typed line
+  ([ADR-010](docs/decisions/ADR-010-messages-between-sessions.md)).
 - **A public module interface**, once the internal modules have settled. The
   project's own modules stay in this repository, and a module loaded from
   outside it is data the core interprets, never code
