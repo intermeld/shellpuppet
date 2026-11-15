@@ -165,8 +165,8 @@ describe('evidenced provider stall', () => {
     lines[index - 1] = plain('  ┃  Please continue');
     expect(detect(lines)).toBeNull();
   });
-  it('seeds only MiMo, whose footer and error ink have evidence', () => {
-    expect(moduleFor('mimo')?.stalls?.map(shape => shape.reason)).toEqual(['provider-refused', 'request-failed']);
-    expect(moduleFor('opencode')?.stalls).toBeUndefined();
+  it('keeps separate MiMo errors and the shared connection banner', () => {
+    expect(moduleFor('mimo')?.stalls?.map(shape => shape.reason)).toEqual(['provider-refused', 'request-failed', 'output-limit', 'error', 'error', 'server-lost']);
+    expect(moduleFor('opencode')?.stalls?.map(shape => shape.reason)).toEqual(['server-lost']);
   });
 });

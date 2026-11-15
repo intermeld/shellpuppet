@@ -71,14 +71,22 @@ export interface StallSignature {
   /** Some versions omit the neutral introduction above the coloured error. */
   beforeOptional?: boolean;
   rows: LineTest[];
+  /** The general error message may occupy several red-gutter rows. */
+  flexibleMessage?: boolean;
+  /** A long error can leave only its coloured body visible above the footer. */
+  clippedBody?: boolean;
   footer: LineTest;
   composer: LineTest;
   /** Mode row immediately before the closing edge, for partial redraw ownership. */
   composerStatus?: LineTest;
   /** Allowed non-blank rows of the idle composer, including placeholders. */
   idle: LineTest[];
+  /** A styled suggestion with the shortcut's opening parenthesis at the inset right edge. */
+  idleClipped?: { row: LineTest; rightInset: number };
   /** Positional rows immediately below the closing edge; later rows are output. */
   bottom: LineTest[];
+  /** A live modal banner may interrupt a busy turn without an idle footer. */
+  overlay?: { message: LineTest; background: string; centreOffset: number };
 }
 
 /** Internal harness data and the few detector walks not yet expressed as data. */

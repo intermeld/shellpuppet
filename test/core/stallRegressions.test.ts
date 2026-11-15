@@ -6,6 +6,7 @@ import { Session } from '../../src/core/session.js';
 import { ScreenRenderer } from '../../src/core/renderer.js';
 import { detectStall, signatureFor } from '../../src/core/reasoning.js';
 import type { StallState } from '../../src/core/types.js';
+import { clippedSuggestion } from '../fixtures/stalls/clipped-suggestion.mjs';
 
 const fixture = (name: string) => readFileSync(new URL(`../fixtures/stalls/${name}.ansi`, import.meta.url), 'utf8');
 const refusal = fixture('mimo-refusal');
@@ -286,6 +287,18 @@ describe('live refusal regressions', () => {
     expect(transitions).toEqual([state]);
     await draw(partial);
     await sleep(600);
+    expect(session.getStalled()).toBeUndefined();
+    expect(transitions).toEqual([state, undefined]);
+  });
+  it('clears an established notice for a long grey composer fragment without a shortcut', async () => {
+    const { session, transitions, draw } = make(120, 30);
+    await draw(clippedSuggestion({ cols: 120 }));
+    await sleep(1400);
+    const state = session.getStalled();
+    expect(state?.reason).toBe('output-limit');
+    await draw(clippedSuggestion({ cols: 120, noShortcut: true }));
+    expect(session.getStalled()).toBe(state);
+    await sleep(700);
     expect(session.getStalled()).toBeUndefined();
     expect(transitions).toEqual([state, undefined]);
   });

@@ -1453,6 +1453,16 @@ export class Session implements WaitTarget {
         }
         return;
       }
+      // A live dialog can replace only rows inside the old error block. Its
+      // text is then omitted from the transcript comparison, even when the
+      // user-turn boundary has scrolled out of the viewport.
+      if (this.stallState !== undefined && detectPrompt(plain.join('\n'), this.agent) !== null) {
+        this.stallTracker.invalidate();
+        this.publishStall(undefined);
+        this.stallValidationPending = false;
+        this.clearStallTimer();
+        return;
+      }
       this.stallContent = content;
       // A visible turn boundary makes changed transcript text an immediate
       // end. A clipped repaint can expose different panel rows while retaining
