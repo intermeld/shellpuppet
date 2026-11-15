@@ -188,6 +188,7 @@ src/
     promptDetector.ts # permission prompts in driven agent CLIs
     regexBudget.ts    # a time budget for a caller's regular expression
     policy.ts         # command allow/deny evaluation
+    mailbox.ts        # messages between sessions: names, states, limits, nudge line
     nativePty.ts      # loading node-pty; what to do when it cannot open a terminal
     windowsPtyStart.ts # node-pty on Windows: failed starts released, unheard errors heard, kills end only their own processes, resizes after the end dropped
     types.ts
@@ -281,6 +282,43 @@ prebuilds too (glibc, x64 and arm64), and only where none matches (another
 architecture, or musl) does its install script build it with node-gyp, which
 needs Python 3, make and a C++ compiler. Whether a Linux install without
 `--allow-scripts=node-pty` works from the prebuilds is to verify in CI.
+
+### 2.5 Messages between sessions
+
+A session, or an outside client holding a claim, can leave a message for a
+named participant instead of typing text into its terminal. The message waits
+in a mailbox the daemon keeps, so it reaches the receiving agent as the result
+of an inbox read, never as words in its user's turn.
+
+The mailbox is a core module (`src/core/mailbox.ts`) that owns the rules and
+knows nothing about sessions: the wiring hands it the participants, who may
+message whom, and a clock.
+
+- **States.** A message is `waiting` until read, `nudged` after the daemon has
+  nudged the session, `read` once the recipient has read it, or
+  `not-delivered` when the recipient ended before reading it.
+- **Names.** A participant (a daemon session, or an outside client proving a
+  claim with a secret) holds a name unique among live participants. A message
+  is bound to the recipient INSTANCE that held the name when it was sent: if
+  that participant ends before reading, the message is `not-delivered`, and a
+  later holder of the same name never receives it.
+- **Limits.** One message holds at most 16 KiB of UTF-8 text. One recipient
+  holds at most 200 messages and 1 MiB of text; a send that would pass those
+  first drops that recipient's oldest READ messages, never unread ones, and is
+  refused when it still does not fit.
+- **Memory only.** Messages live in memory; a daemon restart clears every
+  mailbox.
+- **The nudge.** The one line the daemon may type is fixed wording: the
+  message id, the sender and how to read the mailbox, and nothing else. A
+  sender's name appears only when it is a plain name (letters, digits, dots,
+  underscores, hyphens, at most 40 characters); anything else is replaced by
+  the participant id, so nothing a sender wrote reaches the user's turn.
+
+Who may message whom is configuration (`messaging` in config.json): off by
+default, then a session and the sessions it started, or named groups. The
+HTTP routes, the MCP tools, the CLI commands, the dashboard view and the
+typing of nudges arrive as separate work; this section describes the mailbox
+itself.
 
 ---
 

@@ -87,6 +87,17 @@ Full example, everything optional:
   // nothing is passed until you list it. See below.
   "envNames": [],
 
+  // Messages between sessions (design §2.5). OFF until you switch it on.
+  // "allow" says who may message whom: "parent-child", or a group of
+  // participant names. See the section below.
+  "messaging": {
+    "enabled": true,
+    "allow": [
+      "parent-child",
+      { "group": "chairs", "members": ["cdr", "coding-plan", "shellpuppet-chair"] }
+    ]
+  },
+
   // Audit log (design §4.5). captureContent also records the full
   // text of every keystroke: SECRET-CAPTURING, for debugging only.
   "audit": {
@@ -458,6 +469,44 @@ logs, the audit trail or the viewer; the audit trail records the names. An
 entry that is not a variable name is left out, and a value that is not a list
 passes nothing; either is reported in `daemon.log` as a `CONFIG PROBLEM`, by
 the MCP server on stderr, and by the CLI on a start that names a variable.
+
+## Messages between sessions
+
+Messaging is off until you switch it on: no `messaging` section, or
+`"enabled": false`, means no participant can message another. The daemon
+keeps each message in a mailbox the receiving session reads with an inbox
+read; the text is never typed into a terminal. Messages live in memory only,
+so a daemon restart clears every mailbox.
+
+```json
+{
+  "messaging": {
+    "enabled": true,
+    "allow": [
+      "parent-child",
+      { "group": "chairs", "members": ["cdr", "coding-plan", "shellpuppet-chair"] }
+    ]
+  }
+}
+```
+
+`allow` says who may message whom, in both directions:
+
+- `"parent-child"`: a session and the sessions it started.
+- A group: every pair of `members`, by participant name.
+
+Participant names are 1 to 40 characters of letters, digits, dots,
+underscores or hyphens, and unique among live participants. A daemon session
+holds the name the daemon gave it; an outside client holds a name for as long
+as it keeps its claim. An `allow` entry that is neither `"parent-child"` nor
+a group with `group` and `members` is ignored and reported in `daemon.log`;
+a section that cannot be read as written leaves messaging off, reported the
+same way.
+
+One message holds at most 16 KiB of UTF-8 text. One recipient holds at most
+200 messages and 1 MiB of text: a send that would pass those first drops
+that recipient's oldest read messages, never unread ones, and is refused when
+it still does not fit.
 
 ## Dashboard launch profiles
 
