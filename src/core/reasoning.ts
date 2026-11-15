@@ -924,7 +924,7 @@ export class StallTracker {
 }
 
 const compiledStalls = new WeakMap<StallSignature, {
-  before: CompiledLine; rows: CompiledLine[]; footer: CompiledLine; composer: CompiledLine; composerStatus?: CompiledLine; chrome: CompiledLine[]; idle: CompiledLine[]; bottom: CompiledLine[];
+  before: CompiledLine; rows: CompiledLine[]; footer: CompiledLine; composer: CompiledLine; composerStatus?: CompiledLine; chrome: CompiledLine[]; idle: CompiledLine[]; idleClipped?: CompiledLine; bottom: CompiledLine[];
 }>();
 
 function stallTests(shape: StallSignature) {
@@ -938,6 +938,7 @@ function stallTests(shape: StallSignature) {
       composerStatus: shape.composerStatus === undefined ? undefined : compileLine(shape.composerStatus, 'stall.composerStatus'),
       chrome: shape.chrome.map(row => compileLine(row, 'stall.chrome')),
       idle: shape.idle.map(row => compileLine(row, 'stall.idle')),
+      idleClipped: shape.idleClipped === undefined ? undefined : compileLine(shape.idleClipped.row, 'stall.idleClipped'),
       bottom: shape.bottom.map(row => compileLine(row, 'stall.bottom')),
     };
     compiledStalls.set(shape, tests);
@@ -1018,11 +1019,12 @@ function stallRegion(lines: readonly (string | StyledLine)[], shapes: readonly S
 
 function stallComposer(lines: readonly StyledLine[], shapes: readonly StallSignature[], partial = false): { line: number; chrome: number } | null {
   for (let line = lines.length - 1; line >= 0; line--) {
-    const complete = shapes.some(shape => lineFits(lines[line]!, stallTests(shape).composer));
+    const complete = shapes.some(shape => shape.overlay === undefined && lineFits(lines[line]!, stallTests(shape).composer));
     // A native redraw may replace the closing edge with one gutter row. The
     // independently styled mode row and preceding input gutter still establish
     // ownership, but never prove a complete composer for discovery.
     if (!complete && !(partial && line > 1 && shapes.some(shape => {
+      if (shape.overlay !== undefined) return false;
       const tests = stallTests(shape);
       return tests.composerStatus !== undefined && lineFits(lines[line - 1]!, tests.composerStatus) &&
         tests.chrome.some(test => lineFits(lines[line - 2]!, test)) &&
@@ -1031,7 +1033,7 @@ function stallComposer(lines: readonly StyledLine[], shapes: readonly StallSigna
     let chrome = line;
     // Use the owning module's reading walk, with no broad tidy expression.
     while (chrome > 0 && (blank(lines[chrome - 1]) ||
-      shapes.some(shape => stallTests(shape).chrome.some(test => {
+      shapes.some(shape => shape.overlay === undefined && stallTests(shape).chrome.some(test => {
         const above = lines[chrome - 1]!;
         // Unstyled rows serve only the cosmetic cache and suggestion hint.
         // Validation and transcript ownership always supply gutter ink.
@@ -1049,6 +1051,9 @@ function stallComposer(lines: readonly StyledLine[], shapes: readonly StallSigna
  */
 export function stallTranscriptContent(lines: readonly (string | StyledLine)[], shapes: readonly StallSignature[], signature?: CompiledSignature): string {
   const content = stallRegion(lines, shapes);
+  // The modal owns the busy screen beneath it. Its animated title is not new
+  // transcript output; loss of the modal is checked on the next frame.
+  if (shapes.some(shape => shape.overlay !== undefined && content.some(line => stallMarker(line.text, shape)))) return '';
   const composer = stallComposer(content, shapes, true);
   const omitted = new Set<number>();
   const limit = composer?.chrome ?? content.length;
@@ -1057,6 +1062,7 @@ export function stallTranscriptContent(lines: readonly (string | StyledLine)[], 
     if (lineFits(content[i]!, signature.turn)) { turnStart = i + 1; break; }
   }
   for (const shape of shapes) {
+    if (shape.overlay !== undefined) continue;
     const tests = stallTests(shape);
     // Only the error-ink gutter run immediately before the completed footer
     // owns these rows. The same words elsewhere remain transcript output.
@@ -1127,6 +1133,7 @@ export function possibleStall(lines: readonly string[], signature: CompiledSigna
   // This hint uses only module-owned marker and closing-edge rules. No
   // configured pattern runs here; full validation retains its regex budget.
   if (!shapes?.some(shape => lines.some(line => stallMarker(line, shape)))) return false;
+  if (shapes.some(shape => shape.overlay !== undefined && lines.some(line => stallMarker(line, shape)))) return true;
   // Busy rules run within the turn during validation. Testing the entire
   // viewport here would also reject an ordinary user echo quoting a rule.
   return shapes.some(shape => {
@@ -1187,6 +1194,12 @@ export function validateStall(physical: readonly StyledLine[], signature: Compil
   const signatures = moduleFor(signature.name)?.stalls;
   if (prompt || signatures === undefined || setAside(signature)) return null;
   return guarded(signature, () => {
+    for (const shape of signatures) {
+      if (shape.overlay === undefined) continue;
+      const candidate = validateOverlayStall(physical, shape, firstVisible);
+      if (candidate !== null) return candidate;
+    }
+    if (signatures.every(shape => shape.overlay !== undefined)) return null;
     const logical = logicalStallLines(physical, signatures);
     const lines = stallRegion(logical.lines, signatures);
     const starts = logical.starts;
@@ -1205,6 +1218,7 @@ export function validateStall(physical: readonly StyledLine[], signature: Compil
     const busyInComposer = lines.slice(composer.chrome).some(line => signature.busy.some(test => lineFits(line, test)));
     if (turnBusy(lines, signature, turnStart, composer.chrome) && (!completedFooter || busyInComposer)) return null;
     for (const shape of signatures) {
+      if (shape.overlay !== undefined) continue;
       const tests = stallTests(shape);
       if (!lineFits(lines[composer.line]!, tests.composer)) continue;
       if (lines.slice(composer.line + 1).some((line, index) =>
@@ -1212,24 +1226,68 @@ export function validateStall(physical: readonly StyledLine[], signature: Compil
       const rules = moduleFor(signature.name)?.readingRules;
       const rawInput = lines.slice(composer.chrome, composer.line + 1);
       const input = rules?.inputRegion?.(rawInput, rawInput.length - 1) ?? rawInput;
+      const clipped = shape.idleClipped;
+      const rightEdge = lines[composer.line]!.text.length - (clipped?.rightInset ?? 0);
+      // A row cut off at the edge after a space renders without that space,
+      // one cell short; it counts when the restored space completes the rule.
+      const clippedAtEdge = (line: StyledLine): boolean => tests.idleClipped !== undefined && (
+        (line.text.length === rightEdge && lineFits(line, tests.idleClipped)) ||
+        (line.text.length === rightEdge - 1 && lineFits({ ...line, text: `${line.text} ` }, tests.idleClipped)));
       if (input.some(line =>
-        !blank(line) && !tests.idle.some(test => lineFits(line, test)))) continue;
+        !blank(line) && !tests.idle.some(test => lineFits(line, test)) && !clippedAtEdge(line))) continue;
       let end = composer.chrome - 1;
       while (end >= turnStart && blank(lines[end])) end--;
       const footer = end < turnStart ? undefined : { ...lines[end]!,
         text: lines[end]!.text.replace(shape.cosmetic ?? /$^/u, '$1') };
       if (footer === undefined || !lineFits(footer, tests.footer)) continue;
+      if (shape.clippedBody) {
+        // A marker that has scrolled away cannot establish a new turn boundary.
+        // Require the red block to run from the top of the available history
+        // straight to the completed recovery footer.
+        if (turnStart !== 0 || !lines[end]!.text.includes('↻ /recover')) continue;
+        let top = end - 1;
+        while (top >= 0 && blank(lines[top])) top--;
+        let messages = 0;
+        while (top >= 0 && /^ {2}┃(?: {3,}.*)?$/u.test(lines[top]!.text) &&
+          lines[top]!.spans.some(span => span.from <= 2 && span.to > 2 && span.fg === '#fb7185' && span.bg === '#141414')) {
+          if (lines[top]!.text.length > 3) messages++;
+          top--;
+        }
+        if (top >= 0 || messages < 2 || !/^ {2}┃ {3,}.+/u.test(lines[0]!.text)) continue;
+        const block = lines.slice(0, end).map(line => line.text.trim().replace(/\s+/gu, ' ')).filter(Boolean);
+        const blockIdentity = JSON.stringify([shape.reason, block, footer.text.trim()]);
+        return { reason: shape.reason, description: shape.description, blockIdentity, identity: blockIdentity };
+      }
       let row = end - 1;
       while (row >= turnStart && blank(lines[row])) row--;
       let matches = true;
-      for (let n = tests.rows.length - 1; n >= 0; n--, row--) {
+      if (shape.flexibleMessage) {
+        if (row < turnStart || !lineFits(lines[row]!, tests.rows[4]!)) matches = false;
+        else {
+          row--;
+          let messages = 0;
+          let startFound = false;
+          for (let checked = 0; row >= turnStart && checked < 32; checked++, row--) {
+            if (row >= turnStart + 2 && lineFits(lines[row]!, tests.rows[2]!) &&
+              lineFits(lines[row - 1]!, tests.rows[1]!) && lineFits(lines[row - 2]!, tests.rows[0]!)) {
+              row -= 3;
+              startFound = true;
+              break;
+            }
+            if (lineFits(lines[row]!, tests.rows[3]!)) { messages++; continue; }
+            if (!lineFits(lines[row]!, tests.rows[2]!)) break;
+          }
+          if (!startFound || messages === 0) matches = false;
+        }
+      } else for (let n = tests.rows.length - 1; n >= 0; n--, row--) {
         if (row < turnStart || !lineFits(lines[row]!, tests.rows[n]!)) { matches = false; break; }
       }
       if (!matches) continue;
+      const errorStart = row + 1;
       while (row >= turnStart && blank(lines[row])) row--;
       const hasBefore = row >= turnStart && lineFits(lines[row]!, tests.before);
       if (!hasBefore && !shape.beforeOptional) continue;
-      const blockStart = hasBefore ? row : end - tests.rows.length;
+      const blockStart = hasBefore ? row : errorStart;
       const live = rules?.liveContent?.(lines, turnStart, blockStart, readingContext);
       if (live !== true && live !== 'inconclusive') continue;
       // The same semantic identity drives both settlement and suppression.
@@ -1248,4 +1306,32 @@ export function validateStall(physical: readonly StyledLine[], signature: Compil
     }
     return null;
   });
+}
+
+function validateOverlayStall(lines: readonly StyledLine[], shape: StallSignature, firstVisible: number): StallCandidate | null {
+  const overlay = shape.overlay;
+  if (overlay === undefined || !(shape.marker.text instanceof RegExp)) return null;
+  const message = compileLine(overlay.message, 'stall.overlay.message').text;
+  const styleAt = (line: StyledLine, column: number) => line.spans.find(span => span.from <= column && span.to > column);
+  const visibleRows = lines.length - firstVisible;
+  const visibleWidth = Math.max(...lines.slice(firstVisible).map(line => line.text.length));
+  for (let i = firstVisible; i + 3 < lines.length; i++) {
+    const title = lines[i]!;
+    if (!shape.marker.text.test(title.text)) continue;
+    if (Math.abs(i - firstVisible - (Math.floor((visibleRows + 1) / 2) + overlay.centreOffset)) > 1) continue;
+    const column = title.text.indexOf('Connection lost…') - 2;
+    if (column < 18 || title.text[column - 2] !== ' ' || title.text[column - 1] !== ' ') continue;
+    if (Math.abs(column - 2 - (Math.floor((visibleWidth + 1) / 2) - 24)) > 2) continue;
+    const detail = lines[i + 2]!;
+    if (lines[i + 1]!.text.trim() !== '' || !message?.test(detail.text)) continue;
+    const background = overlay.background;
+    if (styleAt(title, column - 2)?.bg !== background || styleAt(title, column)?.fg !== shape.marker.fg[0] ||
+      styleAt(title, column)?.bg !== background || styleAt(detail, column - 2)?.bg !== background ||
+      styleAt(detail, column)?.fg !== '#808080' || styleAt(detail, column)?.bg !== background ||
+      styleAt(lines[i + 3]!, column - 2)?.bg !== background ||
+      styleAt(lines[i + 3]!, column + 45)?.bg !== background) continue;
+    const identity = JSON.stringify([shape.reason, 'live-overlay']);
+    return { reason: shape.reason, description: shape.description, identity, blockIdentity: identity };
+  }
+  return null;
 }

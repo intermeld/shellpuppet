@@ -1,9 +1,10 @@
 import { prompts } from './prompts.js';
 import type { AgentModule } from '../types.js';
 import { reading } from './reading.js';
+import { stalls } from './stalls.js';
 
 export const opencode: AgentModule = {
-  name: reading.name, programs: reading.programs, reading, prompts,
+  name: reading.name, programs: reading.programs, reading, prompts, stalls,
   readiness: { readyText: ['ctrl+p'] },
   env: {
     // OpenCode child-session variables: packages/opencode/src/index.ts and

@@ -88,8 +88,10 @@ the existing failure response.
 `terminal_list` includes a `STALLED` state with the reason code, fixed product
 description and ISO since time. `waitingOnly: true` still selects permission
 prompts only. A stall does not change the session's startup readiness fields.
-MiMo reports `provider-refused` for a provider refusal and `request-failed` for
-an idle completed turn whose model request failed.
+MiMo reports `provider-refused` for a provider refusal, `request-failed` for a
+failed model request, `output-limit` when the model reaches its output length
+limit and `error` for other error blocks at the end of an idle turn. OpenCode
+and MiMo Code report `server-lost` when the local server connection banner persists.
 
 `terminal_wait` accepts `stalled: true`, alone or with `prompt: true`. A string
 `session` watches one session; an array watches those sessions; omitting it
@@ -123,14 +125,19 @@ are present, otherwise `stalled` when any stalled rows are present, otherwise
 `timeout`. Ended sessions are omitted. `GET /sessions` includes the same
 `stalled` metadata in full session summaries.
 
-Two MiMo error shapes, measured from real screens, are supported at and above
-the 80x24 floor: the provider refusal and a failed model request. It is recognised by its shape on screen. The error must belong to the live
+MiMo error blocks are supported at and above the 80x24 floor. They are recognised
+by their shape on screen. The error must belong to the live
 turn with MiMo's error ink outside recognised tool panels, with a completed
 turn footer, a visible idle composer and only recognised bottom chrome below
 it. Indented unsent input does not qualify. Detection needs a known turn
-boundary within the bounded context to establish a new notice.
-The same error must persist for one second,
-with no prompt or busy indication. Copy and recovery controls, sidebar changes,
+boundary within the bounded context to establish a new notice, except when a
+marker has scrolled away and the red error body reaches the top of the available
+history above a completed recovery footer and idle composer. OpenCode's
+connection banner uses its centred overlay position and styling instead of an
+idle footer. Its frozen busy row does not prevent detection, and the notice
+clears when the banner disappears.
+The same evidence must persist for one second. An idle MiMo error has no prompt
+or busy indication. Copy and recovery controls, sidebar changes,
 resize reflow and cursor-only writes preserve its identity and original time.
 Composer frames repainted to the new width and accepted grey suggestions
 arriving or leaving preserve the notice while the canonical error identity

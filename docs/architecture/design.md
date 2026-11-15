@@ -698,16 +698,18 @@ configurable 300 s. A wrongly low timeout is indistinguishable from a hard failu
 
 ### 3.2 Sessions that stall, noticed
 
-A supported error block at the end of an idle turn (a provider refusal or a
-failed model request) is `stalled`, distinct
+A supported error block at the end of an idle turn or a persistent local server
+connection banner is `stalled`, distinct
 from a session waiting for an answer. `AgentModule.stalls` is an optional list
 of signatures, separate from the reserved `safety` adapter. Each has a stable
 reason code, fixed product description, a cheap visible marker, styled row
 tests for the error, its preceding line, closing footer and idle composer,
-and the allowed bottom chrome. MiMo has measured `provider-refused` and
-`request-failed` shapes, with distinct fixed reasons. A retryable error qualifies
+and the allowed bottom chrome. MiMo has measured `provider-refused`,
+`request-failed` and `output-limit` shapes, with distinct fixed reasons. Other
+MiMo error messages use `error`. A retryable error qualifies
 only after the turn finishes with an idle composer; a visible retry is busy.
-OpenCode has a different measured footer and no capture proving the same shape. Other errors and agents need
+OpenCode has a different measured footer, so its connection loss uses the centred
+overlay banner instead. MiMo Code shares that OpenCode banner. Other agents need
 real screen fixtures before they gain signatures.
 
 Detection recognises these errors by their shape on screen, at and above the
@@ -715,10 +717,11 @@ Detection recognises these errors by their shape on screen, at and above the
 composer, latest user-turn boundary and module busy rules. MiMo's content walk
 uses its own panel framing and error ink to distinguish tool listings and
 quoted text from the live answer. Punctuation in ordinary content does not
-establish a tool, quotation or interface region. A clipped bounded history without a known turn boundary cannot
-establish a new stall. A self-contained captured frame beginning with a styled
+establish a tool, quotation or interface region. A clipped bounded history without a known turn boundary can
+establish a new stall when the red error body fills the available history and
+ends at a completed recovery footer above an idle composer. A self-contained captured frame beginning with a styled
 expandable tool panel can establish one after the panel visibly closes. The last transcript block must have the red
-left bar and red `✗ Error` marker, the reason's own message and the
+left bar and normally the red `✗ Error` marker, the reason's own message and the
 completed `Build · <model>` footer, with or without a duration or recovery
 control, directly above a current visible idle composer. The neutral high-risk
 introduction may be absent. Only recognised bottom chrome, including MiMo's
@@ -726,10 +729,19 @@ one-line or column-wrapped usage and shortcut footer, may follow it. The input r
 comes from the composer frame and independently repeated panel dividers;
 indentation alone never makes typed text a sidebar. Text before a proven
 divider remains input, including text beyond the closing frame's edge.
-The grey suggestion has a separate style rule: its composer gutter must use MiMo's orange or grey ink and every visible character of the suggestion, including its shortcut suffix, must be grey. A resize can expose only a tail of an established error's earlier transcript; matching styled error blocks retain the notice when that tail belongs to the validated transcript. New transcript text and a persistently missing block still clear it within the existing resize allowance and confirmation.
-No detected prompt or busy indication may be present.
+When a long error scrolls the marker out of the bounded capture, two or more
+red-gutter message rows must run from the available top through the closing bar,
+followed by the completed recovery footer and idle composer. Recovery was seen
+on failed turns in the available captures, but its exclusivity is unproven; the
+coloured gutter and interface frame remain required.
+The grey suggestion has a separate style rule: its composer gutter must use MiMo's orange or grey ink and every visible character of the suggestion must be grey. It is idle when the visible shortcut includes `(Tab to`, or when the shortcut's opening `(` is visible at the composer's inset right edge. A grey fragment without the shortcut is not idle, even when it reaches that edge. A resize can expose only a tail of an established error's earlier transcript; matching styled error blocks retain the notice when that tail belongs to the validated transcript. New transcript text and a persistently missing block still clear it within the existing resize allowance and confirmation.
+No detected prompt or busy indication may be present for an idle error block.
+The OpenCode connection banner qualifies while its old busy row remains frozen.
+Its two styled message rows, intervening blank row, modal background and centred
+viewport position establish a live overlay rather than transcript, file or input
+text. Its notice clears when the banner goes.
 
-The same semantic error and user turn must remain for one second. Logical
+The same semantic stall must remain for one second. Logical
 lines join terminal wraps before matching; independently styled interface anchors
 restore row boundaries after a full-width footer marks following rows as wrapped.
 Copy labels, the `↻ /recover`
@@ -744,7 +756,8 @@ unknown context: its text cannot open or close a tool panel.
 Every complete available row still contributes to the content walk.
 An already settled stall with the same error
 and footer keeps its full identity and original `since`. Missing context
-cannot create a new stall or finish settling one. Cursor-only writes do not
+cannot create a new stall or finish settling one unless the complete red body
+and recovery frame described above are visible. Cursor-only writes do not
 end the observation.
 New transcript output, a prompt, busy output, non-empty real input or exit
 clears the state. Automatic terminal reports and zero-byte writes do not.
