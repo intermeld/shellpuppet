@@ -1,3 +1,4 @@
+import { readiness as nudgeReadiness } from './nudge.js';
 import { prompts } from './prompts.js';
 import type { AgentModule } from '../types.js';
 import { reading } from './reading.js';
@@ -5,6 +6,7 @@ import { reading } from './reading.js';
 export const claude: AgentModule = {
   name: reading.name, programs: reading.programs, reading, prompts,
   readiness: { readyText: ['? for shortcuts', 'shift+tab'] },
+  nudge: { readiness: nudgeReadiness },
   env: {
     // Claude Code child-session variables: https://code.claude.com/docs/en/env-vars.
     sessionMarkers: [

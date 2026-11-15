@@ -190,6 +190,17 @@ every module's prompt shapes and dialogs in the existing detection order,
 including a known agent session forwarding a child program's prompt. Input,
 resize, settling and reading still follow the session's own resolved module.
 
+**Empty composer.** Claude Code, Codex, Qoder CLI and Muse Code can tell an
+empty composer from a draft. Empty means a bare composer, or only the grey
+suggestion: Claude Code's `Try "write a test for <filepath>"`, Codex's
+`Ask Codex to do anything`, Qoder CLI's `Type your message or @path/to/file`,
+and Muse Code's `Start a message with ! to run a shell command yourself`.
+Any other composer text is a draft, including text that wraps onto later rows
+before the frame. A running turn is busy even when the composer is empty or
+still shows its suggestion. `? for shortcuts` is a status line, not a draft.
+The screen must also have no prompt waiting, no settled stall, and no change
+for 1,500 ms before that empty composer counts as ready to nudge.
+
 Two Qoder specifics worth knowing:
 
 - Its **folder-trust prompt** (`Do you trust the files in this folder?`)

@@ -256,6 +256,12 @@ The registry combines every module's parent-session markers for the daemon to
 exclude from every launch profile that copies its whole environment, regardless
 of the session's agent. Readiness defaults apply only when a caller opts in
 with `waitReady`. Safety adapters remain a reserved optional module field.
+A module may also offer a nudge judgement. It reuses that module's composer,
+busy line and typed-text rules and reports ready, busy, draft or unknown.
+Grey placeholder and suggestion text counts as an empty composer. The core
+then requires that ready judgement, no prompt waiting for a person, no settled
+stall, and a screen that has stayed unchanged for 1,500 ms. A module without
+the judgement is always unknown, so the session is never treated as ready.
 
 `viewer.js` and `dashboard.js` use `pane.js`; `term.onData` is registered once
 there. The dashboard uses plain script and the DOM renderer, with no new

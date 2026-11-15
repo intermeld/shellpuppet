@@ -89,6 +89,18 @@ export interface StallSignature {
   overlay?: { message: LineTest; background: string; centreOffset: number };
 }
 
+/** What a module can tell about typing into the composer it already describes. */
+export type NudgeReadiness = 'ready' | 'busy' | 'draft' | 'unknown';
+
+/**
+ * The screen a module already reads. Plain rows are enough for a recorded
+ * transcript. Styled rows carry the colours that tell a suggestion from a draft.
+ */
+export interface NudgeView {
+  rows: readonly string[];
+  styled?: readonly StyledLine[];
+}
+
 /** Internal harness data and the few detector walks not yet expressed as data. */
 export interface AgentModule {
   name: string;
@@ -107,6 +119,13 @@ export interface AgentModule {
     readyScreen?: (screen: string) => boolean;
     readyQuietMs?: number;
     settleMs?: number;
+  };
+  /**
+   * Whether this program's screen is idle with an empty composer.
+   * Absent means the module cannot tell, and the session is never judged ready.
+   */
+  nudge?: {
+    readiness(view: NudgeView): NudgeReadiness;
   };
   env?: { sessionMarkers: string[] };
   safety?: SafetyAdapter;
