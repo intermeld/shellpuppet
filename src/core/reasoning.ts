@@ -865,7 +865,7 @@ export type StallValidation = StallCandidate | InconclusiveStall | null;
 
 export const STALL_SETTLE_MS = 1000;
 
-/** The same candidate must survive settling; input suppresses its old screen. */
+/** The same candidate must survive settling; input suppresses old refusal screens. */
 export class StallTracker {
   private candidate: StallCandidate | null = null;
   private since = 0;
@@ -874,6 +874,9 @@ export class StallTracker {
 
   /** A candidate has been recognised and may still be settling. */
   get tracking(): boolean { return this.candidate !== null; }
+
+  /** Includes a recognised candidate that has not yet settled. */
+  get reason(): string | undefined { return this.candidate?.reason ?? this.state?.reason; }
 
   matchesBlock(candidate: StallValidation): boolean {
     return candidate !== null && this.candidate?.blockIdentity === candidate.blockIdentity;
@@ -886,6 +889,7 @@ export class StallTracker {
   }
 
   noteInput(): void {
+    if (this.reason === 'server-lost') return;
     this.suppressed = this.candidate?.blockIdentity ?? this.suppressed;
     this.candidate = null;
     this.state = undefined;

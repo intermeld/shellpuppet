@@ -41,3 +41,39 @@ it('keeps a settled server-lost stall over a detected prompt and restores that p
     expect(session.answerablePrompt((await session.snapshot()).screen)).not.toBeNull();
   } finally { await session.kill(); }
 }, 8000);
+
+it.each([
+  { input: '\r', kind: 'a key', when: 'after settle', delay: 1400 },
+  { input: '\r', kind: 'a key', when: 'during settle', delay: 250 },
+  { input: 'example text', kind: 'typed text', when: 'during settle', delay: 250 },
+])('keeps server-lost through $kind sent $when and clears it when the banner leaves', async ({ input, delay }) => {
+  let output: (data: string) => void = () => {};
+  const pty = {
+    pid: 0, cols: 80, rows: 24, process: 'synthetic', handleFlowControl: false,
+    onData: (fn: (data: string) => void) => { output = fn; return { dispose() {} }; },
+    onExit: () => ({ dispose() {} }), resize() {}, write() {}, clear() {}, kill() {}, pause() {}, resume() {},
+  } satisfies IPty;
+  const session = new Session(`server-lost-input-${delay}`,
+    { command: process.execPath, agent: 'opencode', cols: 80, rows: 24 },
+    { platform: 'linux', spawn: () => pty, pidWaitMs: 0 });
+  const draw = async (data: string) => { output(data); await session.viewportLines(); };
+  try {
+    await draw(prompt);
+    await draw(fixture + '\x1b[16;1H  ┃  △ Permission required\x1b[K');
+    await sleep(delay);
+    if (delay > 1000) expect(session.getStalled()?.reason).toBe('server-lost');
+    else expect(session.getStalled()).toBeUndefined();
+    await session.write(input);
+    if (delay > 1000) expect(session.getStalled()?.reason).toBe('server-lost');
+    await sleep(1400);
+    expect(session.getStalled()?.reason).toBe('server-lost');
+    expect(session.answerablePrompt((await session.snapshot()).screen)).toBeNull();
+    await draw('\x1b[17;1H  ┃  $ another example command\x1b[K');
+    await sleep(300);
+    expect(session.getStalled()?.reason).toBe('server-lost');
+    await draw(prompt);
+    await sleep(300);
+    expect(session.getStalled()).toBeUndefined();
+    expect(session.answerablePrompt((await session.snapshot()).screen)).not.toBeNull();
+  } finally { await session.kill(); }
+}, 8000);

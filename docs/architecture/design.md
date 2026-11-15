@@ -782,11 +782,12 @@ and footer keeps its full identity and original `since`. Missing context
 cannot create a new stall or finish settling one unless the complete red body
 and recovery frame described above are visible. Cursor-only writes do not
 end the observation.
-New transcript output, busy output, non-empty real input or exit clears the
-state. A live prompt clears every stall except `server-lost` while its banner
-persists. Automatic terminal reports and zero-byte writes do not.
-Real input also suppresses that same semantic identity until the block
-disappears or is replaced.
+New transcript output, busy output or exit clears the state. Non-empty real
+input clears other stall reasons and suppresses their semantic identity until
+the block disappears or is replaced. Input never clears, suppresses or delays
+`server-lost` while its banner persists, including during the settle second.
+A live prompt clears every stall except `server-lost` while its banner persists.
+Automatic terminal reports and zero-byte writes do not clear stalls.
 
 Discovery and revalidation share a coalesced path of at most four checks per
 second. Known cosmetic controls and cursor-only repaints skip full validation.
