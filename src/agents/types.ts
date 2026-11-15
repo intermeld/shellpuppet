@@ -27,7 +27,7 @@ export interface PromptRows {
 }
 export type PromptShape =
   | { kind: 'dialog'; signature: DialogSignature }
-  | { kind: 'menu'; order: number; detect: (raw: string[], lines: PromptLine[], tail: PromptLine[], busy: (text: string) => boolean) => DetectedPrompt | null }
+  | { kind: 'menu'; order: number; detect: (raw: string[], lines: PromptLine[], tail: PromptLine[], busy: (text: string) => boolean, viewportRows?: number, styled?: readonly StyledLine[]) => DetectedPrompt | null }
   | PromptRows;
 
 export interface PromptSettler {

@@ -24,6 +24,7 @@ import type { CursorPosition } from './types.js';
 import { markSelectedOption } from './selection.js';
 import { detectPrompt } from './promptDetector.js';
 import { promptShapesFor } from '../agents/index.js';
+import { hasClippedQuestionShape } from '../agents/opencode/prompts.js';
 
 const { Terminal } = xterm;
 const { SerializeAddon } = serializeAddon;
@@ -455,11 +456,12 @@ export class ScreenRenderer {
     }
     // Muse's staged menus use their visible text to identify the question;
     // marking the selected option still needs the styled rows.
-    const prompt = detectPrompt(lines.join('\n'), this.agent);
+    const styled = hasClippedQuestionShape(lines, this.term.rows) ? this.styledLines().lines : undefined;
+    const prompt = detectPrompt(lines.join('\n'), this.agent, this.term.rows, styled);
     const styledHeading = promptShapesFor(this.agent).some(shape => shape.kind === 'rows' && shape.styledHeading !== undefined && lines.some(line => shape.styledHeading!.test(line)));
     const marked = prompt?.optionRows === undefined && !styledHeading
       ? lines
-      : markSelectedOption(this.styledLines().lines, prompt);
+      : markSelectedOption(this.styledLines().lines, prompt).slice(0, lines.length);
     return {
       cols: this.term.cols,
       rows: this.term.rows,
@@ -497,7 +499,7 @@ export class ScreenRenderer {
       lines.push(line ? line.translateToString(true) : '');
     }
     const styled = this.styledLines({ last: Math.max(count, 20) }).lines;
-    return markSelectedOption(styled, detectPrompt(styled.map(line => line.text).join('\n'), this.agent)).slice(-lines.length);
+    return markSelectedOption(styled, detectPrompt(styled.map(line => line.text).join('\n'), this.agent, undefined, styled)).slice(-lines.length);
   }
 
   /**

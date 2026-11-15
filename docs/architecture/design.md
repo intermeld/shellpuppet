@@ -465,6 +465,27 @@ multi-select or confirm is waiting while its headline glyph is `◆`, or `▲` w
 a validation error, and nothing but the step's own frame is drawn under it. A step with no
 message of its own, its glyph alone, takes its question from the message logged just above
 it: MiMo Code asks its folder-trust question that way.
+OpenCode and MiMo Code also draw a `Questions` panel in a `┃` gutter. A fitting
+panel is recognised by its numbered choices, custom-answer row and key footer.
+When the viewport clips the panel, its header, question and at least two
+consecutive numbered choices must remain visible. The last choice or
+description must occupy the physical bottom row. The clipped rule uses rendered
+cell styles: the panel's orange gutter and dark background, grey header and
+descriptions, and bright question and choices. OpenCode's blue composer gutter
+and its different background distinguish drafts from the live panel. Earlier
+transcript rows and idle chrome above the panel are allowed; live busy chrome
+still vetoes it. Question text can itself begin with `>`. Without styled cells,
+the clipped rule does not claim a panel. The colours are those measured on the
+default theme; with another theme a clipped panel is not recognised, as before
+this rule, and a fitting panel still is.
+The renderer first checks the physical bottom row's fixed `┃` gutter position,
+without inspecting any other row. Only then does it check the header, bars and
+consecutive choices before reading styled cells. Other
+prompt checks retain their existing styled-read behaviour.
+Detection reports only visible choice labels and claims only visible panel
+rows; a selected choice is reported only when its visible row carries the
+selection styling. Ordinary
+headings and numbered lists do not supply that panel frame.
 Some agent CLIs draw their permission dialog inside their own interface with the choices
 as one row of buttons (OpenCode's `△ Permission required` over `Allow once   Always
 allow   Reject`, MiMo Code's with `Allow always` in the middle or with two choices),
