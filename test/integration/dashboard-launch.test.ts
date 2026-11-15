@@ -716,9 +716,10 @@ describe('envFromDaemon copies names from the daemon, never from the body', () =
     const filteredScreen = await screenOf(daemon, String((JSON.parse(filtered.body) as Record<string, unknown>)['id']));
     await eventually(async () => (await screenOf(daemon, String((JSON.parse(filtered.body) as Record<string, unknown>)['id']))).includes('ORDINARY_NAME=made-up-ordinary'), 15_000);
     const screen = filteredScreen + await screenOf(daemon, String((JSON.parse(filtered.body) as Record<string, unknown>)['id']));
-    for (const name of ['CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_PID', 'SHELLPUPPET_SESSION']) {
+    for (const name of ['CLAUDECODE', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_MESSAGING_TOKEN', 'CLAUDE_PID']) {
       expect(screen).toContain(`${name}=missing`);
     }
+    expect(screen).toContain(`SHELLPUPPET_SESSION=${String((JSON.parse(filtered.body) as Record<string, unknown>)['id'])}`);
     for (const [name, value] of [['SHELLPUPPET_HOME', source.SHELLPUPPET_HOME], ['ANTHROPIC_API_KEY', source.ANTHROPIC_API_KEY], ['ORDINARY_NAME', source.ORDINARY_NAME]]) {
       expect(screen).toContain(`${name}=${value}`);
     }

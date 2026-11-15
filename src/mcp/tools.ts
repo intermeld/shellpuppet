@@ -684,6 +684,7 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
           exitCode: number | null;
           watchers: number;
           agent?: string | null;
+          parent?: string;
           waitingOnPrompt?: { question?: string; selectedOption?: number; waitingMs: number };
         }[];
         if (sessions.length === 0) return text(withWarnings(warnings, 'No sessions.'));
@@ -693,7 +694,8 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
               `${s.id}  ${listedState(s)}  ` +
               `${String(s.cols)}x${String(s.rows)}  watchers:${String(s.watchers)}  ` +
               `${s.stalled !== undefined ? stallLine(s.stalled) : s.ready ? 'ready' : 'NOT-READY'}  ${s.label}` +
-              (s.agent !== null && s.agent !== undefined ? `  agent:${s.agent}` : '');
+              (s.agent !== null && s.agent !== undefined ? `  agent:${s.agent}` : '') +
+              (s.parent !== undefined ? `  parent:${s.parent}` : '');
             if (s.waitingOnPrompt === undefined) return base;
             // Seconds, not milliseconds: this number exists to be judged at a
             // glance ("blocked 4 minutes"), and ms buries that in digits.

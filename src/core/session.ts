@@ -49,6 +49,7 @@ import {
   MAX_WAIT_TIMEOUT_MS,
   NULL_LOGGER,
   RESERVED_FEATURE_CREDENTIALS,
+  SESSION_IDENTITY_ENV_NAMES,
 } from './types.js';
 import type {
   Logger,
@@ -432,6 +433,8 @@ function resolveExecutable(command: string, platform: NodeJS.Platform, cwd: stri
 }
 
 export interface SessionDeps {
+  /** Identity allocated by the daemon for this session. */
+  identity?: { token: string; instanceId: string; cliPath: string };
   /** A retry retains the identity resolved by its first start attempt. */
   resolvedAgent?: { agent: string; agentSource: AgentSource };
   logger?: Logger;
@@ -632,8 +635,8 @@ export function buildSessionEnv(
   // that way there and exactly elsewhere, as every other name is.
   const isReserved = (name: string): boolean =>
     platform === 'win32'
-      ? [...reserved].some((entry) => entry.toUpperCase() === name.toUpperCase())
-      : reserved.has(name);
+      ? [...reserved, ...SESSION_IDENTITY_ENV_NAMES].some((entry) => entry.toUpperCase() === name.toUpperCase())
+      : reserved.has(name) || SESSION_IDENTITY_ENV_NAMES.has(name);
   if (mode === 'passthrough') {
     for (const [key, value] of Object.entries(source)) {
       if (value !== undefined && !isReserved(key)) env[key] = value;
@@ -657,7 +660,9 @@ export function buildSessionEnv(
     }
     env[name] = value;
   };
-  for (const [name, value] of Object.entries(passed)) setOnly(name, value);
+  for (const [name, value] of Object.entries(passed)) {
+    if (!isReserved(name)) setOnly(name, value);
+  }
   // Always injected (§7): Windows sets no TERM, and TUIs then assume a dumb
   // terminal and disable colour. On Windows any other casing goes first, or
   // the child would see that copy's value instead of these.
@@ -673,6 +678,7 @@ export class Session implements WaitTarget {
   readonly purpose: string;
   /** The audit actor that started it: set by the daemon, not by the body. */
   readonly startedBy: string;
+  readonly parent: string | undefined;
   /** The pre-wrap command as given by the caller. */
   readonly command: string;
   readonly args: string[];
@@ -777,6 +783,7 @@ export class Session implements WaitTarget {
     this.label = options.label ?? options.command;
     this.purpose = options.purpose ?? '';
     this.startedBy = options.startedBy ?? 'unknown';
+    this.parent = options.parent;
     const resolved = deps.resolvedAgent ?? resolveSessionAgent(options.agent, options.command);
     this.agent = resolved.agent;
     this.agentSource = resolved.agentSource;
@@ -848,6 +855,18 @@ export class Session implements WaitTarget {
     // for Windows without a Windows process.
     const trackConsoleHost = this.platform === 'win32';
     const consoleHostT0 = trackConsoleHost ? Date.now() : 0;
+    const sessionEnv = buildSessionEnv(
+      deps.sessionEnv ?? DEFAULT_SESSION_ENV,
+      this.platform,
+      process.env,
+      options.env,
+    );
+    if (deps.identity !== undefined) {
+      sessionEnv['SHELLPUPPET_SESSION'] = id;
+      sessionEnv['SHELLPUPPET_SESSION_TOKEN'] = deps.identity.token;
+      sessionEnv['SHELLPUPPET_DAEMON_INSTANCE'] = deps.identity.instanceId;
+      sessionEnv['SHELLPUPPET_CLI'] = deps.identity.cliPath;
+    }
     const spawnOptions = {
       name: 'xterm-256color',
       cols,
@@ -855,12 +874,7 @@ export class Session implements WaitTarget {
       cwd: options.cwd ?? process.cwd(),
       // The daemon always passes the mode it resolved and reports; this
       // default serves code that uses SessionManager or Session directly.
-      env: buildSessionEnv(
-        deps.sessionEnv ?? DEFAULT_SESSION_ENV,
-        this.platform,
-        process.env,
-        options.env,
-      ),
+      env: sessionEnv,
     };
     try {
       if (this.spawnPty !== undefined) {
@@ -873,7 +887,19 @@ export class Session implements WaitTarget {
     } catch (error) {
       // On Windows node-pty loads its native module here, as the terminal is
       // built, so a missing binary surfaces now rather than at the load above.
-      throw explainSpawnFailure(error);
+      let failure: unknown = explainSpawnFailure(error);
+      // A spawn implementation may include its environment in an error.
+      // The identity secret must not reach the daemon's error response or log.
+      if (deps.identity !== undefined) {
+        const token = deps.identity.token;
+        if (failure instanceof Error) {
+          failure.message = failure.message.replaceAll(token, '[redacted]');
+          if (failure.stack !== undefined) failure.stack = failure.stack.replaceAll(token, '[redacted]');
+        } else {
+          failure = new Error(String(failure).replaceAll(token, '[redacted]'));
+        }
+      }
+      throw failure;
     }
     if (trackConsoleHost) {
       this.consoleHostWindow = { t0: consoleHostT0, t1: Date.now() };
@@ -1725,6 +1751,7 @@ export class Session implements WaitTarget {
       label: this.label,
       purpose: this.purpose,
       startedBy: this.startedBy,
+      ...(this.parent === undefined ? {} : { parent: this.parent }),
       agent: this.agent,
       command: this.command,
       args: this.args,

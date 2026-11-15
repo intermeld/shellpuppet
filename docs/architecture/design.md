@@ -1266,7 +1266,9 @@ Requirements:
 Append-only JSONL at `~/.shellpuppet/audit.log`: timestamp, session id, actor
 (`mcp:<clientInfo.name>` / `cli` / `viewer` / `dashboard`; `client` for a client that does not name
 itself; `daemon` for what the daemon does on its own, such as reaping an exited session),
-action and metadata. Minting a dashboard grant is `grant-mint` under the calling client
+action and metadata. A verified session call also records `callerSession` beside
+the actor; the actor remains the client label. The proof and its token are never
+recorded. Minting a dashboard grant is `grant-mint` under the calling client
 actor, with metadata that names the credential kind and nothing secret. Redeeming it is
 `grant-redeem` under actor `dashboard`, and the grant is not recorded. A refused dashboard
 request is `refuse` under actor `dashboard`, with the method, the path and a reason code
@@ -1334,6 +1336,18 @@ default (ADR-008).
   trail (names only, whatever `captureContent` says), session state and the viewer, and
   a refusal names a variable, never its value.
 - Always inject `TERM=xterm-256color` and `COLORTERM=truecolor` regardless (§7).
+- Every daemon-started session receives `SHELLPUPPET_SESSION` (its id),
+  `SHELLPUPPET_SESSION_TOKEN` (a fresh 32-byte base64url secret),
+  `SHELLPUPPET_DAEMON_INSTANCE` (the daemon instance id) and `SHELLPUPPET_CLI`
+  (the absolute path to that daemon's CLI entry). These values are assigned
+  after all environment copies; no `sessionEnv`, `envNames`, `agents.passEnv` or
+  `envFromDaemon` setting can copy another session's identity. A client sends
+  its id and proof on each request only when its daemon instance matches.
+  The daemon checks that the session is live and compares the proof safely.
+  A recognised caller's new session records its parent; an absent proof is an
+  anonymous client and an invalid proof is refused. Any process running as
+  the same user can already read the daemon token. The session secret makes
+  attribution between sessions correct; it is not a boundary against local code.
 
 A dashboard start uses the same clean baseline. `envFromDaemon` on its
 profile adds the names explicitly configured there from the daemon's

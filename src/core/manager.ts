@@ -7,6 +7,7 @@
  */
 
 import { Session, TREE_KILL_TIMEOUT_MS, taskkillTrees } from './session.js';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { SessionDeps } from './session.js';
 import { whenConsoleHostBatchSettled } from './windowsConsoleHost.js';
 import { checkSessionCapacity, evaluateCommand } from './policy.js';
@@ -35,6 +36,7 @@ export const CONPTY_START_RETRY_DELAY_MS = 100;
 
 export class SessionManager {
   private readonly sessions = new Map<string, Session>();
+  private readonly identities = new Map<string, SessionDeps['identity']>();
   private readonly logger: Logger;
   private readonly sessionDeps: SessionDeps;
   private policy: CompiledPolicy;
@@ -77,9 +79,30 @@ export class SessionManager {
     }
 
     const id = `s${String(++this.seq)}`;
-    const session = new Session(id, options, this.sessionDeps);
+    const identity = this.sessionDeps.identity === undefined ? undefined : {
+      ...this.sessionDeps.identity,
+      token: randomBytes(32).toString('base64url'),
+    };
+    if (identity !== undefined) this.identities.set(id, identity);
+    let session: Session;
+    try {
+      session = new Session(id, options, { ...this.sessionDeps, identity });
+    } catch (error) {
+      this.identities.delete(id);
+      throw error;
+    }
     this.sessions.set(id, session);
     return session;
+  }
+
+  /** Check a live session's proof without revealing whether its id exists. */
+  recognisesCaller(id: string, token: string): boolean {
+    const session = this.sessions.get(id);
+    const expected = this.identities.get(id)?.token;
+    if (session === undefined || session.exited || expected === undefined) return false;
+    const supplied = Buffer.from(token);
+    const stored = Buffer.from(expected);
+    return supplied.length === stored.length && timingSafeEqual(supplied, stored);
   }
 
   /** Finish the deferred Windows start contract, retrying one proven worker
@@ -96,6 +119,7 @@ export class SessionManager {
     const discard = (): void => {
       if (this.sessions.get(session.id) !== current) return;
       this.sessions.delete(session.id);
+      this.identities.delete(session.id);
       this.onRemoved(session.id);
     };
     try {
@@ -129,6 +153,7 @@ export class SessionManager {
         try {
           current = new Session(session.id, options, {
             ...this.sessionDeps, retryAttempt: true,
+            identity: this.identities.get(session.id),
             resolvedAgent: { agent: session.agent, agentSource: session.agentSource },
           });
         } catch (error) {
@@ -177,6 +202,7 @@ export class SessionManager {
       if (!session.exited || session.exitedAt === null) continue;
       if (now - session.exitedAt < graceMs) continue;
       this.sessions.delete(id);
+      this.identities.delete(id);
       this.onRemoved(id);
       // The process is already dead; kill() just releases the PTY handles
       // and disposes the renderer. It deliberately does NOT tree-kill: the
@@ -201,6 +227,7 @@ export class SessionManager {
     if (this.starting.has(id)) this.cancelledStarts.add(id);
     await session.kill();
     this.sessions.delete(id);
+    this.identities.delete(id);
     this.onRemoved(id);
     return true;
   }
@@ -238,6 +265,7 @@ export class SessionManager {
     for (const session of all) {
       if (this.starting.has(session.id)) this.cancelledStarts.add(session.id);
       this.sessions.delete(session.id);
+      this.identities.delete(session.id);
       this.onRemoved(session.id);
     }
     await Promise.all(all.map(async (session) => {

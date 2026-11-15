@@ -16,6 +16,15 @@ const base = {
 };
 
 describe('planPassedEnv', () => {
+  it('refuses identity names even when the configuration lists them', () => {
+    for (const name of ['SHELLPUPPET_SESSION', 'SHELLPUPPET_SESSION_TOKEN',
+      'SHELLPUPPET_DAEMON_INSTANCE', 'SHELLPUPPET_CLI']) {
+      const environment = { [name]: 'parent-value' };
+      const input = { agent: null, requested: [name], agentLists: {}, adHoc: [name], environment, source: 'test' };
+      expect(planPassedEnv(input).refused).toEqual([name]);
+      expect(planPassedEnv({ ...input, agent: 'qoder', requested: [], agentLists: { qoder: [name] } }).env).toEqual({});
+    }
+  });
   it('gives an agent session its list, unasked, and reports a listed name not set', () => {
     const plan = planPassedEnv({ ...base, agent: 'qoder', requested: [] });
     expect(plan.env).toEqual({ A_KEY: 'a' });

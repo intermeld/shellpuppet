@@ -22,7 +22,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { SESSION_MARKERS } from '../agents/index.js';
-import { ENV_NAME_PATTERN, RESERVED_FEATURE_CREDENTIALS } from '../core/types.js';
+import { ENV_NAME_PATTERN, RESERVED_FEATURE_CREDENTIALS, SESSION_IDENTITY_ENV_NAMES } from '../core/types.js';
 import { compilePolicy } from '../core/policy.js';
 import type { CompiledPolicy } from '../core/policy.js';
 
@@ -506,7 +506,8 @@ export function copyDaemonEnv(
     const upperName = name.toUpperCase();
     if (names === 'all'
       && (!ENV_NAME_PATTERN.test(name) || ALL_PROFILE_ENV_EXCLUSIONS.has(process.platform === 'win32' ? upperName : name))) continue;
-    if ((upperName.startsWith('SHELLPUPPET_') && upperName !== 'SHELLPUPPET_HOME')
+    if (SESSION_IDENTITY_ENV_NAMES.has(upperName)
+      || (upperName.startsWith('SHELLPUPPET_') && upperName !== 'SHELLPUPPET_HOME')
       || name === '__proto__') continue;
     if (process.platform === 'win32'
       ? [...reserved].some((entry) => entry.toUpperCase() === upperName)

@@ -5,10 +5,26 @@
 
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_SESSION_ENV, buildSessionEnv, credentialShapedNames } from '../../src/core/session.js';
+import type { SessionEnvMode } from '../../src/core/types.js';
 
 const SOURCE = { PATH: '/bin', HOME: '/home/x', INHERITED_KEY: 'from-daemon' };
+const IDENTITY_NAMES = ['SHELLPUPPET_SESSION', 'SHELLPUPPET_SESSION_TOKEN',
+  'SHELLPUPPET_DAEMON_INSTANCE', 'SHELLPUPPET_CLI'];
 
 describe('buildSessionEnv with variables of the session’s own', () => {
+  it('keeps session identity out of all environment copies and passed values', () => {
+    const source = Object.fromEntries(IDENTITY_NAMES.map((name) => [name, 'old']));
+    for (const mode of ['passthrough', [...IDENTITY_NAMES]] as SessionEnvMode[]) {
+      const env = buildSessionEnv(mode, 'linux', source, source);
+      for (const name of IDENTITY_NAMES) expect(env[name]).toBeUndefined();
+    }
+  });
+
+  it('matches identity names without case on Windows', () => {
+    const env = buildSessionEnv('passthrough', 'win32', { shellpuppet_session_token: 'old' },
+      { shellpuppet_session: 'old' });
+    expect(Object.keys(env).filter((name) => name.toUpperCase().startsWith('SHELLPUPPET_SESSION'))).toEqual([]);
+  });
   it('adds them on top of a clean environment, which keeps everything else out', () => {
     const env = buildSessionEnv('clean', 'linux', SOURCE, { PASSED_KEY: 'v' });
     expect(env['PASSED_KEY']).toBe('v');
