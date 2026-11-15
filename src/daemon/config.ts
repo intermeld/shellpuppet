@@ -39,6 +39,8 @@ import { BUILT_IN_SIGNATURES, compileSignatures } from '../core/reasoning.js';
 import type { AgentSignature } from '../core/reasoning.js';
 import { ENV_NAME_PATTERN } from '../core/types.js';
 import type { PolicyConfig, PolicyMode, SessionEnvMode } from '../core/types.js';
+import { NAME_PATTERN } from '../core/mailbox.js';
+import type { MessagingPolicy, ParticipantRef } from '../core/mailbox.js';
 import type { ViewerLaunchConfig, ViewerLaunchMode } from './viewerLauncher.js';
 import { parseLauncher } from './launchProfiles.js';
 import type { LauncherConfig } from './launchProfiles.js';
@@ -91,6 +93,35 @@ export interface DaemonConfig {
    * `daemon.log` too.
    */
   envNames?: string[];
+  /**
+   * Messages between sessions (design §2.5): off unless `enabled` is true.
+   * `allow` names who may message whom: `parent-child` for a session and the
+   * sessions it started, or a group of participant names. The section is
+   * absent by default, which also means off.
+   */
+  messaging?: MessagingConfig;
+}
+
+/**
+ * A named group of participants that may message each other (design §2.5).
+ * Members are participant names, matched by name whatever kind holds it.
+ */
+export interface MessagingGroupRule {
+  group: string;
+  members: string[];
+}
+
+export type MessagingAllowRule = 'parent-child' | MessagingGroupRule;
+
+/** The parsed `messaging` section of config.json. */
+export interface MessagingConfig {
+  enabled: boolean;
+  allow: MessagingAllowRule[];
+}
+
+/** How the policy asks about sessions: the id of the session that started it. */
+export interface MessagingRelations {
+  parentOf(id: string): string | undefined;
 }
 
 export interface ParsedDaemonConfig {
@@ -118,6 +149,7 @@ const TOP_LEVEL_KEYS = new Set([
   'envNames',
   'launcher',
   'daemon',
+  'messaging',
 ]);
 const DAEMON_KEYS = new Set(['startWith', 'startWithOnlyIfEnvContains']);
 const VIEWER_KEYS = new Set(['launchMode', 'browserPath', 'profileDir']);
@@ -301,6 +333,97 @@ function parsePolicy(raw: unknown, problems: string[]): PolicyConfig {
     ...(isStringArray(raw['allow']) ? { allow: raw['allow'] } : {}),
     ...(isStringArray(raw['deny']) ? { deny: raw['deny'] } : {}),
     ...(typeof maxSessions === 'number' ? { maxSessions } : {}),
+  };
+}
+
+const MESSAGING_KEYS = new Set(['enabled', 'allow']);
+
+/**
+ * The `messaging` section (design §2.5). A section whose shape cannot be read
+ * as written leaves messaging OFF, problem named: messaging is a security
+ * surface, and a guess at what was meant could admit a pair the user never
+ * allowed. A single unreadable allow entry is dropped and its siblings load,
+ * the same leniency the launcher profiles use, because a missing rule refuses
+ * rather than admits.
+ */
+function parseMessaging(raw: unknown, problems: string[]): MessagingConfig | undefined {
+  const off = (detail: string): undefined => {
+    problems.push(`messaging ${detail}: messaging stays off`);
+    return undefined;
+  };
+  if (!isRecord(raw)) {
+    return off('must be an object with "enabled" (a boolean) and "allow" (a list)');
+  }
+  for (const key of Object.keys(raw)) {
+    if (!MESSAGING_KEYS.has(key)) return off(`has an unknown key "${key}"`);
+  }
+  const enabledRaw = raw['enabled'];
+  const enabled = enabledRaw === undefined ? false : enabledRaw;
+  if (typeof enabled !== 'boolean') return off('enabled must be a boolean');
+  const allowRaw = raw['allow'];
+  if (allowRaw === undefined) return { enabled, allow: [] };
+  if (!Array.isArray(allowRaw)) {
+    return off('allow must be a list of "parent-child" or group objects');
+  }
+  const allow: MessagingAllowRule[] = [];
+  for (let index = 0; index < allowRaw.length; index++) {
+    const entry: unknown = allowRaw[index];
+    const where = `messaging.allow[${String(index)}]`;
+    if (entry === 'parent-child') {
+      allow.push(entry);
+      continue;
+    }
+    if (!isRecord(entry) || !Object.keys(entry).every((key) => key === 'group' || key === 'members')) {
+      problems.push(`${where} must be "parent-child" or an object with "group" and "members": that entry is ignored`);
+      continue;
+    }
+    const group = entry['group'];
+    const members = entry['members'];
+    if (typeof group !== 'string' || group === '' || group.length > 64) {
+      problems.push(`${where}.group must be a short name for the group: that entry is ignored`);
+      continue;
+    }
+    if (!Array.isArray(members) || members.length < 1) {
+      problems.push(`${where}.members must list the participant names that may message each other: that entry is ignored`);
+      continue;
+    }
+    const valid = members.filter((name): name is string => typeof name === 'string' && NAME_PATTERN.test(name));
+    if (valid.length !== members.length) {
+      problems.push(`${where}: ignoring members that are not participant names`);
+    }
+    if (valid.length < 1) {
+      problems.push(`${where} names no valid participant: that entry is ignored`);
+      continue;
+    }
+    allow.push({ group, members: valid });
+  }
+  return { enabled, allow };
+}
+
+/**
+ * Compile the parsed `messaging` section into the mailbox's policy function.
+ * No section, or a section that is off, allows nothing at all: the belt to
+ * the braces of the mailbox's own switch check.
+ *
+ * - `parent-child`: a session and the sessions it started, in both
+ *   directions. Only sessions: a claim has no parent.
+ * - A group: every pair of members, by NAME, whatever kind holds the name.
+ */
+export function buildMessagingPolicy(
+  config: MessagingConfig | undefined,
+  relations: MessagingRelations,
+): MessagingPolicy {
+  if (config === undefined || !config.enabled) return () => false;
+  return (from: ParticipantRef, to: ParticipantRef): boolean => {
+    for (const rule of config.allow) {
+      if (rule === 'parent-child') {
+        if (from.kind !== 'session' || to.kind !== 'session') continue;
+        if (relations.parentOf(from.id) === to.id || relations.parentOf(to.id) === from.id) return true;
+        continue;
+      }
+      if (rule.members.includes(from.name) && rule.members.includes(to.name)) return true;
+    }
+    return false;
   };
 }
 
@@ -500,6 +623,14 @@ export function parseDaemonConfig(raw: unknown): ParsedDaemonConfig {
       config.envNames = valid;
     }
   }
+  // Messages between sessions. A broken section leaves messaging off; a
+  // broken entry is dropped and its siblings load. Nothing here can turn
+  // messaging on by accident: only "enabled": true does that.
+  if (raw['messaging'] !== undefined) {
+    const messaging = parseMessaging(raw['messaging'], problems);
+    if (messaging !== undefined) config.messaging = messaging;
+  }
+
   const mcp = raw['mcp'];
   if (isRecord(mcp) && mcp['passEnv'] !== undefined) {
     problems.push(
