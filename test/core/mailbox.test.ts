@@ -78,7 +78,7 @@ describe('claims', () => {
   it('claims a name and hands back a claim id and a secret', () => {
     const box = make();
     const { claimId, secret } = box.claim('desk');
-    expect(claimId).toMatch(/^c\d+$/);
+    expect(claimId).toMatch(/^claim_[a-f0-9]{32}$/);
     expect(secret).toMatch(/^[A-Za-z0-9_-]{43}$/);
     expect(box.verifyClaim(claimId, secret)).toBe(true);
   });
@@ -248,7 +248,7 @@ describe('binding to the recipient instance', () => {
     box.on('state', (event) => states.push(`${event.id}:${event.state}`));
     box.end('s2');
     expect(states).toEqual(['m2:not-delivered']);
-    expect(box.outbox('s1').map((m) => [m.id, m.state])).toEqual([['m1', 'read'], ['m2', 'not-delivered']]);
+    expect(box.outbox('s1').map((m) => [m.id, m.state])).toEqual([['m2', 'not-delivered']]);
   });
 
   it('never re-delivers to a later holder of the same name', () => {

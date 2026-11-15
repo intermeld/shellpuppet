@@ -498,15 +498,23 @@ so a daemon restart clears every mailbox.
 Participant names are 1 to 40 characters of letters, digits, dots,
 underscores or hyphens, and unique among live participants. A daemon session
 holds the name the daemon gave it; an outside client holds a name for as long
-as it keeps its claim. An `allow` entry that is neither `"parent-child"` nor
+as it keeps its claim. Claims may hold configured group member names. Names
+are first come, first served among live participants. An `allow` entry that is neither `"parent-child"` nor
 a group with `group` and `members` is ignored and reported in `daemon.log`;
 a section that cannot be read as written leaves messaging off, reported the
-same way.
+same way. An enabled section without `allow` allows nobody and reports a
+warning. At most 64 `allow` entries and 64 group members are accepted; group
+labels follow the same pattern as participant names.
 
 One message holds at most 16 KiB of UTF-8 text. One recipient holds at most
 200 messages and 1 MiB of text: a send that would pass those first drops
 that recipient's oldest read messages, never unread ones, and is refused when
 it still does not fit.
+When a recipient ends, its read messages are dropped. At most 200
+not-delivered messages per sender are retained. The daemon holds at most
+2,000 messages and 8 MiB of text, dropping the oldest not-delivered messages,
+then the oldest read messages, to make room. Unread messages for live
+recipients are never dropped.
 
 ## Dashboard launch profiles
 

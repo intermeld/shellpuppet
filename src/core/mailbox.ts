@@ -37,6 +37,12 @@ export const MAX_MESSAGE_BYTES = 16 * 1024;
 export const MAX_INBOX_MESSAGES = 200;
 /** The most text one recipient may hold, in UTF-8 bytes. */
 export const MAX_INBOX_BYTES = 1024 * 1024;
+/** The maximum retained history across the daemon. */
+export const MAX_MAILBOX_MESSAGES = 2_000;
+export const MAX_MAILBOX_BYTES = 8 * 1024 * 1024;
+export const MAX_OUTBOX_TOMBSTONES = 200;
+const CLAIM_ID_PATTERN = /^claim_[a-f0-9]{32}$/;
+const DUMMY_CLAIM_SECRET = 'an absent claim has no secret';
 
 // ---------------------------------------------------------------------- types
 
@@ -130,6 +136,7 @@ interface ParticipantRecord {
   kind: ParticipantKind;
   id: string;
   name: string;
+  generation: number;
   /** Claims only: the secret handed out with the claim id. */
   secret?: string;
 }
@@ -139,6 +146,7 @@ interface StoredMessage {
   /** Send order, monotonic for the life of the module. */
   seq: number;
   from: ParticipantRef;
+  fromGeneration: number;
   toId: string;
   toName: string;
   time: number;
@@ -176,7 +184,7 @@ export class Mailbox extends EventEmitter {
   private readonly messages: StoredMessage[] = [];
   private readonly waiters = new Set<Waiter>();
   private seq = 0;
-  private claimSeq = 0;
+  private generation = 0;
 
   constructor(deps: MailboxDeps) {
     super();
@@ -184,6 +192,29 @@ export class Mailbox extends EventEmitter {
     // An absent policy refuses everything: the safe default.
     this.policy = deps.policy ?? (() => false);
     this.now = deps.now ?? Date.now;
+  }
+
+  /** Keep recent tombstones per sender, then enforce the daemon-wide budget. */
+  private trimHistory(): void {
+    const tombstones = new Map<number, number>();
+    for (let index = this.messages.length - 1; index >= 0; index--) {
+      const message = this.messages[index];
+      if (message?.state !== 'not-delivered') continue;
+      const count = (tombstones.get(message.fromGeneration) ?? 0) + 1;
+      tombstones.set(message.fromGeneration, count);
+      if (count > MAX_OUTBOX_TOMBSTONES) this.messages.splice(index, 1);
+    }
+    let bytes = this.messages.reduce((sum, message) => sum + message.bytes, 0);
+    for (const state of ['not-delivered', 'read'] as const) {
+      for (let index = 0; index < this.messages.length &&
+        (this.messages.length > MAX_MAILBOX_MESSAGES || bytes > MAX_MAILBOX_BYTES);) {
+        const message = this.messages[index];
+        if (message?.state === state) {
+          bytes -= message.bytes;
+          this.messages.splice(index, 1);
+        } else index++;
+      }
+    }
   }
 
   override on(event: 'message', listener: (event: MailboxMessageEvent) => void): this;
@@ -203,11 +234,11 @@ export class Mailbox extends EventEmitter {
     if (typeof session.id !== 'string' || session.id === '') {
       throw new MailboxError('duplicate-id', 'A participant id must be a non-empty string.');
     }
-    if (this.participants.has(session.id)) {
+    if (CLAIM_ID_PATTERN.test(session.id) || this.participants.has(session.id)) {
       throw new MailboxError('duplicate-id', `A participant with the id "${session.id}" is already live.`);
     }
     this.checkName(session.name);
-    this.participants.set(session.id, { kind: 'session', id: session.id, name: session.name });
+    this.participants.set(session.id, { kind: 'session', id: session.id, name: session.name, generation: ++this.generation });
     this.byName.set(session.name, session.id);
   }
 
@@ -227,21 +258,32 @@ export class Mailbox extends EventEmitter {
    * Hold a name from outside the daemon. The claim lasts until it is released
    * or the process ends, and is proved by the secret handed back here.
    */
+  private newClaimId(): string {
+    return `claim_${randomBytes(16).toString('hex')}`;
+  }
+
   claim(name: string): { claimId: string; secret: string } {
     this.checkName(name);
-    this.claimSeq += 1;
-    const claimId = `c${String(this.claimSeq)}`;
+    let claimId: string;
+    do {
+      claimId = this.newClaimId();
+    } while (this.participants.has(claimId));
     const secret = randomBytes(32).toString('base64url');
-    this.participants.set(claimId, { kind: 'claim', id: claimId, name, secret });
+    this.participants.set(claimId, { kind: 'claim', id: claimId, name, generation: ++this.generation, secret });
     this.byName.set(name, claimId);
     return { claimId, secret };
+  }
+
+  private compareSecrets(presented: string, expected: string): boolean {
+    return secretsEqual(presented, expected);
   }
 
   /** Timing-safe claim verification. Unknown claims and wrong secrets are alike. */
   verifyClaim(claimId: string, secret: string): boolean {
     const record = this.participants.get(claimId);
-    if (record === undefined || record.kind !== 'claim' || typeof secret !== 'string') return false;
-    return secretsEqual(secret, record.secret ?? '');
+    const matched = this.compareSecrets(typeof secret === 'string' ? secret : '',
+      record?.kind === 'claim' ? (record.secret ?? DUMMY_CLAIM_SECRET) : DUMMY_CLAIM_SECRET);
+    return record?.kind === 'claim' && typeof secret === 'string' && matched;
   }
 
   /** End a claim. The name is freed and its unread messages are not delivered. */
@@ -256,16 +298,28 @@ export class Mailbox extends EventEmitter {
   end(participantId: string): void {
     const record = this.participants.get(participantId);
     if (record === undefined) return;
-    this.participants.delete(participantId);
-    if (this.byName.get(record.name) === participantId) this.byName.delete(record.name);
+    const changed: MailboxStateEvent[] = [];
     for (const message of this.messages) {
       if (message.toId === participantId && message.state !== 'read' && message.state !== 'not-delivered') {
         message.state = 'not-delivered';
-        this.emit('state', { id: message.id, state: 'not-delivered' });
+        changed.push({ id: message.id, state: 'not-delivered' });
       }
+    }
+    for (let index = this.messages.length - 1; index >= 0; index--) {
+      const message = this.messages[index];
+      if (message?.toId === participantId && message.state === 'read') this.messages.splice(index, 1);
     }
     for (const waiter of [...this.waiters]) {
       if (waiter.readerId === participantId) waiter.settle(undefined);
+    }
+    this.participants.delete(participantId);
+    if (this.byName.get(record.name) === participantId) this.byName.delete(record.name);
+    this.trimHistory();
+    // One subscriber must not interrupt shutdown or prevent another from seeing it.
+    for (const event of changed) {
+      for (const listener of this.rawListeners('state')) {
+        try { listener.call(this, event); } catch { /* Event subscribers are independent. */ }
+      }
     }
   }
 
@@ -274,7 +328,9 @@ export class Mailbox extends EventEmitter {
   send(fromId: string, toName: string, text: string, now?: number): SendResult {
     const from = this.participants.get(fromId);
     if (from === undefined) {
-      throw new MailboxError('unknown-sender', `No live participant has the id "${fromId}".`);
+      throw new MailboxError('unknown-sender',
+        typeof fromId === 'string' && NAME_PATTERN.test(fromId)
+          ? `No live participant has the id "${fromId}".` : 'No live participant has that id.');
     }
     if (!this.enabled) {
       throw new MailboxError('messaging-disabled', 'Messaging is switched off in the daemon configuration.');
@@ -282,7 +338,9 @@ export class Mailbox extends EventEmitter {
     const toId = this.byName.get(toName);
     const to = toId === undefined ? undefined : this.participants.get(toId);
     if (to === undefined) {
-      throw new MailboxError('unknown-name', `No live participant is named "${toName}".`);
+      throw new MailboxError('unknown-name',
+        typeof toName === 'string' && NAME_PATTERN.test(toName)
+          ? `No live participant is named "${toName}".` : 'No live participant has that name.');
     }
     if (!this.policy(from, to)) {
       throw new MailboxError(
@@ -325,8 +383,24 @@ export class Mailbox extends EventEmitter {
           `added until some are read.`,
       );
     }
+    // Plan global eviction before changing anything. A refused send drops nothing.
+    const dropped = new Set(drops);
+    let globalCount = this.messages.length - dropped.size + 1;
+    let globalBytes = bytes + this.messages.reduce((sum, item) => sum + (dropped.has(item) ? 0 : item.bytes), 0);
+    for (const state of ['not-delivered', 'read'] as const) {
+      for (const item of this.messages) {
+        if (globalCount <= MAX_MAILBOX_MESSAGES && globalBytes <= MAX_MAILBOX_BYTES) break;
+        if (item.state !== state || dropped.has(item)) continue;
+        drops.push(item);
+        dropped.add(item);
+        globalCount--;
+        globalBytes -= item.bytes;
+      }
+    }
+    if (globalCount > MAX_MAILBOX_MESSAGES || globalBytes > MAX_MAILBOX_BYTES) {
+      throw new MailboxError('mailbox-full', 'The daemon mailbox is full of unread messages.');
+    }
     if (drops.length > 0) {
-      const dropped = new Set(drops);
       for (let index = this.messages.length - 1; index >= 0; index--) {
         const message = this.messages[index];
         if (message !== undefined && dropped.has(message)) this.messages.splice(index, 1);
@@ -338,6 +412,7 @@ export class Mailbox extends EventEmitter {
       id: `m${String(this.seq)}`,
       seq: this.seq,
       from: { kind: from.kind, id: from.id, name: from.name },
+      fromGeneration: from.generation,
       toId: to.id,
       toName: to.name,
       time: now ?? this.now(),
@@ -346,9 +421,10 @@ export class Mailbox extends EventEmitter {
       state: 'waiting',
     };
     this.messages.push(message);
+    this.trimHistory();
     this.emit('message', {
       id: message.id,
-      from: message.from,
+      from: { ...message.from },
       to: { id: to.id, name: to.name },
       state: 'waiting',
     });
@@ -356,13 +432,12 @@ export class Mailbox extends EventEmitter {
     return { id: message.id, to: { id: to.id, name: to.name }, state: 'waiting' };
   }
 
-  /** Wake the first waiter this message satisfies. */
+  /** Wake every matching waiter; waiting does not mark the message read. */
   private wake(message: StoredMessage): void {
     for (const waiter of this.waiters) {
       if (waiter.readerId !== message.toId) continue;
       if (waiter.from !== undefined && waiter.from !== message.from.id) continue;
       waiter.settle(message);
-      return;
     }
   }
 
@@ -391,7 +466,7 @@ export class Mailbox extends EventEmitter {
   private static entry(message: StoredMessage): MailboxEntry {
     return {
       id: message.id,
-      from: message.from,
+      from: { ...message.from },
       to: { id: message.toId, name: message.toName },
       time: message.time,
       text: message.text,
@@ -417,11 +492,13 @@ export class Mailbox extends EventEmitter {
     return chosen.map((message) => Mailbox.entry(message));
   }
 
-  /** The sender's messages, oldest first, with their states. */
-  outbox(senderId: string): MailboxEntry[] {
-    return this.messages
-      .filter((message) => message.from.id === senderId)
-      .map((message) => Mailbox.entry(message));
+  /** The live sender's recent messages, oldest first, with their states. */
+  outbox(senderId: string, opts: { limit?: number } = {}): MailboxEntry[] {
+    const generation = this.participants.get(senderId)?.generation;
+    if (generation === undefined) return [];
+    const all = this.messages.filter((message) => message.from.id === senderId && message.fromGeneration === generation);
+    const kept = opts.limit === undefined ? all : all.slice(Math.max(0, all.length - Math.max(0, opts.limit)));
+    return kept.map((message) => Mailbox.entry(message));
   }
 
   /**
@@ -452,6 +529,7 @@ export class Mailbox extends EventEmitter {
     opts: { from?: string; timeoutMs?: number; signal?: AbortSignal } = {},
   ): Promise<MailboxEntry | undefined> {
     const { from, timeoutMs, signal } = opts;
+    if (!this.participants.has(readerId)) return undefined;
     const waiting = this.unreadFor(readerId, from)[0];
     if (waiting !== undefined) return Mailbox.entry(waiting);
     if (signal?.aborted) {
@@ -477,8 +555,9 @@ export class Mailbox extends EventEmitter {
       };
       if (timeoutMs !== undefined) {
         waiter.timer = setTimeout(() => {
-          waiter.settle(undefined);
+          waiter.settle(this.unreadFor(readerId, from)[0]);
         }, timeoutMs);
+        waiter.timer.unref();
       }
       if (signal !== undefined) {
         const onAbort = (): void => {
@@ -515,8 +594,7 @@ export const NUDGE_LIST_CAP = 3;
  * The one line the daemon types to say that messages are waiting. The wording
  * is fixed, the line carries no message text, and a sender's name is shown
  * only when it is a plain name: anything else (spaces, line breaks, escape
- * codes, words that read as instructions) is replaced by the participant id,
- * so nothing a sender wrote reaches the user's turn through the nudge.
+ * codes) is replaced by the participant id. Plain names may contain words.
  */
 export function buildNudge(messages: readonly NudgeMessage[]): string {
   if (messages.length === 0) return '';
