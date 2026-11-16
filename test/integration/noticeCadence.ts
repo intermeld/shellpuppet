@@ -3,7 +3,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 export const deliveredNoticeScript = fs.readFileSync(new URL('../fixtures/notice-delivered-browser.js', import.meta.url), 'utf8');
 export interface DeliveredCadence {
-  end: number; cycleRows?: number[];
+  end: number; epoch?: number; cycleRows?: number[];
   legs: { row: number; start: number; end: number; top: boolean; bottom: boolean }[];
   samples: { time: number; row: number; side: string; leg: number; deadline: boolean; covered: boolean; evaluation?: boolean }[];
 }
