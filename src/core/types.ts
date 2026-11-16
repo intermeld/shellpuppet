@@ -113,6 +113,8 @@ export interface SessionOptions {
 
 /** One session's public state, as returned by `terminal_list`. */
 export interface SessionSummary {
+  /** Live messaging name, when the daemon has registered this session. */
+  name?: string;
   id: string;
   label: string;
   /** What the session is for; empty when the caller did not say. */

@@ -434,7 +434,7 @@ function resolveExecutable(command: string, platform: NodeJS.Platform, cwd: stri
 
 export interface SessionDeps {
   /** Identity allocated by the daemon for this session. */
-  identity?: { token: string; instanceId: string; cliPath: string };
+  identity?: { token: string; instanceId: string; cliPath: string; home?: string };
   /** A retry retains the identity resolved by its first start attempt. */
   resolvedAgent?: { agent: string; agentSource: AgentSource };
   logger?: Logger;
@@ -866,6 +866,7 @@ export class Session implements WaitTarget {
       sessionEnv['SHELLPUPPET_SESSION_TOKEN'] = deps.identity.token;
       sessionEnv['SHELLPUPPET_DAEMON_INSTANCE'] = deps.identity.instanceId;
       sessionEnv['SHELLPUPPET_CLI'] = deps.identity.cliPath;
+      if (deps.identity.home !== undefined) sessionEnv['SHELLPUPPET_HOME'] = deps.identity.home;
     }
     const spawnOptions = {
       name: 'xterm-256color',

@@ -1,5 +1,29 @@
 # ShellPuppet configuration
 
+## Messaging
+
+Messaging is off until `messaging.enabled` is set to `true` and an allow rule
+permits the sender and recipient. Restart the daemon after changing it.
+For a session to speak with sessions it started, in either direction:
+
+```json
+{ "messaging": { "enabled": true, "allow": ["parent-child"] } }
+```
+
+For named chairs, including an outside client holding a claim:
+
+```json
+{ "messaging": { "enabled": true, "allow": [
+  { "group": "chairs", "members": ["planner", "builder", "checker"] }
+] } }
+```
+
+A session uses its label as its messaging name when it is a plain unique name
+of at most 40 letters, digits, dots, underscores or hyphens. Otherwise its
+session id is the name. The first live participant to hold a name keeps it
+until it ends or releases its claim. Names shaped like session ids (`s` followed
+by digits) are reserved for the session with that id.
+
 All configuration lives in one optional file: `~/.shellpuppet/config.json`
 (override the directory with the `SHELLPUPPET_HOME` environment variable).
 No file means all defaults. The **daemon** reads it at startup, so run

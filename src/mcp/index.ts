@@ -64,7 +64,7 @@ async function main(): Promise<void> {
     };
   };
   readPassLists();
-  registerTools(server, {
+  const releaseClaim = registerTools(server, {
     logger: stderrLogger,
     untrustedFraming: config.untrustedFraming,
     readPassLists,
@@ -76,7 +76,13 @@ async function main(): Promise<void> {
       return info !== undefined ? `mcp:${info.name}` : 'mcp';
     },
   });
-  await server.connect(new StdioServerTransport());
+  const transport = new StdioServerTransport();
+  await server.connect(transport);
+  const previousClose = transport.onclose;
+  transport.onclose = () => {
+    previousClose?.();
+    void releaseClaim();
+  };
 }
 
 main().catch((error: unknown) => {

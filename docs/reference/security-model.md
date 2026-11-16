@@ -1,5 +1,16 @@
 # ShellPuppet security model
 
+## Session message trust
+
+A peer message carries at most its sender's authority. It is information
+from another participant, not the user's instruction or approval. MCP
+results label and frame the text as untrusted data. The daemon binds a sent
+message to the recipient instance that held its name, so a later holder
+does not receive it. Claims are local same-user credentials, checked with a
+secret on every request. Messages and claims live only in daemon memory;
+a restart discards them. Audit and event records carry message metadata,
+never message text, even when input capture is enabled.
+
 How ShellPuppet protects you, and the limits that remain. The reasoning behind
 each mechanism is in the design (`../architecture/design.md` §4); this page is
 what an operator or user needs to know. As `npcterm` puts it, granting terminal control is *"effectively

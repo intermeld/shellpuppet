@@ -242,6 +242,13 @@ export class Mailbox extends EventEmitter {
     this.byName.set(session.name, session.id);
   }
 
+  nameTaken(name: string): boolean { return this.byName.has(name); }
+
+  participant(id: string): ParticipantRef | undefined {
+    const record = this.participants.get(id);
+    return record === undefined ? undefined : { kind: record.kind, id: record.id, name: record.name };
+  }
+
   private checkName(name: string): void {
     if (typeof name !== 'string' || !NAME_PATTERN.test(name)) {
       throw new MailboxError(
@@ -263,6 +270,9 @@ export class Mailbox extends EventEmitter {
   }
 
   claim(name: string): { claimId: string; secret: string } {
+    if (typeof name === 'string' && /^s[0-9]+$/.test(name)) {
+      throw new MailboxError('invalid-name', 'Session id names are reserved for sessions.');
+    }
     this.checkName(name);
     let claimId: string;
     do {
@@ -499,6 +509,15 @@ export class Mailbox extends EventEmitter {
     const all = this.messages.filter((message) => message.from.id === senderId && message.fromGeneration === generation);
     const kept = opts.limit === undefined ? all : all.slice(Math.max(0, all.length - Math.max(0, opts.limit)));
     return kept.map((message) => Mailbox.entry(message));
+  }
+
+  /** Live names this participant may address under the configured policy. */
+  directory(senderId: string): ParticipantRef[] {
+    const sender = this.participants.get(senderId);
+    if (sender === undefined || !this.enabled) return [];
+    return [...this.participants.values()]
+      .filter((recipient) => this.policy(sender, recipient))
+      .map(({ kind, id, name }) => ({ kind, id, name }));
   }
 
   /**
