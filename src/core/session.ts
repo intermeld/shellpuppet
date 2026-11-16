@@ -752,6 +752,7 @@ export class Session implements WaitTarget {
   private exitedFlag = false;
   private exitedAtValue: number | null = null;
   private exitCodeValue: number | null = null;
+  private rendererFault: string | null = null;
   private conptyStartError: Error | null = null;
   /** The tree kill under way for a program whose session ended with no exit code. */
   private endingProgram: Promise<void> | null = null;
@@ -808,7 +809,8 @@ export class Session implements WaitTarget {
 
     const cols = options.cols ?? DEFAULT_COLS;
     const rows = options.rows ?? DEFAULT_ROWS;
-    this.renderer = new ScreenRenderer({ cols, rows, scrollback: DEFAULT_SCROLLBACK, agent: this.agent });
+    this.renderer = new ScreenRenderer({ cols, rows, scrollback: DEFAULT_SCROLLBACK, agent: this.agent,
+      onFault: (error) => this.failRenderer(error) });
     this.stallInk = this.agentModule?.stalls === undefined ? undefined :
       this.renderer.watchForeground(this.agentModule.stalls.flatMap(shape => shape.marker.fg));
     if (this.agentModule?.stalls !== undefined) this.renderer.onResize(() => this.noteStallResize(true));
@@ -943,6 +945,7 @@ export class Session implements WaitTarget {
     });
 
     this.pty.onExit(({ exitCode: reported }) => {
+      if (this.exitedFlag) return;
       // node-pty closes a Windows terminal whose output socket failed and
       // reports an exit with no code, while the program runs on: the session
       // can no longer be read or typed into, so it has ended, and its program
@@ -1073,6 +1076,29 @@ export class Session implements WaitTarget {
    */
   get exitCode(): number | null {
     return this.exitCodeValue;
+  }
+  get fault(): string | null {
+    return this.rendererFault;
+  }
+
+  /** A broken emulator ends only its own session, including a queued resize. */
+  private failRenderer(error: unknown): void {
+    if (this.exitedFlag || this.isKilled) return;
+    this.rendererFault = 'terminal rendering failed';
+    this.logger.error('session renderer failed', { id: this.id, error: String(error) });
+    this.exitedFlag = true;
+    this.exitedAtValue = Date.now();
+    this.exitCodeValue = null;
+    this.lastChange = Date.now();
+    this.clearStallTimer();
+    this.publishStall(undefined);
+    // End the process even if node-pty has no exit code yet. kill() observes
+    // this work and closes the PTY and renderer after the tree has ended.
+    this.endingProgram = this.endProgram();
+    for (const listener of this.exitListeners) listener(null);
+    void this.kill().catch((killError: unknown) => {
+      this.logger.error('session renderer fault cleanup failed', { id: this.id, error: String(killError) });
+    });
   }
   /**
    * Whether the session's program is known to have ended: node-pty has
@@ -1710,6 +1736,7 @@ export class Session implements WaitTarget {
       geometryHeld: this.geometryHeldFlag,
       exited: this.exitedFlag,
       exitCode: this.exitCode,
+      ...(this.rendererFault === null ? {} : { fault: this.rendererFault }),
       watchers: this.watchers,
       createdAt: this.createdAt.toISOString(),
     };

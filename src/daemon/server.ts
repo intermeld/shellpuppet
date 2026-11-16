@@ -4176,7 +4176,7 @@ export class Daemon {
     // AFTER the resync, so the gate holds it behind the snapshot instead of
     // letting the snapshot's wipe erase it.
     if (session.exited) {
-      sync.deliver(exitNotice(session.exitCode));
+      sync.deliver(session.fault === null ? exitNotice(session.exitCode) : `session ended: ${session.fault}`);
     }
 
     // A stall is announced once, at the moment it trips. Someone who opens the
@@ -4201,11 +4201,12 @@ export class Daemon {
     const unsubscribeData = session.onData((data) => sync.deliver(data));
     this.updateFeedSession(session.id);
     const unsubscribeExit = session.onExit((exitCode) => {
-      sync.deliver(exitNotice(exitCode));
+      sync.deliver(session.fault === null ? exitNotice(exitCode) : `session ended: ${session.fault}`);
       // The notice is bytes on the terminal; the page needs a frame to change
       // its own state.
       if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify({ type: 'exited', exitCode }));
+        ws.send(JSON.stringify({ type: 'exited', exitCode,
+          ...(session.fault === null ? {} : { fault: session.fault }) }));
       }
     });
 

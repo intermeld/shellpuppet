@@ -16,7 +16,7 @@
  */
 
 import * as fs from 'node:fs';
-import { afterAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it, vi } from 'vitest';
 import type { SessionManager } from '../../src/core/manager.js';
 import type { Session } from '../../src/core/session.js';
 import { recordedExitCode } from '../../src/core/windowsPtyStart.js';
@@ -33,6 +33,50 @@ afterAll(async () => {
   for (const daemon of daemons) await daemon.stop();
   for (const home of homes) removeTempHome(home);
 });
+
+it('a viewer resize rendering fault ends one session while health and another input survive', async () => {
+  const { daemon, port, token, logPath } = await startDaemon('resize-render-fault-');
+  const script = "process.stdin.setRawMode?.(true); process.stdin.on('data', b => process.stdout.write('GOT:' + b.toString()))";
+  const bad = await api(port, token, '/sessions', {
+    body: { command: process.execPath, args: ['-e', script], shell: false },
+  });
+  const good = await api(port, token, '/sessions', {
+    body: { command: process.execPath, args: ['-e', script], shell: false },
+  });
+  expect([bad.status, good.status]).toEqual([200, 200]);
+  const badId = String(bad.body['id']);
+  const goodId = String(good.body['id']);
+  const session = sessionOf(daemon, badId);
+  const renderer = (session as unknown as { renderer: { repairViewport: () => void } }).renderer;
+  const viewer = await connectWs(port, badId, token);
+  const repair = vi.spyOn(renderer, 'repairViewport').mockImplementation(() => {
+    throw new Error('injected viewport fault');
+  });
+  try {
+    await viewer.waitForControl((control) => control['type'] === 'geometry');
+    viewer.ws.send(JSON.stringify({ type: 'resize', cols: 96, rows: 31 }));
+    const ended = await viewer.waitForControl((control) => control['type'] === 'exited');
+    expect(ended['fault']).toBe('terminal rendering failed');
+    expect(session.exited).toBe(true);
+    expect((await api(port, null, '/health')).status).toBe(200);
+    const listed = await api(port, token, '/sessions');
+    const sessions = listed.body['sessions'] as { id: string; exited: boolean; fault?: string }[];
+    expect(sessions.find((item) => item.id === badId)?.fault).toBe('terminal rendering failed');
+    expect(sessions.find((item) => item.id === goodId)?.exited).toBe(false);
+    expect((await api(port, token, `/sessions/${goodId}/input`, { body: { data: 'still-alive' } })).status).toBe(200);
+    const goodSession = sessionOf(daemon, goodId);
+    const startedAt = Date.now();
+    while (!(await goodSession.snapshot()).screen.includes('GOT:still-alive')) {
+      if (Date.now() - startedAt > 5_000) throw new Error('other session did not echo input');
+      await sleep(20);
+    }
+    expect(logEntries(logPath).some((entry) => entry.message === 'session renderer failed' &&
+      entry.meta?.['id'] === badId)).toBe(true);
+  } finally {
+    repair.mockRestore();
+    viewer.close();
+  }
+}, 30_000);
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));

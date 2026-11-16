@@ -745,7 +745,12 @@ and disposes it when parsing finishes, never on the timeout itself. Replay and
 check renderers use the same lifetime. Browser panes likewise detach on close
 and dispose after their last write callback, with late paint callbacks ignored.
 Resizes take their place between writes so that subsequent replay bytes use the
-right grid. Unexpected errors still reach the daemon's normal shutdown handler.
+right grid. The renderer's private xterm viewport repair fills a bounded number
+of missing rows and stops if the circular list cannot grow. A failed repair,
+whether during an immediate resize or a queued resize, is logged and ends only
+that session. Its list state reports the rendering fault, viewers receive an
+exit notice, and the session's process tree is ended. Other sessions and the
+daemon remain available.
 
 A **Job Object with kill-on-close** is future hardening: it needs a native module,
 and the gap it would close is narrow but real. If the daemon itself dies without running
