@@ -25,7 +25,7 @@ import { planPassedEnv } from '../mcp/config.js';
 import { isEnvNamesProblem, readDaemonConfig } from '../daemon/config.js';
 import { agentNameFor } from '../core/reasoning.js';
 import { knownKeys } from '../core/keys.js';
-import { listedState, stallLine, startReadyLine } from '../core/types.js';
+import { listedState, stallLine, startReadyLine, SESSION_IDENTITY_ENV_NAMES, SESSION_IDENTITY_ENV_RULE } from '../core/types.js';
 import type { StallState, StartReadyResult } from '../core/types.js';
 import { installDesktopShortcut, uninstallDesktopShortcut, userShortcutOptions } from './desktopShortcut.js';
 import type { Logger, SessionSummary } from '../core/types.js';
@@ -369,6 +369,8 @@ async function main(): Promise<void> {
         daemonConfig.config.agentSignatures ?? [],
       );
       const envNames = parsed.lists.get('env-name') ?? [];
+      const reserved = envNames.filter((name) => SESSION_IDENTITY_ENV_NAMES.has(name.toUpperCase()));
+      if (reserved.length > 0) fail(2, `Not started: ${SESSION_IDENTITY_ENV_RULE} ${reserved.join(', ')}.`);
       if (envNames.length > 0) {
         for (const problem of daemonConfig.problems.filter(isEnvNamesProblem)) console.error(`warning: ${problem}`);
       }

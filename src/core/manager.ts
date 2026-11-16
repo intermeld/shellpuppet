@@ -7,7 +7,7 @@
  */
 
 import { Session, TREE_KILL_TIMEOUT_MS, taskkillTrees } from './session.js';
-import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { SessionDeps } from './session.js';
 import { whenConsoleHostBatchSettled } from './windowsConsoleHost.js';
 import { checkSessionCapacity, evaluateCommand } from './policy.js';
@@ -33,6 +33,7 @@ export class SessionStartError extends Error {
 export const CONPTY_WORKER_DISPOSAL_MS = 1_000;
 /** Margin for the scheduled termination and a short pause before another start. */
 export const CONPTY_START_RETRY_DELAY_MS = 100;
+const DUMMY_SESSION_TOKEN = '0'.repeat(43);
 
 export class SessionManager {
   private readonly sessions = new Map<string, Session>();
@@ -99,10 +100,12 @@ export class SessionManager {
   recognisesCaller(id: string, token: string): boolean {
     const session = this.sessions.get(id);
     const expected = this.identities.get(id)?.token;
-    if (session === undefined || session.exited || expected === undefined) return false;
-    const supplied = Buffer.from(token);
-    const stored = Buffer.from(expected);
-    return supplied.length === stored.length && timingSafeEqual(supplied, stored);
+    // Hash both sides to a fixed size, including the dummy for unknown ids.
+    const supplied = createHash('sha256').update(token).digest();
+    const stored = createHash('sha256').update(expected ?? DUMMY_SESSION_TOKEN).digest();
+    const matches = timingSafeEqual(supplied, stored);
+    return session !== undefined && !session.exited && expected !== undefined
+      && matches;
   }
 
   /** Finish the deferred Windows start contract, retrying one proven worker

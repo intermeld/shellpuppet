@@ -37,7 +37,7 @@ import { compileDialogs } from '../core/dialogs.js';
 import type { DialogSignature } from '../core/dialogs.js';
 import { BUILT_IN_SIGNATURES, compileSignatures } from '../core/reasoning.js';
 import type { AgentSignature } from '../core/reasoning.js';
-import { ENV_NAME_PATTERN } from '../core/types.js';
+import { ENV_NAME_PATTERN, SESSION_IDENTITY_ENV_NAMES, SESSION_IDENTITY_ENV_RULE } from '../core/types.js';
 import type { PolicyConfig, PolicyMode, SessionEnvMode } from '../core/types.js';
 import { NAME_PATTERN } from '../core/mailbox.js';
 import type { MessagingPolicy, ParticipantRef } from '../core/mailbox.js';
@@ -242,7 +242,9 @@ function parseAgentPassEnv(
     if (valid.length !== names.length) {
       problems.push(`agents.passEnv.${agent}: ignoring entries that are not variable names`);
     }
-    lists[agent] = valid;
+    const reserved = valid.filter((name) => SESSION_IDENTITY_ENV_NAMES.has(name.toUpperCase()));
+    if (reserved.length > 0) problems.push(`agents.passEnv.${agent}: ${SESSION_IDENTITY_ENV_RULE} Ignoring ${reserved.join(', ')}.`);
+    lists[agent] = valid.filter((name) => !SESSION_IDENTITY_ENV_NAMES.has(name.toUpperCase()));
   }
   return lists;
 }
@@ -500,7 +502,11 @@ export function parseDaemonConfig(raw: unknown): ParsedDaemonConfig {
   const sessionEnv = raw['sessionEnv'];
   if (sessionEnv !== undefined) {
     if (sessionEnv === 'passthrough' || sessionEnv === 'clean' || isStringArray(sessionEnv)) {
-      config.sessionEnv = sessionEnv;
+      if (Array.isArray(sessionEnv)) {
+        const reserved = sessionEnv.filter((name) => SESSION_IDENTITY_ENV_NAMES.has(name.toUpperCase()));
+        if (reserved.length > 0) problems.push(`sessionEnv: ${SESSION_IDENTITY_ENV_RULE} Ignoring ${reserved.join(', ')}.`);
+        config.sessionEnv = sessionEnv.filter((name) => !SESSION_IDENTITY_ENV_NAMES.has(name.toUpperCase()));
+      } else config.sessionEnv = sessionEnv;
     } else {
       config.sessionEnv = 'clean';
       problems.push(
@@ -628,7 +634,9 @@ export function parseDaemonConfig(raw: unknown): ParsedDaemonConfig {
       if (valid.length !== envNames.length) {
         problems.push('envNames in config.json: ignoring entries that are not variable names');
       }
-      config.envNames = valid;
+      const reserved = valid.filter((name) => SESSION_IDENTITY_ENV_NAMES.has(name.toUpperCase()));
+      if (reserved.length > 0) problems.push(`envNames: ${SESSION_IDENTITY_ENV_RULE} Ignoring ${reserved.join(', ')}.`);
+      config.envNames = valid.filter((name) => !SESSION_IDENTITY_ENV_NAMES.has(name.toUpperCase()));
     }
   }
   // Messages between sessions. A broken section leaves messaging off; a

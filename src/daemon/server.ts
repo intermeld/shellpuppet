@@ -735,7 +735,10 @@ export class Daemon {
     this.audit = {
       captureContent: auditor.captureContent,
       record: (actor, action, session, meta) => auditor.record(
-        actor, action, session, meta, this.callerContext.getStore(),
+        actor, action, session, meta,
+        // A session's timers and listeners can inherit the request that created
+        // them. Daemon observations must not inherit that caller's identity.
+        actor === 'daemon' ? undefined : this.callerContext.getStore(),
       ),
     };
     this.sessionEnv = options.sessionEnv ?? DEFAULT_SESSION_ENV;
@@ -1528,7 +1531,6 @@ export class Daemon {
       return;
     }
     this.lastActivity = Date.now();
-
     this.writeSessionList(res, url);
   }
 
@@ -2370,19 +2372,25 @@ export class Daemon {
           actorHeader.replace(/[\x00-\x1f\x7f]/g, '').slice(0, 64)
         : '') || 'client';
 
-    const callerId = req.headers['x-shellpuppet-session'];
-    const callerToken = req.headers['x-shellpuppet-session-token'];
-    const identityPresented = callerId !== undefined || callerToken !== undefined;
-    const callerSession = typeof callerId === 'string' && typeof callerToken === 'string'
-      && this.manager.recognisesCaller(callerId, callerToken) ? callerId : undefined;
-    if (identityPresented && callerSession === undefined) {
+    const caller = this.resolveCallerIdentity(req);
+    if (caller.presented && caller.session === undefined) {
       this.audit.record(actor, 'refuse', undefined, { reason: 'session identity not recognised' });
       json(res, 403, { error: 'Session identity was not recognised.' });
       return;
     }
 
-    return this.callerContext.run(callerSession, () =>
+    return this.callerContext.run(caller.session, () =>
       this.handleClientRequest(req, res, url, segments, actor));
+  }
+
+  private resolveCallerIdentity(req: http.IncomingMessage): { presented: boolean; session?: string } {
+    const id = req.headers['x-shellpuppet-session'];
+    const token = req.headers['x-shellpuppet-session-token'];
+    return {
+      presented: id !== undefined || token !== undefined,
+      ...(typeof id === 'string' && typeof token === 'string'
+        && this.manager.recognisesCaller(id, token) ? { session: id } : {}),
+    };
   }
 
   private async handleClientRequest(
@@ -3838,8 +3846,14 @@ export class Daemon {
         reject(401, 'Unauthorized');
         return;
       }
+      const caller = this.resolveCallerIdentity(req);
+      if (caller.presented && caller.session === undefined) {
+        this.audit.record('client', 'refuse', undefined, { reason: 'session identity not recognised' });
+        reject(403, 'Forbidden');
+        return;
+      }
       this.wss.handleUpgrade(req, socket, head, (ws) => {
-        this.attachEventSocket(ws);
+        this.callerContext.run(caller.session, () => this.attachEventSocket(ws));
       });
       return;
     }
@@ -3867,6 +3881,13 @@ export class Daemon {
       reject(decision.code, decision.reason);
       return;
     }
+    const caller = decision.credential.kind === 'client' ? this.resolveCallerIdentity(req)
+      : { presented: false, session: undefined };
+    if (caller.presented && caller.session === undefined) {
+      this.audit.record('client', 'refuse', undefined, { reason: 'session identity not recognised' });
+      reject(403, 'Forbidden');
+      return;
+    }
 
     const session = this.manager.get(sessionId);
     if (session === undefined) {
@@ -3883,7 +3904,9 @@ export class Daemon {
       // names that credential rather than assuming a browser: `client` for
       // the client token on the query, `viewer` for a viewer cookie,
       // `dashboard` for the dashboard cookie.
-      this.attachSocket(ws, session, decision.credential, { passive, frozen: decision.frozen });
+      this.callerContext.run(caller.session, () =>
+        this.attachSocket(ws, session, decision.credential,
+          { passive, frozen: decision.frozen, callerSession: caller.session }));
     });
   }
 
@@ -4079,7 +4102,8 @@ export class Daemon {
     ws: WebSocket,
     session: Session,
     credential: { kind: 'client' | 'viewer' | 'dashboard'; readOnly: boolean; dashboardToken?: string },
-    options: { passive?: boolean; frozen?: { bytes: string; cols: number; rows: number } } = {},
+    options: { passive?: boolean; frozen?: { bytes: string; cols: number; rows: number };
+      callerSession?: string } = {},
   ): void {
     const { readOnly } = credential;
     // A dashboard credential is always passive, whatever the query says.
@@ -4461,30 +4485,34 @@ export class Daemon {
       this.broadcastControl(session.id, { type: 'input-source', source: 'human' });
     };
     ws.on('message', (message: Buffer | string) => {
-      void onViewerMessage(message).catch((error: unknown) => {
-        this.logger.warn('viewer message failed', { id: session.id, error: String(error) });
+      this.callerContext.run(options.callerSession, () => {
+        void onViewerMessage(message).catch((error: unknown) => {
+          this.logger.warn('viewer message failed', { id: session.id, error: String(error) });
+        });
       });
     });
 
     ws.on('close', () => {
-      unsubscribeData();
-      unsubscribeExit();
-      sync.close();
-      this.sockets.delete(ws);
-      this.sessionSockets.get(session.id)?.delete(ws);
-      this.updateFeedSession(session.id);
-      // The grid stays where it is. A dashboard's grid stays remembered for
-      // that dashboard document, which takes it back when it reconnects; any
-      // other socket follows it until a deliberate resize. Otherwise the next
-      // single-session viewport to arrive, or a `take`, picks it up. A
-      // dashboard socket, and a `drive=0` socket, that is already connected
-      // does not inherit it.
-      if (this.geometryController.get(session.id) === ws) {
-        this.geometryController.delete(session.id);
-        this.announceGeometry(session.id, session, { resync: false });
-      }
-      this.lastActivity = Date.now();
-      this.audit.record(actor, 'ws-close', session.id);
+      this.callerContext.run(options.callerSession, () => {
+        unsubscribeData();
+        unsubscribeExit();
+        sync.close();
+        this.sockets.delete(ws);
+        this.sessionSockets.get(session.id)?.delete(ws);
+        this.updateFeedSession(session.id);
+        // The grid stays where it is. A dashboard's grid stays remembered for
+        // that dashboard document, which takes it back when it reconnects; any
+        // other socket follows it until a deliberate resize. Otherwise the next
+        // single-session viewport to arrive, or a `take`, picks it up. A
+        // dashboard socket, and a `drive=0` socket, that is already connected
+        // does not inherit it.
+        if (this.geometryController.get(session.id) === ws) {
+          this.geometryController.delete(session.id);
+          this.announceGeometry(session.id, session, { resync: false });
+        }
+        this.lastActivity = Date.now();
+        this.audit.record(actor, 'ws-close', session.id);
+      });
     });
   }
 }

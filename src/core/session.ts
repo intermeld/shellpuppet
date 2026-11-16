@@ -620,8 +620,8 @@ export function credentialShapedNames(source: NodeJS.ProcessEnv = process.env): 
  * A name reserved for a connected feature's credential (ADR-007) is never
  * carried, whichever mode is in force: `passthrough` copies the daemon's
  * environment and a list mode can name anything, so the filter has to sit
- * here rather than in one caller. A session's own `passed` value is not the
- * daemon's copy and is left alone.
+ * here rather than in one caller. The four session identity names are also
+ * removed from `passed`; the daemon assigns fresh values to each session.
  */
 export function buildSessionEnv(
   mode: SessionEnvMode,

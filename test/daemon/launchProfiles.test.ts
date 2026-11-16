@@ -296,6 +296,15 @@ describe('a bad profile is named and left out; its siblings load', () => {
     expect(problems.join('\n')).toContain('NOT A NAME');
   });
 
+  it('warns when a profile lists a session identity name', () => {
+    const { launcher, problems } = parse({ profiles: [
+      { name: 'shell', command: 'cmd.exe', envFromDaemon: ['GOOD', 'SHELLPUPPET_DAEMON_INSTANCE'] },
+    ] });
+    expect(launcher.profiles[0]?.envFromDaemon).toEqual(['GOOD']);
+    expect(problems.join('\n')).toContain('they cannot be passed');
+    expect(problems.join('\n')).toContain('SHELLPUPPET_DAEMON_INSTANCE');
+  });
+
   it('accepts all but rejects every other string for envFromDaemon', () => {
     const { launcher, problems } = parse({ profiles: [
       { name: 'whole', command: 'cmd.exe', envFromDaemon: 'all' },

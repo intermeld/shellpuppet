@@ -22,7 +22,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { SESSION_MARKERS } from '../agents/index.js';
-import { ENV_NAME_PATTERN, RESERVED_FEATURE_CREDENTIALS, SESSION_IDENTITY_ENV_NAMES } from '../core/types.js';
+import { ENV_NAME_PATTERN, RESERVED_FEATURE_CREDENTIALS, SESSION_IDENTITY_ENV_NAMES, SESSION_IDENTITY_ENV_RULE } from '../core/types.js';
 import { compilePolicy } from '../core/policy.js';
 import type { CompiledPolicy } from '../core/policy.js';
 
@@ -350,7 +350,8 @@ export function parseLaunchProfile(
     if (envNames === 'all') {
       envFromDaemon = 'all';
     } else if (isStringArray(envNames)) {
-      envFromDaemon = envNames.filter((entry) => ENV_NAME_PATTERN.test(entry));
+      envFromDaemon = envNames.filter((entry) => ENV_NAME_PATTERN.test(entry)
+        && !SESSION_IDENTITY_ENV_NAMES.has(entry.toUpperCase()));
     } else {
       return { problem: 'envFromDaemon must be "all" or an array of variable names' };
     }
@@ -472,6 +473,11 @@ export function parseLauncher(
 
     const configured = isRecord(entry) ? entry['envFromDaemon'] : undefined;
     if (Array.isArray(configured)) {
+      const reserved = configured.filter((name): name is string =>
+        typeof name === 'string' && SESSION_IDENTITY_ENV_NAMES.has(name.toUpperCase()));
+      if (reserved.length > 0) problems.push(
+        `launcher.profiles[${String(index)}] ("${profile.name}"): ${SESSION_IDENTITY_ENV_RULE} Ignoring ${reserved.join(', ')}.`,
+      );
       const dropped = configured.filter(
         (name): name is string => typeof name === 'string' && !ENV_NAME_PATTERN.test(name),
       );

@@ -19,6 +19,8 @@ version may change behaviour, and every such change is listed here.
 ### Changed
 
 - Bound retained mailbox history, protect claim ids, settle ended inboxes before events, and validate messaging configuration limits.
+- Check session identity on client-token WebSocket upgrades, keep daemon audit
+  records free of inherited caller identity, and explain reserved identity variables.
 
 - Agent-specific knowledge (reading signatures, prompt shapes and dialogs,
   Muse's input rules) now lives in one module per harness under
