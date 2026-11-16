@@ -296,6 +296,28 @@ describe('nudge readiness', () => {
       expect(nudgeVerdict(codex, screen)).toEqual({ ready: false, reason: 'unknown' });
     });
 
+    it('synthetic: draft text shaped like the status row, above the real footer, is not the footer', () => {
+      const screen = fromRows([
+        '› ',
+        '  GPT-6-Sol high · Context 99% left · weekly 76% left: explain these limits',
+        '',
+        '  GPT-6-Sol high · Context 99% left · weekly 76% left · Summary',
+        '  ? for shortcuts',
+      ]);
+      expect(readinessOf(codex, screen)).not.toBe('ready');
+      expect(nudgeVerdict(codex, screen).ready).toBe(false);
+    });
+
+    it('synthetic: the current footer with an agents hint still ends the composer', () => {
+      const screen = fromRows([
+        '› ',
+        '',
+        '  GPT-6-Sol high · Context 99% left · weekly 56% left · Daybreak on',
+        '  ← for agents · ? for shortcuts',
+      ]);
+      expect(readinessOf(codex, screen)).toBe('ready');
+    });
+
     it('synthetic: the shortcuts status under a blank composer is not a draft', () => {
       const screen = fromRows(['› ', '', '  ? for shortcuts']);
       expect(readinessOf(codex, screen)).toBe('ready');
