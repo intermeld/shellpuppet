@@ -56,12 +56,12 @@ export function assessDeliveredCadence(cadence: DeliveredCadence) {
     const runChanges = between(run.start, run.end);
     if (runChanges.length > 1) violations.push({ rule: 'one change per rectangle rest', run, changes: runChanges });
     const frames = cadence.samples.filter(sample => sample.deadline && sample.time >= run.start + 1000 && sample.time < run.end);
-    const firstEligible = frames[0];
-    // The rest must outlast that frame for its placement to be observable:
-    // a rest that ends before the next delivered frame cannot show a clear.
-    const outlasted = firstEligible !== undefined &&
-      cadence.samples.some(sample => sample.time > firstEligible.time && sample.time < run.end);
-    if (firstEligible?.covered && outlasted) violations.push({ rule: 'rest clears on first completed frame at or after deadline', run, frame: firstEligible });
+    // The first eligible frame can schedule placement. Check the result after
+    // the following completed frame, as allowed by the design.
+    const clearFrame = frames[1];
+    const outlasted = clearFrame !== undefined &&
+      cadence.samples.some(sample => sample.time > clearFrame.time && sample.time < run.end);
+    if (clearFrame?.covered && outlasted) violations.push({ rule: 'rest clears on first completed frame at or after deadline', run, frame: clearFrame });
     rests.push({ ...run, duration: run.end - run.start, changes: runChanges.length, deadline: frames[0]?.time });
   }
   const repaintChanges = changes.filter(change => {

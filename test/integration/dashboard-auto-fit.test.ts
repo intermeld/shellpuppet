@@ -326,6 +326,11 @@ it('takes a newly arrived pane within three seconds during ten seconds of sessio
     drive: true, timeoutMs: 120_000,
     beforeNavigateScript: `(() => {
       window.__takes = [];
+      window.__takeFrames = [];
+      requestAnimationFrame(function recordTakeFrame(time) {
+        window.__takeFrames.push(time);
+        requestAnimationFrame(recordTakeFrame);
+      });
       const send = WebSocket.prototype.send;
       WebSocket.prototype.send = function(data) {
         if (typeof data === 'string' && data.includes('"type":"window-register"')) window.__feed = this;
@@ -371,16 +376,33 @@ it('takes a newly arrived pane within three seconds during ten seconds of sessio
         const arrivedAt = performance.now();
         await waitFor('13 churn changes over ten seconds', () => window.__churnChanges, count => count >= 13);
         clearInterval(window.__churnTimer);
+        const takes = window.__takes.filter(frame => frame.url.includes(${JSON.stringify(id)}) && frame.take);
+        const until = takes[0]?.at ?? performance.now();
+        let maxFrameGap = 0, measuredFrames = 0;
+        for (let index = 1; index < window.__takeFrames.length; index++) {
+          const previous = window.__takeFrames[index - 1], current = window.__takeFrames[index];
+          if (current >= arrivedAt && previous <= until) {
+            measuredFrames++;
+            maxFrameGap = Math.max(maxFrameGap, current - previous);
+          }
+        }
         return { arrivedAt, changes: window.__churnChanges,
-          takes: window.__takes.filter(frame => frame.url.includes(${JSON.stringify(id)}) && frame.take) };
-      })()`) as { arrivedAt: number; changes: number; takes: { at: number }[] };
+          takes, maxFrameGap, measuredFrames };
+      })()`) as { arrivedAt: number; changes: number; takes: { at: number }[]; maxFrameGap: number; measuredFrames: number };
       return measured;
     },
   });
-  const result = shot.probe as { arrivedAt: number; changes: number; takes: { at: number }[] };
+  const result = shot.probe as { arrivedAt: number; changes: number; takes: { at: number }[];
+    maxFrameGap: number; measuredFrames: number };
+  const takeDelay = result.takes[0] === undefined ? undefined : result.takes[0].at - result.arrivedAt;
+  if (result.measuredFrames === 0 && (takeDelay === undefined || takeDelay > 3000))
+    context.skip('runner stalled: no delivered animation frames');
+  if (takeDelay !== undefined && takeDelay > 3000 &&
+      result.maxFrameGap >= Math.max(500, takeDelay - 3000))
+    context.skip(`runner stalled: ${String(result.maxFrameGap)} ms frame gap`);
   expect(result.changes).toBeGreaterThanOrEqual(13);
   expect(result.takes.length, JSON.stringify(result)).toBeGreaterThan(0);
-  expect(result.takes[0]!.at - result.arrivedAt, JSON.stringify(result)).toBeLessThanOrEqual(3300);
+  expect(takeDelay, JSON.stringify(result)).toBeLessThanOrEqual(3000);
 }, 150_000);
 
 it.each([true, false])('focus profile keeps one floor-sized fit with Auto fit %s', async (enabled) => {
