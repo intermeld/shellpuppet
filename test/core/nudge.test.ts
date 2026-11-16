@@ -44,7 +44,34 @@ async function load(name: string): Promise<NudgeObservation> {
 }
 
 function plain(screen: string): NudgeObservation {
-  return { rows: screen.split('\n'), unchangedMs: NUDGE_QUIET_MS };
+  const rows = screen.split('\n');
+  return { rows, viewportRows: rows.length, unchangedMs: NUDGE_QUIET_MS };
+}
+
+function fromRows(rows: readonly string[]): NudgeObservation {
+  return { rows, viewportRows: rows.length, unchangedMs: NUDGE_QUIET_MS };
+}
+
+const INK = { bold: false, dim: false, italic: false, inverse: false, fg: null, bg: null };
+
+/** Replace the last composer row and paint the whole row in one ink. */
+function replaceComposer(
+  lines: readonly StyledLine[],
+  pattern: RegExp,
+  text: string,
+  style: Partial<StyledLine['spans'][number]>,
+): StyledLine[] {
+  let index = -1;
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i];
+    if (line !== undefined && line.wrapped !== true && pattern.test(line.text)) {
+      index = i;
+      break;
+    }
+  }
+  if (index < 0) throw new Error(`no composer row matching ${pattern}`);
+  const spans = text.length === 0 ? [] : [{ from: 0, to: text.length, ...INK, ...style }];
+  return lines.map((line, i) => (i === index ? { ...line, text, spans } : line));
 }
 
 function readinessOf(module: AgentModule, observation: NudgeObservation): NudgeReadiness {
@@ -173,24 +200,43 @@ describe('nudge readiness', () => {
       expect(nudgeVerdict(claude, screen)).toEqual({ ready: true });
     });
 
-    it('treats the recorded suggestion phrase as empty, including the shortcuts status under it', () => {
+    it('treats the recorded suggestion phrase without its dim ink as a draft', () => {
       const screen = plain(CLAUDE_CODE_SUGGESTION);
-      expect(readinessOf(claude, screen)).toBe('ready');
-      expect(nudgeVerdict(claude, screen)).toEqual({ ready: true });
+      expect(readinessOf(claude, screen)).toBe('draft');
+      expect(nudgeVerdict(claude, screen)).toEqual({ ready: false, reason: 'draft' });
     });
 
-    it('treats dim ink on the captured idle composer as empty when the words are not the recorded suggestion', async () => {
+    it('treats the recorded suggestion phrase as empty when the captured composer draws it dim', async () => {
       const screen = await load('claude-answered');
-      const styled = screen.styled?.map((line) => {
-        if (line.text !== '❯') return line;
-        const text = '❯ Other dim words';
-        return {
-          ...line,
-          text,
-          spans: [{ from: 0, to: text.length, bold: false, dim: true, italic: false, inverse: false, fg: null, bg: null }],
-        };
-      });
-      expect(readinessOf(claude, { ...screen, styled })).toBe('ready');
+      const text = '❯ Try "write a test for <filepath>"';
+      const styled = replaceComposer(screen.styled ?? [], /^❯/u, text, { dim: true });
+      const next = { ...screen, rows: styled.map((line) => line.text), styled };
+      expect(readinessOf(claude, next)).toBe('ready');
+      expect(nudgeVerdict(claude, next)).toEqual({ ready: true });
+    });
+
+    it('treats the recorded suggestion phrase in typed ink as a draft', async () => {
+      const screen = await load('claude-answered');
+      const text = '❯ Try "write a test for <filepath>"';
+      const styled = replaceComposer(screen.styled ?? [], /^❯/u, text, { dim: false });
+      expect(readinessOf(claude, { ...screen, rows: styled.map((line) => line.text), styled })).toBe('draft');
+    });
+
+    it('treats other dim words on the captured composer as a draft', async () => {
+      const screen = await load('claude-answered');
+      const styled = replaceComposer(screen.styled ?? [], /^❯/u, '❯ Other dim words', { dim: true });
+      expect(readinessOf(claude, { ...screen, rows: styled.map((line) => line.text), styled })).toBe('draft');
+    });
+
+    it('synthetic: an empty composer row with a draft on the following rows is a draft', () => {
+      const screen = fromRows([
+        '❯',
+        '  draft typed here',
+        '────────────────────────────────────────────────────────────────────────────────',
+        '  Opus 5.5',
+      ]);
+      expect(readinessOf(claude, screen)).toBe('draft');
+      expect(nudgeVerdict(claude, screen)).toEqual({ ready: false, reason: 'draft' });
     });
 
     it('reads a captured draft as a draft', async () => {
@@ -225,10 +271,35 @@ describe('nudge readiness', () => {
       expect(nudgeVerdict(codex, screen)).toEqual({ ready: true });
     });
 
-    it('treats dim ink on the captured composer as empty when the words change', async () => {
+    it('treats other dim words on the captured composer as a draft', async () => {
       const screen = await load('codex-answered');
       const styled = rewriteBody(screen.styled ?? [], /^› /u, 'Ask Codex to do anything', 'Other dim words');
-      expect(readinessOf(codex, { ...screen, rows: styled.map((line) => line.text), styled })).toBe('ready');
+      expect(readinessOf(codex, { ...screen, rows: styled.map((line) => line.text), styled })).toBe('draft');
+    });
+
+    it('treats the recorded placeholder in typed ink as a draft', async () => {
+      const screen = await load('codex-answered');
+      const styled = replaceComposer(screen.styled ?? [], /^› /u, '› Ask Codex to do anything', { dim: false });
+      expect(readinessOf(codex, { ...screen, rows: styled.map((line) => line.text), styled })).toBe('draft');
+    });
+
+    it('synthetic: a blank composer row with text on the following rows is unknown', () => {
+      const screen = fromRows([
+        '› ',
+        '  the draft starts here',
+        '  and continues',
+        '',
+        '  GPT-6-Sol high · Context 99% left · weekly 76% left · example',
+        '  ? for shortcuts',
+      ]);
+      expect(readinessOf(codex, screen)).toBe('unknown');
+      expect(nudgeVerdict(codex, screen)).toEqual({ ready: false, reason: 'unknown' });
+    });
+
+    it('synthetic: the shortcuts status under a blank composer is not a draft', () => {
+      const screen = fromRows(['› ', '', '  ? for shortcuts']);
+      expect(readinessOf(codex, screen)).toBe('ready');
+      expect(nudgeVerdict(codex, screen)).toEqual({ ready: true });
     });
 
     it('reads a captured draft as a draft', async () => {
@@ -255,10 +326,27 @@ describe('nudge readiness', () => {
       expect(nudgeVerdict(qoder, screen)).toEqual({ ready: true });
     });
 
-    it('treats grey ink on the captured composer as empty when the words change', async () => {
+    it('treats other grey words on the captured composer as a draft', async () => {
       const screen = await load('qoder-answered-first-turn');
       const styled = rewriteBody(screen.styled ?? [], /^ > /u, 'Type your message or @path/to/file', 'Other grey words');
-      expect(readinessOf(qoder, { ...screen, rows: styled.map((line) => line.text), styled })).toBe('ready');
+      expect(readinessOf(qoder, { ...screen, rows: styled.map((line) => line.text), styled })).toBe('draft');
+    });
+
+    it('treats the recorded placeholder in typed ink as a draft', async () => {
+      const screen = await load('qoder-answered-first-turn');
+      const styled = replaceComposer(screen.styled ?? [], /^ > /u, ' > Type your message or @path/to/file', { fg: null });
+      expect(readinessOf(qoder, { ...screen, rows: styled.map((line) => line.text), styled })).toBe('draft');
+    });
+
+    it('synthetic: an empty composer row with a draft on the following rows is a draft', () => {
+      const screen = fromRows([
+        ' > ',
+        '  draft typed here',
+        '────────────────────────────────────────────────────────────────────────────────',
+        '  GLM-5.3',
+      ]);
+      expect(readinessOf(qoder, screen)).toBe('draft');
+      expect(nudgeVerdict(qoder, screen)).toEqual({ ready: false, reason: 'draft' });
     });
 
     it('reads a captured draft as a draft', async () => {
@@ -292,7 +380,7 @@ describe('nudge readiness', () => {
       expect(nudgeVerdict(muse, screen)).toEqual({ ready: true });
     });
 
-    it('treats grey hint ink on the captured composer as empty when the words change', async () => {
+    it('treats other grey words on the captured composer as a draft', async () => {
       const screen = await load('live96-3-done-composer-hint');
       const styled = rewriteBody(
         screen.styled ?? [],
@@ -300,7 +388,25 @@ describe('nudge readiness', () => {
         'Start a message with ! to run a shell command yourself',
         'Other grey words',
       );
-      expect(readinessOf(muse, { ...screen, rows: styled.map((line) => line.text), styled })).toBe('ready');
+      expect(readinessOf(muse, { ...screen, rows: styled.map((line) => line.text), styled })).toBe('draft');
+    });
+
+    it('treats the recorded hint in typed ink as a draft', async () => {
+      const screen = await load('live96-3-done-composer-hint');
+      const text = '❯ Start a message with ! to run a shell command yourself';
+      const styled = replaceComposer(screen.styled ?? [], /^❯/u, text, { fg: '#ccd3db' });
+      expect(readinessOf(muse, { ...screen, rows: styled.map((line) => line.text), styled })).toBe('draft');
+    });
+
+    it('synthetic: an empty composer row with a draft on the following rows is a draft', () => {
+      const screen = fromRows([
+        '❯',
+        '  draft typed here',
+        '────────────────────────────────────────────────────────────────────────────────',
+        '  muse-wonder-full-1.0',
+      ]);
+      expect(readinessOf(muse, screen)).toBe('draft');
+      expect(nudgeVerdict(muse, screen)).toEqual({ ready: false, reason: 'draft' });
     });
 
     it('reads a captured draft that wraps over several rows as a draft', async () => {
@@ -362,6 +468,36 @@ describe('nudge readiness', () => {
       const screen = plain('❯ hello from a synthetic composer');
       expect(readinessOf(claude, screen)).toBe('draft');
       expect(nudgeVerdict(claude, screen)).toEqual({ ready: false, reason: 'draft' });
+    });
+
+    it('synthetic: a finished spinner above the last echoed prompt leaves the empty composer ready', async () => {
+      const screen = await load('claude-answered');
+      const styled = (screen.styled ?? []).map((line) => ({ ...line }));
+      let echo = -1;
+      for (let i = styled.length - 1; i >= 0; i--) {
+        if (/^❯ \S/u.test(styled[i]?.text ?? '')) {
+          echo = i;
+          break;
+        }
+      }
+      if (echo <= 0) throw new Error('no echoed turn above the composer');
+      const text = '✻ Pondering… (2s · thinking)';
+      styled[echo - 1] = {
+        text,
+        spans: [{ from: 0, to: text.length, ...INK }],
+      };
+      const next = { ...screen, styled, rows: styled.map((line) => line.text) };
+      expect(styled[echo - 1]?.text).toMatch(/^✻ \S+…/u);
+      expect(readinessOf(claude, next)).toBe('ready');
+      expect(nudgeVerdict(claude, next)).toEqual({ ready: true });
+    });
+
+    it('does not judge a viewport whose plain rows and styled rows disagree', async () => {
+      const screen = await load('claude-answered');
+      const rows = screen.rows.map((row, index) => (index === screen.rows.length - 1 ? `${row}x` : row));
+      const mismatched = { ...screen, rows };
+      expect(readinessOf(claude, mismatched)).toBe('unknown');
+      expect(nudgeVerdict(claude, mismatched)).toEqual({ ready: false, reason: 'unknown' });
     });
   });
 });

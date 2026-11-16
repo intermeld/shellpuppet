@@ -257,8 +257,12 @@ exclude from every launch profile that copies its whole environment, regardless
 of the session's agent. Readiness defaults apply only when a caller opts in
 with `waitReady`. Safety adapters remain a reserved optional module field.
 A module may also offer a nudge judgement. It reuses that module's composer,
-busy line and typed-text rules and reports ready, busy, draft or unknown.
-Grey placeholder and suggestion text counts as an empty composer. The core
+busy and turn lines, and it repeats that module's placeholder wording and ink
+rule. It reports ready, busy, draft or unknown. The composer is empty only
+when its text is blank, or when it shows that module's exact placeholder
+drawn in the placeholder's own ink. Any other text is a draft, whatever its
+ink. Plain rows and styled rows are the same visible viewport, and the
+terminal height is required so clipped prompt detection can use it. The core
 then requires that ready judgement, no prompt waiting for a person, no settled
 stall, and a screen that has stayed unchanged for 1,500 ms. A module without
 the judgement is always unknown, so the session is never treated as ready.

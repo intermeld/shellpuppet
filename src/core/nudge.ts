@@ -16,14 +16,32 @@ export type NudgeBlock = 'busy' | 'draft' | 'unknown' | 'prompt' | 'stalled' | '
 export type NudgeVerdict = { ready: true } | { ready: false; reason: NudgeBlock };
 
 export interface NudgeObservation {
+  /**
+   * Visible viewport text. When `styled` is set, each row's text must be
+   * the same viewport. The two are not read as two screens.
+   */
   rows: readonly string[];
   styled?: readonly StyledLine[];
-  /** Terminal height, when the caller knows it. Clipped panels need it. */
-  viewportRows?: number;
+  /** Terminal height. Clipped prompt detection needs it, so a verdict always has it. */
+  viewportRows: number;
   /** A stall the session has already settled. Detection is not repeated here. */
   stall?: StallState;
   /** How long the screen has stayed unchanged, in milliseconds. */
   unchangedMs: number;
+}
+
+/**
+ * One viewport for the prompt detector and the composer. Styled text wins
+ * when it matches `rows`. A mismatch is refused.
+ */
+function viewport(observation: NudgeObservation): { rows: readonly string[]; styled?: readonly StyledLine[] } | null {
+  const styled = observation.styled;
+  if (styled === undefined || styled.length === 0) return { rows: observation.rows };
+  if (styled.length !== observation.rows.length) return null;
+  for (let i = 0; i < styled.length; i++) {
+    if (styled[i]?.text !== observation.rows[i]) return null;
+  }
+  return { rows: styled.map((line) => line.text), styled };
 }
 
 /**
@@ -34,11 +52,12 @@ export interface NudgeObservation {
  */
 export function nudgeVerdict(module: AgentModule | undefined, observation: NudgeObservation): NudgeVerdict {
   if (module?.nudge === undefined) return { ready: false, reason: 'unknown' };
-  const screen = observation.rows.join('\n');
-  const prompt = detectPrompt(screen, module.name, observation.viewportRows, observation.styled);
+  const screen = viewport(observation);
+  if (screen === null) return { ready: false, reason: 'unknown' };
+  const prompt = detectPrompt(screen.rows.join('\n'), module.name, observation.viewportRows, screen.styled);
   if (prompt !== null) return { ready: false, reason: 'prompt' };
   if (observation.stall !== undefined) return { ready: false, reason: 'stalled' };
-  const reading = module.nudge.readiness({ rows: observation.rows, styled: observation.styled });
+  const reading = module.nudge.readiness({ rows: screen.rows, styled: screen.styled });
   if (reading !== 'ready') return { ready: false, reason: reading };
   if (!Number.isFinite(observation.unchangedMs) || observation.unchangedMs < NUDGE_QUIET_MS) {
     return { ready: false, reason: 'quiet' };

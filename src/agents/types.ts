@@ -93,8 +93,9 @@ export interface StallSignature {
 export type NudgeReadiness = 'ready' | 'busy' | 'draft' | 'unknown';
 
 /**
- * The screen a module already reads. Plain rows are enough for a recorded
- * transcript. Styled rows carry the colours that tell a suggestion from a draft.
+ * One visible viewport. Plain rows are enough for a recorded transcript.
+ * When styled rows are set, their text is that same viewport: the ink tells
+ * the recorded placeholder from a draft. A difference is not judged.
  */
 export interface NudgeView {
   rows: readonly string[];

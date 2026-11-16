@@ -191,15 +191,25 @@ including a known agent session forwarding a child program's prompt. Input,
 resize, settling and reading still follow the session's own resolved module.
 
 **Empty composer.** Claude Code, Codex, Qoder CLI and Muse Code can tell an
-empty composer from a draft. Empty means a bare composer, or only the grey
-suggestion: Claude Code's `Try "write a test for <filepath>"`, Codex's
-`Ask Codex to do anything`, Qoder CLI's `Type your message or @path/to/file`,
-and Muse Code's `Start a message with ! to run a shell command yourself`.
-Any other composer text is a draft, including text that wraps onto later rows
-before the frame. A running turn is busy even when the composer is empty or
-still shows its suggestion. `? for shortcuts` is a status line, not a draft.
-The screen must also have no prompt waiting, no settled stall, and no change
-for 1,500 ms before that empty composer counts as ready to nudge.
+empty composer from a draft. Empty means a bare composer, or that module's
+exact placeholder drawn in the placeholder's own ink: Claude Code's
+`Try "write a test for <filepath>"` in dim ink, Codex's
+`Ask Codex to do anything` in dim ink, Qoder CLI's
+`Type your message or @path/to/file` in grey (`#95958f`), and Muse Code's
+`Start a message with ! to run a shell command yourself` in grey (`#676c74`).
+The same words in any other ink are a draft. Any other words are a draft too,
+including words drawn in the placeholder's ink. The captured screens do not
+show a free-text suggestion in the composer, so that ink is not treated as
+proof that the row is empty. Claude Code, Qoder CLI and Muse Code read a
+draft that continues on later rows and stop at the frame, so the status line
+under that frame is not part of the draft. Codex has no captured frame around
+a second composer row. Its `? for shortcuts` row and the model line under the
+composer (the captured model, context and weekly line) are status, not a
+draft. Any other text on a row under the Codex composer is left unknown, not
+ready. A running turn is busy even when the composer is empty or still shows
+its placeholder. The screen must also have no prompt waiting, no settled
+stall, and no change for 1,500 ms before that empty composer counts as ready
+to nudge.
 
 Two Qoder specifics worth knowing:
 
