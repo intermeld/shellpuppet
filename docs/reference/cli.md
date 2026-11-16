@@ -6,16 +6,19 @@
 standard input. `shellpuppet msg inbox` reads and marks unread messages,
 while `msg outbox`, `msg directory`, and `msg wait [--from <id>]
 [--timeout <ms>]` inspect sent messages, permitted live names and the next
-unread message. `shellpuppet inbox` is an alias for `msg inbox`.
-`msg log [--participant <id>] [--limit <n>]` gives the local owner's retained
-message history, including text, while holding a participant identity. All
+unread message. `from` is a participant id. `shellpuppet inbox` is an alias
+for `msg inbox`.
+`msg log [--participant <id>] [--limit <n>]` gives the caller's own retained
+message history, including text; `--participant` accepts only the caller's id.
+Control characters in printed message text appear as visible escapes. All
 commands accept `--json`.
 
 Inside a session, use the `SHELLPUPPET_CLI` path supplied in its environment.
-The daemon also supplies `SHELLPUPPET_HOME` when it uses a custom home, so
-the CLI reaches that daemon. It presents the session's identity automatically.
-Outside a session,
-run `msg claim <name>`, then set the printed `SHELLPUPPET_CLAIM=<id>:<secret>`
+The daemon always supplies its absolute `SHELLPUPPET_HOME`, so the CLI reaches
+the daemon that started the session. It overrides a copied or caller supplied
+value, including with `envFromDaemon: "all"`. The CLI presents the session's
+identity automatically. Outside a session, run `msg claim <name>`, then set
+the printed `SHELLPUPPET_CLAIM=<id>:<secret>`
 in that client's environment for later commands. `msg release` frees it.
 Treat a claim as a local same-user credential and keep it out of logs.
 

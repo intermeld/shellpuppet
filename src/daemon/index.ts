@@ -6,6 +6,7 @@
  */
 
 import { Daemon, AlreadyRunningError } from './server.js';
+import * as path from 'node:path';
 import { createAuditor } from './audit.js';
 import { DEFAULT_VIEWER_LAUNCH_MODE, readDaemonConfig, signatureOverBudgetLog } from './config.js';
 import { useDialogSignatures } from '../core/dialogs.js';
@@ -16,7 +17,7 @@ import { daemonLogPath, ensureHome, shellpuppetHome } from './paths.js';
 
 async function main(): Promise<void> {
   assertNodeVersion();
-  const home = shellpuppetHome();
+  const home = path.resolve(shellpuppetHome());
   await ensureHome(home);
   const logger = createFileLogger(daemonLogPath(home));
   // Shape-validated (design §4.3 fail-closed): a malformed policy section

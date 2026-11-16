@@ -19,6 +19,7 @@ import { DaemonGoneError, daemonStartMode, discoverDaemon, ensureDaemon, request
 import type { DaemonConnection } from '../client/http.js';
 import { assertNodeVersion, packageVersion } from '../daemon/meta.js';
 import { NO_MATCHES } from '../core/find.js';
+import { visibleMessageText } from '../core/messageText.js';
 import { resultRefusal } from '../core/reasoning.js';
 import { inspectDaemonState, readDaemonState, shellpuppetHome } from '../daemon/paths.js';
 import { clearRestartHold, readRestartHold, writeRestartHold } from '../daemon/restartHold.js';
@@ -294,6 +295,21 @@ function printJson(value: unknown): void {
   console.log(JSON.stringify(value, null, 2));
 }
 
+function printableMessages(payload: Body): Body {
+  const sanitise = (entry: unknown): unknown => {
+    if (typeof entry !== 'object' || entry === null) return entry;
+    const message = entry as Body;
+    return typeof message['text'] === 'string'
+      ? { ...message, text: visibleMessageText(message['text']) } : entry;
+  };
+  return {
+    ...payload,
+    ...(Array.isArray(payload['messages'])
+      ? { messages: payload['messages'].map(sanitise) } : {}),
+    ...(Object.hasOwn(payload, 'message') ? { message: sanitise(payload['message']) } : {}),
+  };
+}
+
 async function main(): Promise<void> {
   assertNodeVersion();
   const argv = process.argv.slice(2);
@@ -374,7 +390,7 @@ async function main(): Promise<void> {
     } else {
       fail(2, 'msg needs send, inbox, outbox, directory, wait, claim, release or log.');
     }
-    printJson(payload);
+    printJson(['inbox', 'outbox', 'wait', 'log'].includes(sub ?? '') ? printableMessages(payload) : payload);
     return;
   }
 

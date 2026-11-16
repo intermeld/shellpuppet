@@ -151,7 +151,7 @@ describe('shellpuppet start --env-name', () => {
     const before = await sessionCount();
     const result = await startReporter('--env-name', 'SHELLPUPPET_SESSION');
     expect(result.code).toBe(2);
-    expect(result.stderr).toContain('The daemon assigns the four session identity variables for each session; they cannot be passed.');
+    expect(result.stderr).toContain('The daemon assigns the session identity variables and its home for each session; they cannot be passed.');
     expect(result.stderr).toContain('SHELLPUPPET_SESSION');
     expect(await sessionCount()).toBe(before);
   }, 90_000);

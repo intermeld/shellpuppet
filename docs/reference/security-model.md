@@ -483,7 +483,7 @@ variable there. A variable reserved for a connected feature's own credential
 and ShellPuppet's own `SHELLPUPPET_` variables are never copied by the profile.
 Each session instead receives its own `SHELLPUPPET_SESSION`,
 `SHELLPUPPET_SESSION_TOKEN`, `SHELLPUPPET_DAEMON_INSTANCE` and
-`SHELLPUPPET_CLI`. Clients present the id and token only to the matching
+`SHELLPUPPET_CLI` and the daemon's absolute `SHELLPUPPET_HOME`. Clients present the id and token only to the matching
 daemon instance. An invalid or ended session identity is refused. This proof
 attributes calls and parent sessions; any process running as the same user can
 already read the daemon client token, so it is not a boundary against local code.

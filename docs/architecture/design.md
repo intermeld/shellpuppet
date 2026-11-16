@@ -338,14 +338,21 @@ dashboard view and the typing of nudges arrive as separate work.
 The daemon registers each started session in one mailbox and ends it on
 exit. The caller is a verified session identity or a claim proved by its id
 and secret; a client token alone cannot act as a messaging participant.
+At most 64 outside claims may be live, and at most eight may be created in
+60 seconds. A stale claim header is ignored when creating a new claim.
 The client-token HTTP routes are `POST /messages`, `GET /messages/inbox`,
 `GET /messages/outbox`, `GET /messages/directory`, `GET /messages/wait`,
 `POST /messages/claims`, `DELETE /messages/claims/:id` and
 `GET /messages/log`. Inbox and outbox return text only to a participant;
-the log returns retained text to the local owner through a participant identity.
-The CLI and MCP server are
-clients of these routes. Events contain message ids, participants and state,
-never text; audit contains ids, names and byte length, never text.
+the log returns only the caller's own sent or received text. A participant
+filter for anyone else is refused. An unfiltered owner-wide view needs the
+local owner's dashboard credential and is not available yet. MCP frames and
+CLI output show control characters in peer text as visible escapes; HTTP JSON
+keeps the exact text. The frame's text boundary is the contract. Markdown is
+left intact for clients to render. The CLI and MCP server are clients of
+these routes. Events use `message` and `message-state` and contain no text.
+Audit records ids, names and byte length on sends; inbox, outbox, wait and
+log reads record the caller and the number returned, never text.
 
 ---
 
