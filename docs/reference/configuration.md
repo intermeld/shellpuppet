@@ -410,6 +410,9 @@ Every started session also receives `SHELLPUPPET_SESSION`,
 `SHELLPUPPET_CLI`. The daemon assigns its own id, secret, instance and CLI path
 for that session. These four names cannot be inherited through `sessionEnv`,
 `envNames`, `agents.passEnv` or a dashboard profile's `envFromDaemon`.
+The daemon assigns them for each session; they cannot be passed. A start that
+names one is refused with that explanation. A config list that names one gets
+a config problem and that entry is ignored.
 
 ## The variables each agent's sessions receive
 
@@ -640,6 +643,9 @@ start. Connected feature credentials reserved under ADR-007 and ShellPuppet's
 per-session variables, including `SHELLPUPPET_SESSION`, are excluded.
 This includes `SHELLPUPPET_SESSION_TOKEN`, `SHELLPUPPET_DAEMON_INSTANCE` and
 `SHELLPUPPET_CLI` for both an explicit list and `"all"`.
+An explicit list naming one of these four variables gets a config problem;
+the profile remains available with that entry ignored. The pre-existing
+`SHELLPUPPET_` exclusion also covers these names in `"all"`.
 `SHELLPUPPET_HOME` passes through so a launched process can find the same daemon.
 The `"all"` form excludes these known agent session markers:
 

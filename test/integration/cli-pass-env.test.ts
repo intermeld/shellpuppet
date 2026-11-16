@@ -147,6 +147,14 @@ describe('shellpuppet start --agent (agents.passEnv)', () => {
 });
 
 describe('shellpuppet start --env-name', () => {
+  it('explains that a session identity name is assigned by the daemon', async () => {
+    const before = await sessionCount();
+    const result = await startReporter('--env-name', 'SHELLPUPPET_SESSION');
+    expect(result.code).toBe(2);
+    expect(result.stderr).toContain('The daemon assigns the four session identity variables for each session; they cannot be passed.');
+    expect(result.stderr).toContain('SHELLPUPPET_SESSION');
+    expect(await sessionCount()).toBe(before);
+  }, 90_000);
   it('passes a listed variable and nothing it was not asked for, and prints no value', async () => {
     const started = await startReporter('--env-name', 'SP_TEST_PASSED');
     expect(started.code).toBe(0);

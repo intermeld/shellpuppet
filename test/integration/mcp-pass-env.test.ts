@@ -168,6 +168,12 @@ describe('the variables each agent receives (agents.passEnv)', () => {
 });
 
 describe('terminal_start envNames', () => {
+  it('explains that a session identity name is assigned by the daemon', async () => {
+    const { started } = await startReporter(['SHELLPUPPET_SESSION_TOKEN']);
+    expect((started as TextResult).isError).toBe(true);
+    expect(resultText(started)).toContain('The daemon assigns the four session identity variables for each session; they cannot be passed.');
+    expect(resultText(started)).toContain('SHELLPUPPET_SESSION_TOKEN');
+  });
   it('is in the tool schema', async () => {
     const { tools } = await client.listTools();
     const start = tools.find((tool) => tool.name === 'terminal_start');

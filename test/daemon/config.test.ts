@@ -16,6 +16,17 @@ function decide(raw: unknown, command: string): { allowed: boolean; reason?: str
 }
 
 describe('parseDaemonConfig: valid input', () => {
+  it('warns when identity names appear in environment lists and removes them', () => {
+    const { config, problems } = parseDaemonConfig({
+      sessionEnv: ['SHELLPUPPET_CLI', 'KEEP'],
+      envNames: ['SHELLPUPPET_SESSION', 'KEEP'],
+      agents: { passEnv: { qoder: ['SHELLPUPPET_SESSION_TOKEN', 'KEEP'] } },
+    });
+    expect(config.sessionEnv).toEqual(['KEEP']);
+    expect(config.envNames).toEqual(['KEEP']);
+    expect(config.agentPassEnv?.['qoder']).toEqual(['KEEP']);
+    expect(problems.filter((problem) => problem.includes('they cannot be passed'))).toHaveLength(3);
+  });
   it('accepts a bounded dashboard text size and ignores invalid values', () => {
     expect(parseDaemonConfig({ dashboard: { fontSize: 18 } })).toEqual({ config: { dashboard: { fontSize: 18 } }, problems: [] });
     for (const fontSize of [7, 33, 12.5, '18', null]) {

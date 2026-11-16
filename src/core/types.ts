@@ -388,6 +388,7 @@ export const SESSION_IDENTITY_ENV_NAMES: ReadonlySet<string> = new Set([
   'SHELLPUPPET_DAEMON_INSTANCE',
   'SHELLPUPPET_CLI',
 ]);
+export const SESSION_IDENTITY_ENV_RULE = 'The daemon assigns the four session identity variables for each session; they cannot be passed.';
 
 // ----------------------------------------------------------------------- defaults
 

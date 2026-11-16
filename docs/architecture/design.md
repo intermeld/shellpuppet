@@ -1066,6 +1066,12 @@ Token-based, following the Jupyter / SSH-agent model, with **five credentials**:
   still accepts the client token and a viewer cookie for that session. `/dashboard/events`
   takes the dashboard cookie and the subprotocol, and a client token on the query is
   refused.
+  On `/events` and a session stream, a client-token upgrade checks the two
+  session identity headers before accepting the socket. Both absent mean an
+  anonymous client; either present without a live matching pair means 403.
+  A verified caller is retained for connection and later input audits. Node
+  clients can set these upgrade headers; browser WebSocket APIs cannot. Viewer
+  and dashboard cookie upgrades use their existing rules.
 - **`GET /health` is deliberately unauthenticated** and returns only `{ ok, version,
   pid, instanceId }`, including the daemon instance id. Clients must be able to poll it
   before the token file settles (§2.2), and it
@@ -1263,7 +1269,9 @@ Append-only JSONL at `~/.shellpuppet/audit.log`: timestamp, session id, actor
 itself; `daemon` for what the daemon does on its own, such as reaping an exited session),
 action and metadata. A verified session call also records `callerSession` beside
 the actor; the actor remains the client label. The proof and its token are never
-recorded. Minting a dashboard grant is `grant-mint` under the calling client
+recorded. Daemon observations never record `callerSession`, even when a session's
+timer or listener inherited the async context of the request that created it.
+Minting a dashboard grant is `grant-mint` under the calling client
 actor, with metadata that names the credential kind and nothing secret. Redeeming it is
 `grant-redeem` under actor `dashboard`, and the grant is not recorded. A refused dashboard
 request is `refuse` under actor `dashboard`, with the method, the path and a reason code
@@ -1343,6 +1351,8 @@ default (ADR-008).
   anonymous client and an invalid proof is refused. Any process running as
   the same user can already read the daemon token. The session secret makes
   attribution between sessions correct; it is not a boundary against local code.
+  An explicit start request naming one of the four identity variables is
+  refused. A config list naming one reports a problem and ignores that name.
 
 A dashboard start uses the same clean baseline. `envFromDaemon` on its
 profile adds the names explicitly configured there from the daemon's
