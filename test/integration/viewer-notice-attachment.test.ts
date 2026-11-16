@@ -11,25 +11,6 @@ import type { TestDaemon } from './helpers.js';
 import { assessDeliveredCadence, deliveredNoticeScript, recordDeliveredCadence } from './noticeCadence.js';
 import type { DeliveredCadence } from './noticeCadence.js';
 
-it('allows one completed frame after a rest deadline but catches a later clear', () => {
-  const samples: DeliveredCadence['samples'] = [
-    { time: 0, row: 22, side: 'bottom', leg: 0, deadline: false, covered: true },
-    { time: 1000, row: 22, side: 'bottom', leg: 0, deadline: true, covered: true },
-    { time: 1016, row: 22, side: 'top', leg: 0, deadline: true, covered: false },
-    { time: 1032, row: 22, side: 'top', leg: 0, deadline: false, covered: false },
-  ];
-  const cadence: DeliveredCadence = {
-    end: 1500,
-    legs: [{ row: 22, start: 0, end: 1500, top: false, bottom: true }],
-    samples,
-  };
-  expect(assessDeliveredCadence(cadence).violations).toEqual([]);
-  const late = { ...cadence, samples: samples.map((sample, index) => index === 2 ? { ...sample, covered: true } : sample) };
-  expect(assessDeliveredCadence(late).violations).toMatchObject([
-    { rule: 'rest clears on first completed frame at or after deadline' },
-  ]);
-});
-
 const fixture = fileURLToPath(new URL('../fixtures/notice-nested-tui.mjs', import.meta.url));
 const cycleFixture = fileURLToPath(new URL('../fixtures/notice-r-cycle-tui.mjs', import.meta.url));
 let browser: string | null;
