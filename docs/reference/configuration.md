@@ -667,12 +667,13 @@ listing variables. The daemon's environment comes from whichever client
 started it. A listed name that is unset is skipped and does not refuse the
 start. Connected feature credentials reserved under ADR-007 and ShellPuppet's
 per-session variables, including `SHELLPUPPET_SESSION`, are excluded.
-This includes `SHELLPUPPET_SESSION_TOKEN`, `SHELLPUPPET_DAEMON_INSTANCE` and
-`SHELLPUPPET_CLI` for both an explicit list and `"all"`.
-An explicit list naming one of these four variables gets a config problem;
+This includes `SHELLPUPPET_SESSION_TOKEN`, `SHELLPUPPET_DAEMON_INSTANCE`,
+`SHELLPUPPET_CLI` and `SHELLPUPPET_HOME`, for both an explicit list and `"all"`.
+An explicit list naming one of these five variables gets a config problem;
 the profile remains available with that entry ignored. The pre-existing
-`SHELLPUPPET_` exclusion also covers these names in `"all"`.
-`SHELLPUPPET_HOME` passes through so a launched process can find the same daemon.
+`SHELLPUPPET_` exclusion also covers these names in `"all"`. The daemon gives
+every session its own absolute home as `SHELLPUPPET_HOME`, so a launched process
+finds the daemon that started it; a copied or listed value is never used.
 The `"all"` form excludes these known agent session markers:
 
 | Agent CLI | Excluded names |

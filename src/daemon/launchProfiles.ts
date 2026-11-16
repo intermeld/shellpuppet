@@ -513,7 +513,7 @@ export function copyDaemonEnv(
     if (names === 'all'
       && (!ENV_NAME_PATTERN.test(name) || ALL_PROFILE_ENV_EXCLUSIONS.has(process.platform === 'win32' ? upperName : name))) continue;
     if (SESSION_IDENTITY_ENV_NAMES.has(upperName)
-      || (upperName.startsWith('SHELLPUPPET_') && upperName !== 'SHELLPUPPET_HOME')
+      || upperName.startsWith('SHELLPUPPET_')
       || name === '__proto__') continue;
     if (process.platform === 'win32'
       ? [...reserved].some((entry) => entry.toUpperCase() === upperName)

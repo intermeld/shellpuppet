@@ -738,7 +738,7 @@ export class Daemon {
     const startedWrapped = process.env['SHELLPUPPET_DAEMON_STARTED_WRAPPED'] === '1';
     delete process.env['SHELLPUPPET_DAEMON_STARTED_WRAPPED'];
     this.options = { ...options,
-      home: path.isAbsolute(options.home) ? options.home : path.resolve(options.home),
+      home: path.resolve(options.home),
       startedWrapped: options.startedWrapped ?? startedWrapped };
     this.logger = options.logger;
     const auditor = options.audit ?? NULL_AUDITOR;

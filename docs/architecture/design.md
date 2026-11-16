@@ -1383,15 +1383,17 @@ default (ADR-008).
   anonymous client and an invalid proof is refused. Any process running as
   the same user can already read the daemon token. The session secret makes
   attribution between sessions correct; it is not a boundary against local code.
-  An explicit start request naming one of the four identity variables is
+  An explicit start request naming one of these five reserved variables (the four
+  identity variables and `SHELLPUPPET_HOME`) is
   refused. A config list naming one reports a problem and ignores that name.
 
 A dashboard start uses the same clean baseline. `envFromDaemon` on its
 profile adds the names explicitly configured there from the daemon's
 environment, or `"all"` passes the daemon's whole environment to that profile's
 dashboard starts. Unset listed names do not refuse the start. ShellPuppet's
-own `SHELLPUPPET_` variables, except `SHELLPUPPET_HOME`, and connected feature
-credentials are excluded; `__proto__` is never copied.
+own `SHELLPUPPET_` variables and connected feature credentials are excluded;
+`__proto__` is never copied. The daemon then sets `SHELLPUPPET_HOME` to its own
+absolute home, alongside the identity variables.
 The `"all"` form also excludes `NODE_OPTIONS`, malformed variable names
 (including Windows drive pseudo-variables) and every agent's parent-session
 markers. These exclusions apply to every `"all"` profile: a Codex session
