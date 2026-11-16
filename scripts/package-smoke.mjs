@@ -36,10 +36,13 @@ const given = process.argv[2];
 
 // The tools the source registers. The installed MCP server must list exactly
 // these: a package that loses or renames one is not the one this tree builds.
+// The session_* messaging tools are offered only when messaging is switched on
+// in config.json, and this check runs with the default config, where it is off.
 const registeredTools = [
   ...readFileSync(path.join(repoRoot, 'src', 'mcp', 'tools.ts'), 'utf8').matchAll(/registerTool\(\s*'([a-z_]+)'/g),
 ]
   .map((match) => match[1])
+  .filter((name) => !name.startsWith('session_'))
   .sort();
 
 const work = mkdtempSync(path.join(tmpdir(), 'sp-package-'));
