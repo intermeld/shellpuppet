@@ -4,7 +4,7 @@ import { findBrowser } from '../../src/daemon/viewerLauncher.js';
 import { parseDaemonConfig } from '../../src/daemon/config.js';
 import { api, eventually, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
-import { decisionStall } from './decision-stall.js';
+import { decisionStall, deliveredPairs } from './decision-stall.js';
 
 let running: TestDaemon | null = null;
 
@@ -391,23 +391,25 @@ it('takes a newly arrived pane within three seconds during ten seconds of sessio
             decisionGaps.push({ from: previous, to: current, gap: current - previous });
         }
         return { arrivedAt, changes: window.__churnChanges,
-          takes, maxFrameGap, measuredFrames, decisionGaps };
+          takes, maxFrameGap, measuredFrames, decisionGaps, frames: window.__takeFrames.slice() };
       })()`) as { arrivedAt: number; changes: number; takes: { at: number }[]; maxFrameGap: number; measuredFrames: number;
-        decisionGaps: { from: number; to: number; gap: number }[] };
+        decisionGaps: { from: number; to: number; gap: number }[]; frames: number[] };
       return measured;
     },
   });
   const result = shot.probe as { arrivedAt: number; changes: number; takes: { at: number }[];
-    maxFrameGap: number; measuredFrames: number; decisionGaps: { from: number; to: number; gap: number }[] };
+    maxFrameGap: number; measuredFrames: number; decisionGaps: { from: number; to: number; gap: number }[]; frames: number[] };
+  // Stall evidence counts only frame pairs delivered inside the arrival-to-deadline interval.
+  const decisionPairs = deliveredPairs(result.frames, result.arrivedAt, result.arrivedAt + 3000);
   const takeDelay = result.takes[0] === undefined ? undefined : result.takes[0].at - result.arrivedAt;
   const failed = result.changes < 13 || result.takes.length === 0 || takeDelay === undefined || takeDelay > 3000;
-  if (failed && result.measuredFrames === 0)
+  if (failed && decisionPairs === 0)
     throw new Error(`inconclusive: no frames observed during Auto fit decision; ${JSON.stringify(result)}`);
-  const gap = decisionStall(result.decisionGaps, result.measuredFrames, result.arrivedAt, result.arrivedAt + 3000);
-  attempts.push({ takeDelay, gap: gap === 'inconclusive' ? null : gap, frames: result.measuredFrames });
+  const gap = decisionStall(result.decisionGaps, decisionPairs, result.arrivedAt, result.arrivedAt + 3000);
+  attempts.push({ takeDelay, gap: gap === 'inconclusive' ? null : gap, frames: decisionPairs });
   const excused = failed && result.changes >= 13 && gap !== null && gap !== 'inconclusive';
   const details = JSON.stringify({ takeDelay, changes: result.changes, maxFrameGap: result.maxFrameGap,
-    measuredFrames: result.measuredFrames, decisionGap: gap });
+    measuredFrames: result.measuredFrames, decisionPairs, decisionGap: gap });
   if (excused && attempt === 0) {
     console.log(`TIMING_RETRY dashboard-auto-fit: ${JSON.stringify(attempts)}`);
     await daemon.stop(); running = null; continue;
