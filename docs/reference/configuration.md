@@ -4,6 +4,8 @@
 
 Messaging is off until `messaging.enabled` is set to `true` and an allow rule
 permits the sender and recipient. Restart the daemon after changing it.
+With `envFromDaemon: "all"`, `SHELLPUPPET_HOME` is always the daemon's own
+absolute home in a session, never a copied value.
 For a session to speak with sessions it started, in either direction:
 
 ```json

@@ -721,6 +721,8 @@ export class Daemon {
   private readonly compiledPolicy: CompiledPolicy;
   /** Accepted launch times, for the sliding sixty-second cap. */
   private readonly launchTimes: number[] = [];
+  private readonly claimTimes: number[] = [];
+  private claimCount = 0;
   private folderPickerBusy = false;
   private folderPickerAbort: AbortController | null = null;
   private folderPickerDone: Promise<void> | null = null;
@@ -735,7 +737,9 @@ export class Daemon {
   constructor(options: DaemonOptions) {
     const startedWrapped = process.env['SHELLPUPPET_DAEMON_STARTED_WRAPPED'] === '1';
     delete process.env['SHELLPUPPET_DAEMON_STARTED_WRAPPED'];
-    this.options = { ...options, startedWrapped: options.startedWrapped ?? startedWrapped };
+    this.options = { ...options,
+      home: path.isAbsolute(options.home) ? options.home : path.resolve(options.home),
+      startedWrapped: options.startedWrapped ?? startedWrapped };
     this.logger = options.logger;
     const auditor = options.audit ?? NULL_AUDITOR;
     this.audit = {
@@ -757,7 +761,7 @@ export class Daemon {
         token: '',
         instanceId: this.instanceId,
         cliPath: fileURLToPath(new URL('../../dist/cli/index.js', import.meta.url)),
-        home: options.home,
+        home: this.options.home,
       },
     }, (id) => {
       this.endMailboxParticipant(id);
@@ -775,7 +779,7 @@ export class Daemon {
       this.emitEvent({ type: 'message', ...event });
     });
     this.mailbox.on('state', (event) => {
-      this.emitEvent({ type: 'state', ...event });
+      this.emitEvent({ type: 'message-state', ...event });
     });
     this.sessionFeed = new SessionFeed(
       this.version,
@@ -2457,17 +2461,28 @@ export class Daemon {
     const claimPresented = claimId !== undefined || claimSecret !== undefined;
     const claimValid = typeof claimId === 'string' && typeof claimSecret === 'string' &&
       this.mailbox.verifyClaim(claimId, claimSecret);
-    if (claimPresented && !claimValid) {
+    const route = segments[1];
+    const creatingClaim = req.method === 'POST' && route === 'claims' && segments.length === 2;
+    if (claimPresented && !claimValid && !creatingClaim) {
       json(res, 403, { error: 'Messaging claim was not recognised.' });
       return;
     }
     const caller = this.callerContext.getStore() ?? (claimValid ? claimId : undefined);
-    const route = segments[1];
-    if (req.method === 'POST' && route === 'claims' && segments.length === 2) {
+    if (creatingClaim) {
       if (caller !== undefined) { json(res, 409, { error: 'Already a messaging participant.' }); return; }
       const body = await readBody(req);
       if (typeof body['name'] !== 'string') { json(res, 400, { error: 'A valid name is required.' }); return; }
+      const now = this.now();
+      while (this.claimTimes.length > 0 && (this.claimTimes[0] ?? now) <= now - 60_000) this.claimTimes.shift();
+      if (this.claimCount >= 64) {
+        json(res, 429, { error: 'Messaging claim limit reached (64 live claims).' }); return;
+      }
+      if (this.claimTimes.length >= 8) {
+        json(res, 429, { error: 'Messaging claim rate reached (8 in 60 seconds).' }); return;
+      }
       const claim = this.mailbox.claim(body['name']);
+      this.claimTimes.push(now);
+      this.claimCount++;
       this.audit.record(actor, 'msg-claim', claim.claimId, {
         fromId: claim.claimId, fromName: body['name'], toId: null, toName: null,
         messageId: null, length: 0,
@@ -2482,6 +2497,7 @@ export class Daemon {
       }
       const name = this.mailbox.participant(claimId)?.name;
       this.endMailboxParticipant(claimId);
+      this.claimCount--;
       this.audit.record(actor, 'msg-release', claimId, {
         fromId: claimId, fromName: name, toId: null, toName: null, messageId: null, length: 0,
       });
@@ -2505,11 +2521,13 @@ export class Daemon {
         json(res, 400, { error: 'markRead must be true or false.' }); return;
       }
       const entries = this.mailbox.inbox(caller, { markRead: mark !== 'false', limit });
-      if (mark !== 'false') for (const entry of entries) this.messageAudit('msg-read', entry, actor);
+      this.audit.record(actor, 'msg-read', caller, { count: entries.length, source: 'inbox' });
       json(res, 200, { messages: entries }); return;
     }
     if (req.method === 'GET' && route === 'outbox') {
-      json(res, 200, { messages: this.mailbox.outbox(caller, { limit }) }); return;
+      const messages = this.mailbox.outbox(caller, { limit });
+      this.audit.record(actor, 'msg-read', caller, { count: messages.length, source: 'outbox' });
+      json(res, 200, { messages }); return;
     }
     if (req.method === 'GET' && route === 'directory') {
       json(res, 200, { participants: this.mailbox.directory(caller) }); return;
@@ -2528,6 +2546,7 @@ export class Daemon {
           ...(url.searchParams.has('from') ? { from: url.searchParams.get('from')! } : {}),
           timeoutMs: Math.min(requested, MAX_WAIT_TIMEOUT_MS), signal: controller.signal,
         });
+        if (entry !== undefined) this.audit.record(actor, 'msg-read', caller, { count: 1, source: 'wait' });
         if (!res.destroyed) json(res, 200, { message: entry ?? null });
       } catch (error) {
         if (!(error instanceof Error) || error.name !== 'AbortError') throw error;
@@ -2535,9 +2554,12 @@ export class Daemon {
       return;
     }
     if (req.method === 'GET' && route === 'log') {
-      json(res, 200, { messages: this.mailbox.log({
-        ...(url.searchParams.has('participant') ? { participantId: url.searchParams.get('participant')! } : {}), limit,
-      }) }); return;
+      if (url.searchParams.has('participant') && url.searchParams.get('participant') !== caller) {
+        json(res, 403, { error: 'Log participant must be the caller.' }); return;
+      }
+      const messages = this.mailbox.log({ participantId: caller, limit });
+      this.audit.record(actor, 'msg-log', caller, { count: messages.length });
+      json(res, 200, { messages }); return;
     }
     json(res, 404, { error: 'Messaging route not found.' });
   }

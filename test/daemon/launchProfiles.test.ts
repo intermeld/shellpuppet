@@ -467,9 +467,9 @@ describe('the daemon environment copy', () => {
     source['=C:'] = 'made-up-drive';
     source['ODD-NAME'] = 'made-up-malformed';
     const result = copyDaemonEnv('all', source, new Set(['FEATURE_CREDENTIAL']));
-    expect(result.copied).toEqual(['UNLISTED', 'SHELLPUPPET_HOME']);
+    expect(result.copied).toEqual(['UNLISTED']);
     expect(result.env['UNLISTED'] === 'made-up-value').toBe(true);
-    expect(result.env['SHELLPUPPET_HOME'] === 'made-up-home').toBe(true);
+    expect(result.env['SHELLPUPPET_HOME']).toBeUndefined();
   });
   it('keeps agent CLI session scaffolding out of an all profile', () => {
     const excluded = [
@@ -487,14 +487,13 @@ describe('the daemon environment copy', () => {
     for (const name of excluded) source[name] = `made-up-${name}`;
     const result = copyDaemonEnv('all', source);
     expect(result.env).toEqual({
-      SHELLPUPPET_HOME: 'made-up-home',
       ANTHROPIC_API_KEY: 'made-up-user-key',
       CLAUDE_CONFIG_DIR: 'made-up-config-dir',
       OPENAI_API_KEY: 'made-up-openai-key',
       ORDINARY_NAME: 'made-up-ordinary',
     });
     expect(result.copied).toEqual([
-      'SHELLPUPPET_HOME', 'ANTHROPIC_API_KEY', 'CLAUDE_CONFIG_DIR',
+      'ANTHROPIC_API_KEY', 'CLAUDE_CONFIG_DIR',
       'OPENAI_API_KEY', 'ORDINARY_NAME',
     ]);
     expect(copyDaemonEnv(['CLAUDE_CODE_SESSION_ID'], source)).toEqual({
@@ -515,8 +514,8 @@ describe('the daemon environment copy', () => {
       sHeLlPuPpEt_HoMe: 'made-up-home',
     };
     expect(copyDaemonEnv('all', source)).toEqual({
-      env: { sHeLlPuPpEt_HoMe: 'made-up-home' },
-      copied: ['sHeLlPuPpEt_HoMe'],
+      env: {},
+      copied: [],
     });
   });
   it('leaves an owned __proto__ name out of an explicit copy', () => {

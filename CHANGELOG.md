@@ -20,6 +20,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Changed
 
+- Scope message history to each participant, reserve the daemon home for sessions, escape displayed message controls, and bound outside claims.
 - Bound retained mailbox history, protect claim ids, settle ended inboxes before events, and validate messaging configuration limits.
 - Check session identity on client-token WebSocket upgrades, keep daemon audit
   records free of inherited caller identity, and explain reserved identity variables.

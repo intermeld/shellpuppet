@@ -9,7 +9,7 @@ import type { SessionEnvMode } from '../../src/core/types.js';
 
 const SOURCE = { PATH: '/bin', HOME: '/home/x', INHERITED_KEY: 'from-daemon' };
 const IDENTITY_NAMES = ['SHELLPUPPET_SESSION', 'SHELLPUPPET_SESSION_TOKEN',
-  'SHELLPUPPET_DAEMON_INSTANCE', 'SHELLPUPPET_CLI'];
+  'SHELLPUPPET_DAEMON_INSTANCE', 'SHELLPUPPET_CLI', 'SHELLPUPPET_HOME'];
 
 describe('buildSessionEnv with variables of the session’s own', () => {
   it('keeps session identity out of all environment copies and passed values', () => {
@@ -24,6 +24,13 @@ describe('buildSessionEnv with variables of the session’s own', () => {
     const env = buildSessionEnv('passthrough', 'win32', { shellpuppet_session_token: 'old' },
       { shellpuppet_session: 'old' });
     expect(Object.keys(env).filter((name) => name.toUpperCase().startsWith('SHELLPUPPET_SESSION'))).toEqual([]);
+  });
+  it('reserves every casing of the daemon home from copied and passed environments', () => {
+    for (const platform of ['win32', 'linux'] as const) {
+      const env = buildSessionEnv('passthrough', platform,
+        { shellpuppet_home: 'copied' }, { ShElLpUpPeT_hOmE: 'passed' });
+      expect(Object.keys(env).filter((name) => name.toUpperCase() === 'SHELLPUPPET_HOME')).toEqual([]);
+    }
   });
   it('adds them on top of a clean environment, which keeps everything else out', () => {
     const env = buildSessionEnv('clean', 'linux', SOURCE, { PASSED_KEY: 'v' });

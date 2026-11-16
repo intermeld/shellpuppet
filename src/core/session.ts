@@ -620,7 +620,7 @@ export function credentialShapedNames(source: NodeJS.ProcessEnv = process.env): 
  * A name reserved for a connected feature's credential (ADR-007) is never
  * carried, whichever mode is in force: `passthrough` copies the daemon's
  * environment and a list mode can name anything, so the filter has to sit
- * here rather than in one caller. The four session identity names are also
+ * here rather than in one caller. The session identity names and home are also
  * removed from `passed`; the daemon assigns fresh values to each session.
  */
 export function buildSessionEnv(
@@ -631,12 +631,13 @@ export function buildSessionEnv(
   reserved: ReadonlySet<string> = RESERVED_FEATURE_CREDENTIALS,
 ): Record<string, string> {
   const env: Record<string, string> = {};
-  // Windows reads variable names without case, so a reserved name is matched
-  // that way there and exactly elsewhere, as every other name is.
+  // Session-owned names are reserved in every casing. Windows also reads
+  // other reserved names without case; elsewhere those names are exact.
   const isReserved = (name: string): boolean =>
-    platform === 'win32'
-      ? [...reserved, ...SESSION_IDENTITY_ENV_NAMES].some((entry) => entry.toUpperCase() === name.toUpperCase())
-      : reserved.has(name) || SESSION_IDENTITY_ENV_NAMES.has(name);
+    [...SESSION_IDENTITY_ENV_NAMES].some((entry) => entry.toUpperCase() === name.toUpperCase()) ||
+    (platform === 'win32'
+      ? [...reserved].some((entry) => entry.toUpperCase() === name.toUpperCase())
+      : reserved.has(name));
   if (mode === 'passthrough') {
     for (const [key, value] of Object.entries(source)) {
       if (value !== undefined && !isReserved(key)) env[key] = value;
@@ -652,14 +653,7 @@ export function buildSessionEnv(
       }
     }
   }
-  const setOnly = (name: string, value: string): void => {
-    if (platform === 'win32') {
-      for (const key of Object.keys(env)) {
-        if (key.toUpperCase() === name.toUpperCase()) delete env[key];
-      }
-    }
-    env[name] = value;
-  };
+  const setOnly = (name: string, value: string): void => setSessionEnvValue(env, platform, name, value);
   for (const [name, value] of Object.entries(passed)) {
     if (!isReserved(name)) setOnly(name, value);
   }
@@ -669,6 +663,17 @@ export function buildSessionEnv(
   setOnly('TERM', 'xterm-256color');
   setOnly('COLORTERM', 'truecolor');
   return env;
+}
+
+/** Assign a daemon-owned value with the same Windows name collapsing as buildSessionEnv. */
+export function setSessionEnvValue(env: Record<string, string>, platform: NodeJS.Platform,
+  name: string, value: string): void {
+  if (platform === 'win32') {
+    for (const key of Object.keys(env)) {
+      if (key.toUpperCase() === name.toUpperCase()) delete env[key];
+    }
+  }
+  env[name] = value;
 }
 
 export class Session implements WaitTarget {
@@ -866,7 +871,9 @@ export class Session implements WaitTarget {
       sessionEnv['SHELLPUPPET_SESSION_TOKEN'] = deps.identity.token;
       sessionEnv['SHELLPUPPET_DAEMON_INSTANCE'] = deps.identity.instanceId;
       sessionEnv['SHELLPUPPET_CLI'] = deps.identity.cliPath;
-      if (deps.identity.home !== undefined) sessionEnv['SHELLPUPPET_HOME'] = deps.identity.home;
+      if (deps.identity.home !== undefined) {
+        setSessionEnvValue(sessionEnv, this.platform, 'SHELLPUPPET_HOME', deps.identity.home);
+      }
     }
     const spawnOptions = {
       name: 'xterm-256color',
