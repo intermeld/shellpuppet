@@ -218,7 +218,9 @@ describe('provider stall supervision', () => {
       diagnostics.stop(); live?.close();
     }
   });
-  it('clears a genuine native composer loss during the delayed growth allowance', async context => {
+  it('clears a genuine native composer loss during the delayed growth allowance', async () => {
+    const attempts: number[] = [];
+    for (let attempt = 0; attempt < 2; attempt++) {
     const started = await api(td.port, td.token, '/sessions', {
       body: { command: process.execPath, args: [path.join(repoRoot, 'test/fixtures/clipped-stalled-screen.mjs'),
         '--chunk-delays', '--end-on-growth'], shell: false, agent: 'mimo', cols: 120, rows: 30 },
@@ -230,12 +232,9 @@ describe('provider stall supervision', () => {
     const diagnostics = stallDiagnostics(session);
     let cleared = 0;
     let elapsed: number;
-    let schedulingDelay: number | undefined;
-    let previousTick = 0, delayedTicks = 0;
     const off = session.onStall(state => {
       if (state === undefined) {
         cleared = performance.now();
-        if (previousTick > 0) schedulingDelay = delayedTicks + Math.max(0, cleared - previousTick - 75);
       }
     });
     try {
@@ -243,27 +242,21 @@ describe('provider stall supervision', () => {
       await session.resize(80, 24);
       await new Promise(resolve => setTimeout(resolve, 1500));
       expect(session.getStalled()).toBeDefined();
-      previousTick = performance.now();
-      const tick = setInterval(() => {
-        const now = performance.now();
-        delayedTicks += Math.max(0, now - previousTick - 75);
-        previousTick = now;
-      }, 25);
       const requested = performance.now();
-      try {
-        diagnostics.resize(120, 30, 'requested');
-        await session.resize(120, 30);
-        await eventually(() => session.getStalled() === undefined, 5000);
-        elapsed = cleared - requested;
-      } finally { clearInterval(tick); }
-      if (process.env['SP_STALL_TIMINGS'] === '1') console.log('Native genuine end timing:', JSON.stringify({ clearMs: elapsed, schedulingDelay }));
+      diagnostics.resize(120, 30, 'requested');
+      await session.resize(120, 30);
+      await eventually(() => session.getStalled() === undefined, 5000);
+      elapsed = cleared - requested;
+      if (process.env['SP_STALL_TIMINGS'] === '1') console.log('Native genuine end timing:', JSON.stringify({ clearMs: elapsed }));
     } catch (error) { diagnostics.print(); throw error; }
     finally { off(); diagnostics.stop(); }
-    // The product allows 1,000 ms plus 250 ms confirmation. The remaining
-    // 250 ms is test slack; exclude only measured event-loop delay beyond it.
-    if (elapsed >= 1500 && (schedulingDelay ?? 0) >= elapsed - 1500)
-      context.skip(`runner stalled: ${String(Math.round(schedulingDelay ?? 0))} ms event-loop delay`);
-    expect(elapsed).toBeLessThan(1500);
+    // The resize and the product's synchronous work share this event loop.
+    // Its lag cannot distinguish runner load from a broken redraw path.
+    attempts.push(elapsed);
+    if (elapsed < 1500) return;
+    if (attempt === 1) throw new Error(`native composer clear exceeded 1,500 ms twice: ${attempts.map(value => Math.round(value)).join(', ')} ms`);
+    console.log(`TIMING_RETRY stalled-sessions: ${String(Math.round(elapsed))} ms`);
+    }
   });
   it('announces a responsive native composer once across resize and grey suggestions', async () => {
     const started = await api(td.port, td.token, '/sessions', {

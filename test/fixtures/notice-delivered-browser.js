@@ -65,6 +65,6 @@ window.observeDeliveredNotice = (term, notices, startedAt = performance.now(), f
       sample(); if (legs.length) legs.at(-1).end = performance.now() - epoch;
       clearInterval(interval); cancelAnimationFrame(frame); subscription.dispose(); delete style.bottom;
     }
-    return { legs, samples, end: legs.at(-1)?.end ?? 0 };
+    return { legs, samples, end: legs.at(-1)?.end ?? 0, epoch };
   } };
 };

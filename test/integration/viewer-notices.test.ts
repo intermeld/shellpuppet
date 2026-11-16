@@ -160,6 +160,8 @@ function initialPlacementChecks(mode: string): string {
 
 async function withPage(mode: string, interact: NonNullable<CaptureOptions['interact']>, period?: number,
   pluralityRows?: number): Promise<void> {
+  await td?.stop();
+  td = undefined;
   const urls: string[] = [];
   td = await startTestDaemon({ promptScanIntervalMs: 100, promptStallMs: 300,
     launcher: url => { urls.push(url); return Promise.resolve({ launched: true, mode: 'isolated-app', browser: 'mock' }); },
@@ -200,7 +202,9 @@ async function withPage(mode: string, interact: NonNullable<CaptureOptions['inte
 describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
   for (const rows of [24, 150]) it(`uncovers a leading prompt among three excursions at 80x${String(rows)}`, async context => {
     if (!browser) { context.skip(); return; }
-    let runnerStall: string | null = null;
+    const attempts: { gap: number; failures: string[] }[] = [];
+    for (let attempt = 0; attempt < 2; attempt++) {
+    const failures: string[] = [];
     await withPage(mode, async ({ evaluate }) => {
       const sessions = (await api(td!.port, td!.token, '/sessions')).body['sessions'] as { id: string }[];
       await evaluate(`window.__visits = [];
@@ -211,6 +215,7 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
       const result = await evaluate(`(async () => {
         const state = __noticeTest, start = performance.now(), row = state.term.rows - 2, placements = new Set();
         let samples = 0, restingSamples = 0, covered = 0, follow = null;
+        let firstCoveredAt = null, firstWrongSideAt = null;
         while (performance.now() - start < 6000) {
           const box = state.notices.getBoundingClientRect(), screen = state.term.element.querySelector('.xterm-screen').getBoundingClientRect();
           const cell = screen.height / state.term.rows;
@@ -219,9 +224,11 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
           // Start the placement check at the first frame actually delivered
           // after the 2.5 s startup deadline.
           if (__noticeFrames.at(-1) >= start + 2500) {
-            samples++; if (overlap) covered++;
+            samples++; if (overlap) { covered++; firstCoveredAt ??= performance.now() - start; }
             if (state.term.buffer.active.cursorY === row) restingSamples++;
-            placements.add(state.notices.style.top === 'auto' ? 'bottom' : 'top');
+            const side = state.notices.style.top === 'auto' ? 'bottom' : 'top';
+            placements.add(side);
+            if (side !== 'top') firstWrongSideAt ??= performance.now() - start;
           }
           await __pause(4);
         }
@@ -239,8 +246,17 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
           if (visit.row === row) longestPromptStay = Math.max(longestPromptStay, earlyDuration);
         }
         return { row, rows: state.term.rows, samples, restingSamples, covered, follow, weights,
+          startedAt: start, firstCoveredAt, firstWrongSideAt,
           earlyWeights, longestPromptStay,
           deadlineFrame: (__noticeFrames.find(time => time >= start + 2500) ?? NaN) - start,
+          decisionGap: __noticeFrames.slice(1).reduce((largest, current, index) => {
+            const previous = __noticeFrames[index];
+            return previous < start + 2500 && current > start && current <= start + 2500 + 600
+              ? Math.max(largest, current - previous) : largest;
+          }, 0),
+          stalls: __noticeFrames.slice(1).map((time, index) => ({
+            from: __noticeFrames[index] - start, to: time - start, gap: time - __noticeFrames[index],
+          })).filter(gap => gap.to >= 0 && gap.from <= 6000 && gap.gap >= 500),
           ...__noticeFrameSummary(start),
           placements: [...placements], hidden: state.alert.hidden,
           visits: __visits.map(visit => ({ row: visit.row, ms: visit.at - start })),
@@ -248,37 +264,65 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
       })()`) as { row: number; rows: number; samples: number; restingSamples: number; covered: number;
         follow: number | null; weights: Record<string, number>; earlyWeights: Record<string, number>;
         longestPromptStay: number; placements: string[]; hidden: boolean;
-        deadlineFrame: number;
+        deadlineFrame: number; decisionGap: number; startedAt: number;
+        firstCoveredAt: number | null; firstWrongSideAt: number | null;
+        stalls: { from: number; to: number; gap: number }[];
         frames: number; frameInterval: number; maxFrameGap: number; frameSpan: number; observedMs: number;
         visits: { row: number; ms: number }[]; cadence: DeliveredCadence };
       const assessment = assessDeliveredCadence(result.cadence);
       recordDeliveredCadence(`${mode}-${String(rows)}-leading`, result.cadence);
       const details = JSON.stringify({ ...result, cadence: assessment });
-      if (result.frames < 2) { runnerStall = 'runner stalled: no delivered animation frames'; return; }
-      if (result.maxFrameGap >= 500) { runnerStall = `runner stalled: ${String(result.maxFrameGap)} ms frame gap`; return; }
-      expect.soft(result.rows, details).toBe(rows);
-      expect.soft(result.samples, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
-      expect.soft(result.restingSamples, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
-      expect.soft(result.frames, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
-      expect.soft(result.frameInterval, details).toBeLessThan(200);
-      expect.soft(result.maxFrameGap, details).toBeLessThan(500);
-      expect.soft(result.frameSpan, details).toBeGreaterThan(5500);
-      expect.soft(result.observedMs - result.frameSpan, details).toBeLessThan(500);
-      expect.soft(result.hidden, details).toBe(false);
-      expect.soft(result.covered, details).toBe(0);
-      expect.soft(result.follow, details).not.toBeNull();
-      expect.soft(result.deadlineFrame, details).toBeGreaterThanOrEqual(2500);
-      expect.soft(result.follow, details).toBeLessThanOrEqual(result.deadlineFrame);
-      expect.soft(result.placements, details).toEqual(['top']);
-      expect.soft(assessment.repaints.some(repaint => repaint.target === 'top'), details).toBe(true);
-      expect.soft(assessment.violations, details).toEqual([]);
+      const checks: [string, () => void][] = [
+        ['rows', () => expect(result.rows).toBe(rows)],
+        ['samples', () => expect(result.samples).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200))],
+        ['resting samples', () => expect(result.restingSamples).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200))],
+        ['frames', () => expect(result.frames).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200))],
+        ['frame interval', () => expect(result.frameInterval).toBeLessThan(200)],
+        ['frame span', () => expect(result.frameSpan).toBeGreaterThan(5500)],
+        ['observed span', () => expect(result.observedMs - result.frameSpan).toBeLessThan(500)],
+        ['visible', () => expect(result.hidden).toBe(false)],
+        ['uncovered', () => expect(result.covered).toBe(0)],
+        ['first clear', () => expect(result.follow).not.toBeNull()],
+        ['deadline frame', () => expect(result.deadlineFrame).toBeGreaterThanOrEqual(2500)],
+        ['startup deadline', () => expect(result.follow).toBeLessThanOrEqual(result.deadlineFrame)],
+        ['placement', () => expect(result.placements).toEqual(['top'])],
+        ['repaint evidence', () => expect(assessment.repaints.some(repaint => repaint.target === 'top')).toBe(true)],
+        ['cadence', () => expect(assessment.violations).toEqual([])],
+      ];
       const promptTime = result.earlyWeights[String(result.row)] ?? 0;
       const upperTime = result.earlyWeights['0'] ?? 0;
-      expect.soft(result.longestPromptStay >= 1000 ||
-        (promptTime - upperTime >= 20 && upperTime <= promptTime * 2 / 3), details).toBe(true);
+      checks.push(['leading evidence', () => expect(result.longestPromptStay >= 1000 ||
+        (promptTime - upperTime >= 20 && upperTime <= promptTime * 2 / 3)).toBe(true)]);
+      for (const [name, check] of checks) {
+        try { check(); } catch { failures.push(name); }
+      }
+      if (result.frames < 2) failures.push('no delivered animation frames');
+      attempts.push({ gap: result.decisionGap, failures });
+      const firstViolation = assessment.violations[0] as
+        { frame?: { time: number }; first?: number; change?: { time: number }; clearBy?: number } | undefined;
+      const violationAt = (firstViolation?.frame?.time ?? firstViolation?.first ??
+        firstViolation?.change?.time ?? firstViolation?.clearBy ?? result.deadlineFrame) +
+        (result.cadence.epoch ?? result.startedAt) - result.startedAt;
+      const gapBefore = (end: number, start = 0) => result.stalls.some(gap => gap.from <= end && gap.to >= start);
+      const unexcused = failures.filter(name => {
+        if (name === 'no delivered animation frames') return false;
+        if (name === 'rows' || name === 'visible') return true;
+        if (name === 'uncovered') return !gapBefore(result.firstCoveredAt ?? result.deadlineFrame);
+        if (name === 'placement') return !gapBefore(result.firstWrongSideAt ?? result.deadlineFrame);
+        if (name === 'cadence') return !gapBefore(violationAt, violationAt - 500);
+        if (['first clear', 'startup deadline', 'deadline frame', 'repaint evidence'].includes(name))
+          return !gapBefore(result.deadlineFrame);
+        if (name === 'leading evidence') return !gapBefore(result.follow ?? result.deadlineFrame);
+        return result.stalls.length === 0;
+      });
+      if (unexcused.length)
+        throw new Error(`notice placement failed: ${failures.join(', ')}; ${details}`);
     }, 200, rows);
-    if (runnerStall !== null) context.skip(runnerStall);
-  }, 120_000);
+    if (!failures.length) return;
+    if (attempt === 1) throw new Error(`runner stalled twice during notice decision: ${JSON.stringify(attempts)}`);
+    console.log(`TIMING_RETRY viewer-notices ${mode} ${String(rows)}`);
+    }
+  }, 240_000);
 
   for (const period of [33, 25]) it(`uncovers a moved prompt during ${String(period)} ms repaints and stays steady through longer pauses`, async context => {
     if (!browser) { context.skip(); return; }

@@ -2,12 +2,15 @@
 // Socket doubles let the same pane run in viewer and dashboard modes.
 window.noticePause = ms => new Promise(resolve => setTimeout(resolve, ms));
 window.noticeFrameTiming = onFrame => {
-  const gaps = [];
+  const gaps = [], stalls = [];
   let previous = null, first = null, active = true;
   const started = performance.now();
   const tick = time => {
     first ??= time;
-    if (previous !== null) gaps.push(time - previous);
+    if (previous !== null) {
+      gaps.push(time - previous);
+      if (time - previous >= 500) stalls.push({ from: previous - started, to: time - started, gap: time - previous });
+    }
     previous = time;
     onFrame?.(time, gaps.length);
     if (active) requestAnimationFrame(tick);
@@ -18,7 +21,7 @@ window.noticeFrameTiming = onFrame => {
     const ordered = gaps.slice().sort((a, b) => a - b);
     return { frames: gaps.length, frameInterval: ordered[Math.floor(ordered.length / 2)] ?? null,
       maxFrameGap: ordered.at(-1) ?? null, frameSpan: previous === null ? 0 : previous - first,
-      observedMs: performance.now() - started };
+      observedMs: performance.now() - started, stalls };
   };
 };
 window.makeNoticePane = (mode, rows) => {
@@ -92,7 +95,7 @@ window.noticeOccupancyCases = async (mode, kind) => {
         await p.move(1); await p.move(initial); await noticePause(1100); p.show();
         const before = p.measure();
         const stopFrames = noticeFrameTiming(), start = performance.now(), placements = new Set();
-        let samples = 0, covered = 0, measuredAt = null;
+        let samples = 0, covered = 0, measuredAt = null, firstFailureAt = null;
         // Establish the old edge first. A clearly leading lower rest must
         // win whether the previous resting row is still visited or gone.
         // Equal replacements retain their edge in noticeCoveredTimeCases.
@@ -103,6 +106,7 @@ window.noticeOccupancyCases = async (mode, kind) => {
           if (performance.now() - start > 2517) {
             measuredAt ??= p.rects();
             placements.add(p.side()); samples++;
+            if (p.measure(rows - 1).overlap || p.side() !== 'top') firstFailureAt ??= performance.now() - start;
             if (p.measure(rows - 1).overlap) covered++;
           }
           await p.move(0); await noticePause(9);
@@ -115,7 +119,7 @@ window.noticeOccupancyCases = async (mode, kind) => {
         const fitted = p.measure(rows - 1);
         p.geometry(rows + 1);
         const resized = p.measure(rows - 1);
-        results.push({ rows, initial, before, samples, covered, ...stopFrames(), placements: [...placements],
+        results.push({ rows, initial, before, samples, covered, firstFailureAt, ...stopFrames(), placements: [...placements],
           rects: p.rects() - measuredAt, shown, fitted, resized });
       } finally { p.destroy(); }
     }
@@ -163,9 +167,10 @@ window.noticeOccupancyCases = async (mode, kind) => {
           await p.move(rows - 1); await noticePause(650); p.show();
           const stopFrames = noticeFrameTiming();
           const before = p.side(), placements = new Set([before]), start = performance.now();
-          let covered = 0, samples = 0;
+          let covered = 0, samples = 0, firstFailureAt = null;
           const watch = setInterval(() => {
             placements.add(p.side()); samples++;
+            if (p.measure(rows - 1).overlap || p.side() !== before) firstFailureAt ??= performance.now() - start;
             if (p.measure(rows - 1).overlap) covered++;
           }, 10);
           try {
@@ -174,7 +179,7 @@ window.noticeOccupancyCases = async (mode, kind) => {
               await p.move(rows - 1); await noticePause(interval);
             }
           } finally { clearInterval(watch); }
-          const stable = { rows, interval, before, covered, samples, ...stopFrames(),
+          const stable = { rows, interval, before, covered, samples, firstFailureAt, ...stopFrames(),
             placements: [...placements], elapsed: performance.now() - start };
           await p.move(0); await noticePause(1050);
           results.push({ ...stable, final: p.measure() });

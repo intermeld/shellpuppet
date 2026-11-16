@@ -316,6 +316,8 @@ it('fits a settled layout once per free pane, keeps the floor, and stops when sw
 
 it('takes a newly arrived pane within three seconds during ten seconds of session churn', async (context) => {
   if (!browser) { context.skip(); return; }
+  const attempts: { takeDelay: number | undefined; gap: number; frames: number }[] = [];
+  for (let attempt = 0; attempt < 2; attempt++) {
   const urls: string[] = [];
   const daemon = running = await startTestDaemon({
     launcher: (url) => { urls.push(url); return Promise.resolve({ launched: true, mode: 'isolated-app', browser: 'mock' }); },
@@ -341,19 +343,6 @@ it('takes a newly arrived pane within three seconds during ten seconds of sessio
     })()`,
     probe: `(() => document.getElementById('connection')?.textContent === 'Connected' && window.__feed ? true : null)()`,
     interact: async ({ evaluate }) => {
-      await evaluate(`(() => {
-        window.__churnChanges = 0;
-        const change = () => {
-          const index = ++window.__churnChanges;
-          const id = 'churn-' + Math.ceil(index / 2);
-          const frame = index % 2 === 1
-            ? { type: 'session-added', session: { id, label: id } }
-            : { type: 'session-removed', session: id };
-          window.__feed.onmessage({ data: JSON.stringify(frame) });
-        };
-        change();
-        window.__churnTimer = setInterval(change, 800);
-      })()`);
       const started = await api(daemon.port, daemon.token, '/sessions', { body: {
         command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], shell: false,
         openViewer: false, cols: 100, rows: 30,
@@ -374,36 +363,54 @@ it('takes a newly arrived pane within three seconds during ten seconds of sessio
         await waitFor('the arriving pane', () => document.querySelectorAll('.pane[data-session=${JSON.stringify(id)}]').length,
           count => count === 1);
         const arrivedAt = performance.now();
+        window.__churnChanges = 0;
+        const change = () => {
+          const index = ++window.__churnChanges;
+          const churnId = 'churn-' + Math.ceil(index / 2);
+          const frame = index % 2 === 1
+            ? { type: 'session-added', session: { id: churnId, label: churnId } }
+            : { type: 'session-removed', session: churnId };
+          window.__feed.onmessage({ data: JSON.stringify(frame) });
+        };
+        change();
+        window.__churnTimer = setInterval(change, 800);
         await waitFor('13 churn changes over ten seconds', () => window.__churnChanges, count => count >= 13);
         clearInterval(window.__churnTimer);
         const takes = window.__takes.filter(frame => frame.url.includes(${JSON.stringify(id)}) && frame.take);
         const until = takes[0]?.at ?? performance.now();
-        let maxFrameGap = 0, measuredFrames = 0;
+        let maxFrameGap = 0, measuredFrames = 0, decisionGap = 0;
         for (let index = 1; index < window.__takeFrames.length; index++) {
           const previous = window.__takeFrames[index - 1], current = window.__takeFrames[index];
           if (current >= arrivedAt && previous <= until) {
             measuredFrames++;
             maxFrameGap = Math.max(maxFrameGap, current - previous);
           }
+          if (previous < arrivedAt + 3000 && current > arrivedAt &&
+              previous < until) decisionGap = Math.max(decisionGap, current - previous);
         }
         return { arrivedAt, changes: window.__churnChanges,
-          takes, maxFrameGap, measuredFrames };
-      })()`) as { arrivedAt: number; changes: number; takes: { at: number }[]; maxFrameGap: number; measuredFrames: number };
+          takes, maxFrameGap, measuredFrames, decisionGap };
+      })()`) as { arrivedAt: number; changes: number; takes: { at: number }[]; maxFrameGap: number; measuredFrames: number; decisionGap: number };
       return measured;
     },
   });
   const result = shot.probe as { arrivedAt: number; changes: number; takes: { at: number }[];
-    maxFrameGap: number; measuredFrames: number };
+    maxFrameGap: number; measuredFrames: number; decisionGap: number };
   const takeDelay = result.takes[0] === undefined ? undefined : result.takes[0].at - result.arrivedAt;
-  if (result.measuredFrames === 0 && (takeDelay === undefined || takeDelay > 3000))
-    context.skip('runner stalled: no delivered animation frames');
-  if (takeDelay !== undefined && takeDelay > 3000 &&
-      result.maxFrameGap >= Math.max(500, takeDelay - 3000))
-    context.skip(`runner stalled: ${String(result.maxFrameGap)} ms frame gap`);
+  attempts.push({ takeDelay, gap: result.decisionGap, frames: result.measuredFrames });
+  const failed = result.changes < 13 || result.takes.length === 0 || takeDelay === undefined || takeDelay > 3000;
+  const excused = failed && (result.measuredFrames === 0 || result.decisionGap >= 500);
+  if (excused && attempt === 0) {
+    console.log(`TIMING_RETRY dashboard-auto-fit: ${JSON.stringify(attempts)}`);
+    await daemon.stop(); running = null; continue;
+  }
+  if (excused && attempt === 1) throw new Error(`runner stalled twice during Auto fit decision: ${JSON.stringify(attempts)}`);
   expect(result.changes).toBeGreaterThanOrEqual(13);
   expect(result.takes.length, JSON.stringify(result)).toBeGreaterThan(0);
   expect(takeDelay, JSON.stringify(result)).toBeLessThanOrEqual(3000);
-}, 150_000);
+  return;
+  }
+}, 240_000);
 
 it.each([true, false])('focus profile keeps one floor-sized fit with Auto fit %s', async (enabled) => {
   if (!browser) return;

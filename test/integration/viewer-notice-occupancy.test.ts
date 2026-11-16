@@ -20,12 +20,39 @@ afterAll(() => { fs.rmSync(scratch, { recursive: true, force: true }); });
 interface Placement { overlap: boolean }
 interface Occupancy {
   samples: number; covered: number; placements: string[]; rects: number; final: Placement;
+  firstFailureAt: number | null; stalls: { from: number; to: number; gap: number }[];
   frames: number; frameInterval: number; maxFrameGap: number; frameSpan: number; observedMs: number;
   lower: Placement; upper: Placement; edge: Placement; font: Placement; limit: Placement; scale: Placement;
   shown: Placement; fitted: Placement; resized: Placement;
 }
 interface Pending { frames: number; timers: number; listeners: number; observers: number; callbacks: number }
 interface Disposal { pending: string; before: Pending; immediate: Pending; after: Pending; repeated: Pending }
+
+function occupancyFailures(result: Occupancy, kind: string): string[] {
+  const failures: string[] = [];
+  const check = (name: string, assertion: () => void) => {
+    try { assertion(); } catch { failures.push(name); }
+  };
+  if (kind === 'quiet') {
+    for (const key of ['lower', 'upper', 'edge', 'font', 'limit', 'scale'] as const)
+      check(key, () => expect(result[key].overlap).toBe(false));
+  } else {
+    check('samples', () => expect(result.samples).toBeGreaterThan(0));
+    check('frames', () => expect(result.frames).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200)));
+    check('frame interval', () => expect(result.frameInterval).toBeLessThan(200));
+    check('frame span', () => expect(result.frameSpan).toBeGreaterThan(2500));
+    check('observed span', () => expect(result.observedMs - result.frameSpan).toBeLessThan(500));
+    check('uncovered', () => expect(result.covered).toBe(0));
+    check('placement', () => expect(result.placements).toEqual(['top']));
+    if (kind === 'dominant') {
+      check('rectangles', () => expect(result.rects).toBeLessThan(20));
+      for (const key of ['shown', 'fitted', 'resized'] as const)
+        check(key, () => expect(result[key].overlap).toBe(false));
+    } else check('final overlap', () => expect(result.final.overlap).toBe(false));
+  }
+  if (kind !== 'quiet' && result.frames < 2) failures.push('no delivered animation frames');
+  return failures;
+}
 
 async function run<T>(mode: string, expression: string): Promise<T[]> {
   const url = (relative: string): string => new URL(relative, import.meta.url).href;
@@ -54,34 +81,29 @@ describe.each(['viewer', 'dashboard'])('%s notice occupancy', mode => {
     it(`keeps the resting row uncovered during ${kind}`, async context => {
       if (!browser) { context.skip(); return; }
       const results = await run<Occupancy>(mode, `noticeOccupancyCases(${JSON.stringify(mode)}, ${JSON.stringify(kind)})`);
-      const stalled = kind === 'quiet' ? undefined : results.find(result => result.frames < 2 || result.maxFrameGap >= 500);
-      if (stalled) context.skip(stalled.frames < 2 ? 'runner stalled: no delivered animation frames' :
-        `runner stalled: ${String(stalled.maxFrameGap)} ms frame gap`);
-      for (const result of results) {
-        const details = JSON.stringify(result);
-        if (kind === 'quiet') {
-          for (const key of ['lower', 'upper', 'edge', 'font', 'limit', 'scale'] as const) {
-            expect.soft(result[key].overlap, `${key}: ${details}`).toBe(false);
-          }
-        } else {
-          expect.soft(result.samples, details).toBeGreaterThan(0);
-          expect.soft(result.frames, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
-          expect.soft(result.frameInterval, details).toBeLessThan(200);
-          expect.soft(result.maxFrameGap, details).toBeLessThan(500);
-          expect.soft(result.frameSpan, details).toBeGreaterThan(2500);
-          expect.soft(result.observedMs - result.frameSpan, details).toBeLessThan(500);
-          expect.soft(result.covered, details).toBe(0);
-          expect.soft(result.placements, details).toEqual(['top']);
-          if (kind === 'dominant') {
-            expect.soft(result.rects, details).toBeLessThan(20);
-            for (const key of ['shown', 'fitted', 'resized'] as const) {
-              expect.soft(result[key].overlap, `${key}: ${details}`).toBe(false);
-            }
-          }
-          else expect.soft(result.final.overlap, details).toBe(false);
+      const pending = results.map((result, index) => ({ result, index, failures: occupancyFailures(result, kind) }))
+        .filter(item => item.failures.length > 0);
+      const excused = pending.filter(item => kind !== 'quiet' &&
+        (item.result.frames < 2 || item.result.stalls.some(gap =>
+          gap.from <= (item.result.firstFailureAt ?? item.result.observedMs))) &&
+        item.failures.every(failure => ['samples', 'frames', 'frame interval', 'frame span', 'observed span',
+          'uncovered', 'placement', 'no delivered animation frames'].includes(failure)));
+      const unexcused = pending.filter(item => !excused.includes(item));
+      expect(unexcused, JSON.stringify(unexcused)).toEqual([]);
+      if (excused.length) {
+        console.log(`TIMING_RETRY viewer-notice-occupancy ${mode} ${kind}: ${excused.map(item => String(item.index)).join(', ')}`);
+        const repeated = await run<Occupancy>(mode, `noticeOccupancyCases(${JSON.stringify(mode)}, ${JSON.stringify(kind)})`);
+        for (const item of excused) {
+          const retry = repeated[item.index];
+          expect(retry, `missing repeat for occupancy case ${String(item.index)}`).toBeDefined();
+          const retryFailures = occupancyFailures(retry!, kind);
+          if (retryFailures.length && (retry!.frames < 2 || retry!.stalls.some(gap =>
+            gap.from <= (retry!.firstFailureAt ?? retry!.observedMs))))
+            throw new Error(`runner stalled twice in occupancy case ${String(item.index)}: ${String(item.result.maxFrameGap)} ms, ${String(retry!.maxFrameGap)} ms; ${retryFailures.join(', ')}`);
+          expect(retryFailures, JSON.stringify({ original: item.result, retry })).toEqual([]);
         }
       }
-    }, 210_000);
+    }, 420_000);
   }
   it('cancels pending work and disposes listeners at destroy and every session end', async context => {
     if (!browser) { context.skip(); return; }
