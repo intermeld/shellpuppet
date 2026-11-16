@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { captureViewer } from '../../src/daemon/screenshot.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
 import { noticeFrameLimitScript } from './noticeFrameLimit.js';
+import { decisionStall } from './decision-stall.js';
 
 let browser: string | null;
 let scratch: string;
@@ -20,7 +21,7 @@ afterAll(() => { fs.rmSync(scratch, { recursive: true, force: true }); });
 interface Placement { overlap: boolean }
 interface Occupancy {
   samples: number; covered: number; placements: string[]; rects: number; final: Placement;
-  firstFailureAt: number | null; stalls: { from: number; to: number; gap: number }[];
+  firstSampleAt: number | null; firstFailureAt: number | null; stalls: { from: number; to: number; gap: number }[];
   frames: number; frameInterval: number; maxFrameGap: number; frameSpan: number; observedMs: number;
   lower: Placement; upper: Placement; edge: Placement; font: Placement; limit: Placement; scale: Placement;
   shown: Placement; fitted: Placement; resized: Placement;
@@ -83,24 +84,30 @@ describe.each(['viewer', 'dashboard'])('%s notice occupancy', mode => {
       const results = await run<Occupancy>(mode, `noticeOccupancyCases(${JSON.stringify(mode)}, ${JSON.stringify(kind)})`);
       const pending = results.map((result, index) => ({ result, index, failures: occupancyFailures(result, kind) }))
         .filter(item => item.failures.length > 0);
-      const excused = pending.filter(item => kind !== 'quiet' &&
-        (item.result.frames < 2 || item.result.stalls.some(gap =>
-          gap.from <= (item.result.firstFailureAt ?? item.result.observedMs))) &&
+      const classified = pending.map(item => ({ ...item, excuse: kind === 'quiet' ? null : decisionStall(
+        item.result.stalls, item.result.frames, kind === 'dominant' ? 2517 : item.result.firstSampleAt ?? NaN,
+        item.result.firstFailureAt ?? item.result.observedMs,
+      ) }));
+      const inconclusive = classified.filter(item => item.excuse === 'inconclusive');
+      if (inconclusive.length) throw new Error(`inconclusive: no frames observed in occupancy cases ${JSON.stringify(inconclusive)}`);
+      const excused = classified.filter(item => item.excuse &&
         item.failures.every(failure => ['samples', 'frames', 'frame interval', 'frame span', 'observed span',
-          'uncovered', 'placement', 'no delivered animation frames'].includes(failure)));
-      const unexcused = pending.filter(item => !excused.includes(item));
+          'uncovered', 'placement'].includes(failure)));
+      const unexcused = classified.filter(item => !excused.includes(item));
       expect(unexcused, JSON.stringify(unexcused)).toEqual([]);
       if (excused.length) {
-        console.log(`TIMING_RETRY viewer-notice-occupancy ${mode} ${kind}: ${excused.map(item => String(item.index)).join(', ')}`);
+        console.log(`TIMING_RETRY viewer-notice-occupancy ${mode} ${kind}: ${JSON.stringify(excused.map(item => ({ index: item.index, failures: item.failures, gap: item.excuse })))}`);
         const repeated = await run<Occupancy>(mode, `noticeOccupancyCases(${JSON.stringify(mode)}, ${JSON.stringify(kind)})`);
         for (const item of excused) {
           const retry = repeated[item.index];
           expect(retry, `missing repeat for occupancy case ${String(item.index)}`).toBeDefined();
           const retryFailures = occupancyFailures(retry!, kind);
-          if (retryFailures.length && (retry!.frames < 2 || retry!.stalls.some(gap =>
-            gap.from <= (retry!.firstFailureAt ?? retry!.observedMs))))
-            throw new Error(`runner stalled twice in occupancy case ${String(item.index)}: ${String(item.result.maxFrameGap)} ms, ${String(retry!.maxFrameGap)} ms; ${retryFailures.join(', ')}`);
-          expect(retryFailures, JSON.stringify({ original: item.result, retry })).toEqual([]);
+          const secondGap = decisionStall(retry!.stalls, retry!.frames,
+            kind === 'dominant' ? 2517 : retry!.firstSampleAt ?? NaN,
+            retry!.firstFailureAt ?? retry!.observedMs);
+          if (secondGap === 'inconclusive') throw new Error(`inconclusive: no frames observed in occupancy retry case ${String(item.index)}; first: ${JSON.stringify({ failures: item.failures, gap: item.excuse })}; second: ${JSON.stringify(retry)}`);
+          if (retryFailures.length) throw new Error(`occupancy retry failed in case ${String(item.index)}: ${JSON.stringify({ firstFailures: item.failures, firstGap: item.excuse, secondFailures: retryFailures, secondGap, retry })}`);
+          console.log(`TIMING_RESULT viewer-notice-occupancy ${mode} ${kind}: ${JSON.stringify({ firstFailures: item.failures, firstGap: item.excuse, secondFailures: retryFailures })}`);
         }
       }
     }, 420_000);

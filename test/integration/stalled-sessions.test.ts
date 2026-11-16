@@ -14,6 +14,7 @@ import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js';
 import { registerTools } from '../../src/mcp/tools.js';
 import type { SessionManager } from '../../src/core/manager.js';
 import { stallDiagnostics } from './stall-diagnostics.js';
+import { decisionStall } from './decision-stall.js';
 
 const run = promisify(execFile);
 let td: TestDaemon;
@@ -219,8 +220,6 @@ describe('provider stall supervision', () => {
     }
   });
   it('clears a genuine native composer loss during the delayed growth allowance', async () => {
-    const attempts: number[] = [];
-    for (let attempt = 0; attempt < 2; attempt++) {
     const started = await api(td.port, td.token, '/sessions', {
       body: { command: process.execPath, args: [path.join(repoRoot, 'test/fixtures/clipped-stalled-screen.mjs'),
         '--chunk-delays', '--end-on-growth'], shell: false, agent: 'mimo', cols: 120, rows: 30 },
@@ -250,12 +249,11 @@ describe('provider stall supervision', () => {
       if (process.env['SP_STALL_TIMINGS'] === '1') console.log('Native genuine end timing:', JSON.stringify({ clearMs: elapsed }));
     } catch (error) { diagnostics.print(); throw error; }
     finally { off(); diagnostics.stop(); }
-    // The resize and the product's synchronous work share this event loop.
-    // Its lag cannot distinguish runner load from a broken redraw path.
-    attempts.push(elapsed);
-    if (elapsed < 1500) return;
-    if (attempt === 1) throw new Error(`native composer clear exceeded 1,500 ms twice: ${attempts.map(value => Math.round(value)).join(', ')} ms`);
-    console.log(`TIMING_RETRY stalled-sessions: ${String(Math.round(elapsed))} ms`);
+    // The resize and product work share this event loop, so it cannot measure
+    // runner lag independently. An unmeasured late clear cannot be retried.
+    if (elapsed >= 1500) {
+      const attribution = decisionStall([], 0, 0, 1500);
+      throw new Error(`native composer clear exceeded 1,500 ms: ${String(Math.round(elapsed))} ms; ${attribution === 'inconclusive' ? 'inconclusive: no frames observed' : JSON.stringify(attribution)}`);
     }
   });
   it('announces a responsive native composer once across resize and grey suggestions', async () => {

@@ -4,6 +4,7 @@ import { findBrowser } from '../../src/daemon/viewerLauncher.js';
 import { parseDaemonConfig } from '../../src/daemon/config.js';
 import { api, eventually, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
+import { decisionStall } from './decision-stall.js';
 
 let running: TestDaemon | null = null;
 
@@ -316,7 +317,7 @@ it('fits a settled layout once per free pane, keeps the floor, and stops when sw
 
 it('takes a newly arrived pane within three seconds during ten seconds of session churn', async (context) => {
   if (!browser) { context.skip(); return; }
-  const attempts: { takeDelay: number | undefined; gap: number; frames: number }[] = [];
+  const attempts: { takeDelay: number | undefined; gap: { from: number; to: number; gap: number } | null; frames: number }[] = [];
   for (let attempt = 0; attempt < 2; attempt++) {
   const urls: string[] = [];
   const daemon = running = await startTestDaemon({
@@ -378,36 +379,44 @@ it('takes a newly arrived pane within three seconds during ten seconds of sessio
         clearInterval(window.__churnTimer);
         const takes = window.__takes.filter(frame => frame.url.includes(${JSON.stringify(id)}) && frame.take);
         const until = takes[0]?.at ?? performance.now();
-        let maxFrameGap = 0, measuredFrames = 0, decisionGap = 0;
+        let maxFrameGap = 0, measuredFrames = 0;
+        const decisionGaps = [];
         for (let index = 1; index < window.__takeFrames.length; index++) {
           const previous = window.__takeFrames[index - 1], current = window.__takeFrames[index];
           if (current >= arrivedAt && previous <= until) {
             measuredFrames++;
             maxFrameGap = Math.max(maxFrameGap, current - previous);
           }
-          if (previous < arrivedAt + 3000 && current > arrivedAt &&
-              previous < until) decisionGap = Math.max(decisionGap, current - previous);
+          if (previous < arrivedAt + 3000 && current > arrivedAt && previous < until)
+            decisionGaps.push({ from: previous, to: current, gap: current - previous });
         }
         return { arrivedAt, changes: window.__churnChanges,
-          takes, maxFrameGap, measuredFrames, decisionGap };
-      })()`) as { arrivedAt: number; changes: number; takes: { at: number }[]; maxFrameGap: number; measuredFrames: number; decisionGap: number };
+          takes, maxFrameGap, measuredFrames, decisionGaps };
+      })()`) as { arrivedAt: number; changes: number; takes: { at: number }[]; maxFrameGap: number; measuredFrames: number;
+        decisionGaps: { from: number; to: number; gap: number }[] };
       return measured;
     },
   });
   const result = shot.probe as { arrivedAt: number; changes: number; takes: { at: number }[];
-    maxFrameGap: number; measuredFrames: number; decisionGap: number };
+    maxFrameGap: number; measuredFrames: number; decisionGaps: { from: number; to: number; gap: number }[] };
   const takeDelay = result.takes[0] === undefined ? undefined : result.takes[0].at - result.arrivedAt;
-  attempts.push({ takeDelay, gap: result.decisionGap, frames: result.measuredFrames });
   const failed = result.changes < 13 || result.takes.length === 0 || takeDelay === undefined || takeDelay > 3000;
-  const excused = failed && (result.measuredFrames === 0 || result.decisionGap >= 500);
+  if (failed && result.measuredFrames === 0)
+    throw new Error(`inconclusive: no frames observed during Auto fit decision; ${JSON.stringify(result)}`);
+  const gap = decisionStall(result.decisionGaps, result.measuredFrames, result.arrivedAt, result.arrivedAt + 3000);
+  attempts.push({ takeDelay, gap: gap === 'inconclusive' ? null : gap, frames: result.measuredFrames });
+  const excused = failed && result.changes >= 13 && gap !== null && gap !== 'inconclusive';
+  const details = JSON.stringify({ takeDelay, changes: result.changes, maxFrameGap: result.maxFrameGap,
+    measuredFrames: result.measuredFrames, decisionGap: gap });
   if (excused && attempt === 0) {
     console.log(`TIMING_RETRY dashboard-auto-fit: ${JSON.stringify(attempts)}`);
     await daemon.stop(); running = null; continue;
   }
   if (excused && attempt === 1) throw new Error(`runner stalled twice during Auto fit decision: ${JSON.stringify(attempts)}`);
   expect(result.changes).toBeGreaterThanOrEqual(13);
-  expect(result.takes.length, JSON.stringify(result)).toBeGreaterThan(0);
-  expect(takeDelay, JSON.stringify(result)).toBeLessThanOrEqual(3000);
+  expect(result.takes.length, details).toBeGreaterThan(0);
+  expect(takeDelay, details).toBeLessThanOrEqual(3000);
+  if (attempt === 1) console.log(`TIMING_RESULT dashboard-auto-fit: ${JSON.stringify(attempts)}`);
   return;
   }
 }, 240_000);
