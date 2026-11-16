@@ -2,8 +2,12 @@
 
 ## Session messages
 
-Messaging starts off. Once the daemon has `messaging.enabled: true` and an
-allow rule, a session may use `session_send(to, text)` and read its own
+Messaging starts off. The `session_*` tools below are offered only by an MCP
+server that started while `messaging.enabled` was `true` in `config.json`; with
+messaging off, the server offers only the `terminal_*` tools. After switching
+messaging on, restart the MCP client (for example, the agent CLI) to see them.
+Once the daemon has `messaging.enabled: true` and an allow rule, a session may
+use `session_send(to, text)` and read its own
 `session_inbox(markRead?, limit?)` or `session_outbox(limit?)`.
 `session_directory()` lists only live names that policy permits it to address.
 `session_wait_message(from?, timeoutMs?)` waits for the next unread message

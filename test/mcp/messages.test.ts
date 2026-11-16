@@ -24,6 +24,37 @@ describe('peer message result', () => {
   });
 });
 
+describe('message tool registration', () => {
+  const SESSION_TOOLS = ['session_claim', 'session_directory', 'session_inbox', 'session_outbox',
+    'session_release', 'session_send', 'session_wait_message'];
+  const registered = (messaging: boolean | undefined): Map<string, { inputSchema?: unknown }> => {
+    const specs = new Map<string, { inputSchema?: unknown }>();
+    const server = { registerTool(name: string, spec: { inputSchema?: unknown }) {
+      specs.set(name, spec); return {};
+    } } as unknown as McpServer;
+    registerTools(server, messaging === undefined ? {} : { messaging });
+    return specs;
+  };
+
+  it('offers no session tools while messaging is off', () => {
+    for (const setting of [undefined, false]) {
+      const names = [...registered(setting).keys()];
+      expect(names.filter((name) => name.startsWith('session_'))).toEqual([]);
+      expect(names.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('offers every session tool with a strict parameter schema when messaging is on', () => {
+    const specs = registered(true);
+    expect([...specs.keys()].filter((name) => name.startsWith('session_')).sort()).toEqual(SESSION_TOOLS);
+    for (const name of SESSION_TOOLS) {
+      const schema = specs.get(name)?.inputSchema as { safeParse?: (value: unknown) => { success: boolean } };
+      expect(typeof schema?.safeParse, name).toBe('function');
+      expect(schema.safeParse!({ unexpected: true }).success, name).toBe(false);
+    }
+  });
+});
+
 describe('message tools through the daemon', () => {
   it('recovers a held claim after a daemon restart and can claim again', async () => {
     const home = makeTempHome('message-claim-restart-');
@@ -35,7 +66,7 @@ describe('message tools through the daemon', () => {
     const server = { registerTool(name: string, _spec: unknown, handler: Handler) {
       handlers.set(name, handler); return {};
     } } as unknown as McpServer;
-    registerTools(server, { home, actor: 'mcp:restart' });
+    registerTools(server, { home, actor: 'mcp:restart', messaging: true });
     const invoke = async (name: string, input: Record<string, unknown> = {}): Promise<Result> =>
       handlers.get(name)!(input, { signal: new AbortController().signal });
     let second: Awaited<ReturnType<typeof startTestDaemon>> | undefined;
@@ -65,7 +96,7 @@ describe('message tools through the daemon', () => {
       handlers.set(name, handler);
       return {};
     } } as unknown as McpServer;
-    registerTools(server, { home: td.home, actor: 'mcp:test' });
+    registerTools(server, { home: td.home, actor: 'mcp:test', messaging: true });
     const invoke = async (name: string, input: Record<string, unknown> = {}): Promise<Result> =>
       handlers.get(name)!(input, { signal: new AbortController().signal });
     try {
