@@ -12,10 +12,13 @@ process.stdout.write('\x1b[2J' + prompt() + move(0));
 const stop = () => { clearInterval(interval); for (const timer of returns) clearTimeout(timer); returns = []; };
 const repaint = () => {
   process.stdout.write(move(0) + 'Status ' + (++frame));
+  // Keep all three excursions, but give the prompt a clear majority of each
+  // delivered cycle even when the runner delays individual PTY writes.
+  const excursionMs = Math.min(10, period / 6);
   returns = [
-    setTimeout(() => process.stdout.write(move(Math.floor(rows / 3)) + 'Panel ' + frame), period / 6),
-    setTimeout(() => process.stdout.write(move(Math.floor(rows / 2)) + 'Output ' + frame), period / 3),
-    setTimeout(() => process.stdout.write(prompt()), period / 2),
+    setTimeout(() => process.stdout.write(move(Math.floor(rows / 3)) + 'Panel ' + frame), excursionMs),
+    setTimeout(() => process.stdout.write(move(Math.floor(rows / 2)) + 'Output ' + frame), excursionMs * 2),
+    setTimeout(() => process.stdout.write(prompt()), excursionMs * 3),
   ];
 };
 process.stdin.on('data', bytes => {

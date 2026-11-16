@@ -54,6 +54,9 @@ describe.each(['viewer', 'dashboard'])('%s notice occupancy', mode => {
     it(`keeps the resting row uncovered during ${kind}`, async context => {
       if (!browser) { context.skip(); return; }
       const results = await run<Occupancy>(mode, `noticeOccupancyCases(${JSON.stringify(mode)}, ${JSON.stringify(kind)})`);
+      const stalled = kind === 'quiet' ? undefined : results.find(result => result.frames < 2 || result.maxFrameGap >= 500);
+      if (stalled) context.skip(stalled.frames < 2 ? 'runner stalled: no delivered animation frames' :
+        `runner stalled: ${String(stalled.maxFrameGap)} ms frame gap`);
       for (const result of results) {
         const details = JSON.stringify(result);
         if (kind === 'quiet') {

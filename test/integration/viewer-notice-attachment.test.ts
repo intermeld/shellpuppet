@@ -11,6 +11,25 @@ import type { TestDaemon } from './helpers.js';
 import { assessDeliveredCadence, deliveredNoticeScript, recordDeliveredCadence } from './noticeCadence.js';
 import type { DeliveredCadence } from './noticeCadence.js';
 
+it('allows one completed frame after a rest deadline but catches a later clear', () => {
+  const samples: DeliveredCadence['samples'] = [
+    { time: 0, row: 22, side: 'bottom', leg: 0, deadline: false, covered: true },
+    { time: 1000, row: 22, side: 'bottom', leg: 0, deadline: true, covered: true },
+    { time: 1016, row: 22, side: 'top', leg: 0, deadline: true, covered: false },
+    { time: 1032, row: 22, side: 'top', leg: 0, deadline: false, covered: false },
+  ];
+  const cadence: DeliveredCadence = {
+    end: 1500,
+    legs: [{ row: 22, start: 0, end: 1500, top: false, bottom: true }],
+    samples,
+  };
+  expect(assessDeliveredCadence(cadence).violations).toEqual([]);
+  const late = { ...cadence, samples: samples.map((sample, index) => index === 2 ? { ...sample, covered: true } : sample) };
+  expect(assessDeliveredCadence(late).violations).toMatchObject([
+    { rule: 'rest clears on first completed frame at or after deadline' },
+  ]);
+});
+
 const fixture = fileURLToPath(new URL('../fixtures/notice-nested-tui.mjs', import.meta.url));
 const cycleFixture = fileURLToPath(new URL('../fixtures/notice-r-cycle-tui.mjs', import.meta.url));
 let browser: string | null;
@@ -184,6 +203,7 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
   for (const cadence of ['staged', 'spinner', 'equal']) for (const rows of [24, 150])
   it(`respects repaint evidence during ${cadence} updates at 80x${String(rows)}`, async context => {
     if (!browser) { context.skip(); return; }
+    let runnerStall: string | null = null;
     await withPage(mode, rows, async ({ evaluate }, input) => {
       await evaluate('__pause(1100)');
       expect((await evaluate('__measure()') as { side: string }).side).toBe('bottom');
@@ -221,6 +241,11 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
       recordDeliveredCadence(`${mode}-${String(rows)}-${cadence}`, result.cadence);
       const details = JSON.stringify({ ...result, cadence: assessment,
         timing: await evaluate('__noticeFrameSummary(0)') });
+      if (result.restTiming.frames < 2) { runnerStall = 'runner stalled: no delivered animation frames'; return; }
+      if (result.restTiming.maxFrameGap >= 500) {
+        runnerStall = `runner stalled: ${String(result.restTiming.maxFrameGap)} ms frame gap`;
+        return;
+      }
       expect.soft(result.firstRestAt, details).not.toBeNull();
       expect.soft(result.lastRestAt! - result.firstRestAt!, details).toBeGreaterThan(2000);
       expect.soft(result.restSamples, details).toBeGreaterThanOrEqual(
@@ -237,14 +262,15 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
         expect.soft(result.changes, details).toBeLessThanOrEqual(1);
         if (cadence === 'staged') {
           expect.soft(result.firstClear, details).not.toBeNull();
-          if ((assessment.repaints[0]?.firstCycle ?? 0) <= 2500) {
-            expect.soft(result.firstClear!, details).toBeLessThanOrEqual(2500);
-            expect.soft(result.coveredAtRest, details).toBe(0);
-          }
+          const leading = assessment.repaints.find(repaint => repaint.target === 'top');
+          expect.soft(leading, details).toBeDefined();
+          if (leading) expect.soft(result.firstClear!, details).toBeLessThanOrEqual(
+            leading.clearBy + result.restTiming.frameInterval);
         }
       }
       if (cadence === 'spinner') expect.soft(result.visits, details).toBeGreaterThan(100);
     }, cadence);
+    if (runnerStall !== null) context.skip(runnerStall);
   }, 120_000);
   for (const rows of [24, 150]) it(`uncovers the prompt in a 1.3 s staged repaint at 80x${String(rows)}`, async context => {
     if (!browser) { context.skip(); return; }

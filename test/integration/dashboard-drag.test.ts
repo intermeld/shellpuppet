@@ -293,7 +293,17 @@ it('keeps a Focus drag alive through relayout and announces its pixel value', as
         value: d.getAttribute('aria-valuenow'), min: d.getAttribute('aria-valuemin'),
         max: d.getAttribute('aria-valuemax'), text: d.getAttribute('aria-valuetext') }; })()`);
     await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: first.x - 220, y: first.y, button: 'left', clickCount: 1 });
-    await new Promise(resolve => setTimeout(resolve, 350));
+    await evaluate(`(async () => {
+      const deadline = performance.now() + 5000;
+      while (performance.now() < deadline) {
+        const divider = document.querySelector('.pane-divider[data-axis="focus"]');
+        if (!divider.classList.contains('dragging') &&
+            sessionStorage.getItem('shellpuppet.dashboard.tracks')?.includes('focusStrip') &&
+            window.__resizes.length > 0) return;
+        await new Promise(resolve => setTimeout(resolve, 25));
+      }
+      throw new Error('The Focus drag did not settle after release');
+    })()`);
     const released = await evaluate(`(() => ({ stored: sessionStorage.getItem('shellpuppet.dashboard.tracks'),
       dragging: document.querySelector('.pane-divider[data-axis="focus"]').classList.contains('dragging'),
       frames: window.__resizes.length }))()`);
@@ -449,7 +459,7 @@ for (const eventType of ['pagehide', 'beforeunload'] as const) {
         await send('Target.closeTarget', { targetId }, true);
       }
       return { during, ended, repeated };
-    }, eventType === 'beforeunload');
+    }, true);
     const result = shot.probe as { during: { width: number; listeners: number; saves: number };
       ended: { width: number; stored: number | null; dragging: boolean; listeners: number; captured: boolean; saves: number };
       repeated: { saves: number; listeners: number } };
