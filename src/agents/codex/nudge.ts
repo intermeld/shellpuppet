@@ -12,7 +12,17 @@ const PLACEHOLDER = 'Ask Codex to do anything';
  * second composer row, so any other text under the composer is unknown.
  */
 const MODEL_STATUS = /^ {2}GPT-\S+ high\s+·\s+Context \d+% left\s+·\s+weekly \d+% left\b/u;
-const SHORTCUTS = /^\s*\? for shortcuts\s*$/u;
+const SHORTCUTS = /^\s*(?:← for agents\s+·\s+)?\? for shortcuts\s*$/u;
+
+/**
+ * A status-shaped row is the footer only when nothing but blank rows and the
+ * shortcuts hint follows it. Draft text shaped like the status row has more
+ * text, or the real footer, below it, so it stays part of the composer.
+ */
+function isFooter(line: StyledLine, below: readonly StyledLine[]): boolean {
+  if (!SHORTCUTS.test(line.text) && !MODEL_STATUS.test(line.text)) return false;
+  return below.every((row) => row.text.trim() === '' || SHORTCUTS.test(row.text));
+}
 
 function placeholderInk(line: StyledLine): boolean {
   const body = bodyStyles(line);
@@ -25,6 +35,6 @@ export function readiness(view: NudgeView): NudgeReadiness {
     continuations: true,
     placeholderInk,
     unprovenContinuations: true,
-    status: (line) => SHORTCUTS.test(line.text) || MODEL_STATUS.test(line.text),
+    status: isFooter,
   });
 }

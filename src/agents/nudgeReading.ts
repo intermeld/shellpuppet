@@ -20,7 +20,12 @@ export interface ReadingNudgeRule {
    */
   placeholderInk: (line: StyledLine) => boolean;
   /** A status row that ends the input region and is not composer text. */
-  status?: (line: StyledLine) => boolean;
+  /**
+   * A status row that ends the composer. It receives the rows below so a
+   * module can require that the row really is the footer, not draft text
+   * shaped like it.
+   */
+  status?: (line: StyledLine, below: readonly StyledLine[]) => boolean;
   /**
    * A non-blank row before the status is not a proven continuation.
    * It is unknown, never ready.
@@ -128,7 +133,7 @@ function composerRegion(
     const line = lines[i];
     if (line === undefined) break;
     if (frame !== null && line.wrapped !== true && frame.test(line.text)) break;
-    if (rule.status?.(line) === true) break;
+    if (rule.status?.(line, lines.slice(i + 1)) === true) break;
     if (rule.unprovenContinuations === true && line.text.trim() !== '') {
       return { rows, unproven: true };
     }
