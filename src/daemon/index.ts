@@ -44,6 +44,7 @@ async function main(): Promise<void> {
     home,
     logger,
     audit: createAuditor(home, { captureContent: config.audit?.captureContent ?? false }, logger),
+    ...(config.messaging !== undefined ? { messaging: config.messaging } : {}),
     ...(config.policy !== undefined ? { policy: config.policy } : {}),
     ...(config.sessionEnv !== undefined ? { sessionEnv: config.sessionEnv } : {}),
     ...(config.idleMinutes !== undefined ? { idleMs: config.idleMinutes * 60_000 } : {}),

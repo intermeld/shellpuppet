@@ -15,6 +15,7 @@ export type FeedFrame =
 const trackedFields = [
   'cols', 'rows', 'geometryHeld', 'ready', 'readyReason', 'watchers',
   'label', 'purpose', 'exited', 'exitCode', 'waitingOnPrompt', 'stalled',
+  'name',
 ] as const;
 
 export function changedFields(before: FeedSummary, after: FeedSummary): string[] {

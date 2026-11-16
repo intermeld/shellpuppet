@@ -333,9 +333,19 @@ message whom, and a clock.
 
 Who may message whom is configuration (`messaging` in config.json): off by
 default, then a session and the sessions it started, or named groups. The
-HTTP routes, the MCP tools, the CLI commands, the dashboard view and the
-typing of nudges arrive as separate work; this section describes the mailbox
-itself.
+dashboard view and the typing of nudges arrive as separate work.
+
+The daemon registers each started session in one mailbox and ends it on
+exit. The caller is a verified session identity or a claim proved by its id
+and secret; a client token alone cannot act as a messaging participant.
+The client-token HTTP routes are `POST /messages`, `GET /messages/inbox`,
+`GET /messages/outbox`, `GET /messages/directory`, `GET /messages/wait`,
+`POST /messages/claims`, `DELETE /messages/claims/:id` and
+`GET /messages/log`. Inbox and outbox return text only to a participant;
+the log returns retained text to the local owner through a participant identity.
+The CLI and MCP server are
+clients of these routes. Events contain message ids, participants and state,
+never text; audit contains ids, names and byte length, never text.
 
 ---
 

@@ -12,6 +12,7 @@
  */
 
 import { writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import process from 'node:process';
 import { DaemonGoneError, daemonStartMode, discoverDaemon, ensureDaemon, request, waitForPendingDaemon, withDaemonStartLock } from '../client/http.js';
@@ -142,6 +143,10 @@ Usage:
       start a daemon: one that has gone is reported as not running.
       stop: --hold [seconds] prevents auto-start for 120 s by default (1 to 600).
   shellpuppet mcp                                   Run the MCP stdio server (long-running)
+  shellpuppet msg send <to> <text|->                Send a message; - reads standard input
+  shellpuppet msg inbox|outbox|directory|wait      Read messages and live names
+  shellpuppet msg claim <name>|release|log         Manage an outside claim or inspect the log
+  shellpuppet inbox                                Alias for msg inbox
   shellpuppet --version | --help
 
 Any verb accepts --json for the raw API response.
@@ -191,6 +196,10 @@ const VALUE_FLAGS = new Set([
   'out',
   'width',
   'height',
+  'from',
+  'limit',
+  'participant',
+  'mark-read',
 ]);
 
 /**
@@ -332,6 +341,42 @@ async function main(): Promise<void> {
 
   const connection = await ensureDaemon({ logger: stderrLogger });
   surfaceWarnings(connection);
+
+  if (verb === 'msg' || verb === 'inbox') {
+    const sub = verb === 'inbox' ? 'inbox' : parsed.positionals[0];
+    const params = new URLSearchParams();
+    if (parsed.flags.has('limit')) params.set('limit', String(parsed.flags.get('limit')));
+    if (parsed.flags.has('from')) params.set('from', String(parsed.flags.get('from')));
+    if (parsed.flags.has('timeout')) params.set('timeoutMs', String(parsed.flags.get('timeout')));
+    if (parsed.flags.has('mark-read')) params.set('markRead', String(parsed.flags.get('mark-read')));
+    if (parsed.flags.has('participant')) params.set('participant', String(parsed.flags.get('participant')));
+    let payload: Body;
+    if (sub === 'send') {
+      const to = parsed.positionals[1] ?? fail(2, 'msg send needs a recipient.');
+      const input = parsed.positionals[2] ?? fail(2, 'msg send needs text or -.');
+      payload = await call(connection, 'POST', '/messages', { to, text: input === '-' ? readFileSync(0, 'utf8') : input });
+    } else if (sub === 'claim') {
+      const name = parsed.positionals[1] ?? fail(2, 'msg claim needs a name.');
+      payload = await call(connection, 'POST', '/messages/claims', { name });
+      if (!wantJson) {
+        const claim = `${String(payload['claimId'])}:${String(payload['secret'])}`;
+        console.log(`SHELLPUPPET_CLAIM=${claim}`);
+        console.log(`PowerShell: $env:SHELLPUPPET_CLAIM='${claim}'`);
+        console.log(`POSIX shell: export SHELLPUPPET_CLAIM='${claim}'`);
+        return;
+      }
+    } else if (sub === 'release') {
+      const match = process.env['SHELLPUPPET_CLAIM']?.match(/^(claim_[a-f0-9]{32}):.+$/);
+      if (match === undefined || match === null) fail(2, 'Set SHELLPUPPET_CLAIM before release.');
+      payload = await call(connection, 'DELETE', `/messages/claims/${match[1]}`);
+    } else if (['inbox', 'outbox', 'directory', 'wait', 'log'].includes(sub ?? '')) {
+      payload = await call(connection, 'GET', `/messages/${sub}?${params.toString()}`);
+    } else {
+      fail(2, 'msg needs send, inbox, outbox, directory, wait, claim, release or log.');
+    }
+    printJson(payload);
+    return;
+  }
 
   switch (verb) {
     case 'start': {

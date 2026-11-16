@@ -9,7 +9,8 @@ version may change behaviour, and every such change is listed here.
 
 ### Added
 
-- Keep messages for named participants in a mailbox core: names and claims, message states, per-recipient limits and the fixed nudge line, with a `messaging` section in `config.json` that says who may message whom. Off until it is switched on; the routes, tools and typing of nudges arrive separately.
+- Keep messages for named participants in a mailbox core: names and claims, message states, per-recipient limits and the fixed nudge line, with a `messaging` section in `config.json` that says who may message whom. Off until it is switched on; typing of nudges arrives separately.
+- Send and read session messages through daemon routes, MCP tools and CLI commands, with claims for outside callers and text-free audit and event records.
 - Give each session its own daemon instance identity and secret, verify its client calls,
   and show parent sessions in lists and the dashboard feed.
 - Judge whether a Claude Code, Codex, Qoder or Muse Code session is idle with an empty composer, so a later nudge can wait until the screen is quiet, not stalled and not asking for an answer. A module that cannot tell is left unknown.

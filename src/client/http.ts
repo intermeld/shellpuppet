@@ -102,6 +102,8 @@ export class DaemonNotAnsweringError extends Error {
 }
 
 export interface ClientOptions {
+  /** A claim held by this client process, as id:secret. */
+  claim?: string;
   home?: string;
   logger?: Logger;
   /** Override the daemon entry script: tests point this at fixtures. */
@@ -746,6 +748,8 @@ export async function request(
     const sessionInstance = process.env['SHELLPUPPET_DAEMON_INSTANCE'];
     const presentIdentity = session !== undefined && sessionToken !== undefined
       && sessionInstance !== undefined && sessionInstance === conn.instanceId;
+    const claim = options.claim ?? process.env['SHELLPUPPET_CLAIM'];
+    const claimParts = claim?.match(/^(claim_[a-f0-9]{32}):(.+)$/);
     const response = await fetch(`http://127.0.0.1:${String(conn.port)}${path}`, {
       method,
       signal: options.signal,
@@ -755,6 +759,10 @@ export async function request(
         ...(presentIdentity ? {
           'x-shellpuppet-session': session,
           'x-shellpuppet-session-token': sessionToken,
+        } : {}),
+        ...(!presentIdentity && claimParts !== null && claimParts !== undefined ? {
+          'x-shellpuppet-claim': claimParts[1]!,
+          'x-shellpuppet-claim-secret': claimParts[2]!,
         } : {}),
         ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
       },

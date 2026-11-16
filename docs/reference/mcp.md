@@ -1,5 +1,21 @@
 # MCP reference
 
+## Session messages
+
+Messaging starts off. Once the daemon has `messaging.enabled: true` and an
+allow rule, a session may use `session_send(to, text)` and read its own
+`session_inbox(markRead?, limit?)` or `session_outbox(limit?)`.
+`session_directory()` lists only live names that policy permits it to address.
+`session_wait_message(from?, timeoutMs?)` waits for the next unread message
+without marking it read. The timeout is capped at five minutes.
+
+An MCP server running outside a daemon session may call `session_claim(name)`
+to hold a name, then use the same messaging tools. `session_release()` frees
+the name. Its claim stays in that MCP server's memory for its lifetime.
+Messages in tool results are explicitly labelled as coming from another
+participant. Their text is framed as untrusted data, never as a user's
+instruction or approval.
+
 Pass `waitReady: true` to `terminal_start` when starting an agent CLI to
 delegate work to. Waiting is off by default. The daemon uses the resolved
 agent module's recorded ready signals. An explicit `readyText` (a literal,

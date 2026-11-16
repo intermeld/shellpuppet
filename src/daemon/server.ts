@@ -18,6 +18,10 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import type { WebSocket } from 'ws';
 import { SessionManager, PolicyViolationError, SessionStartError } from '../core/manager.js';
+import { Mailbox, MailboxError, NAME_PATTERN } from '../core/mailbox.js';
+import type { MailboxEntry } from '../core/mailbox.js';
+import { buildMessagingPolicy } from './config.js';
+import type { MessagingConfig } from './config.js';
 import {
   CommandNotFoundError,
   DEFAULT_SESSION_ENV,
@@ -263,6 +267,7 @@ const DASHBOARD_FONT_META = '<meta name="sp-dashboard-font-size" content="">';
 export interface DaemonOptions {
   home: string;
   logger: Logger;
+  messaging?: MessagingConfig;
   startedWrapped?: boolean;
   policy?: PolicyConfig;
   /** Session environment hygiene (design §4.6, ADR-008). Defaults to clean. */
@@ -609,6 +614,7 @@ export class Daemon {
   private readonly logger: Logger;
   private readonly tokens = new TokenStore();
   private readonly manager: SessionManager;
+  private readonly mailbox: Mailbox;
   private readonly server: http.Server;
   private readonly wss = new WebSocketServer({
     noServer: true,
@@ -751,8 +757,26 @@ export class Daemon {
         token: '',
         instanceId: this.instanceId,
         cliPath: fileURLToPath(new URL('../../dist/cli/index.js', import.meta.url)),
+        home: options.home,
       },
-    }, (id) => this.sessionFeed.remove(id));
+    }, (id) => {
+      this.endMailboxParticipant(id);
+      this.sessionFeed.remove(id);
+    });
+    this.mailbox = new Mailbox({
+      enabled: options.messaging?.enabled === true,
+      policy: buildMessagingPolicy(options.messaging, {
+        parentOf: (id) => this.manager.get(id)?.parent,
+      }),
+    });
+    this.mailbox.on('message', (event) => {
+      const entry = this.mailbox.log().find((item) => item.id === event.id);
+      if (entry !== undefined) this.messageAudit('msg-send', entry);
+      this.emitEvent({ type: 'message', ...event });
+    });
+    this.mailbox.on('state', (event) => {
+      this.emitEvent({ type: 'state', ...event });
+    });
     this.sessionFeed = new SessionFeed(
       this.version,
       () => this.listedSummaries().map((summary) => this.summaryWithPrompt(summary)),
@@ -1997,6 +2021,7 @@ export class Daemon {
     // that has just started is not reaped sooner than `idleMinutes` allows.
     this.lastActivity = Date.now();
 
+    this.registerMailboxSession(session);
     this.sessionFeed.add(this.summaryWithPrompt(session.summary()));
     session.onExit(() => {
       this.geometryController.delete(session.id);
@@ -2393,6 +2418,130 @@ export class Daemon {
     };
   }
 
+  private messageAudit(action: string, entry: MailboxEntry, actor = 'daemon'): void {
+    this.audit.record(actor, action, entry.from.id, {
+      fromId: entry.from.id, fromName: entry.from.name,
+      toId: entry.to.id, toName: entry.to.name,
+      messageId: entry.id, length: Buffer.byteLength(entry.text, 'utf8'),
+    });
+  }
+
+  private endMailboxParticipant(id: string): void {
+    // Audit before end can trim old tombstones from retained history.
+    for (const entry of this.mailbox.log({ participantId: id })) {
+      if (entry.to.id === id && (entry.state === 'waiting' || entry.state === 'nudged')) {
+        this.messageAudit('msg-undelivered', entry);
+      }
+    }
+    this.mailbox.end(id);
+  }
+
+  private registerMailboxSession(session: Session): void {
+    const label = session.label;
+    const name = label !== undefined && NAME_PATTERN.test(label) &&
+      (!/^s[0-9]+$/.test(label) || label === session.id) &&
+      !this.mailbox.nameTaken(label) ? label : session.id;
+    this.mailbox.register({ kind: 'session', id: session.id, name });
+    session.onExit(() => this.endMailboxParticipant(session.id));
+    if (session.exited) this.endMailboxParticipant(session.id);
+  }
+
+  private async handleMessages(req: http.IncomingMessage, res: http.ServerResponse,
+    url: URL, segments: string[], actor: string): Promise<void> {
+    if (this.options.messaging?.enabled !== true) {
+      json(res, 403, { error: 'Messaging is off.' });
+      return;
+    }
+    const claimId = req.headers['x-shellpuppet-claim'];
+    const claimSecret = req.headers['x-shellpuppet-claim-secret'];
+    const claimPresented = claimId !== undefined || claimSecret !== undefined;
+    const claimValid = typeof claimId === 'string' && typeof claimSecret === 'string' &&
+      this.mailbox.verifyClaim(claimId, claimSecret);
+    if (claimPresented && !claimValid) {
+      json(res, 403, { error: 'Messaging claim was not recognised.' });
+      return;
+    }
+    const caller = this.callerContext.getStore() ?? (claimValid ? claimId : undefined);
+    const route = segments[1];
+    if (req.method === 'POST' && route === 'claims' && segments.length === 2) {
+      if (caller !== undefined) { json(res, 409, { error: 'Already a messaging participant.' }); return; }
+      const body = await readBody(req);
+      if (typeof body['name'] !== 'string') { json(res, 400, { error: 'A valid name is required.' }); return; }
+      const claim = this.mailbox.claim(body['name']);
+      this.audit.record(actor, 'msg-claim', claim.claimId, {
+        fromId: claim.claimId, fromName: body['name'], toId: null, toName: null,
+        messageId: null, length: 0,
+      });
+      json(res, 201, claim);
+      return;
+    }
+    if (caller === undefined) { json(res, 403, { error: 'Not a messaging participant.' }); return; }
+    if (req.method === 'DELETE' && route === 'claims' && segments.length === 3) {
+      if (!claimValid || claimId !== segments[2]) {
+        json(res, 403, { error: 'The matching claim is required.' }); return;
+      }
+      const name = this.mailbox.participant(claimId)?.name;
+      this.endMailboxParticipant(claimId);
+      this.audit.record(actor, 'msg-release', claimId, {
+        fromId: claimId, fromName: name, toId: null, toName: null, messageId: null, length: 0,
+      });
+      json(res, 200, { released: true });
+      return;
+    }
+    const limitText = url.searchParams.get('limit');
+    const limit = limitText === null ? undefined : Number(limitText);
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 0 || limit > 2000)) {
+      json(res, 400, { error: 'limit must be an integer from 0 to 2000.' }); return;
+    }
+    if (req.method === 'POST' && route === undefined) {
+      const body = await readBody(req);
+      const result = this.mailbox.send(caller, body['to'] as string, body['text'] as string);
+      json(res, 201, result);
+      return;
+    }
+    if (req.method === 'GET' && route === 'inbox') {
+      const mark = url.searchParams.get('markRead');
+      if (mark !== null && mark !== 'true' && mark !== 'false') {
+        json(res, 400, { error: 'markRead must be true or false.' }); return;
+      }
+      const entries = this.mailbox.inbox(caller, { markRead: mark !== 'false', limit });
+      if (mark !== 'false') for (const entry of entries) this.messageAudit('msg-read', entry, actor);
+      json(res, 200, { messages: entries }); return;
+    }
+    if (req.method === 'GET' && route === 'outbox') {
+      json(res, 200, { messages: this.mailbox.outbox(caller, { limit }) }); return;
+    }
+    if (req.method === 'GET' && route === 'directory') {
+      json(res, 200, { participants: this.mailbox.directory(caller) }); return;
+    }
+    if (req.method === 'GET' && route === 'wait') {
+      const raw = url.searchParams.get('timeoutMs');
+      const requested = raw === null ? DEFAULT_WAIT_TIMEOUT_MS : Number(raw);
+      if (!Number.isInteger(requested) || requested < 0) {
+        json(res, 400, { error: 'timeoutMs must be a non-negative integer.' }); return;
+      }
+      const controller = new AbortController();
+      const onClose = (): void => controller.abort();
+      res.on('close', onClose);
+      try {
+        const entry = await this.mailbox.waitForMessage(caller, {
+          ...(url.searchParams.has('from') ? { from: url.searchParams.get('from')! } : {}),
+          timeoutMs: Math.min(requested, MAX_WAIT_TIMEOUT_MS), signal: controller.signal,
+        });
+        if (!res.destroyed) json(res, 200, { message: entry ?? null });
+      } catch (error) {
+        if (!(error instanceof Error) || error.name !== 'AbortError') throw error;
+      } finally { res.off('close', onClose); }
+      return;
+    }
+    if (req.method === 'GET' && route === 'log') {
+      json(res, 200, { messages: this.mailbox.log({
+        ...(url.searchParams.has('participant') ? { participantId: url.searchParams.get('participant')! } : {}), limit,
+      }) }); return;
+    }
+    json(res, 404, { error: 'Messaging route not found.' });
+  }
+
   private async handleClientRequest(
     req: http.IncomingMessage,
     res: http.ServerResponse,
@@ -2435,6 +2584,11 @@ export class Daemon {
 
       if (req.method === 'POST' && segments[0] === 'desktop' && segments[1] === 'open' && segments.length === 2) {
         await this.handleDesktopOpen(req, res, actor);
+        return;
+      }
+
+      if (segments[0] === 'messages') {
+        await this.handleMessages(req, res, url, segments, actor);
         return;
       }
 
@@ -3105,6 +3259,24 @@ export class Daemon {
 
       json(res, 404, { error: 'Not found.', path: url.pathname });
     } catch (error) {
+      if (error instanceof MailboxError) {
+        const status = error.code === 'unknown-name' ? 404 :
+          error.code === 'not-allowed' || error.code === 'unknown-sender' ? 403 :
+          error.code === 'duplicate-name' || error.code === 'mailbox-full' ? 409 : 400;
+        const messages: Record<string, string> = {
+          'invalid-name': 'A valid participant name is required.',
+          'duplicate-name': 'That participant name is already held.',
+          'duplicate-id': 'That participant id is already held.',
+          'messaging-disabled': 'Messaging is off.',
+          'unknown-sender': 'Not a messaging participant.',
+          'unknown-name': 'No live participant has that name.',
+          'not-allowed': 'The messaging policy does not allow this message.',
+          'empty-text': 'A message cannot be empty.',
+          'text-too-large': 'A message exceeds the 16 KiB limit.',
+          'mailbox-full': 'The mailbox is full.',
+        };
+        json(res, status, { error: messages[error.code] }); return;
+      }
       if (error instanceof WaitConditionError) {
         json(res, 400, { error: error.message });
         return;
@@ -3241,6 +3413,7 @@ export class Daemon {
 
     // Registration is synchronous with creation, before any asynchronous
     // viewer launch or readiness work can publish a change for this id.
+    this.registerMailboxSession(session);
     this.sessionFeed.add(this.summaryWithPrompt(session.summary()));
     session.onExit(() => {
       this.clearPromptGraceCheck(session.id);
@@ -3504,7 +3677,8 @@ export class Daemon {
 
   /** The sessions a client or the dashboard may see: every one but those still starting. */
   private listedSummaries(): SessionSummary[] {
-    return this.manager.list().filter((summary) => !this.startingIds.has(summary.id));
+    return this.manager.list().filter((summary) => !this.startingIds.has(summary.id))
+      .map((summary) => ({ ...summary, name: this.mailbox.participant(summary.id)?.name ?? summary.id }));
   }
 
   /**
@@ -3534,6 +3708,7 @@ export class Daemon {
   }
 
   private summaryWithPrompt(summary: SessionSummary, now = Date.now()): FeedSummary {
+    summary = { ...summary, name: this.mailbox.participant(summary.id)?.name ?? summary.id };
     if (summary.stalled?.reason === 'server-lost') return summary;
     const state = this.promptStates.get(summary.id);
     if (state === undefined) return summary;
