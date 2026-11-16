@@ -29,6 +29,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Bound viewport repair after resize and end only the affected session if terminal rendering fails.
 - Report MiMo output limits and other idle error blocks, including long errors whose marker scrolled away, plus a persistent OpenCode or MiMo Code server connection loss, as stalled sessions.
 - Detect OpenCode and MiMo Code question panels clipped by the terminal height, reporting the choices still visible.
 - Keep the command rows of a live Grok permission box visible when its question has scrolled off the screen, while reasoning above the box stays hidden.

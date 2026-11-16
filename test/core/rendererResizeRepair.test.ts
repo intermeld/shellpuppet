@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { spawnSync } from 'node:child_process';
 import type { Terminal } from '@xterm/headless';
 import type { IPty } from 'node-pty';
 import { afterEach, expect, it, vi } from 'vitest';
@@ -10,6 +11,75 @@ type Internals = Terminal & { _core: { buffer: { lines: { length: number } } } }
 const terminal = (renderer: ScreenRenderer): Internals =>
   (renderer as unknown as { term: Internals }).term;
 afterEach(() => { vi.useRealTimers(); });
+
+it('stops a saturated circular list repair in a timed child process', () => {
+  const child = spawnSync(process.execPath, ['test/core/fixtures/viewport-resize-child.mjs', 'forced'],
+    { cwd: process.cwd(), encoding: 'utf8', timeout: 10_000 });
+  expect(child.error).toBeUndefined();
+  expect(child.status).toBe(1);
+  expect(child.stderr).toContain('xterm viewport repair failed');
+});
+
+it('takes a fixed repair budget even if the target moves', () => {
+  const child = spawnSync(process.execPath, ['test/core/fixtures/viewport-resize-child.mjs', 'moving'],
+    { cwd: process.cwd(), encoding: 'utf8', timeout: 10_000 });
+  expect(child.error).toBeUndefined();
+  expect(child.status).toBe(0);
+  expect(JSON.parse(child.stdout) as { pushes: number }).toEqual({ scenario: 'moving', pushes: 26 });
+});
+
+it('stops after one circular push that cannot grow the list', () => {
+  const child = spawnSync(process.execPath, ['test/core/fixtures/viewport-resize-child.mjs', 'saturated'],
+    { cwd: process.cwd(), encoding: 'utf8', timeout: 10_000 });
+  expect(child.error).toBeUndefined();
+  expect(child.status).toBe(0);
+  expect(JSON.parse(child.stdout) as { pushes: number }).toEqual({ scenario: 'saturated', pushes: 1 });
+});
+
+it('reports a queued resize repair fault without losing the parser queue', async () => {
+  const fault = vi.fn();
+  const renderer = new ScreenRenderer({ onFault: fault });
+  const repair = vi.spyOn(renderer as unknown as { repairViewport: () => void }, 'repairViewport')
+    .mockImplementation(() => { throw new Error('broken viewport'); });
+  try {
+    void renderer.write('pending output');
+    renderer.resize(96, 31);
+    await renderer.flush();
+    expect(fault).toHaveBeenCalledOnce();
+    expect(String(fault.mock.calls[0]?.[0])).toContain('broken viewport');
+  } finally {
+    repair.mockRestore();
+    await renderer.dispose();
+  }
+});
+
+it('ends only the owning session after a queued resize repair fault', async () => {
+  let data: (text: string) => void = () => undefined;
+  const pty = {
+    pid: 0, cols: 80, rows: 24, process: 'fixture', handleFlowControl: false,
+    onData(listener: (text: string) => void) { data = listener; return { dispose() {} }; },
+    onExit() { return { dispose() {} }; },
+    write() {}, resize() {}, kill() {}, clear() {}, pause() {}, resume() {},
+  } as unknown as IPty;
+  const session = new Session('queued-fault', { command: process.execPath, shell: false },
+    { spawn: () => pty, pidWaitMs: 0, registerConsoleHostWindow() {}, queueConsoleHostEnd() {} });
+  const renderer = (session as unknown as { renderer: ScreenRenderer }).renderer;
+  const repair = vi.spyOn(renderer as unknown as { repairViewport: () => void }, 'repairViewport')
+    .mockImplementation(() => { throw new Error('queued repair broke'); });
+  const exited = vi.fn();
+  session.onExit(exited);
+  try {
+    data('pending');
+    await session.resize(96, 31);
+    await renderer.flush();
+    expect(session.exited).toBe(true);
+    expect(session.summary().fault).toBe('terminal rendering failed');
+    expect(exited).toHaveBeenCalledExactlyOnceWith(null);
+  } finally {
+    repair.mockRestore();
+    await session.kill();
+  }
+});
 
 it('pins the private buffer repair to the audited xterm release', () => {
   expect((require('@xterm/headless/package.json') as { version: string }).version).toBe('6.0.0');

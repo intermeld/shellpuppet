@@ -34,6 +34,7 @@ export interface RendererOptions {
   cols?: number;
   rows?: number;
   scrollback?: number;
+  onFault?: (error: unknown) => void;
 }
 
 export interface SerializeOptions {
@@ -96,8 +97,10 @@ export class ScreenRenderer {
   private disposal: Promise<void> | undefined;
   private width: number;
   private height: number;
+  private readonly onFault: (error: unknown) => void;
 
   constructor(options: RendererOptions = {}) {
+    this.onFault = options.onFault ?? (() => undefined);
     this.agent = options.agent ?? 'generic';
     this.term = new Terminal({
       cols: options.cols ?? DEFAULT_COLS,
@@ -154,11 +157,15 @@ export class ScreenRenderer {
     this.height = rows;
     const resize = (): void => {
       if (this.closed) return;
-      const narrowed = cols < this.term.cols;
-      this.term.resize(cols, rows);
-      this.repairViewport();
-      if (narrowed) this.trimNarrowedRows(cols);
-      for (const reflow of this.foregroundReflows) reflow();
+      try {
+        const narrowed = cols < this.term.cols;
+        this.term.resize(cols, rows);
+        this.repairViewport();
+        if (narrowed) this.trimNarrowedRows(cols);
+        for (const reflow of this.foregroundReflows) reflow();
+      } catch (error) {
+        this.onFault(error);
+      }
     };
     // Preserve the order of output, geometry and the next replay marker.
     if (this.pendingCount === 0) resize();
@@ -232,8 +239,11 @@ export class ScreenRenderer {
         ybase: number; getBlankLine: () => unknown };
     } })._core;
     const buffer = core.buffer;
-    while (buffer.lines.length < buffer.ybase + this.term.rows) {
+    const missing = Math.max(0, buffer.ybase + this.term.rows - buffer.lines.length);
+    for (let i = 0; i < missing; i++) {
+      const before = buffer.lines.length;
       buffer.lines.push(buffer.getBlankLine());
+      if (buffer.lines.length <= before) break;
     }
     if (active.length < active.baseY + this.term.rows ||
         active.length <= active.baseY + active.cursorY) {

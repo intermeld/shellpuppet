@@ -153,6 +153,8 @@ export interface SessionSummary {
    * (`howSessionEnded`).
    */
   exitCode: number | null;
+  /** Reason a session ended before its program reported an exit. */
+  fault?: string;
   /** Number of connected viewer/WebSocket clients. */
   watchers: number;
   createdAt: string;
