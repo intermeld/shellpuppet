@@ -6,6 +6,7 @@ import { captureViewer } from '../../src/daemon/screenshot.js';
 import type { CaptureOptions } from '../../src/daemon/screenshot.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
 import { noticeFrameLimitScript } from './noticeFrameLimit.js';
+import { decisionStall } from './decision-stall.js';
 import { api, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 import { assessDeliveredCadence, deliveredNoticeScript, recordDeliveredCadence } from './noticeCadence.js';
@@ -202,7 +203,7 @@ async function withPage(mode: string, interact: NonNullable<CaptureOptions['inte
 describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
   for (const rows of [24, 150]) it(`uncovers a leading prompt among three excursions at 80x${String(rows)}`, async context => {
     if (!browser) { context.skip(); return; }
-    const attempts: { gap: number; failures: string[] }[] = [];
+    const attempts: { failures: string[]; gaps: { from: number; to: number; gap: number }[] }[] = [];
     for (let attempt = 0; attempt < 2; attempt++) {
     const failures: string[] = [];
     await withPage(mode, async ({ evaluate }) => {
@@ -245,7 +246,22 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
           earlyWeights[visit.row] = (earlyWeights[visit.row] || 0) + earlyDuration;
           if (visit.row === row) longestPromptStay = Math.max(longestPromptStay, earlyDuration);
         }
+        let leadingAt = null, promptEvidence = 0, upperEvidence = 0;
+        for (let i = 0; i < __visits.length; i++) {
+          const visit = __visits[i];
+          const from = Math.max(firstMoving, visit.at);
+          const to = Math.min(earlyEnd, __visits[i + 1]?.at ?? earlyEnd);
+          const duration = Math.max(0, to - from);
+          if (visit.row === row) {
+            const needed = Math.max(upperEvidence + 20, upperEvidence * 1.5) - promptEvidence;
+            if (leadingAt === null && needed <= duration)
+              leadingAt = from + Math.max(0, needed);
+            if (leadingAt === null && duration >= 1000) leadingAt = from + 1000;
+            promptEvidence += duration;
+          } else if (visit.row === 0) upperEvidence += duration;
+        }
         return { row, rows: state.term.rows, samples, restingSamples, covered, follow, weights,
+          leadingAt: leadingAt === null ? null : leadingAt - start,
           startedAt: start, firstCoveredAt, firstWrongSideAt,
           earlyWeights, longestPromptStay,
           deadlineFrame: (__noticeFrames.find(time => time >= start + 2500) ?? NaN) - start,
@@ -264,7 +280,7 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
       })()`) as { row: number; rows: number; samples: number; restingSamples: number; covered: number;
         follow: number | null; weights: Record<string, number>; earlyWeights: Record<string, number>;
         longestPromptStay: number; placements: string[]; hidden: boolean;
-        deadlineFrame: number; decisionGap: number; startedAt: number;
+        deadlineFrame: number; decisionGap: number; startedAt: number; leadingAt: number | null;
         firstCoveredAt: number | null; firstWrongSideAt: number | null;
         stalls: { from: number; to: number; gap: number }[];
         frames: number; frameInterval: number; maxFrameGap: number; frameSpan: number; observedMs: number;
@@ -296,31 +312,36 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
       for (const [name, check] of checks) {
         try { check(); } catch { failures.push(name); }
       }
-      if (result.frames < 2) failures.push('no delivered animation frames');
-      attempts.push({ gap: result.decisionGap, failures });
+      if (result.frames < 2) throw new Error(`inconclusive: no frames observed during notice decision; ${details}`);
       const firstViolation = assessment.violations[0] as
         { frame?: { time: number }; first?: number; change?: { time: number }; clearBy?: number } | undefined;
       const violationAt = (firstViolation?.frame?.time ?? firstViolation?.first ??
         firstViolation?.change?.time ?? firstViolation?.clearBy ?? result.deadlineFrame) +
         (result.cadence.epoch ?? result.startedAt) - result.startedAt;
-      const gapBefore = (end: number, start = 0) => result.stalls.some(gap => gap.from <= end && gap.to >= start);
+      const leadingAt = result.leadingAt ?? NaN;
+      const gapDuring = (start: number, end: number) => decisionStall(result.stalls, result.frames - 1, start, end);
+      const excusingGaps: { from: number; to: number; gap: number }[] = [];
       const unexcused = failures.filter(name => {
-        if (name === 'no delivered animation frames') return false;
         if (name === 'rows' || name === 'visible') return true;
-        if (name === 'uncovered') return !gapBefore(result.firstCoveredAt ?? result.deadlineFrame);
-        if (name === 'placement') return !gapBefore(result.firstWrongSideAt ?? result.deadlineFrame);
-        if (name === 'cadence') return !gapBefore(violationAt, violationAt - 500);
+        let gap;
+        if (name === 'uncovered') gap = gapDuring(Math.max(leadingAt, 2500), result.firstCoveredAt ?? result.deadlineFrame);
+        else if (name === 'placement') gap = gapDuring(Math.max(leadingAt, 2500), result.firstWrongSideAt ?? result.deadlineFrame);
+        else if (name === 'cadence') gap = gapDuring(Math.max(leadingAt, violationAt - 500), violationAt);
         if (['first clear', 'startup deadline', 'deadline frame', 'repaint evidence'].includes(name))
-          return !gapBefore(result.deadlineFrame);
-        if (name === 'leading evidence') return !gapBefore(result.follow ?? result.deadlineFrame);
-        return result.stalls.length === 0;
+          gap = gapDuring(leadingAt, result.deadlineFrame);
+        if (gap && gap !== 'inconclusive') { excusingGaps.push(gap); return false; }
+        return true;
       });
+      attempts.push({ failures, gaps: excusingGaps });
       if (unexcused.length)
-        throw new Error(`notice placement failed: ${failures.join(', ')}; ${details}`);
+        throw new Error(`notice placement failed: ${failures.join(', ')}; ${details}; attempts: ${JSON.stringify(attempts)}`);
     }, 200, rows);
-    if (!failures.length) return;
+    if (!failures.length) {
+      if (attempt === 1) console.log(`TIMING_RESULT viewer-notices ${mode} ${String(rows)}: ${JSON.stringify(attempts)}`);
+      return;
+    }
     if (attempt === 1) throw new Error(`runner stalled twice during notice decision: ${JSON.stringify(attempts)}`);
-    console.log(`TIMING_RETRY viewer-notices ${mode} ${String(rows)}`);
+    console.log(`TIMING_RETRY viewer-notices ${mode} ${String(rows)}: ${JSON.stringify(attempts[0])}`);
     }
   }, 240_000);
 

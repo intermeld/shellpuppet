@@ -96,6 +96,7 @@ window.noticeOccupancyCases = async (mode, kind) => {
         const before = p.measure();
         const stopFrames = noticeFrameTiming(), start = performance.now(), placements = new Set();
         let samples = 0, covered = 0, measuredAt = null, firstFailureAt = null;
+        let firstSampleAt = null;
         // Establish the old edge first. A clearly leading lower rest must
         // win whether the previous resting row is still visited or gone.
         // Equal replacements retain their edge in noticeCoveredTimeCases.
@@ -104,6 +105,7 @@ window.noticeOccupancyCases = async (mode, kind) => {
         while (performance.now() - start < 4000) {
           await p.move(rows - 1); await noticePause(100);
           if (performance.now() - start > 2517) {
+            firstSampleAt ??= performance.now() - start;
             measuredAt ??= p.rects();
             placements.add(p.side()); samples++;
             if (p.measure(rows - 1).overlap || p.side() !== 'top') firstFailureAt ??= performance.now() - start;
@@ -119,7 +121,7 @@ window.noticeOccupancyCases = async (mode, kind) => {
         const fitted = p.measure(rows - 1);
         p.geometry(rows + 1);
         const resized = p.measure(rows - 1);
-        results.push({ rows, initial, before, samples, covered, firstFailureAt, ...stopFrames(), placements: [...placements],
+        results.push({ rows, initial, before, samples, covered, firstSampleAt, firstFailureAt, ...stopFrames(), placements: [...placements],
           rects: p.rects() - measuredAt, shown, fitted, resized });
       } finally { p.destroy(); }
     }
@@ -167,8 +169,9 @@ window.noticeOccupancyCases = async (mode, kind) => {
           await p.move(rows - 1); await noticePause(650); p.show();
           const stopFrames = noticeFrameTiming();
           const before = p.side(), placements = new Set([before]), start = performance.now();
-          let covered = 0, samples = 0, firstFailureAt = null;
+          let covered = 0, samples = 0, firstFailureAt = null, firstSampleAt = null;
           const watch = setInterval(() => {
+            firstSampleAt ??= performance.now() - start;
             placements.add(p.side()); samples++;
             if (p.measure(rows - 1).overlap || p.side() !== before) firstFailureAt ??= performance.now() - start;
             if (p.measure(rows - 1).overlap) covered++;
@@ -179,7 +182,7 @@ window.noticeOccupancyCases = async (mode, kind) => {
               await p.move(rows - 1); await noticePause(interval);
             }
           } finally { clearInterval(watch); }
-          const stable = { rows, interval, before, covered, samples, firstFailureAt, ...stopFrames(),
+          const stable = { rows, interval, before, covered, samples, firstSampleAt, firstFailureAt, ...stopFrames(),
             placements: [...placements], elapsed: performance.now() - start };
           await p.move(0); await noticePause(1050);
           results.push({ ...stable, final: p.measure() });
