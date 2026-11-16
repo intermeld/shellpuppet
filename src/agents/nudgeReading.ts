@@ -12,10 +12,20 @@ import type { NudgeReadiness, NudgeView } from './types.js';
 export interface ReadingNudgeRule {
   /** Composer text that is a placeholder, once the prompt glyph is removed. */
   placeholder: string;
-  /** Keep rows after the composer until the signature's frame. Codex does not. */
+  /** Keep rows after the composer until the signature's frame or status row. */
   continuations: boolean;
-  /** Grey suggestion ink. A row with no spans is never a suggestion. */
-  suggestion: (line: StyledLine) => boolean;
+  /**
+   * The recorded placeholder's own ink. Both the exact words and this ink
+   * are required. A row with no spans does not match.
+   */
+  placeholderInk: (line: StyledLine) => boolean;
+  /** A status row that ends the input region and is not composer text. */
+  status?: (line: StyledLine) => boolean;
+  /**
+   * A non-blank row before the status is not a proven continuation.
+   * It is unknown, never ready.
+   */
+  unprovenContinuations?: boolean;
 }
 
 const GLYPH = /^\s*[❯›>]/u;
@@ -36,8 +46,19 @@ function stripGlyph(text: string): string {
   return text.replace(STRIP_GLYPH, '').trim();
 }
 
-function asStyled(view: NudgeView): readonly StyledLine[] {
-  if (view.styled !== undefined && view.styled.length > 0) return view.styled;
+/**
+ * Plain rows and styled rows are one visible viewport. When both are set
+ * their text must match, and the styled rows are the ones read. A difference
+ * is not one screen.
+ */
+function linesOf(view: NudgeView): readonly StyledLine[] | null {
+  if (view.styled !== undefined && view.styled.length > 0) {
+    if (view.styled.length !== view.rows.length) return null;
+    for (let i = 0; i < view.styled.length; i++) {
+      if (view.styled[i]?.text !== view.rows[i]) return null;
+    }
+    return view.styled;
+  }
   return view.rows.map((text) => ({ text, spans: [] }));
 }
 
@@ -45,11 +66,6 @@ function pattern(source: string | undefined): RegExp | null {
   return source === undefined ? null : new RegExp(source, 'u');
 }
 
-/**
- * The live composer is the last non-wrapped row matching the signature.
- * Continuations, where the module draws them, stop at its frame so the
- * status line under that frame is not part of the draft.
- */
 /** Last non-wrapped row matching the signature's composer, or -1. */
 function composerIndex(lines: readonly StyledLine[], composer: RegExp): number {
   for (let i = lines.length - 1; i >= 0; i--) {
@@ -91,44 +107,59 @@ function turnIsBusy(lines: readonly StyledLine[], reading: AgentSignature, compo
   return false;
 }
 
+/**
+ * Rows of the live composer. Continuations stop at the signature's frame,
+ * and at a status row the module names, so the footer under that boundary
+ * is not part of the draft. A non-blank row before an unproven boundary is
+ * reported separately and is never treated as empty.
+ */
 function composerRegion(
   lines: readonly StyledLine[],
   reading: AgentSignature,
   at: number,
-  continuations: boolean,
-): readonly StyledLine[] | null {
+  rule: ReadingNudgeRule,
+): { rows: readonly StyledLine[]; unproven: boolean } | null {
   const first = lines[at];
   if (first === undefined) return null;
-  if (!continuations) return [first];
+  if (!rule.continuations) return { rows: [first], unproven: false };
   const frame = pattern(reading.frame?.text);
   const rows: StyledLine[] = [first];
   for (let i = at + 1; i < lines.length; i++) {
     const line = lines[i];
     if (line === undefined) break;
     if (frame !== null && line.wrapped !== true && frame.test(line.text)) break;
+    if (rule.status?.(line) === true) break;
+    if (rule.unprovenContinuations === true && line.text.trim() !== '') {
+      return { rows, unproven: true };
+    }
     rows.push(line);
   }
-  return rows;
+  return { rows, unproven: false };
 }
 
+/** Blank, or the exact placeholder drawn in the placeholder's own ink. */
 function rowClear(line: StyledLine, rule: ReadingNudgeRule): boolean {
   const text = stripGlyph(line.text);
-  return text === '' || text === rule.placeholder || rule.suggestion(line);
+  if (text === '') return true;
+  return text === rule.placeholder && rule.placeholderInk(line);
 }
 
 /**
  * Busy wins over an empty composer: a running turn often leaves the
- * placeholder in place. Anything that is not a known empty composer is a
- * draft, including unstyled text. No composer at all is unknown.
+ * placeholder in place. A blank row, or the exact placeholder in its own
+ * ink, is empty. Any other text is a draft, including unstyled text.
+ * A row that might continue the composer, and a viewport whose plain and
+ * styled rows disagree, are unknown. No composer at all is unknown.
  */
 export function readingReadiness(view: NudgeView, reading: AgentSignature, rule: ReadingNudgeRule): NudgeReadiness {
   const composer = pattern(reading.composer.text);
   if (composer === null) return 'unknown';
-  const lines = asStyled(view);
+  const lines = linesOf(view);
+  if (lines === null) return 'unknown';
   const at = composerIndex(lines, composer);
   if (at < 0) return 'unknown';
   if (turnIsBusy(lines, reading, at)) return 'busy';
-  const region = composerRegion(lines, reading, at, rule.continuations);
-  if (region === null) return 'unknown';
-  return region.every((line) => rowClear(line, rule)) ? 'ready' : 'draft';
+  const region = composerRegion(lines, reading, at, rule);
+  if (region === null || region.unproven) return 'unknown';
+  return region.rows.every((line) => rowClear(line, rule)) ? 'ready' : 'draft';
 }
