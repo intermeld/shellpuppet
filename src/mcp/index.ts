@@ -64,8 +64,12 @@ async function main(): Promise<void> {
     };
   };
   readPassLists();
+  // Messaging tools are offered only when messaging is switched on when this
+  // server starts; a change to config.json applies at the next MCP start.
+  const messaging = readDaemonConfig(home).config.messaging?.enabled === true;
   const releaseClaim = registerTools(server, {
     logger: stderrLogger,
+    messaging,
     untrustedFraming: config.untrustedFraming,
     readPassLists,
     // Audit actor (design §4.5): identify the calling MCP client (Claude
