@@ -15,6 +15,7 @@
  */
 
 import { moduleFor } from '../agents/index.js';
+import { nudgeVerdict } from './nudge.js';
 import type { AgentModule, AgentSource } from '../agents/types.js';
 import { validateStall, possibleStall, resolveSessionAgent, signatureForSession, stallTranscriptContent, stallTurnVisible, StallScreenCache, StallTracker } from './reasoning.js';
 import { execFile } from 'node:child_process';
@@ -746,6 +747,9 @@ export class Session implements WaitTarget {
   private cursorHidden = false;
   /** Serialises write() so chunked writes cannot interleave. See write(). */
   private writeChain: Promise<void> = Promise.resolve();
+  private inputVersion = 0;
+  private inputQueueVersion = 0;
+  private screenRevision = 0;
   private submissionsQueued = 0;
   /** Why the input pipe failed (Windows), once it has: input is refused from then on. */
   private inputFailure: Error | null = null;
@@ -1208,6 +1212,7 @@ export class Session implements WaitTarget {
    * including for the rest of a chunked write it fails part-way through.
    */
   write(data: string, options: { terminalReport?: boolean } = {}): Promise<string> {
+    this.inputQueueVersion++;
     const delayedSubmit = this.delayedSubmission(data);
     if (delayedSubmit) this.submissionsQueued++;
     const queued = this.writeChain.then(() => this.writeInput(data, options.terminalReport === true));
@@ -1217,7 +1222,53 @@ export class Session implements WaitTarget {
       () => { if (delayedSubmit) this.submissionsQueued--; },
       () => { if (delayedSubmit) this.submissionsQueued--; },
     );
+    return queued as Promise<string>;
+  }
+
+  /** Queue a daemon nudge, checking the current rendered screen before any bytes are written. */
+  writeNudge(data: string, ready: (screen: string, phase: 'before' | 'submit') => boolean):
+    Promise<'sent' | 'wait' | 'aborted'> {
+    let aborted = false;
+    const queued = this.writeChain.then(async () => {
+      try {
+        const result = await this.writeInput(data, false, ready, () => { aborted = true; });
+        return aborted ? 'aborted' as const : result === null ? 'wait' as const : 'sent' as const;
+      } catch (error) {
+        if (aborted) return 'aborted' as const;
+        throw error;
+      }
+    });
+    this.writeChain = queued.then(() => undefined, () => undefined);
     return queued;
+  }
+
+  nudgeReady(now: number): boolean {
+    const rendered = this.renderer.snapshot();
+    const styled = this.renderer.styledLines().lines;
+    return nudgeVerdict(this.agentModule, {
+      rows: styled.map((line) => line.text),
+      styled,
+      viewportRows: rendered.rows,
+      stall: this.getStalled(),
+      unchangedMs: now - this.lastChangeAt(),
+    }).ready;
+  }
+
+  nudgeSubmit(): string {
+    return this.agentModule?.input?.submit?.key ?? '\r';
+  }
+
+  nudgeInputVersion(): number { return this.inputVersion; }
+  nudgeQueuedInputVersion(): number { return this.inputQueueVersion; }
+  nudgeScreenRevision(): number { return this.screenRevision; }
+
+  nudgeReadyWithLine(line: string): boolean {
+    const rendered = this.renderer.snapshot();
+    const styled = this.renderer.styledLines().lines;
+    return nudgeVerdict(this.agentModule, {
+      rows: styled.map((row) => row.text), styled, viewportRows: rendered.rows,
+      stall: this.getStalled(), unchangedMs: 0, expectedDraft: line,
+    }).ready;
   }
 
   private delayedSubmission(data: string): boolean {
@@ -1225,8 +1276,20 @@ export class Session implements WaitTarget {
     return submit?.delayMs !== undefined && submit.matches?.(data) === true;
   }
 
-  private async writeInput(data: string, terminalReport: boolean): Promise<string> {
+  private async writeInput(data: string, terminalReport: boolean,
+    ready?: (screen: string, phase: 'before' | 'submit') => boolean,
+    onNudgeAbort?: () => void): Promise<string | null> {
     this.refuseIfInputFailed();
+    if (ready !== undefined) await this.renderer.flush();
+    if (!terminalReport && data.length > 0 &&
+      this.agentModule?.stalls !== undefined && !this.stallTracker.tracking) {
+      await this.renderer.flush();
+      if (this.stallInk?.possible) this.refreshStall();
+    }
+    if (ready !== undefined) {
+      this.refuseIfEnded();
+      if (!ready(this.renderer.snapshot().screen, 'before')) return null;
+    }
     // Recorded BEFORE the bytes go in, when the screen still shows what this
     // input is answering: the waiter's stale-prompt guard needs that prompt,
     // and its echo guard needs the input itself.
@@ -1234,10 +1297,6 @@ export class Session implements WaitTarget {
     if (!terminalReport && data.length > 0) {
       // Discovery may still be queued. Capture the screen this input answers
       // before suppressing it, so a delayed check cannot announce that old turn.
-      if (this.agentModule?.stalls !== undefined && !this.stallTracker.tracking) {
-        await this.renderer.flush();
-        if (this.stallInk?.possible) this.refreshStall();
-      }
       // A key cannot repair the local server. Keep a recognised banner and
       // its settle timer until the rendered banner actually goes away.
       if (this.stallTracker.reason !== 'server-lost' && this.stallState?.reason !== 'server-lost') {
@@ -1247,15 +1306,31 @@ export class Session implements WaitTarget {
       }
     }
     const { screen } = this.renderer.snapshot();
+    this.inputVersion++;
     this.stalePrompts.noteInput(screen, this.agent);
 
     if (this.delayedSubmission(data)) {
       const body = data.slice(0, -1);
+      const queuedInputVersion = this.inputQueueVersion;
       await this.writeData(body);
-      await new Promise((resolve) => setTimeout(resolve, this.agentModule!.input!.submit!.delayMs));
-      this.refuseIfInputFailed();
-      this.refuseIfEnded();
-      this.pty.write(this.agentModule!.input!.submit!.key);
+      try {
+        await new Promise((resolve) => setTimeout(resolve, this.agentModule!.input!.submit!.delayMs));
+        this.refuseIfInputFailed();
+        this.refuseIfEnded();
+        if (ready !== undefined) {
+          await this.renderer.flush();
+          this.refuseIfEnded();
+          if (this.inputQueueVersion !== queuedInputVersion ||
+            !ready(this.renderer.snapshot().screen, 'submit')) {
+            onNudgeAbort?.();
+            return null;
+          }
+        }
+        this.pty.write(this.agentModule!.input!.submit!.key);
+      } catch (error) {
+        onNudgeAbort?.();
+        throw error;
+      }
       return screen;
     }
 
@@ -1369,6 +1444,7 @@ export class Session implements WaitTarget {
     const oldCols = this.renderer.cols;
     const oldRows = this.renderer.rows;
     this.pty.resize(cols, rows);
+    this.screenRevision++;
     this.stallPtyCols = this.pty.cols; this.stallPtyRows = this.pty.rows;
     this.noteStallResize(cols !== this.renderer.cols || rows !== this.renderer.rows);
     this.renderer.resize(cols, rows);

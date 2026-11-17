@@ -28,6 +28,8 @@ export interface NudgeObservation {
   stall?: StallState;
   /** How long the screen has stayed unchanged, in milliseconds. */
   unchangedMs: number;
+  /** The daemon line already typed into the composer, for a delayed Enter. */
+  expectedDraft?: string;
 }
 
 /**
@@ -57,8 +59,10 @@ export function nudgeVerdict(module: AgentModule | undefined, observation: Nudge
   const prompt = detectPrompt(screen.rows.join('\n'), module.name, observation.viewportRows, screen.styled);
   if (prompt !== null) return { ready: false, reason: 'prompt' };
   if (observation.stall !== undefined) return { ready: false, reason: 'stalled' };
-  const reading = module.nudge.readiness({ rows: screen.rows, styled: screen.styled });
+  const reading = module.nudge.readiness({ rows: screen.rows, styled: screen.styled,
+    expectedDraft: observation.expectedDraft });
   if (reading !== 'ready') return { ready: false, reason: reading };
+  if (observation.expectedDraft !== undefined) return { ready: true };
   if (!Number.isFinite(observation.unchangedMs) || observation.unchangedMs < NUDGE_QUIET_MS) {
     return { ready: false, reason: 'quiet' };
   }

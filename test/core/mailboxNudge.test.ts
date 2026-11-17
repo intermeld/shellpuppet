@@ -17,7 +17,7 @@ function pair(): Mailbox {
 describe('buildNudge', () => {
   it('uses the fixed wording for one message', () => {
     expect(buildNudge([{ id: 'm42', from: { id: 's3', name: 'chair-2' } }])).toBe(
-      '[ShellPuppet] Message m42 from chair-2 is waiting. Read it with the session_inbox tool, or run: shellpuppet inbox',
+      '[ShellPuppet] Message m42 from chair-2 is waiting. Read it with the session_inbox tool, or run the script in SHELLPUPPET_CLI with node and the argument inbox',
     );
   });
 
@@ -27,7 +27,7 @@ describe('buildNudge', () => {
       { id: 'm2', from: { id: 's4', name: 'b' } },
     ]);
     expect(line).toBe(
-      '[ShellPuppet] 2 messages are waiting: m1 from a, m2 from b. Read them with the session_inbox tool, or run: shellpuppet inbox',
+      '[ShellPuppet] 2 messages are waiting: m1 from a, m2 from b. Read them with the session_inbox tool, or run the script in SHELLPUPPET_CLI with node and the argument inbox',
     );
   });
 
@@ -41,10 +41,10 @@ describe('buildNudge', () => {
     ];
     expect(buildNudge(five)).toBe(
       '[ShellPuppet] 5 messages are waiting: m1 from a, m2 from b, m3 from c, and 2 more. ' +
-        'Read them with the session_inbox tool, or run: shellpuppet inbox',
+        'Read them with the session_inbox tool, or run the script in SHELLPUPPET_CLI with node and the argument inbox',
     );
-    expect(buildNudge(five.slice(0, 4)).endsWith('m3 from c, and 1 more. Read them with the session_inbox tool, or run: shellpuppet inbox')).toBe(true);
-    expect(buildNudge(five.slice(0, 3)).endsWith('m1 from a, m2 from b, m3 from c. Read them with the session_inbox tool, or run: shellpuppet inbox')).toBe(true);
+    expect(buildNudge(five.slice(0, 4)).endsWith('m3 from c, and 1 more. Read them with the session_inbox tool, or run the script in SHELLPUPPET_CLI with node and the argument inbox')).toBe(true);
+    expect(buildNudge(five.slice(0, 3)).endsWith('m1 from a, m2 from b, m3 from c. Read them with the session_inbox tool, or run the script in SHELLPUPPET_CLI with node and the argument inbox')).toBe(true);
   });
 
   it('returns an empty line when there is nothing to nudge about', () => {

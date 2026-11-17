@@ -630,11 +630,11 @@ export function buildNudge(messages: readonly NudgeMessage[]): string {
   if (pairs.length === 1) {
     return (
       `[ShellPuppet] Message ${listed[0] ?? '?'} is waiting. ` +
-      'Read it with the session_inbox tool, or run: shellpuppet inbox'
+      'Read it with the session_inbox tool, or run the script in SHELLPUPPET_CLI with node and the argument inbox'
     );
   }
   return (
     `[ShellPuppet] ${String(pairs.length)} messages are waiting: ${listed.join(', ')}${tail}. ` +
-    'Read them with the session_inbox tool, or run: shellpuppet inbox'
+    'Read them with the session_inbox tool, or run the script in SHELLPUPPET_CLI with node and the argument inbox'
   );
 }

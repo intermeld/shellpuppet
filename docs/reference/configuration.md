@@ -118,6 +118,8 @@ Full example, everything optional:
   // participant names. See the section below.
   "messaging": {
     "enabled": true,
+    "nudgeIntervalMs": 30000,
+    "nudgesPerMinute": 20,
     "allow": [
       "parent-child",
       { "group": "chairs", "members": ["cdr", "coding-plan", "shellpuppet-chair"] }
@@ -517,6 +519,8 @@ so a daemon restart clears every mailbox.
 {
   "messaging": {
     "enabled": true,
+    "nudgeIntervalMs": 30000,
+    "nudgesPerMinute": 20,
     "allow": [
       "parent-child",
       { "group": "chairs", "members": ["cdr", "coding-plan", "shellpuppet-chair"] }
@@ -524,6 +528,15 @@ so a daemon restart clears every mailbox.
   }
 }
 ```
+
+`nudgeIntervalMs` is the minimum time between typed nudges to one session
+(default 30,000 milliseconds). `nudgesPerMinute` caps typed nudges across the
+daemon in a rolling minute (default 20). Both must be positive integers.
+The daemon checks waiting messages on its existing screen scan. Only an idle
+supported session with an empty composer receives a fixed nudge; other messages
+stay in the inbox. The nudge names the CLI inbox command without assuming that
+`shellpuppet` on `PATH` is the CLI belonging to this daemon. Sessions receive
+the matching CLI path in `SHELLPUPPET_CLI`.
 
 `allow` says who may message whom, in both directions:
 
