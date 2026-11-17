@@ -7,14 +7,10 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { agy } from '../../src/agents/agy/index.js';
 import { claude } from '../../src/agents/claude/index.js';
 import { codex } from '../../src/agents/codex/index.js';
 import { generic } from '../../src/agents/generic/index.js';
-import { grok } from '../../src/agents/grok/index.js';
-import { mimo } from '../../src/agents/mimo/index.js';
 import { muse } from '../../src/agents/muse/index.js';
-import { opencode } from '../../src/agents/opencode/index.js';
 import { qoder } from '../../src/agents/qoder/index.js';
 import type { AgentModule, NudgeReadiness } from '../../src/agents/types.js';
 import { NUDGE_QUIET_MS, nudgeVerdict } from '../../src/core/nudge.js';
@@ -489,7 +485,7 @@ describe('nudge readiness', () => {
 
     it('leaves a module that cannot judge the composer unknown, even with a prompt, a stall and a long quiet period', () => {
       const screen = { ...plain(CLAUDE_CODE_TRUST_PROMPT), stall: STALL, unchangedMs: 60_000 };
-      for (const module of [generic, agy, grok, opencode, mimo]) {
+      for (const module of [generic]) {
         expect(module.nudge).toBeUndefined();
         expect(nudgeVerdict(module, screen)).toEqual({ ready: false, reason: 'unknown' });
       }

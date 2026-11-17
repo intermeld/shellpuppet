@@ -1,0 +1,30 @@
+   Single-word ok reply          +
+
+  ┃
+  ┃  Reply with the single word: ok
+  ┃
+
+     ok
+
+     Build · DeepSeek V4.1 Flash 1017 · 3.5s · 272.7 tok/s · 3.5s ttft
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃
+  ┃
+  ┃  Build · DeepSeek V4.1 Flash 1017 OpenCode Go
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  C:\work\project                                                  11.4K (1%)  ctrl+p commands
