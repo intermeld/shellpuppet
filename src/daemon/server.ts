@@ -4174,7 +4174,8 @@ export class Daemon {
         return;
       }
       this.wss.handleUpgrade(req, socket, head, (ws) => {
-        this.attachEventSocket(ws, caller.session ?? (typeof claimId === 'string' ? claimId : undefined));
+        this.callerContext.run(caller.session, () =>
+          this.attachEventSocket(ws, caller.session ?? (typeof claimId === 'string' ? claimId : undefined)));
       });
       return;
     }
