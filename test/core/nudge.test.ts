@@ -321,6 +321,56 @@ describe('nudge readiness', () => {
       expect(nudgeVerdict(codex, screen)).toEqual({ ready: true });
     });
 
+    it('synthetic: before Enter, accepts the daemon line wrapped across composer rows and nothing else', () => {
+      const line = '[ShellPuppet] Message m1 from chair-2 is waiting. Read it with the session_inbox tool, ' +
+        'or run: node "C:\\tools\\shellpuppet\\cli.js" inbox';
+      const footer = ['', '  GPT-6-Sol high · Context 99% left · weekly 56% left · Daybreak on', '  ? for shortcuts'];
+      const wrapped = fromRows([
+        '› [ShellPuppet] Message m1 from chair-2 is waiting. Read it with the session_inbox',
+        '  tool, or run: node "C:\\tools\\shellpuppet\\cli.js" inbox',
+        ...footer,
+      ]);
+      const check = (screen: NudgeObservation, expectedDraft: string) =>
+        nudgeVerdict(codex, { ...screen, unchangedMs: 0, expectedDraft });
+      expect(check(wrapped, line)).toEqual({ ready: true });
+      expect(readinessOf(codex, wrapped)).toBe('unknown');
+      expect(check(wrapped, line + ' more')).toEqual({ ready: false, reason: 'draft' });
+      expect(check(wrapped, line.replace('m1', 'm2'))).toEqual({ ready: false, reason: 'draft' });
+      const extraRow = fromRows([
+        '› [ShellPuppet] Message m1 from chair-2 is waiting. Read it with the session_inbox',
+        '  tool, or run: node "C:\\tools\\shellpuppet\\cli.js" inbox',
+        '  and a person typed this too',
+        ...footer,
+      ]);
+      expect(check(extraRow, line)).toEqual({ ready: false, reason: 'draft' });
+      const below = fromRows([
+        '› [ShellPuppet] Message m1 from chair-2 is waiting. Read it with the session_inbox',
+        '  tool, or run: node "C:\\tools\\shellpuppet\\cli.js" inbox',
+        '  /status   show current session configuration',
+        ...footer,
+      ]);
+      expect(check(below, line)).toEqual({ ready: false, reason: 'draft' });
+      const extraIndent = fromRows([
+        '› [ShellPuppet] Message m1 from chair-2 is waiting. Read it with the session_inbox',
+        '   tool, or run: node "C:\\tools\\shellpuppet\\cli.js" inbox',
+        ...footer,
+      ]);
+      expect(check(extraIndent, line)).toEqual({ ready: false, reason: 'draft' });
+      const extraLead = fromRows([
+        '›  [ShellPuppet] Message m1 from chair-2 is waiting. Read it with the session_inbox',
+        '  tool, or run: node "C:\\tools\\shellpuppet\\cli.js" inbox',
+        ...footer,
+      ]);
+      expect(check(extraLead, line)).toEqual({ ready: false, reason: 'draft' });
+      const blankBetween = fromRows([
+        '› [ShellPuppet] Message m1 from chair-2 is waiting. Read it with the session_inbox',
+        '',
+        '  tool, or run: node "C:\\tools\\shellpuppet\\cli.js" inbox',
+        ...footer,
+      ]);
+      expect(check(blankBetween, line)).toEqual({ ready: false, reason: 'draft' });
+    });
+
     it('reads a captured draft as a draft', async () => {
       const screen = await load('codex-prompt-typed');
       expect(screen.rows.some((row) => row.length > 80)).toBe(true);

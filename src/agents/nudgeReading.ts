@@ -131,13 +131,16 @@ function turnIsBusy(lines: readonly StyledLine[], reading: AgentSignature, compo
  * Rows of the live composer. Continuations stop at the signature's frame,
  * and at a status row the module names, so the footer under that boundary
  * is not part of the draft. A non-blank row before an unproven boundary is
- * reported separately and is never treated as empty.
+ * reported separately and is never treated as empty. When the caller holds
+ * the exact line it typed, those rows are kept instead: the whole region must
+ * then spell that line, so any row that is not part of it fails the match.
  */
 function composerRegion(
   lines: readonly StyledLine[],
   reading: AgentSignature,
   at: number,
   rule: ReadingNudgeRule,
+  matchingExpected: boolean,
 ): { rows: readonly StyledLine[]; unproven: boolean } | null {
   const first = lines[at];
   if (first === undefined) return null;
@@ -149,7 +152,7 @@ function composerRegion(
     if (line === undefined) break;
     if (frame !== null && line.wrapped !== true && frame.test(line.text)) break;
     if (rule.status?.(line, lines.slice(i + 1)) === true) break;
-    if (rule.unprovenContinuations === true && line.text.trim() !== '') {
+    if (rule.unprovenContinuations === true && !matchingExpected && line.text.trim() !== '') {
       return { rows, unproven: true };
     }
     rows.push(line);
@@ -162,6 +165,21 @@ function rowClear(line: StyledLine, rule: ReadingNudgeRule): boolean {
   const text = stripGlyph(line.text);
   if (text === '') return true;
   return text === rule.placeholder && rule.placeholderInk(line);
+}
+
+/**
+ * For a composer whose continuation rows are otherwise unproven: one space
+ * after the prompt glyph, then rows each indented by exactly two spaces with
+ * no blank row between them. Extra spaces or a blank row are not a plain
+ * wrap of one line. A typed line break looks the same as a wrap on screen;
+ * the input checks before Enter are what exclude it.
+ */
+function plainWrapRows(rows: readonly StyledLine[]): boolean {
+  let end = rows.length;
+  while (end > 1 && rows[end - 1]!.text.trim() === '') end--;
+  const [first, ...rest] = rows.slice(0, end);
+  if (first === undefined || !/^\s*[❯›>] \S/u.test(first.text)) return false;
+  return rest.every((line) => /^ {2}\S/u.test(line.text));
 }
 
 /** Rejoin only visual composer wraps, allowing a space lost at a wrap edge. */
@@ -221,9 +239,10 @@ export function readingReadiness(view: NudgeView, reading: AgentSignature, rule:
   const at = composerIndex(lines, composer);
   if (at < 0) return 'unknown';
   if (turnIsBusy(lines, reading, at)) return 'busy';
-  const region = composerRegion(lines, reading, at, rule);
+  const region = composerRegion(lines, reading, at, rule, view.expectedDraft !== undefined);
   if (region === null || region.unproven) return 'unknown';
   if (view.expectedDraft !== undefined) {
+    if (rule.unprovenContinuations === true && !plainWrapRows(region.rows)) return 'draft';
     return holdsExpectedDraft(region.rows, view.expectedDraft) ? 'ready' : 'draft';
   }
   return region.rows.every((line) => rowClear(line, rule)) ? 'ready' : 'draft';
