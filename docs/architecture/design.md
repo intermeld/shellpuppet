@@ -334,10 +334,8 @@ message whom, and a clock.
   checks delivery on its screen scan, types only when a supported module sees an idle empty composer,
   and limits nudges to one per unread batch, one per session in 30 seconds and
   20 across the daemon in a rolling minute. The two rate limits are configurable.
-  The fixed line quotes this daemon's literal CLI path in `node "<path>" inbox`
-  so it does not depend on a command on `PATH`; sessions receive that same
-  path in `SHELLPUPPET_CLI`. When the path is unavailable or cannot be quoted
-  literally across supported shells, the line refers to `SHELLPUPPET_CLI` instead.
+  The fixed line names only the `session_inbox` MCP tool, never a command to
+  run, so a session that messages needs the ShellPuppet MCP server.
   Every check is repeated inside the queued write and, after a pause of at least
   150 ms, again before the module's submit key. A module may require a longer
   pause. Some programs paint a pasted line late, so the check before Enter
