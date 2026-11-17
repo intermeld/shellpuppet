@@ -26,7 +26,7 @@ const relations = {
 describe('parseDaemonConfig: the messaging section', () => {
   it('warns when messaging is enabled without allow rules', () => {
     const result = parseDaemonConfig({ messaging: { enabled: true } });
-    expect(result.config.messaging).toEqual({ enabled: true, allow: [] });
+    expect(result.config.messaging).toEqual({ enabled: true, allow: [], nudgeIntervalMs: 30_000, nudgesPerMinute: 20 });
     expect(result.problems.join(' ')).toContain('without allow rules');
   });
 
@@ -59,13 +59,28 @@ describe('parseDaemonConfig: the messaging section', () => {
     expect(config.messaging).toEqual({
       enabled: false,
       allow: ['parent-child', { group: 'chairs', members: ['cdr', 'coding-plan', 'shellpuppet-chair'] }],
+      nudgeIntervalMs: 30_000,
+      nudgesPerMinute: 20,
     });
   });
 
   it('enabled is false when the key is missing: off until it is switched on', () => {
     const { config, problems } = parseDaemonConfig({ messaging: { allow: ['parent-child'] } });
     expect(problems).toEqual([]);
-    expect(config.messaging).toEqual({ enabled: false, allow: ['parent-child'] });
+    expect(config.messaging).toEqual({ enabled: false, allow: ['parent-child'], nudgeIntervalMs: 30_000, nudgesPerMinute: 20 });
+  });
+
+  it('accepts nudge limits and reports invalid values', () => {
+    const valid = parseDaemonConfig({ messaging: { enabled: true, allow: [],
+      nudgeIntervalMs: 1_000, nudgesPerMinute: 2 } });
+    expect(valid.config.messaging).toMatchObject({ nudgeIntervalMs: 1_000, nudgesPerMinute: 2 });
+    for (const limits of [{ nudgeIntervalMs: 0 }, { nudgeIntervalMs: -1 }, { nudgeIntervalMs: 1.5 },
+      { nudgeIntervalMs: null }, { nudgesPerMinute: 0 }, { nudgesPerMinute: 'many' },
+      { nudgesPerMinute: null }]) {
+      const result = parseDaemonConfig({ messaging: { enabled: true, allow: [], ...limits } });
+      expect(result.config.messaging).toBeUndefined();
+      expect(result.problems.join(' ')).toContain('messaging');
+    }
   });
 
   it('a section that cannot be read as written leaves messaging off', () => {

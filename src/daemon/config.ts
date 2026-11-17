@@ -117,6 +117,8 @@ export type MessagingAllowRule = 'parent-child' | MessagingGroupRule;
 export interface MessagingConfig {
   enabled: boolean;
   allow: MessagingAllowRule[];
+  nudgeIntervalMs?: number;
+  nudgesPerMinute?: number;
 }
 
 /** How the policy asks about sessions: the id of the session that started it. */
@@ -338,7 +340,9 @@ function parsePolicy(raw: unknown, problems: string[]): PolicyConfig {
   };
 }
 
-const MESSAGING_KEYS = new Set(['enabled', 'allow']);
+const MESSAGING_KEYS = new Set(['enabled', 'allow', 'nudgeIntervalMs', 'nudgesPerMinute']);
+export const DEFAULT_NUDGE_INTERVAL_MS = 30_000;
+export const DEFAULT_NUDGES_PER_MINUTE = 20;
 const MAX_MESSAGING_ALLOW = 64;
 const MAX_MESSAGING_MEMBERS = 64;
 
@@ -364,10 +368,19 @@ function parseMessaging(raw: unknown, problems: string[]): MessagingConfig | und
   const enabledRaw = raw['enabled'];
   const enabled = enabledRaw === undefined ? false : enabledRaw;
   if (typeof enabled !== 'boolean') return off('enabled must be a boolean');
+  const interval = raw['nudgeIntervalMs'] === undefined ? DEFAULT_NUDGE_INTERVAL_MS : raw['nudgeIntervalMs'];
+  const perMinute = raw['nudgesPerMinute'] === undefined ? DEFAULT_NUDGES_PER_MINUTE : raw['nudgesPerMinute'];
+  if (!Number.isSafeInteger(interval) || (interval as number) < 1) {
+    return off('nudgeIntervalMs must be a positive integer');
+  }
+  if (!Number.isSafeInteger(perMinute) || (perMinute as number) < 1) {
+    return off('nudgesPerMinute must be a positive integer');
+  }
+  const limits = { nudgeIntervalMs: interval as number, nudgesPerMinute: perMinute as number };
   const allowRaw = raw['allow'];
   if (allowRaw === undefined) {
     if (enabled) problems.push('messaging is enabled without allow rules: no participants may message each other');
-    return { enabled, allow: [] };
+    return { enabled, allow: [], ...limits };
   }
   if (!Array.isArray(allowRaw)) {
     return off('allow must be a list of "parent-child" or group objects');
@@ -407,7 +420,7 @@ function parseMessaging(raw: unknown, problems: string[]): MessagingConfig | und
     }
     allow.push({ group, members: valid });
   }
-  return { enabled, allow };
+  return { enabled, allow, ...limits };
 }
 
 /**

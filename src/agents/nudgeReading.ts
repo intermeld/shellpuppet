@@ -149,6 +149,25 @@ function rowClear(line: StyledLine, rule: ReadingNudgeRule): boolean {
   return text === rule.placeholder && rule.placeholderInk(line);
 }
 
+/** Rejoin only visual composer wraps, allowing a space lost at a wrap edge. */
+function holdsExpectedDraft(rows: readonly StyledLine[], expected: string): boolean {
+  const [first, ...rest] = rows;
+  const pieces = [stripGlyph(first?.text ?? '').trimEnd(), ...rest.map((line) => line.text.trim())]
+    .filter((piece) => piece !== '');
+  let positions = new Set([0]);
+  for (const piece of pieces) {
+    const next = new Set<number>();
+    for (const position of positions) {
+      if (expected.startsWith(piece, position)) next.add(position + piece.length);
+      const spaces = /^\s+/u.exec(expected.slice(position))?.[0].length ?? 0;
+      if (spaces > 0 && expected.startsWith(piece, position + spaces)) next.add(position + spaces + piece.length);
+    }
+    positions = next;
+    if (positions.size === 0) return false;
+  }
+  return positions.has(expected.length);
+}
+
 /**
  * Busy wins over an empty composer: a running turn often leaves the
  * placeholder in place. A blank row, or the exact placeholder in its own
@@ -166,5 +185,8 @@ export function readingReadiness(view: NudgeView, reading: AgentSignature, rule:
   if (turnIsBusy(lines, reading, at)) return 'busy';
   const region = composerRegion(lines, reading, at, rule);
   if (region === null || region.unproven) return 'unknown';
+  if (view.expectedDraft !== undefined) {
+    return holdsExpectedDraft(region.rows, view.expectedDraft) ? 'ready' : 'draft';
+  }
   return region.rows.every((line) => rowClear(line, rule)) ? 'ready' : 'draft';
 }

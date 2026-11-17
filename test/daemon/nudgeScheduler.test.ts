@@ -1,0 +1,51 @@
+import { describe, expect, it } from 'vitest';
+import { NudgeScheduler } from '../../src/daemon/nudgeScheduler.js';
+
+describe('nudge delivery scheduler', () => {
+  it('keeps busy, draft and unknown sessions pending until ready, then delivers once', async () => {
+    let now = 100_000;
+    const state = new Map([['busy', 'busy'], ['draft', 'draft'], ['unknown', 'unknown'], ['ready', 'ready']]);
+    const sent: string[] = [];
+    const scheduler = new NudgeScheduler({ now: () => now, intervalMs: 30_000, perMinute: 20,
+      deliver: (id) => {
+        if (state.get(id) !== 'ready') return Promise.resolve('wait');
+        sent.push(id);
+        return Promise.resolve('sent');
+      } });
+    for (const id of state.keys()) scheduler.queue(id);
+    await scheduler.tick();
+    expect(sent).toEqual(['ready']);
+    for (const id of ['busy', 'draft', 'unknown']) state.set(id, 'ready');
+    now += 5_000;
+    await scheduler.tick();
+    await scheduler.tick();
+    expect(sent).toEqual(['ready', 'busy', 'draft', 'unknown']);
+  });
+
+  it('limits each session to one nudge in thirty seconds and the daemon to two per minute', async () => {
+    let now = 100_000;
+    const sent: string[] = [];
+    const scheduler = new NudgeScheduler({ now: () => now, intervalMs: 30_000, perMinute: 2,
+      deliver: (id) => { sent.push(id); return Promise.resolve('sent'); } });
+    scheduler.queue('a'); scheduler.queue('b'); scheduler.queue('c');
+    await scheduler.tick();
+    expect(sent).toEqual(['a', 'b']);
+    scheduler.queue('a');
+    now += 29_999;
+    await scheduler.tick();
+    expect(sent).toHaveLength(2);
+    now += 30_001;
+    await scheduler.tick();
+    expect(sent).toEqual(['a', 'b', 'c', 'a']);
+  });
+
+  it('removes ended sessions without delivering', async () => {
+    const sent: string[] = [];
+    const scheduler = new NudgeScheduler({ now: () => 100_000, intervalMs: 30_000, perMinute: 20,
+      deliver: (id) => { sent.push(id); return Promise.resolve('sent'); } });
+    scheduler.queue('outside'); scheduler.remove('outside');
+    scheduler.queue('ended'); scheduler.remove('ended');
+    await scheduler.tick();
+    expect(sent).toEqual([]);
+  });
+});

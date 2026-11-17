@@ -47,4 +47,38 @@ describe('Muse input submission', () => {
     await muse.session.write('hello');
     expect(muse.pty.writes.map((entry) => entry.data)).toEqual(['\r', 'hello']);
   });
+
+  it('leaves a typed nudge unsubmitted when a prompt opens during the delay', async () => {
+    const { session, pty } = recordingSession('muse');
+    let promptOpen = false;
+    const phases: string[] = [];
+    const pending = session.writeNudge('fixed nudge\r', (_screen, phase) => {
+      phases.push(phase);
+      return phase === 'before' || !promptOpen;
+    });
+    while (pty.writes.length === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+    promptOpen = true;
+    expect(await pending).toBe('aborted');
+    expect(phases).toEqual(['before', 'submit']);
+    expect(pty.writes.map((entry) => entry.data)).toEqual(['fixed nudge']);
+  });
+
+  it('leaves a typed nudge unsubmitted when other input is queued during the delay', async () => {
+    const { session, pty } = recordingSession('muse');
+    const pending = session.writeNudge('fixed nudge\r', () => true);
+    while (pty.writes.length === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+    const other = session.write('other');
+    expect(await pending).toBe('aborted');
+    await other;
+    expect(pty.writes.map((entry) => entry.data)).toEqual(['fixed nudge', 'other']);
+  });
+
+  it('advances the screen revision for every applied resize', async () => {
+    const { session } = recordingSession('muse');
+    const before = session.nudgeScreenRevision();
+    await session.resize(80, 24);
+    expect(session.nudgeScreenRevision()).toBe(before + 1);
+    await session.resize(90, 30);
+    expect(session.nudgeScreenRevision()).toBe(before + 2);
+  });
 });

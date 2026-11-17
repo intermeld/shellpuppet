@@ -9,6 +9,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Added
 
+- Type a fixed, rate limited nudge into an idle supported session when a message waits for it, through the normal input queue, rechecking the screen, the waiting messages and the terminal size just before it types, and recording message ids, never text, in the audit.
 - Keep messages for named participants in a mailbox core: names and claims, message states, per-recipient limits and the fixed nudge line, with a `messaging` section in `config.json` that says who may message whom. Off until it is switched on; typing of nudges arrives separately.
 - Send and read session messages through daemon routes, MCP tools and CLI commands, with claims for outside callers and text-free audit and event records.
 - Give each session its own daemon instance identity and secret, verify its client calls,

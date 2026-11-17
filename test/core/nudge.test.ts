@@ -390,6 +390,16 @@ describe('nudge readiness', () => {
   });
 
   describe('Muse Code', () => {
+    it('accepts only the exact daemon line already held in a delayed composer', () => {
+      const line = '[ShellPuppet] Message m1 is waiting.';
+      const screen = fromRows(['❯ ' + line, '────────────────────────────────────────────────────────────────────────────────']);
+      expect(nudgeVerdict(muse, { ...screen, unchangedMs: 0, expectedDraft: line })).toEqual({ ready: true });
+      expect(nudgeVerdict(muse, { ...screen, unchangedMs: 0, expectedDraft: line + ' extra' }))
+        .toEqual({ ready: false, reason: 'draft' });
+      const wrapped = fromRows(['❯ [ShellPuppet] Message m1', '  is waiting.',
+        '────────────────────────────────────────────────────────────────────────────────']);
+      expect(nudgeVerdict(muse, { ...wrapped, unchangedMs: 0, expectedDraft: line })).toEqual({ ready: true });
+    });
     it('is ready on a captured idle screen with a bare composer', async () => {
       const screen = await load('muse-violet');
       expect(readinessOf(muse, screen)).toBe('ready');

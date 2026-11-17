@@ -18,9 +18,10 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer } from 'ws';
 import type { WebSocket } from 'ws';
 import { SessionManager, PolicyViolationError, SessionStartError } from '../core/manager.js';
-import { Mailbox, MailboxError, NAME_PATTERN } from '../core/mailbox.js';
+import { Mailbox, MailboxError, NAME_PATTERN, buildNudge } from '../core/mailbox.js';
 import type { MailboxEntry } from '../core/mailbox.js';
-import { buildMessagingPolicy } from './config.js';
+import { buildMessagingPolicy, DEFAULT_NUDGE_INTERVAL_MS, DEFAULT_NUDGES_PER_MINUTE } from './config.js';
+import { NudgeScheduler } from './nudgeScheduler.js';
 import type { MessagingConfig } from './config.js';
 import {
   CommandNotFoundError,
@@ -615,6 +616,7 @@ export class Daemon {
   private readonly tokens = new TokenStore();
   private readonly manager: SessionManager;
   private readonly mailbox: Mailbox;
+  private readonly nudges: NudgeScheduler;
   private readonly server: http.Server;
   private readonly wss = new WebSocketServer({
     noServer: true,
@@ -773,10 +775,17 @@ export class Daemon {
         parentOf: (id) => this.manager.get(id)?.parent,
       }),
     });
+    this.nudges = new NudgeScheduler({
+      now: () => this.now(),
+      intervalMs: options.messaging?.nudgeIntervalMs ?? DEFAULT_NUDGE_INTERVAL_MS,
+      perMinute: options.messaging?.nudgesPerMinute ?? DEFAULT_NUDGES_PER_MINUTE,
+      deliver: (id) => this.deliverNudge(id),
+    });
     this.mailbox.on('message', (event) => {
       const entry = this.mailbox.log().find((item) => item.id === event.id);
       if (entry !== undefined) this.messageAudit('msg-send', entry);
       this.emitEvent({ type: 'message', ...event });
+      if (this.mailbox.participant(event.to.id)?.kind === 'session') this.nudges.queue(event.to.id);
     });
     this.mailbox.on('state', (event) => {
       this.emitEvent({ type: 'message-state', ...event });
@@ -2431,6 +2440,7 @@ export class Daemon {
   }
 
   private endMailboxParticipant(id: string): void {
+    this.nudges.remove(id);
     // Audit before end can trim old tombstones from retained history.
     for (const entry of this.mailbox.log({ participantId: id })) {
       if (entry.to.id === id && (entry.state === 'waiting' || entry.state === 'nudged')) {
@@ -2438,6 +2448,51 @@ export class Daemon {
       }
     }
     this.mailbox.end(id);
+  }
+
+  private async deliverNudge(id: string): Promise<'sent' | 'wait' | 'done'> {
+    const session = this.manager.get(id);
+    if (session === undefined || session.exited || this.mailbox.participant(id)?.kind !== 'session') return 'done';
+    const unread = this.mailbox.inbox(id, { markRead: false });
+    if (unread.some((entry) => entry.state === 'nudged') || unread.length === 0) return 'done';
+    if (!session.hasPainted() || !session.nudgeReady(this.now())) return 'wait';
+    const snapshot = await session.snapshot();
+    if (snapshot.exited || session.answerablePrompt(snapshot.screen) !== null ||
+      !session.nudgeReady(this.now())) return 'wait';
+    const outputAt = session.lastChangeAt();
+    const inputVersion = session.nudgeInputVersion();
+    const queuedInputVersion = session.nudgeQueuedInputVersion();
+    const screenRevision = session.nudgeScreenRevision();
+    const line = buildNudge(unread);
+    const ids = unread.map((entry) => entry.id);
+    const stillWaiting = (): boolean => {
+      const current = this.mailbox.inbox(id, { markRead: false });
+      return !current.some((entry) => entry.state === 'nudged') &&
+        ids.every((messageId) => current.some((entry) => entry.id === messageId && entry.state === 'waiting'));
+    };
+    const ready = (screen: string, phase: 'before' | 'submit'): boolean =>
+      !session.exited && !session.getStalled() &&
+      session.nudgeScreenRevision() === screenRevision &&
+      session.nudgeQueuedInputVersion() === queuedInputVersion &&
+      session.answerablePrompt(screen) === null && stillWaiting() &&
+      (phase === 'before'
+        ? session.lastChangeAt() === outputAt && session.nudgeInputVersion() === inputVersion &&
+          screen === snapshot.screen && session.nudgeReady(this.now())
+        : session.nudgeInputVersion() === inputVersion + 1 && session.nudgeReadyWithLine(line));
+    try {
+      const result = await session.writeNudge(line + session.nudgeSubmit(), ready);
+      if (result === 'wait') return 'wait';
+      if (result === 'aborted') {
+        this.audit.record('daemon', 'nudge-aborted', id, { messageIds: ids, count: ids.length });
+        return 'wait';
+      }
+    } catch (error) {
+      if (error instanceof SessionInputFailedError || error instanceof SessionProgramEndedError) return 'wait';
+      throw error;
+    }
+    this.mailbox.markNudged(ids);
+    this.audit.record('daemon', 'nudge', id, { messageIds: ids, count: ids.length });
+    return 'sent';
   }
 
   private registerMailboxSession(session: Session): void {
@@ -3963,6 +4018,7 @@ export class Daemon {
         this.updateFeedSession(id);
       }
     }
+    await this.nudges.tick();
   }
 
   /** Fan an event out to every `/events` subscriber (TEXT JSON frames). */

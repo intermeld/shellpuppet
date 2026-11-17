@@ -100,6 +100,8 @@ export type NudgeReadiness = 'ready' | 'busy' | 'draft' | 'unknown';
 export interface NudgeView {
   rows: readonly string[];
   styled?: readonly StyledLine[];
+  /** Exact daemon line allowed in the composer during a delayed submission. */
+  expectedDraft?: string;
 }
 
 /** Internal harness data and the few detector walks not yet expressed as data. */
