@@ -11,6 +11,7 @@ version may change behaviour, and every such change is listed here.
 
 - Type a fixed, rate limited nudge into an idle supported session when a message waits for it, through the normal input queue, rechecking the screen, the waiting messages and the terminal size just before it types, and recording message ids, never text, in the audit.
 - Show owner-wide messages in the dashboard with session and group filters, safe text display and unread pane counts.
+- Judge when OpenCode, MiMo Code, Grok and Antigravity sessions have an empty idle composer, including MiMo's grey suggestion, before nudging them about waiting messages.
 - Keep messages for named participants in a mailbox core: names and claims, message states, per-recipient limits and the fixed nudge line, with a `messaging` section in `config.json` that says who may message whom. Off until it is switched on; typing of nudges arrives separately.
 - Send and read session messages through daemon routes, MCP tools and CLI commands, with claims for outside callers and text-free audit and event records.
 - Give each session its own daemon instance identity and secret, verify its client calls,
@@ -22,6 +23,8 @@ version may change behaviour, and every such change is listed here.
 
 ### Changed
 
+- Require a complete composer footer as the last visible block before nudging a session about a waiting message.
+- Check each bar composer's screen identity and input width, and require the live Antigravity composer footer before nudging.
 - Scope message history to each participant, reserve the daemon home for sessions, escape displayed message controls, and bound outside claims.
 - Bound retained mailbox history, protect claim ids, settle ended inboxes before events, and validate messaging configuration limits.
 - Check session identity on client-token WebSocket upgrades, keep daemon audit

@@ -1,0 +1,15 @@
+
+      ▄▀▀▄        Antigravity CLI 1.5.9
+     ▀▀▀▀▀▀       user@example.com     (Example plan )
+    ▀▀▀▀▀▀▀▀      Gemini 3.8 Flash (High)
+   ▄▀▀    ▀▀▄     C:\work\project
+  ▄▀▀      ▀▀▄
+
+
+ ┃ Introducing Gemini 4 Hydrogen
+ ┃ Our daily driver for rapid coding and dependable agentic execution!
+ ┃ esc to dismiss
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+> Auto mode: edits & safe commands auto-approved (shift+tab to cycle)
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+? for shortcuts                                                                                    auto · Gemini 3.8 Flash · high

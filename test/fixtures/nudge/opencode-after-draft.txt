@@ -1,0 +1,30 @@
+   Single-word ok reply          +
+                                           ┃                                                 ┃
+  ┃                                        ┃  MCP server failed: search  › Open MCP servers  ┃
+  ┃  Reply with the single word: ok        ┃                                                 ┃
+  ┃                                        ┃  Run /mcps to view details.                     ┃
+                                           ┃                                                 ┃
+     ok
+
+     Build · DeepSeek V4.1 Flash 1017 · 3.5s · 272.7 tok/s · 3.5s ttft
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ┃
+  ┃  draft words not sent
+  ┃
+  ┃  Build · DeepSeek V4.1 Flash 1017 OpenCode Go
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+  C:\work\project                                                  11.4K (1%)  ctrl+p commands

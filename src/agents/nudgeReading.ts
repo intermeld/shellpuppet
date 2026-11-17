@@ -47,6 +47,11 @@ export function bodyStyles(line: StyledLine): CellStyle[] {
   return GLYPH.test(line.text) ? ink.slice(1) : ink;
 }
 
+/** A complete composer leaves no visible output after its final footer row. */
+export function onlyBlankRowsAfter(rows: readonly string[], footer: number): boolean {
+  return rows.slice(footer + 1).every((row) => row.trim() === '');
+}
+
 function stripGlyph(text: string): string {
   return text.replace(STRIP_GLYPH, '').trim();
 }

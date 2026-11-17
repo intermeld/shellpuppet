@@ -58,7 +58,7 @@ describe('desktop shortcut', () => {
     expect(entry).toContain(String.raw`Icon=/tmp/icon\s` + '\n');
   });
   it('refuses Windows targets it cannot express', () => {
-    const base = { arguments: 'desktop', workingDirectory: String.raw`C:\Users\Example`, icon: String.raw`C:\icon.ico`, description: 'Start', showCommand: 7 };
+    const base = { arguments: 'desktop', workingDirectory: String.raw`C:\work\example`, icon: String.raw`C:\icon.ico`, description: 'Start', showCommand: 7 };
     expect(() => shellLink({ ...base, target: String.raw`\\long-server-name\long-share-name\node.exe` })).toThrow(/local drive letter/);
     const long = 'C:' + String.fromCharCode(92) + Array.from({ length: 130 }, () => 'a'.repeat(250)).join(String.fromCharCode(92)) + String.fromCharCode(92) + 'node.exe';
     expect(() => shellLink({ ...base, target: long })).toThrow(/too long/);

@@ -1,0 +1,23 @@
+
+  C:\work\project                      / MCP (3/4) │ 1.8K / 256K │ [Dashboard]
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+  ╭──────────────────────────────────────────────────────────────────────────╮
+  │ > draft words not sent                                                   │
+  ╰───────────────────────────────────────── Grok 4.7 (xhigh) · auto-review ─╯
+  Grok 4.7 xhigh ░░░░░░░░░░ 1%
+  Enter:send  │  Alt+Enter:newline  │  Shift+Tab:mode  │  Ctrl+x:shortcuts

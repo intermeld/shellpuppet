@@ -1,0 +1,30 @@
+
+
+
+
+
+
+
+
+
+
+                                                              ▄
+                             █▀▀█ █▀▀█ █▀▀█ █▀▀▄ █▀▀▀ █▀▀█ █▀▀█ █▀▀█
+                             █  █ █  █ █▀▀▀ █  █ █    █  █ █  █ █▀▀▀
+                             ▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀
+
+
+           ┃
+           ┃  Ask anything… "What is the tech stack of this project?"
+           ┃
+           ┃  Build · DeepSeek V4.1 Flash 1017 OpenCode Go
+           ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+           C:\work\project                           shift+tab agents  ctrl+p commands
+
+
+
+
+
+
+
+  ⊙ 6 MCP failed /mcps                                                                   2.3.0
