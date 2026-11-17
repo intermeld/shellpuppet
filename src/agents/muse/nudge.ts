@@ -3,6 +3,10 @@ import { bodyStyles, readingReadiness } from '../nudgeReading.js';
 import type { NudgeReadiness, NudgeView } from '../types.js';
 import { reading } from './reading.js';
 
+/** Muse Code draws its rules dim in this grey; typed draft text is drawn in TYPED_INK. */
+const RULE_INK = '#676c74';
+const TYPED_INK = '#ccd3db';
+
 /** Grey hint on an idle Muse Code composer. */
 const PLACEHOLDER = 'Start a message with ! to run a shell command yourself';
 
@@ -16,5 +20,8 @@ export function readiness(view: NudgeView): NudgeReadiness {
     placeholder: PLACEHOLDER,
     continuations: true,
     placeholderInk,
+    ruleRows: [/^── Voice input \(Alt\+V to start\) ─+$/u],
+    ruleInk: (line) => line.spans.some((span) => span.from === 0 && span.dim && span.fg === RULE_INK) &&
+      !line.spans.some((span) => span.fg === TYPED_INK),
   });
 }

@@ -31,6 +31,14 @@ export interface ReadingNudgeRule {
    * It is unknown, never ready.
    */
   unprovenContinuations?: boolean;
+  /**
+   * Full-width rule rows the program paints directly above its composer, such
+   * as a labelled rule. When exactly one row on the screen matches, the row
+   * below it is a fresh row, even if xterm marked it as a wrap.
+   */
+  ruleRows?: readonly RegExp[];
+  /** The ink a declared rule row is drawn in. Typed text in a draft has other ink. */
+  ruleInk?: (line: StyledLine) => boolean;
 }
 
 const GLYPH = /^\s*[❯›>]/u;
@@ -109,9 +117,11 @@ function turnIsBusy(lines: readonly StyledLine[], reading: AgentSignature, compo
       }
     }
   }
+  // Every row counts, wrapped or not: xterm marks a separately painted busy
+  // row as a wrap after a full-width row, and a false busy only waits.
   for (let i = start; i < lines.length; i++) {
     const line = lines[i];
-    if (line === undefined || line.wrapped === true) continue;
+    if (line === undefined) continue;
     if (tests.some((test) => test.test(line.text))) return true;
   }
   return false;
@@ -180,11 +190,34 @@ function holdsExpectedDraft(rows: readonly StyledLine[], expected: string): bool
  * A row that might continue the composer, and a viewport whose plain and
  * styled rows disagree, are unknown. No composer at all is unknown.
  */
+/**
+ * xterm marks the row after a row that fills the full width as a wrap, even
+ * when the program painted it separately. A module may declare the rule row
+ * it paints directly above its composer. When exactly one painted row on the
+ * screen matches it, the row below is a fresh row, so the composer under a
+ * full-width rule is still found. Typed text cannot stand in for that row: a
+ * copy in a draft would make two matches, and a wrapped row never counts.
+ * Every other wrap keeps its mark.
+ */
+function unwrapBelowRules(lines: readonly StyledLine[], rule: ReadingNudgeRule): readonly StyledLine[] {
+  const rules = rule.ruleRows ?? [];
+  if (rules.length === 0) return lines;
+  const matches = lines.flatMap((line, i) =>
+    line.wrapped !== true && rules.some((test) => test.test(line.text)) &&
+    (rule.ruleInk === undefined || rule.ruleInk(line)) ? [i] : []);
+  if (matches.length !== 1) return lines;
+  const below = matches[0]! + 1;
+  const line = lines[below];
+  if (line?.wrapped !== true) return lines;
+  return lines.map((item, i) => (i === below ? { ...item, wrapped: false } : item));
+}
+
 export function readingReadiness(view: NudgeView, reading: AgentSignature, rule: ReadingNudgeRule): NudgeReadiness {
   const composer = pattern(reading.composer.text);
   if (composer === null) return 'unknown';
-  const lines = linesOf(view);
-  if (lines === null) return 'unknown';
+  const viewport = linesOf(view);
+  if (viewport === null) return 'unknown';
+  const lines = unwrapBelowRules(viewport, rule);
   const at = composerIndex(lines, composer);
   if (at < 0) return 'unknown';
   if (turnIsBusy(lines, reading, at)) return 'busy';

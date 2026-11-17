@@ -44,6 +44,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Find an agent's composer under a rule that fills the terminal width, so a session showing it can be nudged.
 - Limit message event metadata to participants, bound dashboard badge updates and show invisible message characters as escapes.
 - Bound viewport repair after resize and end only the affected session if terminal rendering fails.
 - Report MiMo output limits and other idle error blocks, including long errors whose marker scrolled away, plus a persistent OpenCode or MiMo Code server connection loss, as stalled sessions.

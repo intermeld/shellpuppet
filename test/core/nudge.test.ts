@@ -7,6 +7,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { agy } from '../../src/agents/agy/index.js';
 import { claude } from '../../src/agents/claude/index.js';
 import { codex } from '../../src/agents/codex/index.js';
 import { generic } from '../../src/agents/generic/index.js';
@@ -527,5 +528,150 @@ describe('nudge readiness', () => {
       expect(readinessOf(claude, mismatched)).toBe('unknown');
       expect(nudgeVerdict(claude, mismatched)).toEqual({ ready: false, reason: 'unknown' });
     });
+  });
+});
+
+describe('composer under a full-width rule', () => {
+  // As captured from Muse Code 1.4.14: a rule across the whole width, then the
+  // composer painted with no line break, so xterm marks the composer row as a
+  // wrap. The composer row itself ends with a line break.
+  async function painted(cols: number, composer: string): Promise<NudgeObservation> {
+    const rule = (label: string) => label + '─'.repeat(cols - label.length);
+    const stream = '  Muse Code 1.4.14\r\n\r\n' +
+      '\u001b[2;38;2;103;108;116m' + rule('── Voice input (Alt+V to start) ') + '\u001b[0m' +
+      composer + '\r\n' +
+      rule('') +
+      '  muse-wonder-full-1.0 · high · C:\\work\\project · Launch overrides';
+    const renderer = new ScreenRenderer({ cols, rows: 12 });
+    await renderer.write(stream);
+    const styled = renderer.styledLines({ last: 2000 }).lines;
+    await renderer.dispose();
+    return { rows: styled.map((line) => line.text), styled, viewportRows: 12, unchangedMs: NUDGE_QUIET_MS };
+  }
+
+  it.each([80, 152])('finds the empty composer at %i columns', async (cols) => {
+    const view = await painted(cols, '❯');
+    expect(view.styled?.find((line) => line.text.startsWith('❯'))?.wrapped).toBe(true);
+    expect(muse.nudge?.readiness(view)).toBe('ready');
+  });
+
+  it('still reads a typed draft under the rule as a draft', async () => {
+    expect(muse.nudge?.readiness(await painted(80, '❯ draft words not sent'))).toBe('draft');
+  });
+
+  it('keeps a long draft that wraps inside the composer as one draft', async () => {
+    const view = await painted(40, `❯ ${'long draft '.repeat(5)}`.slice(0, 40) + 'continues past the edge');
+    expect(muse.nudge?.readiness(view)).not.toBe('ready');
+  });
+});
+
+describe('a wrapped row below rule-like text', () => {
+  const lastRow = (screen: NudgeObservation, test: RegExp): number => {
+    const texts = screen.styled!.map((line) => line.text);
+    for (let i = texts.length - 1; i >= 0; i--) if (test.test(texts[i]!)) return i;
+    return -1;
+  };
+  const row = (text: string, wrapped: boolean): StyledLine =>
+    ({ text, spans: [{ from: 0, to: text.length, ...INK }], ...(wrapped ? { wrapped: true } : {}) });
+  function splice(screen: NudgeObservation, at: number, remove: number, rows: StyledLine[]): NudgeObservation {
+    const styled = [...(screen.styled ?? [])];
+    styled.splice(at, remove, ...rows);
+    return { ...screen, styled, rows: styled.map((line) => line.text) };
+  }
+
+  it('does not read a typed draft ending in chrome-like text as an empty composer', async () => {
+    const screen = await load('claude-answered');
+    const at = lastRow(screen, /^❯/u);
+    const draft = `❯ draft words ${'x'.repeat(30)} /effort`;
+    const view = splice(screen, at, 1, [row(draft, false), row('❯', true)]);
+    expect(claude.nudge?.readiness(view)).not.toBe('ready');
+  });
+
+  it('does not read a busy turn as idle when the busy row is a wrap', async () => {
+    const screen = await load('codex-answered');
+    const at = lastRow(screen, /^\s*›/u);
+    const composer = { ...screen.styled![at]!, wrapped: true };
+    const view = splice(screen, at, 1, [row('output '.repeat(14), false),
+      row('• Working (3s • esc to interrupt)', true), composer]);
+    expect(codex.nudge?.readiness(view)).not.toBe('ready');
+  });
+
+  it('does not end a Muse draft at a rule-shaped wrap of the draft itself', async () => {
+    const cols = 80;
+    const stream = '  Muse Code 1.4.14\r\n\r\n' +
+      '\u001b[2;38;2;103;108;116m' + `── Voice input (Alt+V to start) ${'─'.repeat(cols - 32)}` + '\u001b[0m' +
+      `❯ ${'a'.repeat(cols - 2)}` + '─'.repeat(cols) + '❯\r\n' +
+      '─'.repeat(cols) +
+      '  muse-wonder-full-1.0 · high · C:\\work\\project · Launch overrides';
+    const renderer = new ScreenRenderer({ cols, rows: 12 });
+    await renderer.write(stream);
+    const styled = renderer.styledLines({ last: 2000 }).lines;
+    await renderer.dispose();
+    const view = { rows: styled.map((line) => line.text), styled, viewportRows: 12, unchangedMs: NUDGE_QUIET_MS };
+    expect(muse.nudge?.readiness(view)).not.toBe('ready');
+  });
+});
+
+describe('typed text shaped like a rule row', () => {
+  async function render(cols: number, stream: string): Promise<NudgeObservation> {
+    const renderer = new ScreenRenderer({ cols, rows: 14 });
+    await renderer.write(stream);
+    const styled = renderer.styledLines({ last: 2000 }).lines;
+    await renderer.dispose();
+    return { rows: styled.map((line) => line.text), styled, viewportRows: 14, unchangedMs: NUDGE_QUIET_MS };
+  }
+
+  it('does not treat a typed rule in an Antigravity draft as its frame', async () => {
+    const cols = 80;
+    const view = await render(cols, '  ok\r\n' + '─'.repeat(cols) + '\r\n' +
+      '> draft text\r\n' + '  ' + '─'.repeat(cols - 2) + '>\r\n' +
+      '─'.repeat(cols) + '\r\n' + '? for shortcuts');
+    expect(agy.nudge?.readiness(view)).not.toBe('ready');
+  });
+
+  it('does not treat a typed copy of the Muse voice rule as the real one', async () => {
+    const cols = 80;
+    const voice = `── Voice input (Alt+V to start) ${'─'.repeat(cols - 32)}`;
+    const view = await render(cols, '  Muse Code 1.4.14\r\n\r\n' + voice + '❯ draft text\r\n' +
+      voice + '❯\r\n' + '─'.repeat(cols) +
+      '  muse-wonder-full-1.0 · high · C:\\work\\project · Launch overrides');
+    expect(muse.nudge?.readiness(view)).not.toBe('ready');
+  });
+});
+
+describe('a typed Muse voice rule after the real one has scrolled away', () => {
+  it('does not unwrap below a rule drawn in typed ink', async () => {
+    const cols = 80;
+    const typed = '\u001b[38;2;204;211;219m';
+    const voice = `── Voice input (Alt+V to start) ${'─'.repeat(cols - 32)}`;
+    const draftRows = Array.from({ length: 14 }, (_, i) => `draft line ${String(i)}\r\n`).join('');
+    const stream = '\u001b[2;38;2;103;108;116m' + voice + '\u001b[0m' + typed + '❯ ' + draftRows +
+      voice + '❯' + '\u001b[0m\r\n' + '─'.repeat(cols) +
+      '  muse-wonder-full-1.0 · high · C:\\work\\project · Launch overrides';
+    const renderer = new ScreenRenderer({ cols, rows: 12 });
+    await renderer.write(stream);
+    const styled = renderer.styledLines({ last: 12 }).lines;
+    await renderer.dispose();
+    expect(styled.some((line) => line.text.startsWith('── Voice input'))).toBe(true);
+    const view = { rows: styled.map((line) => line.text), styled, viewportRows: 12, unchangedMs: NUDGE_QUIET_MS };
+    expect(muse.nudge?.readiness(view)).not.toBe('ready');
+  });
+});
+
+describe('a busy Muse turn painted after a full-width row', () => {
+  it('stays busy when xterm marks the busy row as a wrap', async () => {
+    const cols = 80;
+    const voice = `── Voice input (Alt+V to start) ${'─'.repeat(cols - 32)}`;
+    const stream = 'output '.repeat(11) + 'x'.repeat(cols - 77) +
+      '◈ Thinking (5s · esc to interrupt)\r\n' +
+      '\u001b[2;38;2;103;108;116m' + voice + '\u001b[0m' + '❯\r\n' + '─'.repeat(cols) +
+      '  muse-wonder-full-1.0 · high · C:\\work\\project · Launch overrides';
+    const renderer = new ScreenRenderer({ cols, rows: 12 });
+    await renderer.write(stream);
+    const styled = renderer.styledLines({ last: 12 }).lines;
+    await renderer.dispose();
+    expect(styled.find((line) => line.text.startsWith('◈ Thinking'))?.wrapped).toBe(true);
+    const view = { rows: styled.map((line) => line.text), styled, viewportRows: 12, unchangedMs: NUDGE_QUIET_MS };
+    expect(muse.nudge?.readiness(view)).toBe('busy');
   });
 });
