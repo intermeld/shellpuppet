@@ -615,8 +615,14 @@ export const NUDGE_LIST_CAP = 3;
  * only when it is a plain name: anything else (spaces, line breaks, escape
  * codes) is replaced by the participant id. Plain names may contain words.
  */
-export function buildNudge(messages: readonly NudgeMessage[]): string {
+export function buildNudge(messages: readonly NudgeMessage[], cliPath?: string): string {
   if (messages.length === 0) return '';
+  // Use only paths whose spelling is literal in double quotes in the supported shells.
+  // Bash folds a doubled backslash, and a trailing one escapes the closing quote.
+  const command = cliPath !== undefined && new RegExp(String.raw`^[\p{L}\p{N}_ .:/\\()+-]+$`, 'u').test(cliPath) &&
+    !cliPath.includes('\\\\') && !cliPath.endsWith('\\')
+    ?`run: node "${cliPath}" inbox`
+    : 'run the script in SHELLPUPPET_CLI with node and the argument inbox';
   const shown = (value: string | undefined, fallback: string): string =>
     typeof value === 'string' && NAME_PATTERN.test(value) ? value : fallback;
   const pairs = messages.map((message) => {
@@ -630,11 +636,11 @@ export function buildNudge(messages: readonly NudgeMessage[]): string {
   if (pairs.length === 1) {
     return (
       `[ShellPuppet] Message ${listed[0] ?? '?'} is waiting. ` +
-      'Read it with the session_inbox tool, or run the script in SHELLPUPPET_CLI with node and the argument inbox'
+      `Read it with the session_inbox tool, or ${command}`
     );
   }
   return (
     `[ShellPuppet] ${String(pairs.length)} messages are waiting: ${listed.join(', ')}${tail}. ` +
-    'Read them with the session_inbox tool, or run the script in SHELLPUPPET_CLI with node and the argument inbox'
+    `Read them with the session_inbox tool, or ${command}`
   );
 }

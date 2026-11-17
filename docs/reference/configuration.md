@@ -540,9 +540,11 @@ so a daemon restart clears every mailbox.
 daemon in a rolling minute (default 20). Both must be positive integers.
 The daemon checks waiting messages on its existing screen scan. Only an idle
 supported session with an empty composer receives a fixed nudge; other messages
-stay in the inbox. The nudge names the CLI inbox command without assuming that
-`shellpuppet` on `PATH` is the CLI belonging to this daemon. Sessions receive
-the matching CLI path in `SHELLPUPPET_CLI`.
+stay in the inbox. The nudge quotes this daemon's CLI path in
+`node "<path>" inbox`, without assuming that `shellpuppet` on `PATH` belongs to
+this daemon. Sessions receive the same path in `SHELLPUPPET_CLI`. The daemon
+writes the line, pauses for at least 150 milliseconds, checks that the composer
+and waiting messages are unchanged, then sends the agent's submit key.
 
 `allow` says who may message whom, in both directions:
 

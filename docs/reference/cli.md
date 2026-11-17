@@ -14,6 +14,8 @@ Control characters in printed message text appear as visible escapes. All
 commands accept `--json`.
 
 Inside a session, use the `SHELLPUPPET_CLI` path supplied in its environment.
+The message nudge includes `node "<path>" inbox` with this daemon's literal CLI
+path when that path can be quoted consistently in supported shells.
 The daemon always supplies its absolute `SHELLPUPPET_HOME`, so the CLI reaches
 the daemon that started the session. It overrides a copied or caller supplied
 value, including with `envFromDaemon: "all"`. The CLI presents the session's

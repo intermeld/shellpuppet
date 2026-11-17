@@ -15,6 +15,30 @@ function pair(): Mailbox {
 }
 
 describe('buildNudge', () => {
+  it('names the daemon CLI literally when its path contains spaces', () => {
+    const line = buildNudge([{ id: 'm42', from: { id: 's3', name: 'chair-2' } }],
+      'C:\\Program Files\\ShellPuppet\\cli.js');
+    expect(line).toBe('[ShellPuppet] Message m42 from chair-2 is waiting. ' +
+      'Read it with the session_inbox tool, or run: node "C:\\Program Files\\ShellPuppet\\cli.js" inbox');
+    expect(line).not.toMatch(/[\r\n]/);
+  });
+
+  it('keeps the nudge to one line when a CLI path needs shell expansion', () => {
+    const line = buildNudge([{ id: 'm42', from: { id: 's3', name: 'chair-2' } }],
+      '/tmp/unsafe$path\ncli.js');
+    expect(line).toContain('run the script in SHELLPUPPET_CLI with node and the argument inbox');
+    expect(line).not.toContain('unsafe');
+    expect(line).not.toMatch(/[\r\n]/);
+  });
+
+  it('falls back when a backslash in the CLI path would not stay literal in bash', () => {
+    for (const cliPath of ['\\\\server\\share\\cli.js', 'C:\\tools\\']) {
+      const line = buildNudge([{ id: 'm42', from: { id: 's3', name: 'chair-2' } }], cliPath);
+      expect(line).toContain('run the script in SHELLPUPPET_CLI with node and the argument inbox');
+      expect(line).not.toContain('server');
+    }
+  });
+
   it('uses the fixed wording for one message', () => {
     expect(buildNudge([{ id: 'm42', from: { id: 's3', name: 'chair-2' } }])).toBe(
       '[ShellPuppet] Message m42 from chair-2 is waiting. Read it with the session_inbox tool, or run the script in SHELLPUPPET_CLI with node and the argument inbox',

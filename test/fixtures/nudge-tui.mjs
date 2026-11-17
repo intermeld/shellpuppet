@@ -7,10 +7,23 @@ const mode = process.argv[2];
 const inputFile = process.argv[3];
 const readSignal = process.argv[4];
 const capture = mode === 'draft' ? 'claude-prompt-typed' : 'claude-answered';
-process.stdout.write(fs.readFileSync(path.join(here, 'reasoning', `${capture}.ansi`)));
+const initialScreen = fs.readFileSync(path.join(here, 'reasoning', `${capture}.ansi`));
+process.stdout.write(initialScreen);
 process.stdin.setRawMode?.(true);
 process.stdin.resume();
-process.stdin.on('data', (bytes) => fs.appendFileSync(inputFile, bytes));
+process.stdin.on('data', (bytes) => {
+  fs.appendFileSync(inputFile, bytes);
+  fs.appendFileSync(`${inputFile}.events`, `${JSON.stringify({ data: bytes.toString(), at: Date.now() })}\n`);
+  if (mode !== 'ready') return;
+  const data = bytes.toString();
+  if (data === '\r') {
+    process.stdout.write('\x1b[2J\x1b[H');
+    process.stdout.write(initialScreen);
+  } else {
+    process.stdout.write('\x1b[31;1H\x1b[J❯\u00a0' + data + '\r\n' +
+      '\x1b[0;38;2;136;136;136m' + '─'.repeat(120) + '\x1b[0m');
+  }
+});
 
 let read = false;
 setInterval(async () => {
