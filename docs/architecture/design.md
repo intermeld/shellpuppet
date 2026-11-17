@@ -340,7 +340,9 @@ message whom, and a clock.
   literally across supported shells, the line refers to `SHELLPUPPET_CLI` instead.
   Every check is repeated inside the queued write and, after a pause of at least
   150 ms, again before the module's submit key. A module may require a longer
-  pause. If anything changed in between,
+  pause. Some programs paint a pasted line late, so the check before Enter
+  repeats for up to 2 s until the composer shows exactly the line; other input
+  in that time ends the wait at once. If anything changed in between,
   nothing more is sent and the messages stay `waiting` (audit `nudge-aborted`).
   A line already typed is left visible rather than erased; the composer then
   reads as a draft and receives no further nudge until it is cleared. The

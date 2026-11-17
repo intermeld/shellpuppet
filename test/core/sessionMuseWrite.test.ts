@@ -1,6 +1,6 @@
 import type { IPty } from 'node-pty';
 import { describe, expect, it } from 'vitest';
-import { MUSE_SUBMIT_DELAY_MS, NUDGE_SUBMIT_DELAY_MS, Session } from '../../src/core/session.js';
+import { MUSE_SUBMIT_DELAY_MS, NUDGE_SUBMIT_DELAY_MS, NUDGE_SUBMIT_WAIT_MS, Session } from '../../src/core/session.js';
 
 class RecordingPty implements IPty {
   readonly pid = 0;
@@ -38,6 +38,37 @@ describe('Muse input submission', () => {
     expect(phases).toEqual(['before', 'submit']);
     expect(pty.writes.map((entry) => entry.data)).toEqual(['fixed nudge', '\r']);
     expect(pty.writes[1]!.at - pty.writes[0]!.at).toBeGreaterThanOrEqual(NUDGE_SUBMIT_DELAY_MS - 5);
+  });
+
+  it('waits for a Codex nudge line painted after the pause, then submits it', async () => {
+    const { session, pty } = recordingSession('codex');
+    let checks = 0;
+    const result = await session.writeNudge('fixed nudge\r', (_screen, phase) =>
+      phase === 'before' || ++checks >= 4);
+    expect(result).toBe('sent');
+    expect(checks).toBe(4);
+    expect(pty.writes.map((entry) => entry.data)).toEqual(['fixed nudge', '\r']);
+  });
+
+  it('abandons a Codex nudge whose line never shows within the wait', async () => {
+    const { session, pty } = recordingSession('codex');
+    const started = Date.now();
+    expect(await session.writeNudge('fixed nudge\r', (_screen, phase) => phase === 'before')).toBe('aborted');
+    expect(Date.now() - started).toBeGreaterThanOrEqual(NUDGE_SUBMIT_DELAY_MS + NUDGE_SUBMIT_WAIT_MS - 10);
+    expect(pty.writes.map((entry) => entry.data)).toEqual(['fixed nudge']);
+  });
+
+  it('abandons a waiting Codex nudge as soon as other input is queued', async () => {
+    const { session, pty } = recordingSession('codex');
+    const pending = session.writeNudge('fixed nudge\r', (_screen, phase) => phase === 'before');
+    while (pty.writes.length === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+    await new Promise((resolve) => setTimeout(resolve, NUDGE_SUBMIT_DELAY_MS + 200));
+    const started = Date.now();
+    const other = session.write('other');
+    expect(await pending).toBe('aborted');
+    expect(Date.now() - started).toBeLessThan(500);
+    await other;
+    expect(pty.writes.map((entry) => entry.data)).toEqual(['fixed nudge', 'other']);
   });
 
   it('leaves a Codex nudge visible when a prompt opens during the delay', async () => {
@@ -91,7 +122,9 @@ describe('Muse input submission', () => {
     while (pty.writes.length === 0) await new Promise((resolve) => setTimeout(resolve, 5));
     promptOpen = true;
     expect(await pending).toBe('aborted');
-    expect(phases).toEqual(['before', 'submit']);
+    expect(phases[0]).toBe('before');
+    expect(phases.slice(1).length).toBeGreaterThan(0);
+    expect(phases.slice(1).every((phase) => phase === 'submit')).toBe(true);
     expect(pty.writes.map((entry) => entry.data)).toEqual(['fixed nudge']);
   });
 

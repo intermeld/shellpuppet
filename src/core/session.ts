@@ -171,6 +171,9 @@ const WRITE_CHUNK_DELAY_MS = 8;
 export { MUSE_SUBMIT_DELAY_MS } from '../agents/index.js';
 /** Time between a nudge's body and submit key when the module needs no longer pause. */
 export const NUDGE_SUBMIT_DELAY_MS = 150;
+/** How long a nudge may wait after that pause for the program to paint its line. */
+export const NUDGE_SUBMIT_WAIT_MS = 2000;
+const NUDGE_SUBMIT_POLL_MS = 50;
 
 /**
  * Bracketed paste (DEC private mode 2004). A TUI that enables it is telling us
@@ -1323,12 +1326,24 @@ export class Session implements WaitTarget {
         this.refuseIfInputFailed();
         this.refuseIfEnded();
         if (ready !== undefined) {
-          await this.renderer.flush();
-          this.refuseIfEnded();
-          if (this.inputQueueVersion !== queuedInputVersion ||
-            !ready(this.renderer.snapshot().screen, 'submit')) {
-            onNudgeAbort?.();
-            return null;
+          // A program may paint a pasted line some time after it arrives, so
+          // the check repeats until the screen holds the line or the wait ends.
+          // Any other input during the wait still abandons the submit.
+          const deadline = Date.now() + (nudge ? NUDGE_SUBMIT_WAIT_MS : 0);
+          for (;;) {
+            await this.renderer.flush();
+            this.refuseIfEnded();
+            if (this.inputQueueVersion !== queuedInputVersion) {
+              onNudgeAbort?.();
+              return null;
+            }
+            if (ready(this.renderer.snapshot().screen, 'submit')) break;
+            if (Date.now() >= deadline) {
+              onNudgeAbort?.();
+              return null;
+            }
+            await new Promise((resolve) => setTimeout(resolve, NUDGE_SUBMIT_POLL_MS));
+            this.refuseIfInputFailed();
           }
         }
         this.pty.write(key);
