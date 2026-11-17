@@ -150,7 +150,11 @@ function composerRegion(
   for (let i = at + 1; i < lines.length; i++) {
     const line = lines[i];
     if (line === undefined) break;
-    if (frame !== null && line.wrapped !== true && frame.test(line.text)) break;
+    // xterm can mark the frame row under a wrapped draft as a wrap too. While
+    // matching the exact line the daemon typed, a frame row in the module's
+    // own rule ink still ends the region: typed text is never drawn in it.
+    if (frame !== null && frame.test(line.text) &&
+      (line.wrapped !== true || (matchingExpected && rule.ruleInk?.(line) === true))) break;
     if (rule.status?.(line, lines.slice(i + 1)) === true) break;
     if (rule.unprovenContinuations === true && !matchingExpected && line.text.trim() !== '') {
       return { rows, unproven: true };

@@ -447,6 +447,25 @@ describe('nudge readiness', () => {
         '────────────────────────────────────────────────────────────────────────────────']);
       expect(nudgeVerdict(muse, { ...wrapped, unchangedMs: 0, expectedDraft: line })).toEqual({ ready: true });
     });
+    it('before Enter, accepts a captured daemon line wrapped above a frame row marked as a wrap', async () => {
+      const line = '[ShellPuppet] Message m1 from chair-mute is waiting. Read it with the session_inbox tool, ' +
+        'or run: node "C:\\tools\\example\\shellpuppet-cli-xyzx\\dist\\cli\\index.js" inbox';
+      const screen = await load('muse-nudge-wrapped');
+      const frameAt = screen.styled!.findIndex((row, i) => i > 0 && /^─{10,}$/u.test(row.text.trimEnd()) &&
+        screen.styled![i - 1]!.text.includes('inbox'));
+      expect(screen.styled![frameAt]!.wrapped).toBe(true);
+      const check = (view: NudgeObservation, expectedDraft: string) =>
+        nudgeVerdict(muse, { ...view, unchangedMs: 0, expectedDraft });
+      expect(check(screen, line)).toEqual({ ready: true });
+      expect(check(screen, line.replace('m1', 'm2'))).toEqual({ ready: false, reason: 'draft' });
+      expect(check(screen, line + ' more')).toEqual({ ready: false, reason: 'draft' });
+      // The same row in typed ink is text in the draft, not the frame.
+      const styled = screen.styled!.map((row, i) => (i === frameAt
+        ? { ...row, spans: row.spans.map((span) => ({ ...span, dim: false, fg: '#ccd3db' })) }
+        : row));
+      expect(check({ ...screen, rows: styled.map((row) => row.text), styled }, line))
+        .toEqual({ ready: false, reason: 'draft' });
+    });
     it('is ready on a captured idle screen with a bare composer', async () => {
       const screen = await load('muse-violet');
       expect(readinessOf(muse, screen)).toBe('ready');
