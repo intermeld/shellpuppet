@@ -659,7 +659,7 @@ export class Daemon {
   private readonly geometryEpoch = new Map<string, number>();
   private readonly widerReads = new Map<string, { abort: AbortController; done: Promise<void>; finish: () => void }>();
   /** Subscribers to the daemon-wide event stream (`/events`). */
-  private readonly eventSockets = new Set<WebSocket>();
+  private readonly eventSockets = new Map<WebSocket, string | undefined>();
   /**
    * Open `/dashboard/events` sockets. While one is open, a session start does
    * not launch a per-session viewer window and does not hand back a viewer URL.
@@ -784,11 +784,14 @@ export class Daemon {
     this.mailbox.on('message', (event) => {
       const entry = this.mailbox.log().find((item) => item.id === event.id);
       if (entry !== undefined) this.messageAudit('msg-send', entry);
-      this.emitEvent({ type: 'message', ...event });
+      this.emitMessageEvent({ type: 'message', ...event }, entry);
+      this.emitDashboardMessageEvent({ type: 'message', ...event });
       if (this.mailbox.participant(event.to.id)?.kind === 'session') this.nudges.queue(event.to.id);
     });
     this.mailbox.on('state', (event) => {
-      this.emitEvent({ type: 'message-state', ...event });
+      const entry = this.mailbox.log().find((item) => item.id === event.id);
+      this.emitMessageEvent({ type: 'message-state', ...event }, entry);
+      this.emitDashboardMessageEvent({ type: 'message-state', ...event });
     });
     this.sessionFeed = new SessionFeed(
       this.version,
@@ -1569,6 +1572,39 @@ export class Daemon {
     }
     this.lastActivity = Date.now();
     this.writeSessionList(res, url);
+  }
+
+  /** Owner-wide history is available only with the dashboard cookie and document proof. */
+  private serveDashboardMessages(req: http.IncomingMessage, res: http.ServerResponse, url: URL): void {
+    const presented = this.dashboardCookiePresented(req.headers.cookie);
+    if (this.dashboardCookieToken(req.headers.cookie) === null) {
+      if (presented) this.auditDashboardRefusal(req, 'unauthenticated');
+      json(res, 401, { error: 'Unauthorised.' });
+      return;
+    }
+    if (!this.isSameOriginRead(req)) {
+      this.auditDashboardRefusal(req, this.cookieRefusalReason(req));
+      json(res, 403, { error: 'Forbidden.' });
+      return;
+    }
+    if (!this.tokens.acceptsDashboardProof(headerOne(req, 'x-shellpuppet-csrf'))) {
+      this.auditDashboardRefusal(req, 'proof');
+      json(res, 403, { error: 'Forbidden.' });
+      return;
+    }
+    const messages = this.mailbox.log();
+    const counts: Record<string, number> = {};
+    for (const entry of messages) {
+      if (entry.state === 'waiting' || entry.state === 'nudged')
+        counts[entry.to.id] = (counts[entry.to.id] ?? 0) + 1;
+    }
+    const summary = url.searchParams.get('summary') === '1';
+    const groups = (this.options.messaging?.allow ?? []).filter((rule) => typeof rule !== 'string')
+      .map((rule) => ({ group: rule.group, members: rule.members }));
+    this.audit.record('dashboard', 'msg-log', undefined, { count: messages.length });
+    this.lastActivity = Date.now();
+    json(res, 200, { enabled: this.options.messaging?.enabled === true,
+      counts, ...(summary ? {} : { messages, groups }) });
   }
 
   /** A cookie mutation: same-origin Fetch Metadata and a matching Origin. */
@@ -2361,6 +2397,10 @@ export class Daemon {
       await this.serveDashboardProfiles(req, res);
       return;
     }
+    if (req.method === 'GET' && url.pathname === '/dashboard/messages') {
+      this.serveDashboardMessages(req, res, url);
+      return;
+    }
     if (req.method === 'POST' && url.pathname === '/dashboard/launch') {
       await this.handleDashboardLaunch(req, res);
       return;
@@ -2448,6 +2488,9 @@ export class Daemon {
       }
     }
     this.mailbox.end(id);
+    for (const [ws, participant] of this.eventSockets) {
+      if (participant === id) ws.close();
+    }
   }
 
   private async deliverNudge(id: string): Promise<'sent' | 'wait' | 'done'> {
@@ -4024,8 +4067,25 @@ export class Daemon {
   /** Fan an event out to every `/events` subscriber (TEXT JSON frames). */
   private emitEvent(event: Record<string, unknown>): void {
     const message = JSON.stringify({ ...event, at: new Date().toISOString() });
-    for (const ws of this.eventSockets) {
+    for (const ws of this.eventSockets.keys()) {
       if (ws.readyState === ws.OPEN) ws.send(message);
+    }
+  }
+
+  private emitMessageEvent(event: Record<string, unknown>, entry: MailboxEntry | undefined): void {
+    if (entry === undefined) return;
+    const message = JSON.stringify({ ...event, at: new Date().toISOString() });
+    for (const [ws, participant] of this.eventSockets) {
+      if (ws.readyState === ws.OPEN && participant !== undefined &&
+          (participant === entry.from.id || participant === entry.to.id)) ws.send(message);
+    }
+  }
+
+  /** Dashboard notifications carry metadata only; the page fetches text separately. */
+  private emitDashboardMessageEvent(event: Record<string, unknown>): void {
+    const frame = JSON.stringify({ ...event, at: new Date().toISOString() });
+    for (const ws of this.dashboardEventSockets) {
+      if (ws.readyState === ws.OPEN) ws.send(frame);
     }
   }
 
@@ -4105,8 +4165,16 @@ export class Daemon {
         reject(403, 'Forbidden');
         return;
       }
+      const claimId = req.headers['x-shellpuppet-claim'];
+      const claimSecret = req.headers['x-shellpuppet-claim-secret'];
+      const claimPresented = claimId !== undefined || claimSecret !== undefined;
+      if (claimPresented && (typeof claimId !== 'string' || typeof claimSecret !== 'string' ||
+          !this.mailbox.verifyClaim(claimId, claimSecret))) {
+        reject(403, 'Forbidden');
+        return;
+      }
       this.wss.handleUpgrade(req, socket, head, (ws) => {
-        this.callerContext.run(caller.session, () => this.attachEventSocket(ws));
+        this.attachEventSocket(ws, caller.session ?? (typeof claimId === 'string' ? claimId : undefined));
       });
       return;
     }
@@ -4164,9 +4232,9 @@ export class Daemon {
   }
 
   /** Attach a subscriber to the daemon-wide event stream. */
-  private attachEventSocket(ws: WebSocket): void {
+  private attachEventSocket(ws: WebSocket, participant?: string): void {
     this.sockets.add(ws);
-    this.eventSockets.add(ws);
+    this.eventSockets.set(ws, participant);
     this.lastActivity = Date.now();
     this.audit.record('client', 'events-connect', '-');
     ws.send(JSON.stringify({ type: 'hello', version: this.version }));

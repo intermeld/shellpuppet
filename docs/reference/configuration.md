@@ -509,6 +509,12 @@ the MCP server on stderr, and by the CLI on a start that names a variable.
 
 ## Messages between sessions
 
+The dashboard's Messages button opens a live, newest-first history of all sessions' messages.
+Select a row to read its text, or filter by a session or configured group. A pane's
+message count opens that session's history; the count clears when its messages are read
+or cannot be delivered. Counts refresh together after a burst of updates, while the
+full history is fetched only when Messages is open.
+
 Messaging is off until you switch it on: no `messaging` section, or
 `"enabled": false`, means no participant can message another. The daemon
 keeps each message in a mailbox the receiving session reads with an inbox

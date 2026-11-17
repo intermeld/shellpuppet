@@ -9,6 +9,13 @@
   const error = document.getElementById('error');
   const connection = document.getElementById('connection');
   const attentionCount = document.getElementById('attention-count');
+  const messagesToggle = document.getElementById('messages-toggle');
+  const messagesView = document.getElementById('messages-view');
+  const messagesFilter = document.getElementById('messages-filter');
+  const messagesList = document.getElementById('messages-list');
+  const messagesDetail = document.getElementById('messages-detail');
+  const messagesOff = document.getElementById('messages-off');
+  const messagesEmpty = document.getElementById('messages-empty');
   const shareCount = document.getElementById('share-count');
   const profileSelect = document.getElementById('profile');
   const folderField = document.getElementById('folder-field');
@@ -28,6 +35,148 @@
   main.id = 'main-pane';
   strip.id = 'strip';
   const panes = new Map();
+  let messageEntries = [];
+  let unreadCounts = {};
+  let messageGroups = [];
+  let messagingEnabled = false;
+  let messageSelection = null;
+  let messageFetching = false;
+  let messageDirty = false;
+  let messageTimer = null;
+  let lastMessageFetch = 0;
+  let messageRetryDelay = 0;
+  let messageFilter = '';
+  // eslint-disable-next-line no-control-regex
+  const visibleMessageText = (value) => value.replace(/[\x00-\x08\x0b-\x1f\x7f-\x9f\u200b-\u200f\u202a-\u202e\u2060\u2066-\u2069\ufeff]/g,
+    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, '0')}`);
+
+  function unreadCount(id) {
+    return unreadCounts[id] ?? 0;
+  }
+  function renderMessages() {
+    const options = [{ value: '', label: 'All' }];
+    const participants = new Map();
+    for (const entry of messageEntries) {
+      participants.set(entry.from.id, entry.from.name);
+      participants.set(entry.to.id, entry.to.name);
+    }
+    for (const [id, name] of [...participants].sort((a, b) => a[1].localeCompare(b[1])))
+      options.push({ value: `session:${id}`, label: `${name} (${id})` });
+    for (const group of messageGroups) options.push({ value: `group:${group.group}`, label: `Group: ${group.group}` });
+    // A badge can open the view before the history arrives; keep its filter
+    // rather than dropping it because no row has named that session yet.
+    if (messageFilter && !options.some((option) => option.value === messageFilter)) {
+      const id = messageFilter.startsWith('session:') ? messageFilter.slice(8) : messageFilter;
+      const pane = panes.get(id);
+      options.push({ value: messageFilter, label: pane ? `${pane.label.textContent} (${id})` : id });
+    }
+    messagesFilter.replaceChildren();
+    for (const option of options) {
+      const node = document.createElement('option');
+      node.value = option.value;
+      node.textContent = option.label;
+      messagesFilter.append(node);
+    }
+    messagesFilter.value = messageFilter;
+    if (messagesFilter.value !== messageFilter) messageFilter = '';
+    const filtered = messageEntries.filter((entry) => {
+      if (!messageFilter) return true;
+      if (messageFilter.startsWith('session:')) {
+        const id = messageFilter.slice(8);
+        return entry.from.id === id || entry.to.id === id;
+      }
+      const group = messageGroups.find((item) => item.group === messageFilter.slice(6));
+      return group?.members.includes(entry.from.name) || group?.members.includes(entry.to.name);
+    }).sort((a, b) => b.time - a.time || b.id.localeCompare(a.id));
+    messagesOff.hidden = messagingEnabled;
+    messagesEmpty.hidden = !messagingEnabled || filtered.length > 0;
+    document.getElementById('messages-content').hidden = !messagingEnabled || filtered.length === 0;
+    const focusedId = document.activeElement?.dataset?.messageId;
+    messagesList.replaceChildren();
+    for (const entry of filtered) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'message-row';
+      row.dataset.messageId = entry.id;
+      row.setAttribute('aria-current', String(entry.id === messageSelection));
+      row.textContent = `${entry.from.name} → ${entry.to.name} · ${new Date(entry.time).toLocaleString()} · ${entry.id} · ${entry.state}`;
+      row.addEventListener('click', () => { messageSelection = entry.id; renderMessages(); });
+      const listItem = document.createElement('li');
+      listItem.append(row);
+      messagesList.append(listItem);
+    }
+    const selectedEntry = filtered.find((entry) => entry.id === messageSelection);
+    messagesDetail.textContent = selectedEntry
+      ? visibleMessageText(selectedEntry.text ?? '') : 'Select a message to read it.';
+    if (focusedId) messagesList.querySelectorAll('button').forEach((row) => {
+      if (row.dataset.messageId === focusedId) row.focus();
+    });
+  }
+  function updateMessageBadge(item) {
+    const count = unreadCount(item.id);
+    item.messageCount.hidden = count === 0;
+    item.messageCount.textContent = count ? `${count} ${count === 1 ? 'message' : 'messages'}` : '';
+    item.messageCount.setAttribute('aria-label', `${count} unread messages for ${item.label.textContent}`);
+  }
+  async function loadMessages() {
+    messageTimer = null;
+    if (messageFetching || !messageDirty) return;
+    messageDirty = false;
+    messageFetching = true;
+    lastMessageFetch = Date.now();
+    const full = !messagesView.hidden;
+    try {
+      const response = await fetch(`/dashboard/messages${full ? '' : '?summary=1'}`, {
+        headers: { 'x-shellpuppet-csrf': proof },
+      });
+      if (!response.ok) throw new Error('The message history could not be read.');
+      const result = await response.json();
+      messagingEnabled = result.enabled === true;
+      unreadCounts = result.counts;
+      for (const item of panes.values()) updateMessageBadge(item);
+      if (full && !messagesView.hidden) {
+        messageEntries = result.messages;
+        messageGroups = result.groups;
+        renderMessages();
+      }
+      if (full !== !messagesView.hidden) messageDirty = true;
+      messageRetryDelay = 0;
+    } catch {
+      showError('The message history could not be read.');
+      // Keep the update pending: the socket may stay open with no further
+      // event, so retry rather than leave the badge stale.
+      messageDirty = true;
+      messageRetryDelay = Math.min(messageRetryDelay * 2 || 1000, 30_000);
+    }
+    finally { messageFetching = false; if (messageDirty) scheduleMessageRefresh(); }
+  }
+  function scheduleMessageRefresh() {
+    messageDirty = true;
+    if (messageFetching || messageTimer !== null) return;
+    messageTimer = setTimeout(() => { void loadMessages(); },
+      Math.max(messageRetryDelay, 250 - (Date.now() - lastMessageFetch)));
+  }
+  function openMessages(filter = '') {
+    messageFilter = filter;
+    messagesView.hidden = false;
+    root.hidden = true;
+    empty.hidden = true;
+    messagesToggle.setAttribute('aria-expanded', 'true');
+    messagesToggle.classList.add('active');
+    renderMessages();
+    messagesFilter.focus();
+    scheduleMessageRefresh();
+  }
+  function closeMessages() {
+    messagesView.hidden = true;
+    root.hidden = false;
+    empty.hidden = panes.size > 0;
+    messagesToggle.setAttribute('aria-expanded', 'false');
+    messagesToggle.classList.remove('active');
+    messagesToggle.focus();
+    messageEntries = [];
+    scheduleMessageRefresh();
+  }
   const PREF = 'shellpuppet.dashboard';
   const TRACK_PREF = 'shellpuppet.dashboard.tracks';
   const LAUNCH_PREF = 'shellpuppet.dashboard.launches';
@@ -502,6 +651,10 @@
     purpose.className = 'pane-purpose hint';
     const badge = document.createElement('span');
     badge.className = 'badge';
+    const messageCount = makeButton('', () => openMessages(`session:${item.id}`));
+    messageCount.className = 'pane-message-count';
+    messageCount.hidden = true;
+    messageCount.addEventListener('click', (event) => event.stopPropagation());
     const state = document.createElement('span');
     state.className = 'pane-state hint';
     const space = document.createElement('span');
@@ -512,7 +665,7 @@
     overflowNote.className = 'pane-overflow-note';
     overflowNote.textContent = 'Shift+wheel or drag the scrollbars to see the rest. Enlarge or Fit to show it whole.';
     overflowNote.hidden = true;
-    const item = { id: summary.id, summary, card, label, purpose, badge, state, size, overflowNote, client: null, previousGrid: null };
+    const item = { id: summary.id, summary, card, label, purpose, badge, messageCount, state, size, overflowNote, client: null, previousGrid: null };
     item.fit = makeButton('Fit', () => { select(item.id); item.client?.fitGrid(); });
     item.enlarge = makeButton('Enlarge', () => {
       select(item.id);
@@ -555,7 +708,7 @@
     item.dismiss.dataset.action = 'dismiss';
     menu.append(item.kill, item.copy, item.pop, item.restart, item.dismiss);
     item.menu = menu;
-    head.append(label, purpose, badge, state, space, size, item.fit, item.enlarge,
+    head.append(label, purpose, badge, messageCount, state, space, size, item.fit, item.enlarge,
       item.pin, item.left, item.right, item.menuButton);
     head.addEventListener('dblclick', (event) => {
       if (!event.target.closest('button')) item.enlarge.click();
@@ -612,6 +765,7 @@
     item.dismiss.hidden = summary.exited !== true;
     item.pop.hidden = popSelf === item.id;
     item.card.setAttribute('aria-label', `${item.label.textContent} ${item.purpose.textContent}`);
+    updateMessageBadge(item);
   }
   function attention(item) {
     const prompt = item.summary.waitingOnPrompt;
@@ -965,7 +1119,7 @@
         columns, rows, primary, enlarged, pins]);
       if (layoutKey !== lastLayout) {
         const structureKey = JSON.stringify([items.map((item) => item.id), layout, primary, enlarged]);
-        empty.hidden = items.length > 0;
+        empty.hidden = !messagesView.hidden || items.length > 0;
         root.className = layout === 'focus' && items.length === 1 ? 'focus focus-only' : layout;
         root.dataset.layout = layout;
         root.style.setProperty('--columns', String(Math.max(1, columns)));
@@ -1040,6 +1194,10 @@
   }
   function receive(frame) {
     if (!frame || typeof frame.type !== 'string') return;
+    if (frame.type === 'message' || frame.type === 'message-state') {
+      scheduleMessageRefresh();
+      return;
+    }
     if (frame.type === 'window-gone' && validWindowId(frame.id) && validWindowId(frame.instance)) {
       if (popSelf !== null) return;
       markWindowGone(frame.id, frame.instance);
@@ -1064,6 +1222,7 @@
     feed = new WebSocket(`ws://${location.host}/dashboard/events`, [`sp-csrf.${proof}`]);
     feed.onopen = () => {
       connection.textContent = 'Connected'; error.hidden = true;
+      scheduleMessageRefresh();
       if (popSelf === null) {
         if (registered) {
           channel?.postMessage({ type: 'window-leave', id: windowId, instance: windowInstance, token: windowToken });
@@ -1464,6 +1623,14 @@
   document.getElementById('text-auto').addEventListener('click', () => setFontSize(null));
   document.getElementById('text-larger').addEventListener('click', () => setFontSize(Math.min(32, (fontSize ?? 13) + 1)));
   document.getElementById('error-close').addEventListener('click', closeError);
+  messagesToggle.addEventListener('click', () => {
+    if (messagesView.hidden) openMessages(); else closeMessages();
+  });
+  messagesFilter.addEventListener('change', () => {
+    messageFilter = messagesFilter.value;
+    messageSelection = null;
+    renderMessages();
+  });
   document.getElementById('shortcut').addEventListener('click', () => {
     choosingPrefix = true;
     document.getElementById('shortcut').textContent = 'Press Ctrl+Shift and a letter';
@@ -1494,6 +1661,7 @@
     endActiveDivider?.();
     leaveWindow();
     clearTimeout(retry);
+    clearTimeout(messageTimer);
     clearTimeout(autoFitTimer);
     window.cancelAnimationFrame(fontFitFrame);
     feed?.close();

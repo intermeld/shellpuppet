@@ -99,12 +99,7 @@ describe('session messaging over a real daemon', () => {
       audit: { captureContent: true, record: (...data) => { audit.push(data); } },
     });
     const events: string[] = [];
-    const socket = new WebSocket(`ws://127.0.0.1:${String(td.port)}/events?token=${td.token}`);
-    socket.on('message', (data) => events.push(
-      Array.isArray(data) ? Buffer.concat(data).toString('utf8') :
-        data instanceof ArrayBuffer ? Buffer.from(data).toString('utf8') : data.toString('utf8'),
-    ));
-    await new Promise<void>((resolve, reject) => { socket.once('open', resolve); socket.once('error', reject); });
+    let socket: WebSocket | undefined;
     const start = async (label: string, headers: Record<string, string> = {}) => {
       const response = await api(td.port, td.token, '/sessions', { body: {
         command: process.execPath, args: ['-e',
@@ -122,6 +117,14 @@ describe('session messaging over a real daemon', () => {
     };
     try {
       const parent = await start('parent');
+      socket = new WebSocket(`ws://127.0.0.1:${String(td.port)}/events?token=${td.token}`, {
+        headers: parent.headers,
+      });
+      socket.on('message', (data) => events.push(
+        Array.isArray(data) ? Buffer.concat(data).toString('utf8') :
+          data instanceof ArrayBuffer ? Buffer.from(data).toString('utf8') : data.toString('utf8'),
+      ));
+      await new Promise<void>((resolve, reject) => { socket!.once('open', resolve); socket!.once('error', reject); });
       const child = await start('child', parent.headers);
       const chair1 = await start('chair1');
       const chair2 = await start('chair2');
@@ -207,7 +210,7 @@ describe('session messaging over a real daemon', () => {
       expect(cliOutbox.stdout).toContain(marker);
       const cliInbox = await execFileAsync(process.execPath, [cli, 'inbox'], { env: cliEnv });
       expect(cliInbox.stdout).toContain('messages');
-      const controlText = '\u001b[2J\u001b[H\u001b[8mhidden\u001b[0m\u001b]0;title\u0007\rswap\u0000';
+      const controlText = '\u001b[2J\u001b[H\u001b[8mhidden\u001b[0m\u001b]0;title\u0007\rswap\u0000\u202e\u200b';
       expect((await api(td.port, td.token, '/messages', {
         body: { to: 'outside', text: controlText }, headers: chair1.headers,
       })).status).toBe(201);
@@ -220,6 +223,8 @@ describe('session messaging over a real daemon', () => {
       expect(printed.stdout).not.toContain('\u001b');
       expect(printed.stdout).not.toContain('\r');
       expect(printed.stdout).toContain('\\\\u001b');
+      expect(printed.stdout).toContain('\\\\u202e');
+      expect(printed.stdout).toContain('\\\\u200b');
       const claimCommand = await execFileAsync(process.execPath, [cli, 'msg', 'claim', 'temporary'], {
         env: { ...process.env, SHELLPUPPET_HOME: td.home, SHELLPUPPET_CLAIM: '' },
       });
@@ -236,7 +241,7 @@ describe('session messaging over a real daemon', () => {
       expect(JSON.stringify(events)).not.toContain(marker);
       expect(JSON.stringify(audit)).toContain('msg-undelivered');
       expect(JSON.stringify(audit)).toContain('msg-read');
-    } finally { socket.close(); await td.stop(); }
+    } finally { socket?.close(); await td.stop(); }
   }, 180_000);
 
   it('refuses every messaging route while disabled', async () => {
