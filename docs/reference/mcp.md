@@ -19,7 +19,12 @@ to hold a name, then use the same messaging tools. `session_release()` frees
 the name. Its claim stays in that MCP server's memory for its lifetime.
 Received messages in tool results name the sender; sent messages name the
 caller. Their text is framed as untrusted data, never as a user's instruction
-or approval. Control characters are shown as visible escapes.
+or approval. Control and invisible directional characters are shown as visible escapes.
+On the client-token `/events` WebSocket, message and state notifications go only
+to the sender or receiver when the upgrade proves a session identity or claim.
+A non-browser client can send claim headers on the upgrade; browser WebSocket
+APIs cannot, so a claim holder using that API receives no message notifications.
+A client token alone also receives none.
 
 Pass `waitReady: true` to `terminal_start` when starting an agent CLI to
 delegate work to. Waiting is off by default. The daemon uses the resolved

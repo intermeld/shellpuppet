@@ -10,6 +10,7 @@ version may change behaviour, and every such change is listed here.
 ### Added
 
 - Type a fixed, rate limited nudge into an idle supported session when a message waits for it, through the normal input queue, rechecking the screen, the waiting messages and the terminal size just before it types, and recording message ids, never text, in the audit.
+- Show owner-wide messages in the dashboard with session and group filters, safe text display and unread pane counts.
 - Keep messages for named participants in a mailbox core: names and claims, message states, per-recipient limits and the fixed nudge line, with a `messaging` section in `config.json` that says who may message whom. Off until it is switched on; typing of nudges arrives separately.
 - Send and read session messages through daemon routes, MCP tools and CLI commands, with claims for outside callers and text-free audit and event records.
 - Give each session its own daemon instance identity and secret, verify its client calls,
@@ -40,6 +41,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Limit message event metadata to participants, bound dashboard badge updates and show invisible message characters as escapes.
 - Bound viewport repair after resize and end only the affected session if terminal rendering fails.
 - Report MiMo output limits and other idle error blocks, including long errors whose marker scrolled away, plus a persistent OpenCode or MiMo Code server connection loss, as stalled sessions.
 - Detect OpenCode and MiMo Code question panels clipped by the terminal height, reporting the choices still visible.

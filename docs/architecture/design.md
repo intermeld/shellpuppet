@@ -1620,12 +1620,19 @@ gets a fresh proof, without replacing the cookie. The routes are:
 |---|---|
 | `POST /dashboard/open` | Client token only; opens the isolated window and returns `{ "opened": true }`, never its URL or grant |
 | `GET /dashboard/profiles` | Cookie read; profile descriptions and problems, never environment values |
+| `GET /dashboard/messages` | Cookie and document proof; owner-wide message history, or unread counts per session for `summary=1` |
 | `POST /dashboard/launch` | Cookie, document proof and JSON profile name; limits in §4.3 |
 | `POST /dashboard/folder-picker` | Cookie, same-origin mutation proof and JSON name of an `any` profile; opens one desktop picker at a time for at most ten minutes |
 | `GET /sessions` | Cookie may read the existing list, including prompt and stall state |
 | `DELETE /sessions/<id>` | Cookie plus document proof may kill |
 | `/dashboard/events` | Cookie plus subprotocol; outbound WebSocket; inbound ignored |
 | `/sessions/<id>/stream` | Cookie plus subprotocol. The dashboard credential is always passive; `drive=0` is not required and cannot make it drive |
+
+The Messages view lists owner-wide history newest first and reads full text only when opened.
+Its session and group filters narrow the history. Unread counts come from the bounded
+summary while the view is closed. Message and state notifications on
+`/dashboard/events` contain no text; the view coalesces refreshes. Message text is
+shown as inert text with control and invisible directional characters made visible.
 
 `shellpuppet dashboard` is the CLI verb for `POST /dashboard/open`. It prints
 whether a window opened, never the URL or grant. The route opens the isolated
@@ -1640,7 +1647,10 @@ checks, preventing unauthenticated enumeration. `/dashboard/events` sends
 `session-updated` and `session-removed` follow lifecycle changes, with
 timestamps after the initial hello. `session-updated` includes prompt and stall state;
 the client-token `/events` keeps its existing `prompt-stall` and
-`prompt-clear` frames. While a dashboard events socket is open, a new
+`prompt-clear` frames. Its message and state frames reach only a verified
+session or claim that sent or received the message. A client token alone gets
+no message frames. A claim can be proved in WebSocket upgrade headers by a
+non-browser client; browser WebSocket APIs cannot set those headers. While a dashboard events socket is open, a new
 session opens no separate viewer window and the start response omits
 `viewerUrl`. When the last socket closes, a later start opens the dashboard
 again after any pending launch has had 30 seconds to connect.

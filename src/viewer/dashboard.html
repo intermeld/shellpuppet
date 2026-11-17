@@ -14,6 +14,7 @@
 <header>
   <h1>ShellPuppet</h1><span id="connection" class="hint">Connecting</span>
   <span class="spacer"></span>
+  <button id="messages-toggle" type="button" aria-controls="messages-view" aria-expanded="false">Messages</button>
   <button id="auto" type="button">Auto</button><button id="grid" type="button">Grid</button><button id="focus" type="button">Focus</button>
   <button id="auto-fit" type="button" aria-pressed="true">Auto fit</button>
   <span id="text-size" aria-label="Text size"><button id="text-smaller" type="button" aria-label="Smaller text">Smaller</button><button id="text-auto" type="button" aria-label="Auto text">Auto text</button><button id="text-larger" type="button" aria-label="Larger text">Larger</button></span>
@@ -33,6 +34,12 @@
 <div id="error" role="status" hidden><span id="error-message"></span><button id="error-close" type="button" aria-label="Close error">Close</button></div>
 <main id="panes" aria-label="Sessions"></main>
 <div id="empty" class="hint">No sessions yet</div>
+<section id="messages-view" aria-label="Messages" hidden>
+  <div class="messages-tools"><h2>Messages</h2><label>Filter by session or group <select id="messages-filter"><option value="">All</option></select></label></div>
+  <p id="messages-off" hidden>Messaging is off. <a href="https://github.com/intermeld/shellpuppet/blob/main/docs/reference/configuration.md#messages-between-sessions">Switch it on in the configuration.</a></p>
+  <p id="messages-empty" hidden>No messages yet.</p>
+  <div id="messages-content"><ul id="messages-list" aria-label="Message history"></ul><div id="messages-detail" aria-live="polite"><p>Select a message to read it.</p></div></div>
+</section>
 <div id="help" hidden><span id="shortcut-help">Ctrl+Shift+A</span>: navigation. Arrows or digits: select. Enter: terminal. J: next waiting pane. P: pin. F: fit. M: enlarge. Drag a pane boundary to resize, or focus it and use arrows, Shift+arrows or Home to reset. Double-click a pane title bar to Enlarge or Restore. Escape, in navigation mode or outside the terminal, closes a visible error first, then restores. ?: help.</div>
 <script src="/vendor/xterm.js"></script>
 <script src="/vendor/addon-fit.js"></script>
