@@ -2508,7 +2508,7 @@ export class Daemon {
     const inputVersion = session.nudgeInputVersion();
     const queuedInputVersion = session.nudgeQueuedInputVersion();
     const screenRevision = session.nudgeScreenRevision();
-    const line = buildNudge(unread, this.cliPath);
+    const line = buildNudge(unread);
     const ids = unread.map((entry) => entry.id);
     const stillWaiting = (): boolean => {
       const current = this.mailbox.inbox(id, { markRead: false });
