@@ -9,7 +9,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Added
 
-- Type a fixed, rate limited nudge into an idle supported session when a message waits for it, through the normal input queue, rechecking the screen, the waiting messages and the terminal size just before it types, and recording message ids, never text, in the audit.
+- Type a fixed, rate limited nudge into an idle supported session when a message waits for it, through the normal input queue; name this daemon's CLI path, pause before submitting, recheck the screen, waiting messages and terminal size before Enter, and record message ids, never text, in the audit.
 - Show owner-wide messages in the dashboard with session and group filters, safe text display and unread pane counts.
 - Judge when OpenCode, MiMo Code, Grok and Antigravity sessions have an empty idle composer, including MiMo's grey suggestion, before nudging them about waiting messages.
 - Keep messages for named participants in a mailbox core: names and claims, message states, per-recipient limits and the fixed nudge line, with a `messaging` section in `config.json` that says who may message whom. Off until it is switched on; typing of nudges arrives separately.

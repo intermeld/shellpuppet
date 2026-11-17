@@ -1,6 +1,6 @@
 import type { IPty } from 'node-pty';
 import { describe, expect, it } from 'vitest';
-import { MUSE_SUBMIT_DELAY_MS, Session } from '../../src/core/session.js';
+import { MUSE_SUBMIT_DELAY_MS, NUDGE_SUBMIT_DELAY_MS, Session } from '../../src/core/session.js';
 
 class RecordingPty implements IPty {
   readonly pid = 0;
@@ -28,6 +28,38 @@ function recordingSession(agent: string): { session: Session; pty: RecordingPty 
 }
 
 describe('Muse input submission', () => {
+  it('submits a Codex nudge after a separate delay', async () => {
+    const { session, pty } = recordingSession('codex');
+    const phases: string[] = [];
+    expect(await session.writeNudge('fixed nudge\r', (_screen, phase) => {
+      phases.push(phase);
+      return true;
+    })).toBe('sent');
+    expect(phases).toEqual(['before', 'submit']);
+    expect(pty.writes.map((entry) => entry.data)).toEqual(['fixed nudge', '\r']);
+    expect(pty.writes[1]!.at - pty.writes[0]!.at).toBeGreaterThanOrEqual(NUDGE_SUBMIT_DELAY_MS - 5);
+  });
+
+  it('leaves a Codex nudge visible when a prompt opens during the delay', async () => {
+    const { session, pty } = recordingSession('codex');
+    let promptOpen = false;
+    const pending = session.writeNudge('fixed nudge\r', (_screen, phase) =>
+      phase === 'before' || !promptOpen);
+    while (pty.writes.length === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+    promptOpen = true;
+    expect(await pending).toBe('aborted');
+    expect(pty.writes.map((entry) => entry.data)).toEqual(['fixed nudge']);
+  });
+
+  it('leaves a Codex nudge visible when another input is queued during the delay', async () => {
+    const { session, pty } = recordingSession('codex');
+    const pending = session.writeNudge('fixed nudge\r', () => true);
+    while (pty.writes.length === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+    const other = session.write('other');
+    expect(await pending).toBe('aborted');
+    await other;
+    expect(pty.writes.map((entry) => entry.data)).toEqual(['fixed nudge', 'other']);
+  });
   it('writes Enter after the delay and before a following write', async () => {
     const { session, pty } = recordingSession('muse');
     const submitting = session.write('hello\r');

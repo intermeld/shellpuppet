@@ -719,6 +719,7 @@ export class Daemon {
   /** The profiles the dashboard may name, and the entries that did not load. */
   private readonly launchProfiles: LauncherConfig;
   private readonly daemonEnv: NodeJS.ProcessEnv;
+  private readonly cliPath: string;
   /** The global policy, kept here so a launch can report it before creating. */
   private readonly compiledPolicy: CompiledPolicy;
   /** Accepted launch times, for the sliding sixty-second cap. */
@@ -756,13 +757,14 @@ export class Daemon {
     this.sessionEnv = options.sessionEnv ?? DEFAULT_SESSION_ENV;
     this.launchProfiles = options.launchProfiles ?? { profiles: [], problems: [] };
     this.daemonEnv = options.daemonEnv ?? process.env;
+    this.cliPath = fileURLToPath(new URL('../../dist/cli/index.js', import.meta.url));
     this.compiledPolicy = compilePolicy(options.policy);
     this.manager = new SessionManager(compilePolicy(options.policy), this.logger, {
       sessionEnv: this.sessionEnv,
       identity: {
         token: '',
         instanceId: this.instanceId,
-        cliPath: fileURLToPath(new URL('../../dist/cli/index.js', import.meta.url)),
+        cliPath: this.cliPath,
         home: this.options.home,
       },
     }, (id) => {
@@ -2506,7 +2508,7 @@ export class Daemon {
     const inputVersion = session.nudgeInputVersion();
     const queuedInputVersion = session.nudgeQueuedInputVersion();
     const screenRevision = session.nudgeScreenRevision();
-    const line = buildNudge(unread);
+    const line = buildNudge(unread, this.cliPath);
     const ids = unread.map((entry) => entry.id);
     const stillWaiting = (): boolean => {
       const current = this.mailbox.inbox(id, { markRead: false });

@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { buildNudge } from '../../src/core/mailbox.js';
+import { NUDGE_SUBMIT_DELAY_MS } from '../../src/core/session.js';
 import { createAuditor, auditLogPath } from '../../src/daemon/audit.js';
 import { createFileLogger } from '../../src/daemon/logger.js';
 import { api, eventually, makeTempHome, repoRoot, startTestDaemon } from './helpers.js';
@@ -36,6 +37,7 @@ describe('fixed message nudges through a real terminal', () => {
       const outside = await api(td.port, td.token, '/messages/claims', { body: { name: 'outside' } });
       expect(outside.status).toBe(201);
       const sent = new Map<string, string>();
+      const cliPath = path.join(repoRoot, 'dist', 'cli', 'index.js');
       const marker = 'private-message-body-91b4';
       for (const name of started.keys()) {
         const response = await api(td.port, td.token, '/messages', { body: { to: name, text: marker }, headers });
@@ -49,9 +51,14 @@ describe('fixed message nudges through a real terminal', () => {
         .body['messages'] as { id: string; state: string }[];
       await eventually(async () => (await outbox()).find((entry) => entry.id === sent.get('ready'))?.state === 'nudged',
         15_000);
-      const expected = buildNudge([{ id: sent.get('ready')!, from: { id: String(claim.body['claimId']), name: 'sender' } }]);
+      const expected = buildNudge([{ id: sent.get('ready')!, from: { id: String(claim.body['claimId']), name: 'sender' } }], cliPath);
       await eventually(() => fs.existsSync(files('ready').input));
       expect(fs.readFileSync(files('ready').input, 'utf8')).toBe(`${expected}\r`);
+      const events = fs.readFileSync(`${files('ready').input}.events`, 'utf8').trim().split('\n')
+        .map((row) => JSON.parse(row) as { data: string; at: number });
+      expect(events.map((event) => event.data)).toEqual([expected, '\r']);
+      // PTY delivery can lag behind the write clock, unlike the recording PTY.
+      expect(events[1]!.at - events[0]!.at).toBeGreaterThanOrEqual(NUDGE_SUBMIT_DELAY_MS - 50);
       expect((await outbox()).filter((entry) => entry.state === 'nudged')).toHaveLength(1);
       expect((await outbox()).find((entry) => entry.id === outsideMessage.body['id'])?.state).toBe('waiting');
       const second = await api(td.port, td.token, '/messages', {
@@ -73,7 +80,7 @@ describe('fixed message nudges through a real terminal', () => {
       expect(third.status).toBe(201);
       await eventually(async () => (await outbox()).find((entry) => entry.id === third.body['id'])?.state === 'nudged');
       const next = buildNudge([{ id: String(third.body['id']), from: {
-        id: String(claim.body['claimId']), name: 'sender' } }]);
+        id: String(claim.body['claimId']), name: 'sender' } }], cliPath);
       await eventually(() => fs.existsSync(files('ready').input) &&
         fs.readFileSync(files('ready').input, 'utf8') === `${expected}\r${next}\r`);
       expect(fs.readFileSync(files('ready').input, 'utf8')).toBe(`${expected}\r${next}\r`);

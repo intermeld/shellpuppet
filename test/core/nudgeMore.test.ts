@@ -290,3 +290,18 @@ describe('live composer position', () => {
     expect(judgement(agy, { rows: [...screen.rows, 'Another visible line'] })).toBe('unknown');
   });
 });
+
+describe('the line before Enter', () => {
+  for (const [name, module] of Object.entries(modules)) {
+    it(`${name} submits only when the composer holds exactly the nudge`, () => {
+      const empty = load(`${name}-after-empty`);
+      const draft = load(`${name}-after-draft`);
+      expect(nudgeVerdict(module, { ...empty, unchangedMs: 0, expectedDraft: 'fixed nudge' }))
+        .toEqual({ ready: false, reason: 'draft' });
+      expect(nudgeVerdict(module, { ...draft, unchangedMs: 0, expectedDraft: 'other words' }))
+        .toEqual({ ready: false, reason: 'draft' });
+      expect(nudgeVerdict(module, { ...draft, unchangedMs: 0, expectedDraft: 'draft words not sent' }))
+        .toEqual({ ready: true });
+    });
+  }
+});

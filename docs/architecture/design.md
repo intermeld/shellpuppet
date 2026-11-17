@@ -334,11 +334,13 @@ message whom, and a clock.
   checks delivery on its screen scan, types only when a supported module sees an idle empty composer,
   and limits nudges to one per unread batch, one per session in 30 seconds and
   20 across the daemon in a rolling minute. The two rate limits are configurable.
-  The fixed line refers to the CLI inbox command without assuming a command on
-  `PATH` matches this daemon; sessions receive the matching CLI path in
-  `SHELLPUPPET_CLI`.
-  Every check is repeated inside the queued write and, for an agent that
-  submits after a delay, again before Enter. If anything changed in between,
+  The fixed line quotes this daemon's literal CLI path in `node "<path>" inbox`
+  so it does not depend on a command on `PATH`; sessions receive that same
+  path in `SHELLPUPPET_CLI`. When the path is unavailable or cannot be quoted
+  literally across supported shells, the line refers to `SHELLPUPPET_CLI` instead.
+  Every check is repeated inside the queued write and, after a pause of at least
+  150 ms, again before the module's submit key. A module may require a longer
+  pause. If anything changed in between,
   nothing more is sent and the messages stay `waiting` (audit `nudge-aborted`).
   A line already typed is left visible rather than erased; the composer then
   reads as a draft and receives no further nudge until it is cleared. The

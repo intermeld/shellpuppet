@@ -23,7 +23,7 @@ export function readiness(view: NudgeView): NudgeReadiness {
   const rows = [...view.rows];
   rows[at] = `> ${body}`;
   const styled = view.styled?.map((line, index) => index === at ? { ...line, text: rows[at]!, spans: [] } : line);
-  return readingReadiness({ rows, styled }, { ...reading, composer: { text: '^> ' } }, {
+  return readingReadiness({ rows, styled, expectedDraft: view.expectedDraft }, { ...reading, composer: { text: '^> ' } }, {
     placeholder: '', continuations: false, placeholderInk: () => false,
   });
 }

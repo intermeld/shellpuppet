@@ -169,6 +169,8 @@ export const taskkillTrees = (pids: readonly number[], timeoutMs = TREE_KILL_TIM
 const WRITE_CHUNK_CHARS = 1024;
 const WRITE_CHUNK_DELAY_MS = 8;
 export { MUSE_SUBMIT_DELAY_MS } from '../agents/index.js';
+/** Time between a nudge's body and submit key when the module needs no longer pause. */
+export const NUDGE_SUBMIT_DELAY_MS = 150;
 
 /**
  * Bracketed paste (DEC private mode 2004). A TUI that enables it is telling us
@@ -1231,7 +1233,7 @@ export class Session implements WaitTarget {
     let aborted = false;
     const queued = this.writeChain.then(async () => {
       try {
-        const result = await this.writeInput(data, false, ready, () => { aborted = true; });
+        const result = await this.writeInput(data, false, ready, () => { aborted = true; }, true);
         return aborted ? 'aborted' as const : result === null ? 'wait' as const : 'sent' as const;
       } catch (error) {
         if (aborted) return 'aborted' as const;
@@ -1278,7 +1280,7 @@ export class Session implements WaitTarget {
 
   private async writeInput(data: string, terminalReport: boolean,
     ready?: (screen: string, phase: 'before' | 'submit') => boolean,
-    onNudgeAbort?: () => void): Promise<string | null> {
+    onNudgeAbort?: () => void, nudge = false): Promise<string | null> {
     this.refuseIfInputFailed();
     if (ready !== undefined) await this.renderer.flush();
     if (!terminalReport && data.length > 0 &&
@@ -1309,12 +1311,15 @@ export class Session implements WaitTarget {
     this.inputVersion++;
     this.stalePrompts.noteInput(screen, this.agent);
 
-    if (this.delayedSubmission(data)) {
-      const body = data.slice(0, -1);
+    if (nudge || this.delayedSubmission(data)) {
+      const submit = this.agentModule?.input?.submit;
+      const key = nudge ? this.nudgeSubmit() : submit!.key;
+      const delayMs = nudge ? Math.max(NUDGE_SUBMIT_DELAY_MS, submit?.delayMs ?? 0) : submit!.delayMs!;
+      const body = data.slice(0, -key.length);
       const queuedInputVersion = this.inputQueueVersion;
       await this.writeData(body);
       try {
-        await new Promise((resolve) => setTimeout(resolve, this.agentModule!.input!.submit!.delayMs));
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
         this.refuseIfInputFailed();
         this.refuseIfEnded();
         if (ready !== undefined) {
@@ -1326,7 +1331,7 @@ export class Session implements WaitTarget {
             return null;
           }
         }
-        this.pty.write(this.agentModule!.input!.submit!.key);
+        this.pty.write(key);
       } catch (error) {
         onNudgeAbort?.();
         throw error;
