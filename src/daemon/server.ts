@@ -4009,7 +4009,7 @@ export class Daemon {
   private listWithPrompts(hideReasoning = false): (SessionSummary & {
     waitingOnPrompt?: { question?: string; options?: string[]; selectedOption?: number; waitingMs: number; alerted: boolean };
   })[] {
-    const now = Date.now();
+    const now = this.now();
     return this.listedSummaries().map((summary) => {
       const full = this.summaryWithPrompt(summary, now);
       const waiting = full.waitingOnPrompt;
@@ -4018,7 +4018,7 @@ export class Daemon {
     });
   }
 
-  private summaryWithPrompt(summary: SessionSummary, now = Date.now()): FeedSummary {
+  private summaryWithPrompt(summary: SessionSummary, now = this.now()): FeedSummary {
     summary = { ...summary, name: this.mailbox.participant(summary.id)?.name ?? summary.id };
     if (summary.stalled?.reason === 'server-lost') return summary;
     const state = this.promptStates.get(summary.id);
@@ -4127,8 +4127,8 @@ export class Daemon {
         // its clock for a short wall-clock grace period, independent of the
         // scan interval; a lasting disappearance still clears it.
         if (previous !== undefined) {
-          if (previous.missingSince === null) previous.missingSince = Date.now();
-          const remaining = previous.missingSince + PROMPT_REPAINT_GRACE_MS - Date.now();
+          if (previous.missingSince === null) previous.missingSince = this.now();
+          const remaining = previous.missingSince + PROMPT_REPAINT_GRACE_MS - this.now();
           if (remaining > 0) {
             this.schedulePromptGraceCheck(session.id, remaining);
             continue;
@@ -4197,7 +4197,7 @@ export class Daemon {
         }
         this.promptStates.set(session.id, {
           signature: detected.signature,
-          since: Date.now(),
+          since: this.now(),
           alerted: false,
           prompt: detected,
           missingSince: null,
@@ -4210,10 +4210,10 @@ export class Daemon {
 
       if (promptChanged) this.updateFeedSession(session.id);
 
-      if (!previous.alerted && Date.now() - previous.since >= stallMs) {
+      if (!previous.alerted && this.now() - previous.since >= stallMs) {
         previous.alerted = true;
         this.updateFeedSession(session.id);
-        const waitingMs = Date.now() - previous.since;
+        const waitingMs = this.now() - previous.since;
         this.audit.record('daemon', 'prompt-stall', session.id);
         this.logger.warn('session waiting on a prompt', {
           id: session.id,
