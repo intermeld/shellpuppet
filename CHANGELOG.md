@@ -45,6 +45,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Nudge an idle Muse Code session after a reply, when its padded rows leave the rule above the composer marked as a wrap.
 - Find an agent's composer under a rule that fills the terminal width, so a session showing it can be nudged.
 - Limit message event metadata to participants, bound dashboard badge updates and show invisible message characters as escapes.
 - Bound viewport repair after resize and end only the affected session if terminal rendering fails.

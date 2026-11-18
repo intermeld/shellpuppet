@@ -214,24 +214,27 @@ function holdsExpectedDraft(rows: readonly StyledLine[], expected: string): bool
  */
 /**
  * xterm marks the row after a row that fills the full width as a wrap, even
- * when the program painted it separately. A module may declare the rule row
- * it paints directly above its composer. When exactly one painted row on the
- * screen matches it, the row below is a fresh row, so the composer under a
- * full-width rule is still found. Typed text cannot stand in for that row: a
- * copy in a draft would make two matches, and a wrapped row never counts.
- * Every other wrap keeps its mark.
+ * when the program painted it separately. A program that pads every row to
+ * the full width, as Muse Code does once its transcript has text, leaves
+ * almost every row marked, the rule above its composer included. A module may
+ * declare the rule row it paints directly above its composer. When exactly
+ * one row on the screen matches it in the module's rule ink, that row and the
+ * row below are fresh rows, so the composer under a full-width rule is still
+ * found. Typed text cannot stand in for the rule: the ink check refuses typed
+ * ink, and a copy would make two matches. Every other wrap keeps its mark.
  */
 function unwrapBelowRules(lines: readonly StyledLine[], rule: ReadingNudgeRule): readonly StyledLine[] {
   const rules = rule.ruleRows ?? [];
   if (rules.length === 0) return lines;
+  // A wrapped match must prove itself by its ink: without a module ink check
+  // only an unwrapped row counts, as before.
   const matches = lines.flatMap((line, i) =>
-    line.wrapped !== true && rules.some((test) => test.test(line.text)) &&
-    (rule.ruleInk === undefined || rule.ruleInk(line)) ? [i] : []);
+    rules.some((test) => test.test(line.text)) &&
+    (rule.ruleInk === undefined ? line.wrapped !== true : rule.ruleInk(line)) ? [i] : []);
   if (matches.length !== 1) return lines;
-  const below = matches[0]! + 1;
-  const line = lines[below];
-  if (line?.wrapped !== true) return lines;
-  return lines.map((item, i) => (i === below ? { ...item, wrapped: false } : item));
+  const at = matches[0]!;
+  if (lines[at]?.wrapped !== true && lines[at + 1]?.wrapped !== true) return lines;
+  return lines.map((item, i) => (i === at || i === at + 1 ? { ...item, wrapped: false } : item));
 }
 
 export function readingReadiness(view: NudgeView, reading: AgentSignature, rule: ReadingNudgeRule): NudgeReadiness {
