@@ -6,8 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { captureViewer } from '../../src/daemon/screenshot.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
-import { noticeFrameLimitScript } from './noticeFrameLimit.js';
-import { decisionStall } from './decision-stall.js';
+import { virtualNoticeFrames } from './noticeFrameLimit.js';
 
 let browser: string | null;
 let scratch: string;
@@ -65,9 +64,11 @@ async function run<T>(mode: string, expression: string): Promise<T[]> {
     <script src="${url('../fixtures/notice-occupancy-browser.js')}"></script>`);
   const result = await captureViewer({ browser: browser!, viewerUrl: pathToFileURL(page).href,
     cpuThrottlingRate: Number(process.env['NOTICE_CPU_RATE'] ?? 1),
-    beforeNavigateScript: noticeFrameLimitScript,
+    beforeNavigateScript: virtualNoticeFrames,
     width: 1000, height: 900, drive: true, probeOnly: true, timeoutMs: 180_000,
-    probe: '!!window.noticeOccupancyCases', interact: async ({ evaluate }) => {
+    probe: '!!window.noticeOccupancyCases', interact: async ({ evaluate, send }) => {
+      await evaluate('document.fonts.ready.then(() => true)');
+      await send('Emulation.setVirtualTimePolicy', { policy: 'advance' });
       await evaluate('window.__stopCaseFrames = noticeFrameTiming()');
       const cases = await evaluate(expression) as Record<string, unknown>[];
       const timing = await evaluate('__stopCaseFrames()') as Record<string, unknown>;
@@ -82,33 +83,8 @@ describe.each(['viewer', 'dashboard'])('%s notice occupancy', mode => {
     it(`keeps the resting row uncovered during ${kind}`, async context => {
       if (!browser) { context.skip(); return; }
       const results = await run<Occupancy>(mode, `noticeOccupancyCases(${JSON.stringify(mode)}, ${JSON.stringify(kind)})`);
-      const pending = results.map((result, index) => ({ result, index, failures: occupancyFailures(result, kind) }))
-        .filter(item => item.failures.length > 0);
-      const classified = pending.map(item => ({ ...item, excuse: kind === 'quiet' ? null : decisionStall(
-        item.result.stalls, item.result.frames, kind === 'dominant' ? 2517 : item.result.firstSampleAt ?? NaN,
-        item.result.firstFailureAt ?? item.result.observedMs,
-      ) }));
-      const inconclusive = classified.filter(item => item.excuse === 'inconclusive');
-      if (inconclusive.length) throw new Error(`inconclusive: no frames observed in occupancy cases ${JSON.stringify(inconclusive)}`);
-      const excused = classified.filter(item => item.excuse &&
-        item.failures.every(failure => ['samples', 'frames', 'frame interval', 'frame span', 'observed span',
-          'uncovered', 'placement'].includes(failure)));
-      const unexcused = classified.filter(item => !excused.includes(item));
-      expect(unexcused, JSON.stringify(unexcused)).toEqual([]);
-      if (excused.length) {
-        console.log(`TIMING_RETRY viewer-notice-occupancy ${mode} ${kind}: ${JSON.stringify(excused.map(item => ({ index: item.index, failures: item.failures, gap: item.excuse })))}`);
-        const repeated = await run<Occupancy>(mode, `noticeOccupancyCases(${JSON.stringify(mode)}, ${JSON.stringify(kind)})`);
-        for (const item of excused) {
-          const retry = repeated[item.index];
-          expect(retry, `missing repeat for occupancy case ${String(item.index)}`).toBeDefined();
-          const retryFailures = occupancyFailures(retry!, kind);
-          const secondGap = decisionStall(retry!.stalls, retry!.frames,
-            kind === 'dominant' ? 2517 : retry!.firstSampleAt ?? NaN,
-            retry!.firstFailureAt ?? retry!.observedMs);
-          if (secondGap === 'inconclusive') throw new Error(`inconclusive: no frames observed in occupancy retry case ${String(item.index)}; first: ${JSON.stringify({ failures: item.failures, gap: item.excuse })}; second: ${JSON.stringify(retry)}`);
-          if (retryFailures.length) throw new Error(`occupancy retry failed in case ${String(item.index)}: ${JSON.stringify({ firstFailures: item.failures, firstGap: item.excuse, secondFailures: retryFailures, secondGap, retry })}`);
-          console.log(`TIMING_RESULT viewer-notice-occupancy ${mode} ${kind}: ${JSON.stringify({ firstFailures: item.failures, firstGap: item.excuse, secondFailures: retryFailures })}`);
-        }
+      for (const result of results) {
+        expect(occupancyFailures(result, kind), JSON.stringify(result)).toEqual([]);
       }
     }, 420_000);
   }

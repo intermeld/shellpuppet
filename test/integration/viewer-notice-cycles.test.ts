@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { captureViewer } from '../../src/daemon/screenshot.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
-import { noticeFrameLimitScript } from './noticeFrameLimit.js';
+import { virtualNoticeFrames } from './noticeFrameLimit.js';
 
 let browser: string | null;
 let scratch: string;
@@ -28,9 +28,11 @@ async function run<T>(mode: string, expression: string): Promise<T[]> {
     <script src="${url('../fixtures/notice-cycle-browser.js')}"></script>`);
   const result = await captureViewer({ browser: browser!, viewerUrl: pathToFileURL(page).href,
     cpuThrottlingRate: Number(process.env['NOTICE_CPU_RATE'] ?? 1),
-    beforeNavigateScript: noticeFrameLimitScript,
+    beforeNavigateScript: virtualNoticeFrames,
     width: 1000, height: 900, drive: true, probeOnly: true, timeoutMs: 90_000,
-    probe: '!!window.noticeSnapshotCases', interact: async ({ evaluate }) => {
+    probe: '!!window.noticeSnapshotCases', interact: async ({ evaluate, send }) => {
+      await evaluate('document.fonts.ready.then(() => true)');
+      await send('Emulation.setVirtualTimePolicy', { policy: 'advance' });
       await evaluate('window.__stopCaseFrames = noticeFrameTiming()');
       const cases = await evaluate(expression) as Record<string, unknown>[];
       const timing = await evaluate('__stopCaseFrames()') as Record<string, unknown>;

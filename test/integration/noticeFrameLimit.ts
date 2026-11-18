@@ -30,3 +30,27 @@ export const noticeFrameLimitScript = `(() => {
     requestAnimationFrame(slowFrame);
   });
 })()`;
+
+/** Deliver one shared batch of animation callbacks per tick of the browser's
+ * virtual clock. Only the fixtures with a socket double use this clock. */
+export const virtualNoticeFrames = `(() => {
+  const interval = ${JSON.stringify(Number(process.env['NOTICE_FRAME_INTERVAL_MS'] || 0) || 16)};
+  const callbacks = new Map();
+  let next = 0, timer;
+  function tick() {
+    timer = undefined;
+    const time = performance.now(), ready = [...callbacks.keys()];
+    for (const id of ready) {
+      const callback = callbacks.get(id);
+      callbacks.delete(id);
+      if (callback) callback(time);
+    }
+  }
+  window.requestAnimationFrame = callback => {
+    const id = ++next;
+    callbacks.set(id, callback);
+    timer ??= setTimeout(tick, interval);
+    return id;
+  };
+  window.cancelAnimationFrame = id => { callbacks.delete(id); };
+})()`;
