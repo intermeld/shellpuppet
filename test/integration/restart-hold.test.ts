@@ -8,7 +8,7 @@ import * as path from 'node:path';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ensureDaemon, waitForPendingDaemon, withDaemonStartLock } from '../../src/client/http.js';
-import { daemonLogPath, daemonStatePath, readDaemonState } from '../../src/daemon/paths.js';
+import { daemonLogPath, daemonStatePath, readDaemonState, removeDaemonStateIf } from '../../src/daemon/paths.js';
 import { readRestartHold, restartHoldPath, writeRestartHold } from '../../src/daemon/restartHold.js';
 import type { Logger } from '../../src/core/types.js';
 import { api, distDaemonEntry, makeTempHome, processAlive, removeTempHome, repoRoot } from './helpers.js';
@@ -234,8 +234,15 @@ describe('planned daemon restart hold', () => {
         signalStopping();
         void stopCanFinish.then(() => {
           response.writeHead(200, { 'content-type': 'application/json' });
+          response.once('finish', () => {
+            record('stand-in shutdown response finished');
+            // The real daemon withdraws its own record when it stops. A
+            // stand-in shares the worker pid, which remains alive afterwards.
+            const own = readDaemonState(value);
+            if (own?.pid === process.pid && own.token === 'stand-in-token') removeDaemonStateIf(value, own);
+            server.close();
+          });
           response.end('{}');
-          response.once('finish', () => { record('stand-in shutdown response finished'); server.close(); });
         });
       }
     });
@@ -269,11 +276,16 @@ describe('planned daemon restart hold', () => {
     process.env['SP_TEST_SPAWN_MARKER'] = marker;
     try {
       const occupied = await startEndpointOccupied(value);
+      const checkedOldHealth = new Promise<void>(resolve => {
+        const check = (request: http.IncomingMessage) => {
+          if (request.url !== '/health') return;
+          server.off('request', check);
+          resolve();
+        };
+        server.on('request', check);
+      });
       const peerPromise = ensureDaemon({ home: value, daemonEntry: markerEntry, logger });
-      let settled = false;
-      void peerPromise.then(() => { settled = true; }, () => { settled = true; });
-      await new Promise((resolve) => setTimeout(resolve, 350));
-      expect(settled).toBe(false);
+      expect(await Promise.race([checkedOldHealth.then(() => 'checked'), peerPromise.then(() => 'settled')])).toBe('checked');
       finishStop();
       await closed;
       const peer = await peerPromise;
