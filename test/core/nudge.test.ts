@@ -241,10 +241,27 @@ describe('nudge readiness', () => {
       expect(readinessOf(claude, { ...screen, rows: styled.map((line) => line.text), styled })).toBe('draft');
     });
 
-    it('treats other dim words on the captured composer as a draft', async () => {
+    it('treats a suggested next prompt drawn dim on the captured composer as empty', async () => {
       const screen = await load('claude-answered');
-      const styled = replaceComposer(screen.styled ?? [], /^❯/u, '❯ Other dim words', { dim: true });
+      const styled = replaceComposer(screen.styled ?? [], /^❯/u, '❯ how is the review getting on?', { dim: true });
+      const next = { ...screen, rows: styled.map((line) => line.text), styled };
+      expect(readinessOf(claude, next)).toBe('ready');
+      expect(nudgeVerdict(claude, next)).toEqual({ ready: true });
+    });
+
+    it('treats the same words in typed ink as a draft', async () => {
+      const screen = await load('claude-answered');
+      const styled = replaceComposer(screen.styled ?? [], /^❯/u, '❯ how is the review getting on?', { dim: false });
       expect(readinessOf(claude, { ...screen, rows: styled.map((line) => line.text), styled })).toBe('draft');
+    });
+
+    it('treats a suggestion marked as a wrap, between wrapped rules, as empty', async () => {
+      // Seen live: the padded composer row carries the suggestion and is marked as a wrap.
+      const screen = await load('claude-answered');
+      const replaced = replaceComposer(screen.styled ?? [], /^❯/u, '❯ how is the review getting on?', { dim: true });
+      const composerAt = replaced.map((row) => row.text.startsWith('❯')).lastIndexOf(true);
+      const marked = replaced.map((row, i) => (i === composerAt || i === composerAt + 1 ? { ...row, wrapped: true } : row));
+      expect(nudgeVerdict(claude, { ...screen, rows: marked.map((line) => line.text), styled: marked })).toEqual({ ready: true });
     });
 
     it('synthetic: an empty composer row with a draft on the following rows is a draft', () => {
