@@ -12,7 +12,7 @@ use `session_send(to, text)` and read its own
 `session_directory()` lists only live names that policy permits it to address.
 `session_wait_message(from?, timeoutMs?)` waits for the next unread message
 without marking it read. The timeout is capped at five minutes.
-`from` is a participant id.
+`from` is a participant id or the name that participant holds now.
 
 An MCP server running outside a daemon session may call `session_claim(name)`
 to hold a name, then use the same messaging tools. `session_release()` frees

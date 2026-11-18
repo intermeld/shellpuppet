@@ -45,6 +45,8 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Let a message wait name its sender by name: a wait for `from` set to a name never returned before.
+- Nudge an idle Claude Code session that shows a suggested next prompt in its composer.
 - Nudge an idle Claude Code session whose padded composer rows are marked as wraps, and an idle Muse Code session showing one of its rotating grey tips.
 - Nudge an idle Muse Code session after a reply, when its padded rows leave the rule above the composer marked as a wrap.
 - Find an agent's composer under a rule that fills the terminal width, so a session showing it can be nudged.
