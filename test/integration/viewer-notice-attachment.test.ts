@@ -6,7 +6,7 @@ import { captureViewer } from './browserCapture.js';
 import type { CaptureOptions } from '../../src/daemon/screenshot.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
 import { noticeFrameLimitScript } from './noticeFrameLimit.js';
-import { api, startTestDaemon } from './helpers.js';
+import { api, eventually, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 import { assessDeliveredCadence, deliveredNoticeScript, recordDeliveredCadence } from './noticeCadence.js';
 import type { DeliveredCadence } from './noticeCadence.js';
@@ -444,20 +444,18 @@ describe('notice placement on Pop out and reattachment', () => {
             if (result.exceptionDetails) throw new Error(JSON.stringify(result.exceptionDetails));
             return result.result.value;
           };
-          let ready = false;
-          for (let i = 0; i < 100 && !ready; i++) {
-            await new Promise(resolve => setTimeout(resolve, 50));
-            ready = await popup('!!window.__notice && __notice.term.buffer.active.cursorY > 0') as boolean;
-          }
-          expect(ready).toBe(true);
+          await eventually(async () => (await popup(
+            '!!window.__noticeSnapshotParsed && __notice.term.buffer.active.cursorY > 0')) === true,
+          15_000, 50, 'parsed Pop out snapshot');
           if (ended) await popup('__showEndBanner()');
           // Earlier than the 550 ms quiet fallback: snapshot completion must place it.
           await popup('__pause(100)');
           const placement = await popup('__measure()') as Placement;
           checkPlacement(placement, rows);
         } finally { await send('Target.closeTarget', { targetId: target.targetId }, true); }
-        await evaluate('window.__openedHandle.closed = true');
-        await evaluate('__pause(1600)');
+        await evaluate('window.__noticeSnapshotParsed = false; window.__openedHandle.closed = true');
+        await eventually(async () => (await evaluate('window.__noticeSnapshotParsed')) === true,
+          15_000, 50, 'parsed reattached snapshot');
         if (ended) await evaluate('__showEndBanner()');
         checkPlacement(await evaluate('__measure()') as Placement, rows);
         await evaluate('__pause(2200)');
