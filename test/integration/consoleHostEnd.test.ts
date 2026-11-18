@@ -3,7 +3,10 @@
  * the list returned. A bare `process.kill` would, once Windows had reused it.
  */
 
-import { execFile, execFileSync, spawn } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
+import { copyFileSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { ChildProcess } from 'node:child_process';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { endConsoleHostProcess } from '../../src/core/windowsConsoleHost.js';
@@ -48,25 +51,28 @@ async function startTime(pid: number): Promise<number> {
   return started;
 }
 
-afterEach(() => {
+const directories: string[] = [];
+afterEach(async () => {
   vi.restoreAllMocks();
   for (const child of children.splice(0)) {
-    if (child.pid !== undefined && alive(child.pid)) {
-      try {
-        execFileSync('taskkill.exe', ['/T', '/F', '/PID', String(child.pid)], {
-          windowsHide: true,
-          stdio: 'ignore',
-        });
-      } catch {
-        // Already gone.
-      }
+    if (child.exitCode === null && child.signalCode === null && child.pid !== undefined) {
+      await new Promise<void>(resolve => {
+        child.once('exit', () => resolve());
+        child.kill();
+      });
     }
   }
+  for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
 describe.skipIf(process.platform !== 'win32')('ending a listed console host', () => {
   it('does not kill a process on another console that now holds the listed pid', async () => {
-    const decoy = spawn(process.execPath, ['-e', 'setInterval(() => {}, 500)'], {
+    // Match the host name so only the creation time distinguishes this process.
+    const directory = mkdtempSync(join(tmpdir(), 'console-host-test-'));
+    directories.push(directory);
+    const executable = join(directory, 'OpenConsole.exe');
+    copyFileSync(process.execPath, executable);
+    const decoy = spawn(executable, ['-e', 'setInterval(() => {}, 500)'], {
       windowsHide: true,
       stdio: 'ignore',
     });
@@ -99,5 +105,5 @@ describe.skipIf(process.platform !== 'win32')('ending a listed console host', ()
     );
     expect(alive(decoyPid)).toBe(true);
     expect(outcome).toMatchObject({ code: 'ESRCH' });
-  }, 40_000);
+  });
 });
