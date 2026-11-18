@@ -404,12 +404,12 @@
       autoFitTimer = null;
       if (window.performance.now() < assignmentSettleUntil) { scheduleAutoFit(); return; }
       assignmentSettleStartedAt = 0;
+      assignmentSettleUntil = 0;
       for (const item of shown()) {
         if (!visible(item)) continue;
         item.client?.autoFitGrid(80, 24, focusOpenFits.has(item.id) || incomingFits.has(item.id));
       }
-    }, assignmentSettleUntil > window.performance.now()
-      ? Math.max(0, assignmentSettleUntil - window.performance.now()) : 250);
+    }, assignmentSettleUntil ? Math.max(0, assignmentSettleUntil - window.performance.now()) : 250);
   }
   function fitFonts() {
     const visiblePanes = shown().filter((item) => item.client && visible(item));
@@ -438,12 +438,13 @@
       fitFonts();
     });
   }
-  function settleAssignmentFits() {
+  function settleAssignmentFits(settleMs = 900) {
     // A feed change and its window assignment can arrive in separate tasks.
     // Wait for the last change before taking a pane's grid.
     const now = window.performance.now();
     if (assignmentSettleStartedAt === 0) assignmentSettleStartedAt = now;
-    assignmentSettleUntil = Math.min(now + 900, assignmentSettleStartedAt + 3000);
+    // Leave one layout settling interval for measuring and sending the take.
+    assignmentSettleUntil = Math.min(now + settleMs, assignmentSettleStartedAt + 3000 - 250);
     scheduleAutoFit();
   }
   function broadcastPreferences() {
@@ -1208,7 +1209,10 @@
   function reconcile(sessions, full = false) {
     const incoming = new Map(sessions.filter((s) => s && typeof s.id === 'string').map((s) => [s.id, s]));
     if ([...panes.keys()].some((id) => !incoming.has(id) || dismissed.has(id)) ||
-        [...incoming.keys()].some((id) => !panes.has(id) && !dismissed.has(id))) settleAssignmentFits();
+        [...incoming.keys()].some((id) => !panes.has(id) && !dismissed.has(id))) {
+      // Only another window can send a second assignment for this feed change.
+      settleAssignmentFits(orderedWindows().length > 1 ? 900 : 250);
+    }
     // A snapshot is the whole list. An added or removed frame is not, so it
     // must not forget a dismissal or a launch for a session it did not mention.
     if (full) {
