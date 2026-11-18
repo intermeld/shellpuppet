@@ -287,16 +287,20 @@ it('repaints an idle full-screen program from the daemon after narrowing and wid
 
 it('fills the tile at the 400 column cap with a fixed text choice', async (context) => {
   if (!browser) { context.skip(); return; }
-  const { result } = await openDashboard(5000, 1000, async ({ evaluate }) => evaluate(`(async () => {
-    document.getElementById('text-smaller').click();
-    await new Promise(resolve => setTimeout(resolve, 850));
-    const tile = document.querySelector('.pane-term').getBoundingClientRect();
-    const screen = document.querySelector('.xterm-screen').getBoundingClientRect();
-    return { size: document.querySelector('.pane-size').textContent, font: Number(document.querySelector('.pane-term').dataset.fontSize),
-      tileWidth: tile.width, screenWidth: screen.width, tileHeight: tile.height, screenHeight: screen.height,
-      screenOffsetWidth: document.querySelector('.xterm-screen').offsetWidth,
-      wrapWidth: document.querySelector('.pane-wrap').clientWidth };
-  })()`));
+  const { result } = await openDashboard(5000, 1000, async ({ evaluate }) => {
+    await evaluate("document.getElementById('text-smaller').click()");
+    await eventually(async () => (await evaluate(`window.__dashboardDiagnostics.streams.some(stream =>
+      stream.socket.readyState === 1 && stream.geometry.at(-1)?.cols === 400 && stream.geometry.at(-1)?.control === 'yours')`)) === true,
+      10_000, 50, 'acknowledged 400 column fit');
+    return evaluate(`(() => {
+      const tile = document.querySelector('.pane-term').getBoundingClientRect();
+      const screen = document.querySelector('.xterm-screen').getBoundingClientRect();
+      return { size: document.querySelector('.pane-size').textContent, font: Number(document.querySelector('.pane-term').dataset.fontSize),
+        tileWidth: tile.width, screenWidth: screen.width, tileHeight: tile.height, screenHeight: screen.height,
+        screenOffsetWidth: document.querySelector('.xterm-screen').offsetWidth,
+        wrapWidth: document.querySelector('.pane-wrap').clientWidth };
+    })()`);
+  });
   const measured = result as { size: string; font: number; tileWidth: number; screenWidth: number;
     tileHeight: number; screenHeight: number };
   expect(measured.size).toContain('400×');
@@ -499,13 +503,19 @@ it('keeps the whole held screen steady during click, text entry and cell selecti
       openViewer: false, cols: 220, rows: 115, hold: true,
     } });
     expect(held.status).toBe(200);
-    const point = await evaluate(`(async () => {
-      await new Promise(resolve => setTimeout(resolve, 500));
-      document.querySelector('.pane').click(); document.getElementById('focus').click();
-      await new Promise(resolve => setTimeout(resolve, 700));
+    await eventually(async () => (await evaluate(`document.querySelectorAll('.pane').length === 2`)) === true);
+    await evaluate("document.querySelector('.pane').click(); document.getElementById('focus').click()");
+    await eventually(async () => (await evaluate(`(() => {
+      const card = document.querySelector('#strip .pane');
+      const text = card?.querySelector('.xterm-rows')?.textContent;
+      const wrap = card?.querySelector('.pane-wrap')?.getBoundingClientRect();
+      const box = card?.querySelector('.xterm-screen')?.getBoundingClientRect();
+      return text?.includes('ROW030:') && box?.height > 0 && box.left >= wrap.left - 1 &&
+        box.right <= wrap.right + 1 && box.top >= wrap.top - 1 && box.bottom <= wrap.bottom + 1;
+    })()`)) === true, 15_000, 50, 'held screen fitted inside the Focus strip');
+    const point = await evaluate(`(() => {
       const card = document.querySelector('#strip .pane');
       const wrap = card.querySelector('.pane-wrap');
-      await new Promise(resolve => requestAnimationFrame(resolve));
       const rect = wrap.getBoundingClientRect();
       const screenRect = card.querySelector('.xterm-screen').getBoundingClientRect();
       // MouseEvent coordinates use whole CSS pixels. With rows below a
@@ -520,7 +530,10 @@ it('keeps the whole held screen steady during click, text entry and cell selecti
     await send('Input.dispatchMouseEvent', { type: 'mousePressed', x: point.x, y: point.y, button: 'left', clickCount: 1 });
     await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x: point.x, y: point.y, button: 'left', clickCount: 1 });
     await send('Input.insertText', { text: 'Wispr probe' });
-    const afterText = await evaluate(`(async () => { await new Promise(resolve => setTimeout(resolve, 700));
+    await eventually(async () => (await evaluate(
+      "document.querySelector('#strip .xterm-rows')?.textContent.includes('RECEIVED:Wispr probe')")) === true,
+      10_000, 50, 'typed text in the held pane');
+    const afterText = await evaluate(`(() => {
       const wrap = document.querySelector('#strip .pane-wrap');
       return { left: wrap.scrollLeft, top: wrap.scrollTop, received: document.querySelector('#strip .xterm-rows')?.textContent.includes('RECEIVED:Wispr probe'),
         active: [document.activeElement?.tagName, document.activeElement?.className], inputs: window.__inputs.slice(),
