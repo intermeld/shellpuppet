@@ -1,4 +1,5 @@
-import { afterEach, beforeAll, expect, it } from 'vitest';
+import { afterEach, beforeAll, expect, it, vi } from 'vitest';
+import type { SessionManager } from '../../src/core/manager.js';
 import { captureDashboard } from './dashboardCapture.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
 import { api, eventually, startTestDaemon } from './helpers.js';
@@ -79,6 +80,30 @@ it('keeps a dashboard pane in control after a wider read and still auto fits', a
   expect(measured.fitted).not.toContain('following');
 }, 150_000);
 
+// Hold the wider read after it has announced the temporary grid. A busy
+// browser can then exercise the competing action anywhere inside that read.
+async function duringWiderRead(id: string, action: () => Promise<void>) {
+  const daemon = running!;
+  const session = (daemon.daemon as unknown as { manager: SessionManager }).manager.get(id)!;
+  const waitFor = session.waitFor.bind(session);
+  let release!: () => void;
+  const released = new Promise<void>(resolve => { release = resolve; });
+  const wait = vi.spyOn(session, 'waitFor').mockImplementationOnce(async (...args) => {
+    const result = await waitFor(...args);
+    await released;
+    return result;
+  });
+  const pending = api(daemon.port, daemon.token, `/sessions/${id}/snapshot?wider=300x120&widerTimeout=3000`);
+  try {
+    await action();
+  } finally {
+    release();
+    wait.mockRestore();
+    await pending;
+  }
+  return pending;
+}
+
 for (const action of ['Enlarge', 'Focus']) {
 it(`lets a deliberate ${action} take the grid during a wider read`, async (context) => {
   if (!browser) { context.skip(); return; }
@@ -90,16 +115,20 @@ it(`lets a deliberate ${action} take the grid during a wider read`, async (conte
       const stream = window.__dashboardDiagnostics.streams.find(entry => entry.url.includes('/sessions/${id}/stream'));
       return stream?.geometry.at(-1)?.control === 'yours';
     })()`)) === true, 10_000);
-    const pending = api(running!.port, running!.token,
-      `/sessions/${id}/snapshot?wider=300x120&widerTimeout=3000`);
-    await eventually(async () => (await evaluate(`(() => {
-      const stream = window.__dashboardDiagnostics.streams.find(entry => entry.url.includes('/sessions/${id}/stream'));
-      return stream?.geometry.some(frame => frame.cols === 300 && frame.temporary === true);
-    })()`)) === true, 10_000);
-    await evaluate(action === 'Enlarge'
-      ? `document.querySelector('.pane button[aria-label="Enlarge"]').click()`
-      : `(() => { document.querySelector('.pane').click(); document.getElementById('focus').click(); })()`);
-    const read = await pending;
+    const read = await duringWiderRead(id, async () => {
+      await eventually(async () => (await evaluate(`(() => {
+        const stream = window.__dashboardDiagnostics.streams.find(entry => entry.url.includes('/sessions/${id}/stream'));
+        return stream?.geometry.some(frame => frame.cols === 300 && frame.temporary === true);
+      })()`)) === true, 10_000);
+      await evaluate(action === 'Enlarge'
+        ? `document.querySelector('.pane button[aria-label="Enlarge"]').click()`
+        : `(() => { document.querySelector('.pane').click(); document.getElementById('focus').click(); })()`);
+      await eventually(async () => (await evaluate(`(() => {
+        const stream = window.__dashboardDiagnostics.streams.find(entry => entry.url.includes('/sessions/${id}/stream'));
+        const last = stream.geometry.at(-1);
+        return last?.control === 'yours' && !last.temporary;
+      })()`)) === true, 10_000, 50, 'acknowledgement of the deliberate take');
+    });
     expect(read.status, JSON.stringify(read.body)).toBe(200);
     expect(read.body['restored']).toBe(false);
     return await evaluate(`(() => {
@@ -125,15 +154,17 @@ it('keeps the grid through Pop out during a wider read', async (context) => {
       return stream?.geometry.at(-1)?.control === 'yours';
     })()`)) === true, 10_000);
     const before = await api(running!.port, running!.token, `/sessions/${id}/snapshot`);
-    const pending = api(running!.port, running!.token,
-      `/sessions/${id}/snapshot?wider=300x120&widerTimeout=3000`);
-    await eventually(async () => (await evaluate(`(() => {
-      const stream = window.__dashboardDiagnostics.streams.find(entry => entry.url.includes('/sessions/${id}/stream'));
-      return stream?.geometry.some(frame => frame.cols === 300 && frame.temporary === true);
-    })()`)) === true, 10_000);
-    await send('Runtime.evaluate', { expression: `document.querySelector('.pane [data-action="pop"]').click()`,
-      returnByValue: true, userGesture: true });
-    const read = await pending;
+    const read = await duringWiderRead(id, async () => {
+      await eventually(async () => (await evaluate(`(() => {
+        const stream = window.__dashboardDiagnostics.streams.find(entry => entry.url.includes('/sessions/${id}/stream'));
+        return stream?.geometry.some(frame => frame.cols === 300 && frame.temporary === true);
+      })()`)) === true, 10_000);
+      await send('Runtime.evaluate', { expression: `document.querySelector('.pane [data-action="pop"]').click()`,
+        returnByValue: true, userGesture: true });
+      await eventually(async () => (await evaluate(`window.__dashboardDiagnostics.streams
+        .some(entry => entry.url.includes('/sessions/${id}/stream') && entry.socket.readyState === 3)`)) === true,
+        10_000, 50, 'departure of the popped out pane');
+    });
     expect(read.status, JSON.stringify(read.body)).toBe(200);
     expect(read.body['restored']).toBe(true);
     const after = await api(running!.port, running!.token, `/sessions/${id}/snapshot`);
