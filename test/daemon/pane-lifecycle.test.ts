@@ -1,9 +1,12 @@
 import * as fs from 'node:fs';
 import * as vm from 'node:vm';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 /** Exercise the shipped pane script without starting a browser or a daemon. */
-function fixture(captureMode = false) {
+function fixture(captureMode = false, withNotice = false) {
+  const screen = { addEventListener() {}, removeEventListener() {}, getBoundingClientRect: () => ({ top: 0, bottom: 240, height: 240 }) };
+  const notice = { style: { top: '', bottom: '' }, getBoundingClientRect: () => ({ height: 20 }) };
+  let move: (row: number) => void = () => {};
   const calls: string[] = [];
   const writes: (() => void)[] = [];
   const frames: (() => void)[] = [];
@@ -11,7 +14,7 @@ function fixture(captureMode = false) {
     cols = 80;
     rows = 24;
     options = { fontSize: 13 };
-    element = { querySelector: () => null, style: {} };
+    element = { querySelector: (selector: string) => withNotice && selector === '.xterm-screen' ? screen : null, style: {} };
     buffer = { active: { cursorX: 0, cursorY: 0, baseY: 0, viewportY: 0 } };
     _core = {
       _coreBrowserService: { onDprChange: () => ({ dispose() {} }) },
@@ -20,7 +23,10 @@ function fixture(captureMode = false) {
     };
     open() {}
     attachCustomKeyEventHandler() {}
-    onCursorMove() { return { dispose() {} }; }
+    onCursorMove(callback: () => void) {
+      move = row => { this.buffer.active.cursorY = row; callback(); };
+      return { dispose() {} };
+    }
     onData() {}
     write(data: string | Uint8Array, done: () => void) {
       calls.push(data.length === 0 ? 'marker' : 'write');
@@ -54,10 +60,12 @@ function fixture(captureMode = false) {
   });
   const pane = (window['ShellPuppetPane'] as { create(config: unknown): {
     destroy(): void; relayout(deliberate: boolean): void; setFontOverride(value: number): void;
-  } }).create({ container: { parentElement: null, dataset: {} }, sessionId: 'fixture',
+  } }).create({ container: { parentElement: withNotice ? screen : null, dataset: {} },
+    elements: withNotice ? { promptAlert: { parentElement: notice } } : {}, sessionId: 'fixture',
     captureMode, initialFontOverride: 13 });
   return {
-    pane, calls, window,
+    pane, calls, window, move, notice,
+    frame: () => { for (const callback of frames.splice(0)) callback(); },
     bytes: () => { message({ data: new Uint8Array([65, 10]).buffer }); },
     geometry: (cols: number) => { message({ data: JSON.stringify({ type: 'geometry', cols, rows: 24, control: 'held' }) }); },
     drain: () => { while (writes.length > 0) writes.shift()!(); },
@@ -66,6 +74,23 @@ function fixture(captureMode = false) {
 }
 
 describe('pane parser lifetime', () => {
+  it('clears a covered rest on the first delivered frame even if its timer has not run', () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const f = fixture(false, true);
+      try {
+        f.move(23);
+        vi.setSystemTime(300);
+        f.frame();
+        expect(f.notice.style.top).toBe('auto');
+        vi.setSystemTime(1100);
+        f.frame();
+        expect(f.notice.style.bottom).toBe('auto');
+      } finally { f.pane.destroy(); }
+    } finally { vi.useRealTimers(); }
+  });
+
   it('defers dashboard disposal, drops late frames and disposes once', async () => {
     const f = fixture();
     f.bytes();
