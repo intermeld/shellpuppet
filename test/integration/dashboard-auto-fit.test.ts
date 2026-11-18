@@ -317,8 +317,6 @@ it('fits a settled layout once per free pane, keeps the floor, and stops when sw
 
 it('takes a newly arrived pane within three seconds during ten seconds of session churn', async (context) => {
   if (!browser) { context.skip(); return; }
-  const attempts: { takeDelay: number | undefined; gap: { from: number; to: number; gap: number } | null; frames: number }[] = [];
-  for (let attempt = 0; attempt < 2; attempt++) {
   const urls: string[] = [];
   const daemon = running = await startTestDaemon({
     launcher: (url) => { urls.push(url); return Promise.resolve({ launched: true, mode: 'isolated-app', browser: 'mock' }); },
@@ -328,6 +326,11 @@ it('takes a newly arrived pane within three seconds during ten seconds of sessio
   const shot = await captureDashboard({ browser, viewerUrl: urls.at(-1)!, width: 1280, height: 720,
     drive: true, timeoutMs: 120_000,
     beforeNavigateScript: `(() => {
+      new MutationObserver(() => {
+        if (window.__arrivedAt === undefined && document.querySelector('.pane[data-session]')) {
+          window.__arrivedAt = performance.now();
+        }
+      }).observe(document, { childList: true, subtree: true });
       window.__takes = [];
       window.__takeFrames = [];
       requestAnimationFrame(function recordTakeFrame(time) {
@@ -363,7 +366,7 @@ it('takes a newly arrived pane within three seconds during ten seconds of sessio
         };
         await waitFor('the arriving pane', () => document.querySelectorAll('.pane[data-session=${JSON.stringify(id)}]').length,
           count => count === 1);
-        const arrivedAt = performance.now();
+        const arrivedAt = window.__arrivedAt;
         window.__churnChanges = 0;
         const change = () => {
           const index = ++window.__churnChanges;
@@ -402,25 +405,14 @@ it('takes a newly arrived pane within three seconds during ten seconds of sessio
   // Stall evidence counts only frame pairs delivered inside the arrival-to-deadline interval.
   const decisionPairs = deliveredPairs(result.frames, result.arrivedAt, result.arrivedAt + 3000);
   const takeDelay = result.takes[0] === undefined ? undefined : result.takes[0].at - result.arrivedAt;
-  const failed = result.changes < 13 || result.takes.length === 0 || takeDelay === undefined || takeDelay > 3300;
-  if (failed && decisionPairs === 0)
-    throw new Error(`inconclusive: no frames observed during Auto fit decision; ${JSON.stringify(result)}`);
   const gap = decisionStall(result.decisionGaps, decisionPairs, result.arrivedAt, result.arrivedAt + 3000);
-  attempts.push({ takeDelay, gap: gap === 'inconclusive' ? null : gap, frames: decisionPairs });
-  const excused = failed && result.changes >= 13 && gap !== null && gap !== 'inconclusive';
-  const details = JSON.stringify({ takeDelay, changes: result.changes, maxFrameGap: result.maxFrameGap,
-    measuredFrames: result.measuredFrames, decisionPairs, decisionGap: gap });
-  if (excused && attempt === 0) {
-    console.log(`TIMING_RETRY dashboard-auto-fit: ${JSON.stringify(attempts)}`);
-    await daemon.stop(); running = null; continue;
+  const details = JSON.stringify({ takeDelay, changes: result.changes, decisionPairs, gap });
+  if ((takeDelay === undefined || takeDelay > 3000) && gap !== null) {
+    throw new Error(`runner stalled during the Auto fit decision: ${details}`);
   }
-  if (excused && attempt === 1) throw new Error(`runner stalled twice during Auto fit decision: ${JSON.stringify(attempts)}`);
-  expect(result.changes).toBeGreaterThanOrEqual(13);
+  expect(result.changes, details).toBeGreaterThanOrEqual(13);
   expect(result.takes.length, details).toBeGreaterThan(0);
-  expect(takeDelay, details).toBeLessThanOrEqual(3300);
-  if (attempt === 1) console.log(`TIMING_RESULT dashboard-auto-fit: ${JSON.stringify(attempts)}`);
-  return;
-  }
+  expect(takeDelay, details).toBeLessThanOrEqual(3000);
 }, 240_000);
 
 it.each([true, false])('focus profile keeps one floor-sized fit with Auto fit %s', async (enabled) => {
