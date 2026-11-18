@@ -258,6 +258,14 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
         ['frame interval', () => expect(result.restTiming.frameInterval).toBeLessThan(200)],
         ['observed span', () => expect(result.restTiming.observedMs - result.restTiming.frameSpan).toBeLessThan(500)],
         ['legs', () => expect(result.cadence.legs.length).toBeGreaterThan(4)],
+      await evaluate(`window.__firstHeader = new Promise(resolve => {
+        const subscription = __notice.term.onCursorMove(() => {
+          if (__notice.term.buffer.active.cursorY === 0) {
+            subscription.dispose();
+            resolve(performance.now());
+          }
+        });
+      }); true`);
         ['cadence', () => expect(assessment.violations).toEqual([])],
       ];
       if (!assessment.rests.length) {
@@ -303,7 +311,7 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
       expect(initial.side, JSON.stringify(initial)).toBe('bottom');
       await input('r');
       const result = await evaluate(`(async () => {
-        const start = performance.now(), prompt = __notice.term.rows - 2;
+        const start = await __firstHeader, prompt = __notice.term.rows - 2;
         let firstClear = null, changes = 0, coveredAtRest = 0, restSamples = 0;
         let firstRestAt = null, lastRestAt = null;
         let last = __measure(prompt).side;

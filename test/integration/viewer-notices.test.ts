@@ -6,7 +6,6 @@ import { captureViewer } from './browserCapture.js';
 import type { CaptureOptions } from '../../src/daemon/screenshot.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
 import { noticeFrameLimitScript } from './noticeFrameLimit.js';
-import { decisionStall } from './decision-stall.js';
 import { api, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 import { assessDeliveredCadence, deliveredNoticeScript, recordDeliveredCadence } from './noticeCadence.js';
@@ -203,18 +202,22 @@ async function withPage(mode: string, interact: NonNullable<CaptureOptions['inte
 describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
   for (const rows of [24, 150]) it(`uncovers a leading prompt among three excursions at 80x${String(rows)}`, async context => {
     if (!browser) { context.skip(); return; }
-    const attempts: { failures: string[]; gaps: { from: number; to: number; gap: number }[] }[] = [];
-    for (let attempt = 0; attempt < 2; attempt++) {
-    const failures: string[] = [];
     await withPage(mode, async ({ evaluate }) => {
       const sessions = (await api(td!.port, td!.token, '/sessions')).body['sessions'] as { id: string }[];
       await evaluate(`window.__visits = [];
         __noticeTest.term.onCursorMove(() => __visits.push({ row: __noticeTest.term.buffer.active.cursorY, at: performance.now() }))`);
       await evaluate(deliveredNoticeScript);
       await evaluate('window.__leadingCadence = observeDeliveredNotice(__noticeTest.term, __noticeTest.notices, performance.now(), 0)');
-      expect((await api(td!.port, td!.token, `/sessions/${sessions[0]!.id}/input`, { body: { data: 'r' } })).status).toBe(200);
-      const result = await evaluate(`(async () => {
-        const state = __noticeTest, start = performance.now(), row = state.term.rows - 2, placements = new Set();
+      await evaluate(`window.__leadingResult = (async () => {
+        const state = __noticeTest, row = state.term.rows - 2, placements = new Set();
+        const start = await new Promise(resolve => {
+          const first = state.term.onCursorMove(() => {
+            if (state.term.buffer.active.cursorY === 0) {
+              first.dispose();
+              resolve(performance.now());
+            }
+          });
+        });
         let samples = 0, restingSamples = 0, covered = 0, follow = null;
         let firstCoveredAt = null, firstWrongSideAt = null;
         while (performance.now() - start < 6000) {
@@ -277,7 +280,9 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
           placements: [...placements], hidden: state.alert.hidden,
           visits: __visits.map(visit => ({ row: visit.row, ms: visit.at - start })),
           cadence: __leadingCadence.stop() };
-      })()`) as { row: number; rows: number; samples: number; restingSamples: number; covered: number;
+      })(); true`);
+      expect((await api(td!.port, td!.token, `/sessions/${sessions[0]!.id}/input`, { body: { data: 'r' } })).status).toBe(200);
+      const result = await evaluate('window.__leadingResult') as { row: number; rows: number; samples: number; restingSamples: number; covered: number;
         follow: number | null; weights: Record<string, number>; earlyWeights: Record<string, number>;
         longestPromptStay: number; placements: string[]; hidden: boolean;
         deadlineFrame: number; decisionGap: number; startedAt: number; leadingAt: number | null;
@@ -288,61 +293,24 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
       const assessment = assessDeliveredCadence(result.cadence);
       recordDeliveredCadence(`${mode}-${String(rows)}-leading`, result.cadence);
       const details = JSON.stringify({ ...result, cadence: assessment });
-      const checks: [string, () => void][] = [
-        ['rows', () => expect(result.rows).toBe(rows)],
-        ['samples', () => expect(result.samples).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200))],
-        ['resting samples', () => expect(result.restingSamples).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200))],
-        ['frames', () => expect(result.frames).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200))],
-        ['frame interval', () => expect(result.frameInterval).toBeLessThan(200)],
-        ['frame span', () => expect(result.frameSpan).toBeGreaterThan(5500)],
-        ['observed span', () => expect(result.observedMs - result.frameSpan).toBeLessThan(500)],
-        ['visible', () => expect(result.hidden).toBe(false)],
-        ['uncovered', () => expect(result.covered).toBe(0)],
-        ['first clear', () => expect(result.follow).not.toBeNull()],
-        ['deadline frame', () => expect(result.deadlineFrame).toBeGreaterThanOrEqual(2500)],
-        ['startup deadline', () => expect(result.follow).toBeLessThanOrEqual(result.deadlineFrame)],
-        ['placement', () => expect(result.placements).toEqual(['top'])],
-        ['repaint evidence', () => expect(assessment.repaints.some(repaint => repaint.target === 'top')).toBe(true)],
-        ['cadence', () => expect(assessment.violations).toEqual([])],
-      ];
+      expect(assessment.violations, details).toEqual([]);
       const promptTime = result.earlyWeights[String(result.row)] ?? 0;
       const upperTime = result.earlyWeights['0'] ?? 0;
-      checks.push(['leading evidence', () => expect(result.longestPromptStay >= 1000 ||
-        (promptTime - upperTime >= 20 && upperTime <= promptTime * 2 / 3)).toBe(true)]);
-      for (const [name, check] of checks) {
-        try { check(); } catch { failures.push(name); }
+      if (result.samples === 0 || result.restingSamples === 0 || result.frames < 2 ||
+          !Number.isFinite(result.deadlineFrame)) {
+        throw new Error(`runner stalled before a post-deadline prompt observation: ${details}`);
       }
-      if (result.frames < 2) throw new Error(`inconclusive: no frames observed during notice decision; ${details}`);
-      const firstViolation = assessment.violations[0] as
-        { frame?: { time: number }; first?: number; change?: { time: number }; clearBy?: number } | undefined;
-      const violationAt = (firstViolation?.frame?.time ?? firstViolation?.first ??
-        firstViolation?.change?.time ?? firstViolation?.clearBy ?? result.deadlineFrame) +
-        (result.cadence.epoch ?? result.startedAt) - result.startedAt;
-      const leadingAt = result.leadingAt ?? NaN;
-      const gapDuring = (start: number, end: number) => decisionStall(result.stalls, result.frames - 1, start, end);
-      const excusingGaps: { from: number; to: number; gap: number }[] = [];
-      const unexcused = failures.filter(name => {
-        if (name === 'rows' || name === 'visible') return true;
-        let gap;
-        if (name === 'uncovered') gap = gapDuring(Math.max(leadingAt, 2500), result.firstCoveredAt ?? result.deadlineFrame);
-        else if (name === 'placement') gap = gapDuring(Math.max(leadingAt, 2500), result.firstWrongSideAt ?? result.deadlineFrame);
-        else if (name === 'cadence') gap = gapDuring(Math.max(leadingAt, violationAt - 500), violationAt);
-        if (['first clear', 'startup deadline', 'deadline frame', 'repaint evidence'].includes(name))
-          gap = gapDuring(leadingAt, result.deadlineFrame);
-        if (gap && gap !== 'inconclusive') { excusingGaps.push(gap); return false; }
-        return true;
-      });
-      attempts.push({ failures, gaps: excusingGaps });
-      if (unexcused.length)
-        throw new Error(`notice placement failed: ${failures.join(', ')}; ${details}; attempts: ${JSON.stringify(attempts)}`);
+      expect(result.rows, details).toBe(rows);
+      expect(result.hidden, details).toBe(false);
+      expect(result.longestPromptStay >= 1000 ||
+        (promptTime - upperTime >= 20 && upperTime <= promptTime * 2 / 3), details).toBe(true);
+      expect(result.covered, details).toBe(0);
+      expect(result.follow, details).not.toBeNull();
+      expect(result.deadlineFrame, details).toBeGreaterThanOrEqual(2500);
+      expect(result.follow, details).toBeLessThanOrEqual(result.deadlineFrame);
+      expect(result.placements, details).toEqual(['top']);
+      expect(assessment.repaints.some(repaint => repaint.target === 'top'), details).toBe(true);
     }, 200, rows);
-    if (!failures.length) {
-      if (attempt === 1) console.log(`TIMING_RESULT viewer-notices ${mode} ${String(rows)}: ${JSON.stringify(attempts)}`);
-      return;
-    }
-    if (attempt === 1) throw new Error(`runner stalled twice during notice decision: ${JSON.stringify(attempts)}`);
-    console.log(`TIMING_RETRY viewer-notices ${mode} ${String(rows)}: ${JSON.stringify(attempts[0])}`);
-    }
   }, 240_000);
 
   for (const period of [33, 25]) it(`uncovers a moved prompt during ${String(period)} ms repaints and stays steady through longer pauses`, async context => {

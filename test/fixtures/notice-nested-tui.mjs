@@ -18,11 +18,7 @@ const phases = phaseDriver();
 const stop = () => { phases.stop(); clearInterval(interval); returns.forEach(clearTimeout); };
 const repaint = () => {
   process.stdout.write(move(0) + 'Status ' + (++frame));
-  returns = long ? [
-    setTimeout(() => process.stdout.write(move(Math.floor(rows / 3)) + 'Panel A ' + frame), 100),
-    setTimeout(() => process.stdout.write(move(Math.floor(rows / 2)) + 'Panel B ' + frame), 450),
-    setTimeout(() => process.stdout.write(prompt()), 800),
-  ] : [
+  returns = [
     setTimeout(() => process.stdout.write(move(Math.floor(rows / 2)) + 'Rendering ' + frame), timing[0]),
     setTimeout(() => process.stdout.write(move(0) + 'Status ready ' + frame), timing[1]),
     setTimeout(() => process.stdout.write(prompt()), timing[2]),
@@ -34,7 +30,11 @@ process.stdin.on('data', data => {
   for (const key of phases.read(data)) {
     stop();
     if (key === 'r') {
-      if (extended) {
+      if (long) {
+        phases.start([[move(0) + 'Status', 100, 0],
+          [move(Math.floor(rows / 3)) + 'Panel A', 350, Math.floor(rows / 3)],
+          [move(Math.floor(rows / 2)) + 'Panel B', 350, Math.floor(rows / 2)], [prompt(), 500, rows - 2]]);
+      } else if (extended) {
         phases.start([[move(0) + 'Status', 160, 0], [move(Math.floor(rows / 2)) + 'Rendering', 290, Math.floor(rows / 2)],
           [move(0) + 'Status ready', 30, 0], [prompt(), 700, rows - 2]]);
       } else if (equal) {
@@ -53,7 +53,7 @@ process.stdin.on('data', data => {
           process.stdout.write('\x1b[' + (row + 1) + ';' + (70 + frame++ % 2) + 'H*');
         };
         draw(); interval = setInterval(draw, 50);
-      } else { repaint(); interval = setInterval(repaint, long ? 1300 : timing[3]); }
+      } else { repaint(); interval = setInterval(repaint, timing[3]); }
     }
     if (key === 'b') process.stdout.write(prompt());
     if (key === 'q') process.exit(0);
