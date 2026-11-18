@@ -19,6 +19,8 @@ export function readiness(view: NudgeView): NudgeReadiness {
     placeholder: PLACEHOLDER,
     continuations: true,
     placeholderInk,
+    // Claude Code also offers a suggested next prompt in the same dim ink; typed text is never dim.
+    anyHintInPlaceholderInk: true,
     // The rule above the composer may carry the session's title in the same grey.
     ruleRows: [/^─{10,}$/u, /^─{10,} \S(?:.*\S)? ─{1,}$/u],
     ruleInk: (line) => line.spans.length > 0 && line.spans.every((span) => span.fg === RULE_INK && !span.dim),
