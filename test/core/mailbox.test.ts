@@ -365,6 +365,31 @@ describe('waitForMessage', () => {
     expect(entry?.text).toBe('from the third');
   });
 
+  it('takes the sender by name, for a message already waiting', async () => {
+    const box = pair();
+    box.register({ kind: 'session', id: 's3', name: 'third' });
+    box.send('s1', 'helper', 'from the chair', 10);
+    box.send('s3', 'helper', 'from the third', 11);
+    const entry = await box.waitForMessage('s2', { from: 'third', timeoutMs: 1_000 });
+    expect(entry?.id).toBe('m2');
+  });
+
+  it('takes the sender by name, for a message that arrives later', async () => {
+    const box = pair();
+    box.register({ kind: 'session', id: 's3', name: 'third' });
+    let settled = false;
+    const wait = box.waitForMessage('s2', { from: 'third', timeoutMs: 5_000 }).then((entry) => {
+      settled = true;
+      return entry;
+    });
+    box.send('s1', 'helper', 'from the chair', 10);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+    box.send('s3', 'helper', 'from the third', 11);
+    expect((await wait)?.id).toBe('m2');
+  });
+
   it('resolves with undefined when the timeout passes with no message', async () => {
     vi.useFakeTimers();
     const box = pair();
