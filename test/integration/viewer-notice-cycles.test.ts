@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { captureViewer } from './browserCapture.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
-import { virtualNoticeFrames } from './noticeFrameLimit.js';
+import { noticeFrameLimitScript, virtualNoticeFrames } from './noticeFrameLimit.js';
 
 let browser: string | null;
 let scratch: string;
@@ -17,7 +17,7 @@ beforeAll(async () => {
 });
 afterAll(() => { fs.rmSync(scratch, { recursive: true, force: true }); });
 
-async function run<T>(mode: string, expression: string): Promise<T[]> {
+async function run<T>(mode: string, expression: string, timed = false): Promise<T[]> {
   const url = (relative: string): string => new URL(relative, import.meta.url).href;
   const page = path.join(scratch, `${mode}.html`);
   fs.writeFileSync(page, `<!doctype html><link rel="stylesheet" href="${url('../../node_modules/@xterm/xterm/css/xterm.css')}">
@@ -26,13 +26,17 @@ async function run<T>(mode: string, expression: string): Promise<T[]> {
     <script src="${pathToFileURL(path.join(scratch, 'pane.js')).href}"></script>
     <script src="${url('../fixtures/notice-occupancy-browser.js')}"></script>
     <script src="${url('../fixtures/notice-cycle-browser.js')}"></script>`);
+  const virtual = timed && !Number(process.env['NOTICE_FRAME_BUSY_MS']);
   const result = await captureViewer({ browser: browser!, viewerUrl: pathToFileURL(page).href,
     cpuThrottlingRate: Number(process.env['NOTICE_CPU_RATE'] ?? 1),
-    beforeNavigateScript: virtualNoticeFrames,
+    beforeNavigateScript: virtual ? undefined : noticeFrameLimitScript,
     width: 1000, height: 900, drive: true, probeOnly: true, timeoutMs: 90_000,
     probe: '!!window.noticeSnapshotCases', interact: async ({ evaluate, send }) => {
-      await evaluate('document.fonts.ready.then(() => true)');
-      await send('Emulation.setVirtualTimePolicy', { policy: 'advance' });
+      if (virtual) {
+        await evaluate('document.fonts.ready.then(() => true)');
+        await evaluate(virtualNoticeFrames);
+        await send('Emulation.setVirtualTimePolicy', { policy: 'advance' });
+      }
       await evaluate('window.__stopCaseFrames = noticeFrameTiming()');
       const cases = await evaluate(expression) as Record<string, unknown>[];
       const timing = await evaluate('__stopCaseFrames()') as Record<string, unknown>;
@@ -60,7 +64,7 @@ interface HorizontalRest { rows: number; samples: number; covered: number; follo
 describe.each(['viewer', 'dashboard'])('%s notice repaint boundaries', mode => {
   for (const kind of ['height', 'refresh']) it(`keeps both initial edges during equal alternation with late ${kind} updates`, async context => {
     if (!browser) { context.skip(); return; }
-    const results = await run<EqualLayout>(mode, `noticeEqualLayoutCases(${JSON.stringify(mode)}, ${JSON.stringify(kind)})`);
+    const results = await run<EqualLayout>(mode, `noticeEqualLayoutCases(${JSON.stringify(mode)}, ${JSON.stringify(kind)})`, true);
     for (const result of results) {
       const details = JSON.stringify(result);
       expect.soft(result.changes, details).toEqual([]);
@@ -75,7 +79,7 @@ describe.each(['viewer', 'dashboard'])('%s notice repaint boundaries', mode => {
   for (const timing of [[30, 290, 30, 300], [160, 290, 30, 450]]) {
     it(`ignores a nested header return with ${timing.join('/')} ms legs`, async context => {
       if (!browser) { context.skip(); return; }
-      const results = await run<Nested>(mode, `noticeNestedReturnCases(${JSON.stringify(mode)}, ${JSON.stringify(timing)})`);
+      const results = await run<Nested>(mode, `noticeNestedReturnCases(${JSON.stringify(mode)}, ${JSON.stringify(timing)})`, true);
       for (const result of results) {
         const details = JSON.stringify(result);
         expect.soft(result.samples, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
@@ -109,7 +113,7 @@ describe.each(['viewer', 'dashboard'])('%s notice repaint boundaries', mode => {
   }, 60_000);
   it('follows a settled row while typing or animating horizontally', async context => {
     if (!browser) { context.skip(); return; }
-    const results = await run<HorizontalRest>(mode, `noticeHorizontalRestCases(${JSON.stringify(mode)})`);
+    const results = await run<HorizontalRest>(mode, `noticeHorizontalRestCases(${JSON.stringify(mode)})`, true);
     if (process.env['NOTICE_DIAGNOSTICS']) process.stderr.write(JSON.stringify({ mode, results }) + '\n');
     for (const result of results) {
       const details = JSON.stringify(result);

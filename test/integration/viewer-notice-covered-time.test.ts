@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { captureViewer } from './browserCapture.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
-import { virtualNoticeFrames } from './noticeFrameLimit.js';
+import { noticeFrameLimitScript, virtualNoticeFrames } from './noticeFrameLimit.js';
 import { assessDeliveredCadence, recordDeliveredCadence } from './noticeCadence.js';
 import type { DeliveredCadence } from './noticeCadence.js';
 
@@ -19,7 +19,7 @@ beforeAll(async () => {
 });
 afterAll(() => { fs.rmSync(scratch, { recursive: true, force: true }); });
 
-async function run<T>(mode: string, expression: string): Promise<T[]> {
+async function run<T>(mode: string, expression: string, timed = false): Promise<T[]> {
   const url = (relative: string): string => new URL(relative, import.meta.url).href;
   const page = path.join(scratch, `${mode}.html`);
   fs.writeFileSync(page, `<!doctype html><link rel="stylesheet" href="${url('../../node_modules/@xterm/xterm/css/xterm.css')}">
@@ -29,13 +29,17 @@ async function run<T>(mode: string, expression: string): Promise<T[]> {
     <script src="${url('../fixtures/notice-occupancy-browser.js')}"></script>
     <script src="${url('../fixtures/notice-delivered-browser.js')}"></script>
     <script src="${url('../fixtures/notice-covered-time-browser.js')}"></script>`);
+  const virtual = timed && !Number(process.env['NOTICE_FRAME_BUSY_MS']);
   const result = await captureViewer({ browser: browser!, viewerUrl: pathToFileURL(page).href,
     cpuThrottlingRate: Number(process.env['NOTICE_CPU_RATE'] ?? 1),
-    beforeNavigateScript: virtualNoticeFrames,
+    beforeNavigateScript: virtual ? undefined : noticeFrameLimitScript,
     width: 1000, height: 900, drive: true, probeOnly: true, timeoutMs: 300_000,
     probe: '!!window.noticeCoveredTimeCases', interact: async ({ evaluate, send }) => {
-      await evaluate('document.fonts.ready.then(() => true)');
-      await send('Emulation.setVirtualTimePolicy', { policy: 'advance' });
+      if (virtual) {
+        await evaluate('document.fonts.ready.then(() => true)');
+        await evaluate(virtualNoticeFrames);
+        await send('Emulation.setVirtualTimePolicy', { policy: 'advance' });
+      }
       await evaluate('window.__stopCaseFrames = noticeFrameTiming()');
       const cases = await evaluate(expression) as Record<string, unknown>[];
       const timing = await evaluate('__stopCaseFrames()') as Record<string, unknown>;
@@ -59,7 +63,7 @@ describe.each(['viewer', 'dashboard'])('%s covered notice time', mode => {
   for (const kind of ['plurality', 'adjacent', 'equal']) {
     it(`keeps the correct edge through ${kind} repaints at 24 and 150 rows`, async context => {
       if (!browser) { context.skip(); return; }
-      const results = await run<Rest>(mode, `noticeCoveredTimeCases(${JSON.stringify(mode)}, ${JSON.stringify(kind)})`);
+      const results = await run<Rest>(mode, `noticeCoveredTimeCases(${JSON.stringify(mode)}, ${JSON.stringify(kind)})`, true);
       if (process.env['NOTICE_DIAGNOSTICS']) process.stderr.write(JSON.stringify({ mode, kind, results }) + '\n');
       for (const result of results) {
         const details = JSON.stringify(result);
@@ -92,7 +96,7 @@ describe.each(['viewer', 'dashboard'])('%s covered notice time', mode => {
   }
   it('applies the repaint budget to moving dominant rows and clears a genuine rest', async context => {
     if (!browser) { context.skip(); return; }
-    const results = await run<Moving>(mode, `noticeMovingRestCases(${JSON.stringify(mode)}, true)`);
+    const results = await run<Moving>(mode, `noticeMovingRestCases(${JSON.stringify(mode)}, true)`, true);
     for (const [index, result] of results.entries()) {
       expect.soft(result.legs).toHaveLength(4);
       expect.soft(result.sustained).toHaveLength(2);
