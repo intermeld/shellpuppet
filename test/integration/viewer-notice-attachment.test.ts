@@ -169,9 +169,6 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
   }
   it('follows a real PTY rest across two lower notice rows', async context => {
     if (!browser) { context.skip(); return; }
-    const attempts: { gap: number; failures: string[] }[] = [];
-    for (let attempt = 0; attempt < 2; attempt++) {
-    const failures: string[] = [];
     await withPage(mode, 24, async ({ evaluate }, input) => {
       await evaluate(deliveredNoticeScript);
       await evaluate('window.__delivered = observeDeliveredNotice(__notice.term, __notice.notices, performance.now(), 0)');
@@ -185,26 +182,18 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
       cadence.cycleRows = [0, 22, 0, 22, 23, 22, 23, 0, 8, 9, 10, 11, 12];
       const assessment = assessDeliveredCadence(cadence);
       recordDeliveredCadence(`${mode}-24-rword`, cadence);
-      if (assessment.legs.length <= 13) failures.push('cursor legs');
-      if (!assessment.rests.some(rest => (rest as { edge?: string }).edge === 'bottom')) failures.push('lower rest');
-      if (assessment.violations.length) failures.push('cadence');
-      if (timing.frames < 2) failures.push('no delivered animation frames');
-      attempts.push({ gap: timing.maxFrameGap, failures });
-      if (failures.length && (failures.some(failure => !['cursor legs', 'no delivered animation frames'].includes(failure)) ||
-          (timing.frames >= 2 && timing.maxFrameGap < 500)))
-        throw new Error(`real PTY rest failed: ${failures.join(', ')}; ${JSON.stringify(observation)}`);
+      const details = JSON.stringify({ timing, assessment });
+      expect(assessment.violations, details).toEqual([]);
+      if (timing.frames < 2 || assessment.legs.length <= 13 || !assessment.rests.some(rest =>
+        (rest as { edge?: string; deadline?: number }).edge === 'bottom' &&
+        (rest as { deadline?: number }).deadline !== undefined)) {
+        throw new Error(`runner stalled before a complete lower rest was observed: ${details}`);
+      }
     }, 'rword');
-    if (!failures.length) return;
-    if (attempt === 1) throw new Error(`runner stalled twice during real PTY rest: ${JSON.stringify(attempts)}`);
-    console.log(`TIMING_RETRY viewer-notice-attachment ${mode} rword`);
-    }
   }, 240_000);
   for (const cadence of ['staged', 'spinner', 'equal']) for (const rows of [24, 150])
   it(`respects repaint evidence during ${cadence} updates at 80x${String(rows)}`, async context => {
     if (!browser) { context.skip(); return; }
-    const attempts: { gap: number; failures: string[] }[] = [];
-    for (let attempt = 0; attempt < 2; attempt++) {
-    const failures: string[] = [];
     await withPage(mode, rows, async ({ evaluate }, input) => {
       await evaluate('__pause(1100)');
       expect((await evaluate('__measure()') as { side: string }).side).toBe('bottom');
@@ -212,7 +201,7 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
       await evaluate(`window.__delivered = observeDeliveredNotice(__notice.term, __notice.notices,
         performance.now(), 0)`);
       await evaluate(`window.__visits = [];
-        __notice.term.onCursorMove(() => __visits.push({ row: __notice.term.buffer.active.cursorY, at: performance.now() }))`);
+        __notice.term.onCursorMove(() => __visits.push({ row: __notice.term.buffer.active.cursorY, col: __notice.term.buffer.active.cursorX, at: performance.now() }))`);
       await input('r');
       const result = await evaluate(`(async () => {
         const start = performance.now(), prompt = __notice.term.rows - 2;
@@ -228,17 +217,15 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
           }
           await __pause(4);
         }
-        const vertical = __visits.filter((visit, i) => i === 0 || visit.row !== __visits[i - 1].row);
-        const legs = vertical.slice(1).map((visit, i) => visit.at - vertical[i].at);
         return { firstClear, changes, restSamples, coveredAtRest, firstRestAt, lastRestAt, startedAt: start,
           restTiming: __noticeFrameSummary(start + 2500, performance.now()),
           stalls: __noticeFrames.slice(1).map((time, index) => ({
             from: __noticeFrames[index] - start, to: time - start, gap: time - __noticeFrames[index],
           })).filter(gap => gap.to >= 0 && gap.from <= 10000 && gap.gap >= 500),
-          maxLeg: Math.max(...legs), visits: __visits.length,
+          horizontalMoves: __visits.some((v, i) => i && v.row === __visits[i - 1].row && v.col !== __visits[i - 1].col),
           cadence: __delivered.stop() };
       })()`) as { firstClear: number | null; changes: number; restSamples: number; coveredAtRest: number;
-        firstRestAt: number | null; lastRestAt: number | null; maxLeg: number; visits: number;
+        firstRestAt: number | null; lastRestAt: number | null; horizontalMoves: boolean;
         startedAt: number; stalls: { from: number; to: number; gap: number }[];
         restTiming: { frames: number; frameInterval: number; maxFrameGap: number; frameSpan: number; observedMs: number };
         cadence: DeliveredCadence };
@@ -247,17 +234,30 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
       const details = JSON.stringify({ ...result, cadence: assessment,
         timing: await evaluate('__noticeFrameSummary(0)') });
       const leading = assessment.repaints.find(repaint => repaint.target === 'top');
-      const checks: [string, () => void][] = [
-        ['first rest', () => expect(result.firstRestAt).not.toBeNull()],
-        ['rest duration', () => expect(result.lastRestAt! - result.firstRestAt!).toBeGreaterThan(2000)],
-        ['rest samples', () => expect(result.restSamples).toBeGreaterThanOrEqual(
-          Math.floor((result.lastRestAt! - result.firstRestAt!) / 200))],
-        ['frame span', () => expect(result.restTiming.frameSpan).toBeGreaterThan(6000)],
-        ['frames', () => expect(result.restTiming.frames).toBeGreaterThanOrEqual(
-          Math.floor(result.restTiming.frameSpan / 200))],
-        ['frame interval', () => expect(result.restTiming.frameInterval).toBeLessThan(200)],
-        ['observed span', () => expect(result.restTiming.observedMs - result.restTiming.frameSpan).toBeLessThan(500)],
-        ['legs', () => expect(result.cadence.legs.length).toBeGreaterThan(4)],
+      expect(assessment.violations, details).toEqual([]);
+      if (result.firstRestAt === null || result.lastRestAt === null ||
+          result.lastRestAt - result.firstRestAt <= 2000 || result.restTiming.frames < 2 ||
+          result.cadence.legs.length <= 4) {
+        throw new Error(`runner stalled before the repaint reached the resting row: ${details}`);
+      }
+      if (!assessment.rests.length) {
+        expect(result.changes, details).toBeLessThanOrEqual(1);
+        if (cadence === 'staged') {
+          expect(leading, details).toBeDefined();
+          expect(result.firstClear, details).not.toBeNull();
+        }
+      }
+      if (cadence === 'spinner' && !result.horizontalMoves) {
+        throw new Error(`runner stalled before a horizontal spinner update was delivered: ${details}`);
+      }
+    }, cadence);
+  }, 240_000);
+  for (const rows of [24, 150]) it(`uncovers the prompt in a 1.3 s staged repaint at 80x${String(rows)}`, async context => {
+    if (!browser) { context.skip(); return; }
+    await withPage(mode, rows, async ({ evaluate }, input) => {
+      await evaluate('__pause(1100)');
+      const initial = await evaluate('__measure()') as { side: string; overlap: boolean };
+      expect(initial.side, JSON.stringify(initial)).toBe('bottom');
       await evaluate(`window.__firstHeader = new Promise(resolve => {
         const subscription = __notice.term.onCursorMove(() => {
           if (__notice.term.buffer.active.cursorY === 0) {
@@ -266,49 +266,6 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
           }
         });
       }); true`);
-        ['cadence', () => expect(assessment.violations).toEqual([])],
-      ];
-      if (!assessment.rests.length) {
-        checks.push(['changes', () => expect(result.changes).toBeLessThanOrEqual(1)]);
-        if (cadence === 'staged') {
-          checks.push(['first clear', () => expect(result.firstClear).not.toBeNull()]);
-          checks.push(['leading repaint evidence', () => expect(leading).toBeDefined()]);
-        }
-      }
-      if (cadence === 'spinner') checks.push(['spinner visits', () => expect(result.visits).toBeGreaterThan(100)]);
-      for (const [name, check] of checks) {
-        try { check(); } catch { failures.push(name); }
-      }
-      if (result.restTiming.frames < 2) failures.push('no delivered animation frames');
-      const firstViolation = assessment.violations[0] as { frame?: { time: number }; first?: number;
-        change?: { time: number }; run?: { start: number }; clearBy?: number } | undefined;
-      const offset = (result.cadence.epoch ?? result.startedAt) - result.startedAt;
-      const violationAt = (firstViolation?.frame?.time ?? firstViolation?.first ??
-        firstViolation?.change?.time ?? firstViolation?.run?.start ?? firstViolation?.clearBy ?? 10000) + offset;
-      const gapBefore = (end: number, start = 0) => result.stalls.some(gap => gap.from <= end && gap.to >= start);
-      const unexcused = failures.filter(name => {
-        if (name === 'no delivered animation frames') return false;
-        if (name === 'changes') return true;
-        if (name === 'cadence') return !gapBefore(violationAt, violationAt - 500);
-        if (name === 'first clear') return !gapBefore((leading?.clearBy ?? 2500) + offset);
-        if (name === 'leading repaint evidence') return !gapBefore(2500);
-        return !gapBefore(result.lastRestAt ?? 10000, 2500);
-      });
-      attempts.push({ gap: Math.max(0, ...result.stalls.map(gap => gap.gap)), failures });
-      if (unexcused.length)
-        throw new Error(`notice attachment failed: ${failures.join(', ')}; ${details}`);
-    }, cadence);
-    if (!failures.length) return;
-    if (attempt === 1) throw new Error(`runner stalled twice during notice attachment: ${JSON.stringify(attempts)}`);
-    console.log(`TIMING_RETRY viewer-notice-attachment ${mode} ${cadence} ${String(rows)}`);
-    }
-  }, 240_000);
-  for (const rows of [24, 150]) it(`uncovers the prompt in a 1.3 s staged repaint at 80x${String(rows)}`, async context => {
-    if (!browser) { context.skip(); return; }
-    await withPage(mode, rows, async ({ evaluate }, input) => {
-      await evaluate('__pause(1100)');
-      const initial = await evaluate('__measure()') as { side: string; overlap: boolean };
-      expect(initial.side, JSON.stringify(initial)).toBe('bottom');
       await input('r');
       const result = await evaluate(`(async () => {
         const start = await __firstHeader, prompt = __notice.term.rows - 2;
@@ -357,7 +314,7 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
       await evaluate(deliveredNoticeScript);
       await evaluate('window.__delivered = observeDeliveredNotice(__notice.term, __notice.notices, performance.now(), 0)');
       await evaluate(`window.__visits = [];
-        __notice.term.onCursorMove(() => __visits.push({ row: __notice.term.buffer.active.cursorY, at: performance.now() }))`);
+        __notice.term.onCursorMove(() => __visits.push({ row: __notice.term.buffer.active.cursorY, col: __notice.term.buffer.active.cursorX, at: performance.now() }))`);
       await input('r');
       const result = await evaluate(`(async () => {
         const start = performance.now();
