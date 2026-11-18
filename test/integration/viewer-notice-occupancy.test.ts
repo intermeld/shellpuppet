@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { captureViewer } from './browserCapture.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
-import { virtualNoticeFrames } from './noticeFrameLimit.js';
+import { noticeFrameLimitScript, virtualNoticeFrames } from './noticeFrameLimit.js';
 
 let browser: string | null;
 let scratch: string;
@@ -54,7 +54,7 @@ function occupancyFailures(result: Occupancy, kind: string): string[] {
   return failures;
 }
 
-async function run<T>(mode: string, expression: string): Promise<T[]> {
+async function run<T>(mode: string, expression: string, timed = false): Promise<T[]> {
   const url = (relative: string): string => new URL(relative, import.meta.url).href;
   const page = path.join(scratch, `${mode}.html`);
   fs.writeFileSync(page, `<!doctype html><link rel="stylesheet" href="${url('../../node_modules/@xterm/xterm/css/xterm.css')}">
@@ -62,13 +62,17 @@ async function run<T>(mode: string, expression: string): Promise<T[]> {
     <script src="${url('../../node_modules/@xterm/xterm/lib/xterm.js')}"></script>
     <script src="${pathToFileURL(path.join(scratch, 'pane.js')).href}"></script>
     <script src="${url('../fixtures/notice-occupancy-browser.js')}"></script>`);
+  const virtual = timed && !Number(process.env['NOTICE_FRAME_BUSY_MS']);
   const result = await captureViewer({ browser: browser!, viewerUrl: pathToFileURL(page).href,
     cpuThrottlingRate: Number(process.env['NOTICE_CPU_RATE'] ?? 1),
-    beforeNavigateScript: virtualNoticeFrames,
+    beforeNavigateScript: virtual ? undefined : noticeFrameLimitScript,
     width: 1000, height: 900, drive: true, probeOnly: true, timeoutMs: 180_000,
     probe: '!!window.noticeOccupancyCases', interact: async ({ evaluate, send }) => {
-      await evaluate('document.fonts.ready.then(() => true)');
-      await send('Emulation.setVirtualTimePolicy', { policy: 'advance' });
+      if (virtual) {
+        await evaluate('document.fonts.ready.then(() => true)');
+        await evaluate(virtualNoticeFrames);
+        await send('Emulation.setVirtualTimePolicy', { policy: 'advance' });
+      }
       await evaluate('window.__stopCaseFrames = noticeFrameTiming()');
       const cases = await evaluate(expression) as Record<string, unknown>[];
       const timing = await evaluate('__stopCaseFrames()') as Record<string, unknown>;
@@ -82,7 +86,7 @@ describe.each(['viewer', 'dashboard'])('%s notice occupancy', mode => {
   for (const kind of ['dominant', 'quiet', 'alternation']) {
     it(`keeps the resting row uncovered during ${kind}`, async context => {
       if (!browser) { context.skip(); return; }
-      const results = await run<Occupancy>(mode, `noticeOccupancyCases(${JSON.stringify(mode)}, ${JSON.stringify(kind)})`);
+      const results = await run<Occupancy>(mode, `noticeOccupancyCases(${JSON.stringify(mode)}, ${JSON.stringify(kind)})`, true);
       for (const result of results) {
         expect(occupancyFailures(result, kind), JSON.stringify(result)).toEqual([]);
       }
