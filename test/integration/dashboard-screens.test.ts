@@ -156,7 +156,7 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
       return result;
     };
     const makePage = async (pageUrl: string, width = 1280, beforeNavigate = ''): Promise<{ targetId: string; sessionId: string }> => {
-      const target = await send('Target.createTarget', { url: 'about:blank' });
+      const target = await send('Target.createTarget', { url: 'about:blank', newWindow: true });
       const targetId = String(target.targetId);
       const attached = await send('Target.attachToTarget', { targetId, flatten: true });
       const sessionId = String(attached.sessionId);

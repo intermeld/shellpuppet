@@ -431,7 +431,7 @@ describe('notice placement on Pop out and reattachment', () => {
         await evaluate("document.querySelector('[data-action=pop]').click()");
         const openedURL = await evaluate('window.__openedURL') as string;
         expect(openedURL).toBeTruthy();
-        const target = await send('Target.createTarget', { url: 'about:blank' }, true) as { targetId: string };
+        const target = await send('Target.createTarget', { url: 'about:blank', newWindow: true }, true) as { targetId: string };
         try {
           const attached = await send('Target.attachToTarget', { targetId: target.targetId, flatten: true }, true) as { sessionId: string };
           await send('Page.enable', {}, attached.sessionId);
