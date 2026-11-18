@@ -64,7 +64,7 @@ async function settleGrid(evaluate: (expression: string) => Promise<unknown>, li
   throw new Error(`Grid pane fits did not settle within ${String(limitMs)} ms: ${JSON.stringify(last)}`);
 }
 
-async function exercise(count: number, interact: Parameters<typeof captureDashboard>[0]['interact'], probeOnly = false) {
+async function exercise(count: number, interact: Parameters<typeof captureDashboard>[0]['interact']) {
   const urls: string[] = [];
   daemon = await startTestDaemon({
     launcher: (url) => { urls.push(url); return Promise.resolve({ launched: true, mode: 'isolated-app', browser: 'mock' }); },
@@ -78,7 +78,7 @@ async function exercise(count: number, interact: Parameters<typeof captureDashbo
   }
   expect((await api(daemon.port, daemon.token, '/dashboard/open', { method: 'POST', body: {} })).status).toBe(200);
   return captureDashboard({ browser: browser!, viewerUrl: urls.at(-1)!, width: 2200, height: 1300,
-    drive: true, timeoutMs: 120_000, probeOnly,
+    drive: true, timeoutMs: 120_000, probeOnly: true,
     beforeNavigateScript: `(() => {
       window.__resizes = [];
       window.__delayFocusMainTake = false;
@@ -459,7 +459,7 @@ for (const eventType of ['pagehide', 'beforeunload'] as const) {
         await send('Target.closeTarget', { targetId }, true);
       }
       return { during, ended, repeated };
-    }, true);
+    });
     const result = shot.probe as { during: { width: number; listeners: number; saves: number };
       ended: { width: number; stored: number | null; dragging: boolean; listeners: number; captured: boolean; saves: number };
       repeated: { saves: number; listeners: number } };
