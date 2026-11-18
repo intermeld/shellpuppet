@@ -157,7 +157,7 @@ it.for(['keep', 'drop', 'dismiss', 'reload', 'pop'])(
     interact: async ({ evaluate, send }) => {
       await evaluate(`document.querySelector('.pane button[aria-label="Fit"]').click()`);
       await eventually(async () => !String(await evaluate(`document.querySelector('.pane-size')?.textContent`)).includes('following'), 10_000);
-      const target = await send('Target.createTarget', { url: 'about:blank' }, true) as { targetId: string };
+      const target = await send('Target.createTarget', { url: 'about:blank', newWindow: true }, true) as { targetId: string };
       const attached = await send('Target.attachToTarget', { targetId: target.targetId, flatten: true }, true) as { sessionId: string };
       const second = async (expression: string): Promise<unknown> => {
         const response = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true },
@@ -631,13 +631,14 @@ it('keeps pane control through Enlarge, a closed session, and Restore in two win
         entry.url.endsWith('/sessions/' + pane.dataset.session + '/stream') &&
         entry.socket.readyState === 1 && entry.geometry.at(-1)?.control === 'yours')) ? true : null)()`,
     interact: async ({ evaluate, send }) => {
-      const target = await send('Target.createTarget', { url: 'about:blank' }, true) as { targetId: string };
+      const target = await send('Target.createTarget', { url: 'about:blank', newWindow: true }, true) as { targetId: string };
       const attached = await send('Target.attachToTarget', { targetId: target.targetId, flatten: true }, true) as { sessionId: string };
       const evaluateSecond = async (expression: string): Promise<unknown> => {
         const response = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true },
           attached.sessionId) as { result: { value?: unknown } };
         return response.result.value;
       };
+      await send('Page.enable', {}, attached.sessionId);
       await send('Page.addScriptToEvaluateOnNewDocument', { source: dashboardDiagnosticsScript }, attached.sessionId);
       await send('Emulation.setDeviceMetricsOverride',
         { width: 1920, height: 1080, deviceScaleFactor: 1, mobile: false }, attached.sessionId);
@@ -751,7 +752,7 @@ it('takes only the final grid when two window assignments arrive in separate ste
         };
         window.__restoreAssignmentCapture = () => { BroadcastChannel.prototype.postMessage = post; };
       })()`);
-      const target = await send('Target.createTarget', { url: 'about:blank' }, true) as { targetId: string };
+      const target = await send('Target.createTarget', { url: 'about:blank', newWindow: true }, true) as { targetId: string };
       const attached = await send('Target.attachToTarget', { targetId: target.targetId, flatten: true }, true) as { sessionId: string };
       const evaluateSecond = async (expression: string): Promise<unknown> => {
         const response = await send('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true },
