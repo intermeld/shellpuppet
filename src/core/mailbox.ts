@@ -541,13 +541,17 @@ export class Mailbox extends EventEmitter {
    * Resolve with the next unread message for a reader, through events rather
    * than polling. Resolves at once when one is already waiting. Resolves with
    * `undefined` on timeout or when the reader ends; rejects with an
-   * `AbortError` when the signal fires. `from` waits for one sender only.
+   * `AbortError` when the signal fires. `from` waits for one sender only,
+   * named by participant id or by the name it holds now.
    */
   async waitForMessage(
     readerId: string,
     opts: { from?: string; timeoutMs?: number; signal?: AbortSignal } = {},
   ): Promise<MailboxEntry | undefined> {
-    const { from, timeoutMs, signal } = opts;
+    const { timeoutMs, signal } = opts;
+    const from = opts.from === undefined || this.participants.has(opts.from)
+      ? opts.from
+      : this.byName.get(opts.from) ?? opts.from;
     if (!this.participants.has(readerId)) return undefined;
     const waiting = this.unreadFor(readerId, from)[0];
     if (waiting !== undefined) return Mailbox.entry(waiting);
