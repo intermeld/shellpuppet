@@ -627,7 +627,9 @@ it('keeps pane control through Enlarge, a closed session, and Restore in two win
     })()`,
     probe: `(() => document.getElementById('connection')?.textContent === 'Connected' &&
       document.querySelectorAll('.pane-size').length === 6 &&
-      [...document.querySelectorAll('.pane-size')].every(node => node.textContent.includes('×')) ? true : null)()`,
+      [...document.querySelectorAll('.pane')].every(pane => window.__dashboardDiagnostics.streams.some(entry =>
+        entry.url.endsWith('/sessions/' + pane.dataset.session + '/stream') &&
+        entry.socket.readyState === 1 && entry.geometry.at(-1)?.control === 'yours')) ? true : null)()`,
     interact: async ({ evaluate, send }) => {
       const target = await send('Target.createTarget', { url: 'about:blank' }, true) as { targetId: string };
       const attached = await send('Target.attachToTarget', { targetId: target.targetId, flatten: true }, true) as { sessionId: string };
@@ -636,7 +638,7 @@ it('keeps pane control through Enlarge, a closed session, and Restore in two win
           attached.sessionId) as { result: { value?: unknown } };
         return response.result.value;
       };
-      await send('Page.enable', {}, attached.sessionId);
+      await send('Page.addScriptToEvaluateOnNewDocument', { source: dashboardDiagnosticsScript }, attached.sessionId);
       await send('Emulation.setDeviceMetricsOverride',
         { width: 1920, height: 1080, deviceScaleFactor: 1, mobile: false }, attached.sessionId);
       await send('Page.navigate', { url: `${new URL(urls.at(-1)!).origin}/dashboard` }, attached.sessionId);
@@ -672,26 +674,25 @@ it('keeps pane control through Enlarge, a closed session, and Restore in two win
       await waitFor('primary sharing five sessions', () => share(evaluate), value => value === '4 of 5 here, 2 windows');
       await evaluate(`(() => { window.__resizes.length = 0; window.__delayRestoredTake = true;
         document.querySelector('.pane button[aria-label="Restore"]').click(); })()`);
-      const readFirst = () => evaluate(`(() => ({ share: document.getElementById('share-count')?.textContent,
-          panes: [...document.querySelectorAll('.pane')].map(card => ({ id: card.dataset.session,
-            size: card.querySelector('.pane-size')?.textContent })),
-          resizes: window.__resizes.slice() }))()`);
-      const readSecond = () => evaluateSecond(`(() => ({
+      const state = `(() => ({
         share: document.getElementById('share-count')?.textContent,
-        panes: [...document.querySelectorAll('.pane')].map(card => ({ id: card.dataset.session,
-          size: card.querySelector('.pane-size')?.textContent })),
+        panes: [...document.querySelectorAll('.pane')].map(card => {
+          const stream = window.__dashboardDiagnostics.streams.findLast(entry =>
+            entry.socket.readyState === 1 && entry.url.endsWith('/sessions/' + card.dataset.session + '/stream'));
+          const geometry = stream?.geometry.at(-1);
+          return { id: card.dataset.session, size: card.querySelector('.pane-size')?.textContent, geometry };
+        }),
         resizes: window.__resizes.slice(),
-      }))()`);
-      await waitFor('Restore and primary pane takes', readFirst, value => {
-        const state = value as { panes?: { id: string; size: string }[] };
-        return state?.panes?.length === 4 && state.panes.every(pane => !pane.size.includes('following'));
-      });
+      }))()`;
+      const owns = (value: unknown, count: number) => {
+        const { panes } = value as { panes: { size: string; geometry?: { control: string; cols: number; rows: number } }[] };
+        return panes.length === count && panes.every(({ size, geometry }) => geometry?.control === 'yours' &&
+          size === `${geometry.cols}×${geometry.rows}`);
+      };
+      const readFirst = () => evaluate(state), readSecond = () => evaluateSecond(state);
+      await waitFor('acknowledged restored takes', readFirst, value => owns(value, 4));
       await send('Page.bringToFront', {}, attached.sessionId);
-      await waitFor('second window pane take', readSecond, value => {
-        const state = value as { share?: string; panes?: { size: string }[] };
-        return state?.share === '1 of 5 here, 2 windows' && state.panes?.length === 1 &&
-          !state.panes[0]?.size.includes('following');
-      });
+      await waitFor('acknowledged second window fit', readSecond, value => owns(value, 1));
       const first = await readFirst();
       const second = await readSecond();
       return { ...first as object, second };
@@ -737,7 +738,9 @@ it('takes only the final grid when two window assignments arrive in separate ste
     drive: true, probeOnly: true, timeoutMs: 120_000,
     probe: `(() => document.getElementById('connection')?.textContent === 'Connected' &&
       document.querySelectorAll('.pane-size').length === 6 &&
-      [...document.querySelectorAll('.pane-size')].every(node => node.textContent.includes('×')) ? true : null)()`,
+      [...document.querySelectorAll('.pane')].every(pane => window.__dashboardDiagnostics.streams.some(entry =>
+        entry.url.endsWith('/sessions/' + pane.dataset.session + '/stream') &&
+        entry.socket.readyState === 1 && entry.geometry.at(-1)?.control === 'yours')) ? true : null)()`,
     interact: async ({ evaluate, send }) => {
       // Capture the real assignment published when the second window joins.
       await evaluate(`(() => {
@@ -818,6 +821,8 @@ it('takes only the final grid when two window assignments arrive in separate ste
       const clearResizes = 'window.__dashboardDiagnostics.streams.forEach(entry => { entry.resizes.length = 0; })';
       await evaluate(clearResizes);
       await evaluateSecond(clearResizes);
+      // The staged assignment timer belongs to the primary document.
+      await send('Page.bringToFront');
       await evaluate(`(() => {
         const layout = ShellPuppetDashboardLayout;
         const assign = layout.assign;
@@ -848,7 +853,6 @@ it('takes only the final grid when two window assignments arrive in separate ste
           channel.close();
         }, 350);
       })()`);
-      await send('Page.bringToFront');
       await waitFor('final primary assignment', () => read(evaluate),
         value => {
           const state = value as { share?: string; panes?: { id: string }[] };
