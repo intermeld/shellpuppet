@@ -23,7 +23,7 @@ import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { captureViewer } from '../../src/daemon/screenshot.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
-import { api, startTestDaemon } from './helpers.js';
+import { api, eventually, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 
 function fixturePath(name: string): string {
@@ -176,7 +176,7 @@ describe('geometry in the browser (design §5)', () => {
     if (browser === null) { context.skip(); return; }
     const started = await api(td.port, td.token, '/sessions', {
       body: { command: process.execPath, args: ['-e',
-        "let bottom = false; const paint = () => process.stdout.write('\\x1b[2J\\x1b[H' + (bottom ? '\\x1b[30;1HBOTTOM' : 'TOP')); paint(); setInterval(() => { bottom = !bottom; paint(); }, 1500);",
+        "process.stdin.setRawMode(true); process.stdin.on('data', () => process.stdout.write('\\x1b[2J\\x1b[30;1HBOTTOM')); process.stdout.write('\\x1b[2J\\x1b[HTOP')",
       ], shell: false, cols: 100, rows: 30, hold: true },
     });
     expect(started.status).toBe(200);
@@ -184,58 +184,52 @@ describe('geometry in the browser (design §5)', () => {
     try {
       const capture = await captureViewer({
         browser, viewerUrl: await freshViewerUrl(id), width: 920, height: 680,
-        drive: true, timeoutMs: 90_000,
-        probe: `(() => {
-          const rows = [...document.querySelectorAll('#term .xterm-rows > div')];
-          const notice = document.getElementById('notices');
-          if (rows.length < 30 || !document.getElementById('size').textContent) return null;
-          const state = (window.__cursorNotice = window.__cursorNotice || { sent: [], original: WebSocket.prototype.send });
-          if (!state.installed) {
+        drive: true, probeOnly: true, timeoutMs: 90_000,
+        probe: "document.querySelector('#term .xterm-rows > div')?.textContent.includes('TOP')",
+        interact: async ({ evaluate }) => {
+          await evaluate(`(() => {
+            window.__noticeResizes = [];
+            const send = WebSocket.prototype.send;
             WebSocket.prototype.send = function(data) {
-              if (typeof data === 'string' && data.includes('"type":"resize"')) state.sent.push(JSON.parse(data));
-              return state.original.call(this, data);
+              if (typeof data === 'string' && data.includes('"type":"resize"')) __noticeResizes.push(data);
+              return send.call(this, data);
             };
-            state.installed = true;
             const alert = document.getElementById('prompt-alert');
             alert.textContent = 'A long question '.repeat(400);
             alert.hidden = false;
-            document.getElementById('banner').textContent = 'Connection notice';
-            document.getElementById('banner').hidden = false;
+            const banner = document.getElementById('banner');
+            banner.textContent = 'Connection notice';
+            banner.hidden = false;
+          })()`);
+          for (const edge of ['TOP', 'BOTTOM']) {
+            if (edge === 'BOTTOM') {
+              expect((await api(td.port, td.token, `/sessions/${id}/input`, { body: { data: 'b' } })).status).toBe(200);
+            }
+            await eventually(async () => {
+              const sample = await evaluate(`(() => {
+                const rows = document.querySelectorAll('#term .xterm-rows > div');
+                const row = rows[${edge === 'TOP' ? 0 : 29}];
+                if (!row?.textContent.includes('${edge}')) return null;
+                const cursor = row.getBoundingClientRect();
+                const box = document.getElementById('notices').getBoundingClientRect();
+                const screen = document.querySelector('#term .xterm-screen').getBoundingClientRect();
+                if (!box.height || box.top < cursor.bottom && box.bottom > cursor.top) return null;
+                const left = Math.max(box.left, screen.left, 0), right = Math.min(box.right, screen.right, innerWidth);
+                const top = Math.max(box.top, screen.top, 0), bottom = Math.min(box.bottom, screen.bottom, innerHeight);
+                if (right <= left || bottom <= top) return null;
+                const target = document.elementFromPoint((left + right) / 2, (top + bottom) / 2);
+                return { through: !!target?.closest('#term'), height: box.height, screenHeight: screen.height };
+              })()`) as { through: boolean; height: number; screenHeight: number } | null;
+              if (!sample) return false;
+              expect(sample.through).toBe(true);
+              expect(sample.height).toBeLessThanOrEqual(sample.screenHeight / 3 + 1);
+              return true;
+            }, 10_000, 50, `visible notice clear of ${edge}`);
           }
-          const index = rows[0].textContent.includes('TOP') ? 0 :
-            rows[rows.length - 1].textContent.includes('BOTTOM') ? rows.length - 1 : -1;
-          if (index !== 0 && index !== rows.length - 1) return null;
-          const box = notice.getBoundingClientRect();
-          const row = rows[index].getBoundingClientRect();
-          const screen = document.querySelector('#term .xterm-screen').getBoundingClientRect();
-          const sample = {
-            index, overlap: box.top < row.bottom && box.bottom > row.top,
-            height: box.height, screenHeight: screen.height,
-            hit: document.elementFromPoint(box.left + 20, box.top + 20)?.closest('#notices') !== null,
-          };
-          // The terminal paints rows and moves the notice on separate browser
-          // turns. Observe each end only once the notice has followed the
-          // cursor; a persistent overlap still times out the probe.
-          if (!sample.overlap) {
-            if (index === 0) state.top = sample;
-            else state.bottom = sample;
-          }
-          if (!state.top || !state.bottom) return null;
-          return JSON.stringify({ top: state.top, bottom: state.bottom, sent: state.sent });
-        })()`,
+          return evaluate('window.__noticeResizes');
+        },
       });
-      const result = JSON.parse(String(capture.probe)) as {
-        top: { overlap: boolean; height: number; screenHeight: number; hit: boolean };
-        bottom: { overlap: boolean; height: number; screenHeight: number; hit: boolean };
-        sent: unknown[];
-      };
-      expect(result.top.overlap).toBe(false);
-      expect(result.bottom.overlap).toBe(false);
-      expect(result.top.height).toBeLessThanOrEqual(result.top.screenHeight / 3 + 1);
-      expect(result.bottom.height).toBeLessThanOrEqual(result.bottom.screenHeight / 3 + 1);
-      expect(result.top.hit).toBe(false);
-      expect(result.bottom.hit).toBe(false);
-      expect(result.sent).toEqual([]);
+      expect(capture.probe).toEqual([]);
     } finally {
       await api(td.port, td.token, `/sessions/${id}`, { method: 'DELETE' });
     }
