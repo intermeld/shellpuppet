@@ -624,7 +624,7 @@ Each entry has these keys. Unknown keys refuse that entry.
 | `envFromDaemon` | no | An array of variable names copied from the daemon's environment, or `"all"` for its whole environment. |
 | `readyText` | no | A literal substring that marks the session ready. |
 | `readyQuiet` | no | Milliseconds of quiet that mark the session ready. Not with `readyText`. |
-| `label`, `purpose` | no | Non-empty text for the page. Placeholders: `{name}` and `{folder}`. |
+| `label`, `purpose` | no | Non-empty text for the page. Placeholders: `{name}` and `{folder}`. The dashboard's profile list shows the label with the purpose after it in brackets. A session started from the profile takes the expanded label, so `"label": "{name}"` gives the session the profile's name, which is also its messaging name. |
 | `policy` | no | `{ "allow": [...], "deny": [...] }` regex lists. No `mode`, no `maxSessions`. |
 | `open` | no | `"grid"` (default), `"focus"` or `"window"`. Returned when the profile starts. |
 

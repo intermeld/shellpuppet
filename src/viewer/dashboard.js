@@ -1426,7 +1426,7 @@
       if (!profile || typeof profile.name !== 'string') continue;
       const option = document.createElement('option');
       option.value = profile.name;
-      option.textContent = typeof profile.label === 'string' && profile.label !== '' ? profile.label : profile.name;
+      option.textContent = ShellPuppetDashboardFolders.optionText(profile);
       profileSelect.append(option);
     }
     const loaded = profileSelect.options.length > 0;

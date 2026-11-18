@@ -16,5 +16,11 @@
       ...(Array.isArray(roots) ? roots.map((item) => item.path) : [])];
     return values.filter((value) => typeof value === 'string' && value !== '' && !seen.has(value) && seen.add(value));
   }
-  globalThis.ShellPuppetDashboardFolders = { remember, order, anyOptions };
+  // The profile's label, with its purpose after it in brackets as a reminder of what the name starts.
+  function optionText(profile) {
+    const label = typeof profile.label === 'string' && profile.label !== '' ? profile.label : profile.name;
+    const purpose = typeof profile.purpose === 'string' ? profile.purpose.trim() : '';
+    return purpose === '' || purpose === label ? label : `${label} (${purpose})`;
+  }
+  globalThis.ShellPuppetDashboardFolders = { remember, order, anyOptions, optionText };
 })();
