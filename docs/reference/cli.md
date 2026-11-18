@@ -6,7 +6,7 @@
 standard input. `shellpuppet msg inbox` reads and marks unread messages,
 while `msg outbox`, `msg directory`, and `msg wait [--from <id>]
 [--timeout <ms>]` inspect sent messages, permitted live names and the next
-unread message. `from` is a participant id. `shellpuppet inbox` is an alias
+unread message. `from` is a participant id or the name it holds now. `shellpuppet inbox` is an alias
 for `msg inbox`.
 `msg log [--participant <id>] [--limit <n>]` gives the caller's own retained
 message history, including text; `--participant` accepts only the caller's id.
