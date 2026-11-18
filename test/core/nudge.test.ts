@@ -197,6 +197,28 @@ describe('nudge readiness', () => {
       expect(nudgeVerdict(claude, screen)).toEqual({ ready: true });
     });
 
+    it('finds an idle composer between full-width rules marked as wraps, with a title in the top rule', async () => {
+      // Claude Code pads its rows to the full width, so xterm marks the
+      // composer row and the rule under it as wraps. The top rule can carry the
+      // session title in the same grey.
+      const screen = await load('claude-answered');
+      const rows = screen.styled!;
+      const composerAt = rows.map((row) => row.text.startsWith('❯')).lastIndexOf(true);
+      const top = rows[composerAt - 1]!;
+      const titled = `${'─'.repeat(top.text.length - 12)} my-chair ─`;
+      const marked = rows.map((row, i) => {
+        if (i === composerAt - 1) return { ...row, text: titled };
+        return i === composerAt || i === composerAt + 1 ? { ...row, wrapped: true } : row;
+      });
+      const view = { ...screen, rows: marked.map((row) => row.text), styled: marked };
+      expect(nudgeVerdict(claude, view)).toEqual({ ready: true });
+      // The same rules in typed ink are not the frame.
+      const typed = marked.map((row, i) => (i === composerAt - 1 || i === composerAt + 1
+        ? { ...row, spans: row.spans.map((span) => ({ ...span, fg: null })) }
+        : row));
+      expect(nudgeVerdict(claude, { ...view, styled: typed }).ready).toBe(false);
+    });
+
     it('treats the recorded suggestion phrase without its dim ink as a draft', () => {
       const screen = plain(CLAUDE_CODE_SUGGESTION);
       expect(readinessOf(claude, screen)).toBe('draft');
@@ -486,6 +508,24 @@ describe('nudge readiness', () => {
       expect(nudgeVerdict(muse, { ...view, styled: typed }).ready).toBe(false);
     });
 
+    it('treats a rotating grey tip as an empty composer, and the same words in typed ink as a draft', async () => {
+      const screen = await load('muse-violet');
+      const tip = '❯ /resume reopens a past session (--last for the latest)';
+      const grey = replaceComposer(screen.styled ?? [], /^❯\s*$/u, tip, { fg: '#676c74' });
+      expect(nudgeVerdict(muse, { ...screen, rows: grey.map((row) => row.text), styled: grey })).toEqual({ ready: true });
+      const typed = replaceComposer(screen.styled ?? [], /^❯\s*$/u, tip, { fg: '#ccd3db' });
+      expect(nudgeVerdict(muse, { ...screen, rows: typed.map((row) => row.text), styled: typed }))
+        .toEqual({ ready: false, reason: 'draft' });
+    });
+
+    it('finds an idle composer when the plain rule under it is marked as a wrap too', async () => {
+      const screen = await load('muse-violet');
+      const composerAt = screen.styled!.map((row) => row.text.startsWith('❯')).lastIndexOf(true);
+      const marked = screen.styled!.map((row, i) => (i > 0 ? { ...row, wrapped: true } : row));
+      expect(marked[composerAt + 1]!.text.startsWith('─')).toBe(true);
+      expect(nudgeVerdict(muse, { ...screen, rows: marked.map((row) => row.text), styled: marked })).toEqual({ ready: true });
+    });
+
     it('is ready on a captured idle screen with a bare composer', async () => {
       const screen = await load('muse-violet');
       expect(readinessOf(muse, screen)).toBe('ready');
@@ -498,7 +538,9 @@ describe('nudge readiness', () => {
       expect(nudgeVerdict(muse, screen)).toEqual({ ready: true });
     });
 
-    it('treats other grey words on the captured composer as a draft', async () => {
+    it('treats other words in the hint grey on the captured composer as an empty composer', async () => {
+      // Muse Code rotates its grey tips; only typed ink makes a draft. Before
+      // Enter, the nudge still checks that the composer holds exactly its line.
       const screen = await load('live96-3-done-composer-hint');
       const styled = rewriteBody(
         screen.styled ?? [],
@@ -506,7 +548,7 @@ describe('nudge readiness', () => {
         'Start a message with ! to run a shell command yourself',
         'Other grey words',
       );
-      expect(readinessOf(muse, { ...screen, rows: styled.map((line) => line.text), styled })).toBe('draft');
+      expect(readinessOf(muse, { ...screen, rows: styled.map((line) => line.text), styled })).toBe('ready');
     });
 
     it('treats the recorded hint in typed ink as a draft', async () => {
