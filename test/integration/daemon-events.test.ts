@@ -67,18 +67,20 @@ function eventsUpgradeStatus(port: number, query: string): Promise<number> {
  * A session that draws a Qoder-shaped permission prompt, holds it and then
  * (after `clearAfterMs`) draws a busy line below it: the prompt-clear path.
  */
-async function startPromptingSession(clearAfterMs: number): Promise<string> {
+async function startPromptingSession(clearAfterMs: number | 'on-input', daemon = td): Promise<string> {
   const script = [
     `console.log(' Permission Required');`,
     `console.log(' Allow this command to run?');`,
     `console.log('  \\u276F 1. Allow once');`,
     `console.log('    2. No');`,
-    clearAfterMs > 0
+    clearAfterMs === 'on-input'
+      ? "process.stdin.setRawMode(true); process.stdin.once('data', () => console.log(' Generating... (esc to cancel)'));"
+      : clearAfterMs > 0
       ? `setTimeout(() => { console.log(' Generating... (esc to cancel)'); }, ${String(clearAfterMs)});`
       : '',
     `setInterval(() => {}, 200);`,
   ].join(' ');
-  const started = await api(td.port, td.token, '/sessions', {
+  const started = await api(daemon.port, daemon.token, '/sessions', {
     body: {
       command: process.execPath,
       args: ['-e', script],
@@ -193,18 +195,34 @@ describe('prompt-stall alerting', () => {
   }, 120_000);
 
   it('never alerts for a prompt answered before the stall threshold', async () => {
-    const client = await connectEvents(td.port, td.token);
-    // Clears after 150 ms, under the 300 ms stall threshold.
-    const id = await startPromptingSession(150);
-
-    // Give the scanner ample beats to have alerted if it were going to.
-    await new Promise((resolve) => setTimeout(resolve, 1_500));
-    expect(
-      client.events.some((e) => e.type === 'prompt-stall' && e.session === id),
-    ).toBe(false);
-
-    client.close();
-    await api(td.port, td.token, `/sessions/${id}`, { method: 'DELETE' });
+    let now = Date.now();
+    const local = await startTestDaemon({ now: () => now, promptScanIntervalMs: 600_000, promptStallMs: 300 });
+    const client = await connectEvents(local.port, local.token);
+    const scanner = local.daemon as unknown as { scanForPromptStalls(): Promise<void> };
+    const waitForText = async (id: string, text: string) => {
+      const read = await api(local.port, local.token,
+        `/sessions/${id}/wait?text=${encodeURIComponent(text)}&timeout=15000`);
+      expect(read.body['matched']).toBe(true);
+    };
+    try {
+      const answered = await startPromptingSession('on-input', local);
+      const held = await startPromptingSession(0, local);
+      for (const id of [answered, held]) await waitForText(id, '2. No');
+      await scanner.scanForPromptStalls();
+      now += 299;
+      await scanner.scanForPromptStalls();
+      expect((await api(local.port, local.token, `/sessions/${answered}/input`, { body: { data: 'a' } })).status).toBe(200);
+      await waitForText(answered, 'Generating...');
+      await scanner.scanForPromptStalls();
+      now++;
+      await scanner.scanForPromptStalls();
+      // The held prompt is also an ordered delivery marker on this socket.
+      await eventually(() => client.events.some(e => e.type === 'prompt-stall' && e.session === held));
+      expect(client.events.filter(e => e.type === 'prompt-stall').map(e => e.session)).toEqual([held]);
+    } finally {
+      client.close();
+      await local.stop();
+    }
   });
 });
 
