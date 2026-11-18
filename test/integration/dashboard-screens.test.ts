@@ -129,7 +129,7 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
       } catch { /* Chromium may still be writing the endpoint file. */ }
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
-    if (!endpoint) throw new Error('Test browser did not expose DevTools.');
+    if (!endpoint) throw new Error('runner stalled: the test browser did not expose DevTools.');
     socket = await new Promise<WebSocket>((resolve, reject) => {
       const ws = new WebSocket(endpoint);
       ws.once('open', () => resolve(ws)); ws.once('error', reject);
@@ -146,7 +146,7 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
       const answer = new Promise<Record<string, unknown>>((resolve, reject) => {
         const timer = setTimeout(() => {
           pending.delete(id);
-          reject(new Error(`DevTools did not answer ${method} after 30000 ms; page did not answer`));
+          reject(new Error(`runner stalled: DevTools did not answer ${method} after 30000 ms; page did not answer`));
         }, 30_000);
         pending.set(id, (value) => { clearTimeout(timer); resolve(value); });
       });

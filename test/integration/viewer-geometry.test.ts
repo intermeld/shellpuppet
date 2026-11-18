@@ -21,7 +21,7 @@
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { captureViewer } from '../../src/daemon/screenshot.js';
+import { captureViewer } from './browserCapture.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
 import { api, eventually, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';

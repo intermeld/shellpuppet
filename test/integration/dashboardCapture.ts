@@ -1,5 +1,5 @@
 /** Test-only diagnostics for a dashboard whose renderer stalls on CI. */
-import { captureViewer } from '../../src/daemon/screenshot.js';
+import { captureViewer } from './browserCapture.js';
 import type { CaptureOptions } from '../../src/daemon/screenshot.js';
 
 export const dashboardDiagnosticsScript = `(() => {

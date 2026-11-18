@@ -4,7 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { captureViewer } from '../../src/daemon/screenshot.js';
+import { captureViewer } from './browserCapture.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
 import { virtualNoticeFrames } from './noticeFrameLimit.js';
 import { assessDeliveredCadence, recordDeliveredCadence } from './noticeCadence.js';
