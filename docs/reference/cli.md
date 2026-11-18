@@ -4,10 +4,11 @@
 
 `shellpuppet msg send <to> <text|->` sends a message; `-` reads the text from
 standard input. `shellpuppet msg inbox` reads and marks unread messages,
-while `msg outbox`, `msg directory`, and `msg wait [--from <id>]
+while `msg outbox`, `msg directory`, and `msg wait [--from <id|name>]
 [--timeout <ms>]` inspect sent messages, permitted live names and the next
-unread message. `from` is a participant id or the name it holds now. `shellpuppet inbox` is an alias
-for `msg inbox`.
+unread message. `--from` takes a participant id or the name it holds now;
+a live id wins when a name equals one. `shellpuppet inbox` is an alias for
+`msg inbox`.
 `msg log [--participant <id>] [--limit <n>]` gives the caller's own retained
 message history, including text; `--participant` accepts only the caller's id.
 Control characters in printed message text appear as visible escapes. All

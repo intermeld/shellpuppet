@@ -197,10 +197,11 @@ exact placeholder drawn in the placeholder's own ink: Claude Code's
 `Ask Codex to do anything` in dim ink, Qoder CLI's
 `Type your message or @path/to/file` in grey (`#95958f`), and Muse Code's
 `Start a message with ! to run a shell command yourself` in grey (`#676c74`).
-The same words in any other ink are a draft. Any other words are a draft too,
-including words drawn in the placeholder's ink. The captured screens do not
-show a free-text suggestion in the composer, so that ink is not treated as
-proof that the row is empty. Claude Code, Qoder CLI and Muse Code read a
+The same words in any other ink are a draft. For Codex, Qoder CLI and Muse
+Code, any other words are a draft too, including words drawn in the
+placeholder's ink. Claude Code also offers a suggested next prompt in that
+same dim ink, so a Claude Code composer whose words are all dim counts as
+empty; words in typed ink are a draft. Claude Code, Qoder CLI and Muse Code read a
 draft that continues on later rows and stop at the frame, so the status line
 under that frame is not part of the draft. Codex has no captured frame around
 a second composer row. Its `? for shortcuts` row and the model line under the
