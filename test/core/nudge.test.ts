@@ -466,6 +466,26 @@ describe('nudge readiness', () => {
       expect(check({ ...screen, rows: styled.map((row) => row.text), styled }, line))
         .toEqual({ ready: false, reason: 'draft' });
     });
+    it('finds an idle composer when every row after a reply is marked as a wrap', async () => {
+      // Muse pads its rows to the full width once the transcript has text, so
+      // xterm marks nearly every row as a wrap, the rule above the composer too.
+      // The row under the short composer line is the only one left unmarked,
+      // as in the captured screens.
+      const screen = await load('muse-violet');
+      const composerAt = screen.styled!.map((row) => row.text.startsWith('❯')).lastIndexOf(true);
+      expect(composerAt).toBeGreaterThan(0);
+      const marked = screen.styled!.map((row, i) => (i === 0 || i === composerAt + 1 ? row : { ...row, wrapped: true }));
+      const view = { ...screen, rows: marked.map((row) => row.text), styled: marked };
+      expect(nudgeVerdict(muse, view)).toEqual({ ready: true });
+      // The rule in typed ink is draft text, never the frame.
+      const ruleAt = marked.findIndex((row) => row.text.startsWith('── Voice input'));
+      expect(ruleAt).toBeGreaterThan(0);
+      const typed = marked.map((row, i) => (i === ruleAt
+        ? { ...row, spans: row.spans.map((span) => ({ ...span, dim: false, fg: '#ccd3db' })) }
+        : row));
+      expect(nudgeVerdict(muse, { ...view, styled: typed }).ready).toBe(false);
+    });
+
     it('is ready on a captured idle screen with a bare composer', async () => {
       const screen = await load('muse-violet');
       expect(readinessOf(muse, screen)).toBe('ready');
