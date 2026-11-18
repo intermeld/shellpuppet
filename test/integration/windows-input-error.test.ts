@@ -23,7 +23,7 @@ import { taskkillTrees } from '../../src/core/session.js';
 import type { Session, TreeKiller } from '../../src/core/session.js';
 import type { Logger } from '../../src/core/types.js';
 import type { Auditor } from '../../src/daemon/audit.js';
-import { captureViewer } from '../../src/daemon/screenshot.js';
+import { captureViewer } from './browserCapture.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
 import { api, connectWs, eventually, interactiveShell, processAlive, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
@@ -132,11 +132,10 @@ async function viewerHint(
       return null;
     })()`,
   });
-  // Handled here so a capture that fails while the test waits below is not
-  // an unhandled rejection; it still fails the await at the end.
-  void capture.catch(() => undefined);
   if (options.whenWatching !== undefined) {
-    await eventually(() => session.watchers > 0, 30_000);
+    // Surface a failed navigation immediately if there can be no watcher.
+    await Promise.race([eventually(() => session.watchers > 0, 30_000, 50, 'viewer stream to attach'),
+      capture.then(() => { throw new Error('viewer finished before its stream attached'); })]);
     options.whenWatching();
   }
   return String((await capture).probe);

@@ -2,7 +2,7 @@
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
-import { captureViewer } from '../../src/daemon/screenshot.js';
+import { captureViewer } from './browserCapture.js';
 import type { CaptureOptions } from '../../src/daemon/screenshot.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
 import { noticeFrameLimitScript } from './noticeFrameLimit.js';
