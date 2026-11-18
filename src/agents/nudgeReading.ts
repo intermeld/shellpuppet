@@ -19,6 +19,12 @@ export interface ReadingNudgeRule {
    * are required. A row with no spans does not match.
    */
   placeholderInk: (line: StyledLine) => boolean;
+  /**
+   * The program rotates its hint text, so any composer text drawn wholly in
+   * the placeholder's ink counts as empty. Only for a program whose typed
+   * text is never drawn in that ink.
+   */
+  anyHintInPlaceholderInk?: boolean;
   /** A status row that ends the input region and is not composer text. */
   /**
    * A status row that ends the composer. It receives the rows below so a
@@ -164,11 +170,15 @@ function composerRegion(
   return { rows, unproven: false };
 }
 
-/** Blank, or the exact placeholder drawn in the placeholder's own ink. */
+/**
+ * Blank, or the exact placeholder drawn in the placeholder's own ink, or, for
+ * a module whose hint text rotates, any text drawn wholly in that ink.
+ */
 function rowClear(line: StyledLine, rule: ReadingNudgeRule): boolean {
   const text = stripGlyph(line.text);
   if (text === '') return true;
-  return text === rule.placeholder && rule.placeholderInk(line);
+  if (!rule.placeholderInk(line)) return false;
+  return text === rule.placeholder || rule.anyHintInPlaceholderInk === true;
 }
 
 /**
@@ -214,27 +224,35 @@ function holdsExpectedDraft(rows: readonly StyledLine[], expected: string): bool
  */
 /**
  * xterm marks the row after a row that fills the full width as a wrap, even
- * when the program painted it separately. A program that pads every row to
- * the full width, as Muse Code does once its transcript has text, leaves
- * almost every row marked, the rule above its composer included. A module may
- * declare the rule row it paints directly above its composer. When exactly
- * one row on the screen matches it in the module's rule ink, that row and the
- * row below are fresh rows, so the composer under a full-width rule is still
- * found. Typed text cannot stand in for the rule: the ink check refuses typed
- * ink, and a copy would make two matches. Every other wrap keeps its mark.
+ * when the program painted it separately. Muse Code and Claude Code pad their
+ * rows to the full width, so the rules around the composer, the composer row
+ * and the row under it can all carry the mark. A module may declare the rule
+ * rows it paints around its composer and the ink it paints them in. Every row
+ * that matches a declared rule in that ink is a fresh row, and so is the row
+ * under it. Typed text cannot stand in for a rule: the ink check refuses typed
+ * ink. Without an ink check, only a single unmarked match counts, and only the
+ * row under it is freed. Every other wrap keeps its mark.
  */
 function unwrapBelowRules(lines: readonly StyledLine[], rule: ReadingNudgeRule): readonly StyledLine[] {
   const rules = rule.ruleRows ?? [];
   if (rules.length === 0) return lines;
-  // A wrapped match must prove itself by its ink: without a module ink check
-  // only an unwrapped row counts, as before.
-  const matches = lines.flatMap((line, i) =>
-    rules.some((test) => test.test(line.text)) &&
-    (rule.ruleInk === undefined ? line.wrapped !== true : rule.ruleInk(line)) ? [i] : []);
-  if (matches.length !== 1) return lines;
-  const at = matches[0]!;
-  if (lines[at]?.wrapped !== true && lines[at + 1]?.wrapped !== true) return lines;
-  return lines.map((item, i) => (i === at || i === at + 1 ? { ...item, wrapped: false } : item));
+  const matchesRule = (line: StyledLine): boolean => rules.some((test) => test.test(line.text));
+  const inked = rule.ruleInk;
+  if (inked === undefined) {
+    const matches = lines.flatMap((line, i) => (matchesRule(line) && line.wrapped !== true ? [i] : []));
+    if (matches.length !== 1) return lines;
+    const below = matches[0]! + 1;
+    if (lines[below]?.wrapped !== true) return lines;
+    return lines.map((item, i) => (i === below ? { ...item, wrapped: false } : item));
+  }
+  const fresh = new Set<number>();
+  lines.forEach((line, i) => {
+    if (!matchesRule(line) || !inked(line)) return;
+    fresh.add(i);
+    fresh.add(i + 1);
+  });
+  if (![...fresh].some((i) => lines[i]?.wrapped === true)) return lines;
+  return lines.map((item, i) => (fresh.has(i) && item.wrapped === true ? { ...item, wrapped: false } : item));
 }
 
 export function readingReadiness(view: NudgeView, reading: AgentSignature, rule: ReadingNudgeRule): NudgeReadiness {

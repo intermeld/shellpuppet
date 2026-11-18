@@ -7,7 +7,7 @@ import { reading } from './reading.js';
 const RULE_INK = '#676c74';
 const TYPED_INK = '#ccd3db';
 
-/** Grey hint on an idle Muse Code composer. */
+/** Grey hint recorded on an idle Muse Code 1.4.14 composer. */
 const PLACEHOLDER = 'Start a message with ! to run a shell command yourself';
 
 function placeholderInk(line: StyledLine): boolean {
@@ -20,7 +20,11 @@ export function readiness(view: NudgeView): NudgeReadiness {
     placeholder: PLACEHOLDER,
     continuations: true,
     placeholderInk,
-    ruleRows: [/^── Voice input \(Alt\+V to start\) ─+$/u],
+    // Muse Code 1.4.23 rotates grey tips in the empty composer (for example a
+    // /resume tip); typed text is always drawn in TYPED_INK, never in this grey.
+    anyHintInPlaceholderInk: true,
+    // The Voice input rule above the composer and the plain rule under it.
+    ruleRows: [/^── Voice input \(Alt\+V to start\) ─+$/u, /^─{10,}$/u],
     ruleInk: (line) => line.spans.some((span) => span.from === 0 && span.dim && span.fg === RULE_INK) &&
       !line.spans.some((span) => span.fg === TYPED_INK),
   });
