@@ -569,9 +569,9 @@ window.ShellPuppetPane = (() => {
       if (destroyed || sessionEnded) return;
       const now = window.performance.now();
       placeNotices(now);
-      // Watch frames continuously near a rest deadline. The first completed
-      // frame after it can then place the notice without a late timer hop.
-      if (noticeStayEdge !== null && now - noticeStaySince >= NOTICE_QUIET_MS - 100 &&
+      // A frame can be delivered before an overdue timer after a long pause.
+      // Keep a callback armed while a covered stay is waiting for its deadline.
+      if (noticeStayEdge === (noticeBottom ? 'bottom' : 'top') &&
           now - noticeStaySince < NOTICE_QUIET_MS) {
         noticeFrame = window.requestAnimationFrame(sampleNoticeCursor);
       }
@@ -709,7 +709,10 @@ window.ShellPuppetPane = (() => {
         noticeStayMoved = false;
         noticeStayPreviousRepaint = undefined;
         clearNoticeTimer();
-        if (edge !== null && !noticeDisposed) noticeTimer = setTimeout(settleNoticeCursor, NOTICE_QUIET_MS - 100);
+        if (edge !== null && !noticeDisposed) {
+          noticeTimer = setTimeout(settleNoticeCursor, NOTICE_QUIET_MS - 100);
+          if (noticeFrame === null) noticeFrame = window.requestAnimationFrame(sampleNoticeCursor);
+        }
       }
       // A repeated prompt control or resize must use the existing cadence.
       // Only first visibility (including an alert after a hidden period longer
