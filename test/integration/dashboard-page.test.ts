@@ -533,6 +533,7 @@ describe('passive dashboard page', () => {
       const shot = await captureDashboard({ browser, viewerUrl: await dashboardUrl(), width: 1280, height: 720,
         drive: true, timeoutMs: 90_000,
         probe: `(() => document.getElementById('connection')?.textContent === 'Connected' &&
+          document.querySelector('[data-session=${JSON.stringify(id)}] .xterm-rows')?.textContent.includes('ESC-READY') &&
           document.querySelector('[data-session=${JSON.stringify(id)}] textarea') ? true : null)()`,
         interact: async (page) => {
           await page.evaluate(`(() => {
