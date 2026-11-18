@@ -23,6 +23,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Changed
 
+- The dashboard's profile list shows each profile's purpose in brackets after its label.
 - Require a complete composer footer as the last visible block before nudging a session about a waiting message.
 - Check each bar composer's screen identity and input width, and require the live Antigravity composer footer before nudging.
 - Scope message history to each participant, reserve the daemon home for sessions, escape displayed message controls, and bound outside claims.

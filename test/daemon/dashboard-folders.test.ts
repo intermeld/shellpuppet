@@ -29,4 +29,17 @@ describe('dashboard recent folders', () => {
     expect([...choices.anyOptions({ open: ['C:/recent', 'C:/root'] }, 'open', [{ path: 'C:/root' }, { path: 'C:/other' }])])
       .toEqual(['C:/recent', 'C:/root', 'C:/other']);
   });
+  it('shows a profile as its label with the purpose in brackets', () => {
+    const source = fs.readFileSync(path.resolve('src/viewer/dashboard-folders.js'), 'utf8');
+    const context: Record<string, unknown> = {};
+    vm.runInNewContext(source, context);
+    const choices = context['ShellPuppetDashboardFolders'] as {
+      optionText: (profile: { name: string; label?: string; purpose?: string }) => string;
+    };
+    expect(choices.optionText({ name: 'muse-contrib-off', label: 'muse-contrib-off', purpose: 'Muse Code (Contributor off)' }))
+      .toBe('muse-contrib-off (Muse Code (Contributor off))');
+    expect(choices.optionText({ name: 'pwsh', label: 'pwsh', purpose: '' })).toBe('pwsh');
+    expect(choices.optionText({ name: 'pwsh', purpose: 'pwsh' })).toBe('pwsh');
+    expect(choices.optionText({ name: 'claude', label: 'Claude Code' })).toBe('Claude Code');
+  });
 });
