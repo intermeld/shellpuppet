@@ -47,7 +47,7 @@ describe('dashboard naming controls', () => {
           const renamed = () => {
             if (pane.querySelector('.pane-label')?.textContent === 'renamed-page') resolve(JSON.stringify({
               nameBox: name.value, label: pane.querySelector('.pane-label').textContent,
-              role: pane.querySelector('.pane-role')?.textContent }));
+              role: pane.dataset.role }));
             else if (Date.now() < deadline) setTimeout(renamed, 100);
             else resolve('rename timeout');
           };
@@ -56,6 +56,6 @@ describe('dashboard naming controls', () => {
         poll();
       })`),
     });
-    expect(JSON.parse(String(result.probe))).toMatchObject({ nameBox: 'from-page', label: 'renamed-page', role: 'Delegate' });
+    expect(JSON.parse(String(result.probe))).toMatchObject({ nameBox: 'from-page', label: 'renamed-page', role: 'delegate' });
   }, 120_000);
 });
