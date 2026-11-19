@@ -155,8 +155,15 @@ it.for(['keep', 'drop', 'dismiss', 'reload', 'pop'])(
     probe: `(() => document.getElementById('connection')?.textContent === 'Connected' &&
       document.querySelector('.pane-size')?.textContent.includes('×') ? true : null)()`,
     interact: async ({ evaluate, send }) => {
-      await evaluate(`document.querySelector('.pane button[aria-label="Fit"]').click()`);
-      await eventually(async () => !String(await evaluate(`document.querySelector('.pane-size')?.textContent`)).includes('following'), 10_000);
+      await evaluate(`(() => {
+        window.__humanStream = __dashboardDiagnostics.streams.findLast(entry =>
+          entry.socket.readyState === 1 && entry.url.endsWith('/sessions/${id}/stream'));
+        window.__beforeFit = __humanStream.geometry.length;
+        document.querySelector('.pane button[aria-label="Fit"]').click();
+      })()`);
+      await eventually(async () => await evaluate(
+        "__humanStream.geometry.slice(__beforeFit).some(frame => frame.control === 'yours')") === true,
+        10_000, 50, 'acknowledged human Fit');
       const target = await send('Target.createTarget', { url: 'about:blank', newWindow: true }, true) as { targetId: string };
       const attached = await send('Target.attachToTarget', { targetId: target.targetId, flatten: true }, true) as { sessionId: string };
       const second = async (expression: string): Promise<unknown> => {
@@ -173,23 +180,17 @@ it.for(['keep', 'drop', 'dismiss', 'reload', 'pop'])(
       await eventually(async () => (await second(`!!window.ShellPuppetPane &&
         !!document.querySelector('meta[name="sp-csrf"]')`)) === true, 10_000);
       await second(`(() => {
-        window.__secondPaneTakes = 0;
-        const send = WebSocket.prototype.send;
-        WebSocket.prototype.send = function(data) {
-          if (typeof data === 'string' && data.includes('"type":"resize"') && data.includes('"take":true'))
-            window.__secondPaneTakes++;
-          return send.call(this, data);
-        };
         const box = document.createElement('div');
         box.style.cssText = 'position:fixed;left:0;top:0;width:350px;height:250px';
         document.body.append(box);
         window.__secondPane = ShellPuppetPane.create({ container: box, sessionId: '${id}',
           dashboardProof: document.querySelector('meta[name="sp-csrf"]').content,
-          onGeometryReady: () => setTimeout(() => {
-            window.__secondPaneAuto = window.__secondPane.autoFitGrid();
-          }, 300) });
+          onGeometryReady: () => { window.__secondPaneAuto = window.__secondPane.autoFitGrid(); } });
+        window.__follower = __dashboardDiagnostics.streams.at(-1);
       })()`);
-      await new Promise(resolve => setTimeout(resolve, 2_000));
+      await eventually(async () => await second("typeof window.__secondPaneAuto === 'boolean'") === true,
+        10_000, 50, 'second pane to exercise Auto fit after receiving its grid');
+      const beforeDeparture = await second('__follower.geometry.length') as number;
       if (action !== 'keep') {
         const controller = (daemon.daemon as unknown as {
           geometryController: Map<string, { close: () => void; readyState: number }>;
@@ -211,26 +212,24 @@ it.for(['keep', 'drop', 'dismiss', 'reload', 'pop'])(
           returnByValue: true, userGesture: true,
         });
         await eventually(() => controller!.readyState === 3, 10_000);
-        await new Promise(resolve => setTimeout(resolve, 3_000));
+        await eventually(async () => await second(`__follower.geometry.slice(${String(beforeDeparture)})
+          .some(frame => frame.control === 'adopt')`) === true, 10_000, 50, 'follower to receive the owner departure');
         if (action === 'pop') expect(await evaluate('window.__releaseFrames')).toBe(0);
       }
-      return await second(`({ auto: window.__secondPaneAuto, takes: window.__secondPaneTakes,
-        geometry: window.__dashboardDiagnostics?.streams?.filter(x => x.url.includes('/sessions/${id}/stream'))
-          .flatMap(x => x.geometry).find(x => x.control === 'adopt'),
-        latest: window.__dashboardDiagnostics?.streams?.filter(x => x.url.includes('/sessions/${id}/stream'))
-          .flatMap(x => x.geometry).at(-1),
-        streams: window.__dashboardDiagnostics?.streams?.filter(x => x.url.includes('/sessions/${id}/stream')).map(x => x.geometry),
-        panes: document.querySelectorAll('.pane').length })`);
+      return await second(`({ auto: window.__secondPaneAuto, after: __secondPane.autoFitGrid(),
+        takes: __follower.resizes.filter(frame => frame.take).length,
+        geometry: __follower.geometry[0], offeredTransfer: __follower.geometry.some(frame => frame.dashboardTransferable) })`);
     },
   });
-  const result = shot.probe as { auto: boolean; takes: number;
+  const result = shot.probe as { auto: boolean; after: boolean; takes: number;
     geometry?: { dashboardTransferable?: boolean; control: string };
-    latest?: { dashboardTransferable?: boolean; control: string } };
+    offeredTransfer: boolean };
   expect(result.geometry?.control, JSON.stringify(result)).toBe('adopt');
   expect(result.geometry?.dashboardTransferable, JSON.stringify(result)).toBe(false);
   expect(result.auto, JSON.stringify(result)).toBe(false);
+  expect(result.after, JSON.stringify(result)).toBe(false);
   expect(result.takes).toBe(0);
-  expect(result.latest?.dashboardTransferable, JSON.stringify(result)).toBe(false);
+  expect(result.offeredTransfer, JSON.stringify(result)).toBe(false);
 });
 
 let browser: string | null = null;
