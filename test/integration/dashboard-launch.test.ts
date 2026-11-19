@@ -100,7 +100,9 @@ function raw(
         port,
         method,
         path: requestPath,
-        headers: { host: `127.0.0.1:${String(port)}`, ...headers },
+        // Each request owns its connection: a reused idle one can be closed by the server as the request is sent.
+        agent: false,
+        headers: { host: `127.0.0.1:${String(port)}`, connection: 'close', ...headers },
       },
       (res) => {
         const chunks: Buffer[] = [];
