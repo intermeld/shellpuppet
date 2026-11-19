@@ -153,6 +153,7 @@ async function startLaunchDaemon(options: {
   folderPicker?: (signal: AbortSignal) => Promise<string | null>;
   folderPickerTimeoutMs?: number;
   dashboardSessionFactory?: (options: SessionOptions) => Session;
+  now?: () => number;
   messaging?: MessagingConfig;
 } = {}): Promise<LaunchDaemon> {
   const home = makeTempHome('dash-launch-');
@@ -170,6 +171,7 @@ async function startLaunchDaemon(options: {
     ...(options.folderPicker === undefined ? {} : { folderPicker: options.folderPicker }),
     ...(options.folderPickerTimeoutMs === undefined ? {} : { folderPickerTimeoutMs: options.folderPickerTimeoutMs }),
     ...(options.dashboardSessionFactory === undefined ? {} : { dashboardSessionFactory: options.dashboardSessionFactory }),
+    ...(options.now === undefined ? {} : { now: options.now }),
     viewer: { launchMode: 'no-window' },
     promptScanIntervalMs: 600_000,
     idleCheckIntervalMs: 600_000,
@@ -659,7 +661,11 @@ describe('policy sees the real command, and both caps bite', () => {
   });
 
   it('accepts eight launches in a minute, refuses the ninth, and leaves the client token uncapped', async () => {
+    const now = Date.now();
+    let created = 0;
     const daemon = await startLaunchDaemon({
+      now: () => now,
+      dashboardSessionFactory: (options) => standInStart(options, `quick-${String(++created)}`),
       launcher: profilesOf([
         {
           name: 'quick',
@@ -676,6 +682,7 @@ describe('policy sees the real command, and both caps bite', () => {
     const beforeNinth = await sessionIds(daemon);
     const ninth = await launch(daemon, { profile: 'quick' });
     expect(ninth.status).toBe(429);
+    expect(created).toBe(8);
     expect(ninth.body).toContain(
       'Dashboard launch rate reached (8 in 60 seconds). Wait before starting another profile.',
     );
