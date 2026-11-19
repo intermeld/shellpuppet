@@ -199,6 +199,16 @@ function composerBlockKey(rows: readonly string[]): string {
   return rows.filter((row) => row.trim() !== '').slice(-COMPOSER_BLOCK_ROWS).join('\n');
 }
 
+/** Let the program repaint its composer before deciding whether Enter landed. */
+const TYPED_SUBMIT_SETTLE_MS = 150;
+
+export interface TypedWriteResult {
+  before: string;
+  submitted?: boolean;
+  submitRetried: boolean;
+  message?: string;
+}
+
 /**
  * Bracketed paste (DEC private mode 2004). A TUI that enables it is telling us
  * it wants multi-character input delivered as ONE paste event rather than as a
@@ -1259,18 +1269,28 @@ export class Session implements WaitTarget {
    * including for the rest of a chunked write it fails part-way through.
    */
   write(data: string, options: { terminalReport?: boolean; humanInput?: boolean } = {}): Promise<string> {
+    return this.writeWithResult(data, options).then((result) => result.before);
+  }
+
+  /** Write and report what a module can establish about a typed submission. */
+  writeWithResult(data: string, options: { terminalReport?: boolean; humanInput?: boolean } = {}): Promise<TypedWriteResult> {
     this.inputQueueVersion++;
     const delayedSubmit = this.delayedSubmission(data);
     if (delayedSubmit) this.submissionsQueued++;
-    const queued = this.writeChain.then(() =>
-      this.writeInput(data, options.terminalReport === true));
+    const queued = this.writeChain.then(async () => {
+      const result: TypedWriteResult = { before: '', submitRetried: false };
+      result.before = (await this.writeInput(data, options.terminalReport === true,
+        undefined, undefined, false, [], () => 'line-not-seen',
+        (outcome) => Object.assign(result, outcome))) ?? '';
+      return result;
+    });
     // The chain must survive a failed write, or one rejection would wedge every
     // subsequent write on this session.
     this.writeChain = queued.then(
       () => { if (delayedSubmit) this.submissionsQueued--; },
       () => { if (delayedSubmit) this.submissionsQueued--; },
     );
-    return queued as Promise<string>;
+    return queued;
   }
 
   /** Queue a nudge and retain the original result expected by direct callers. */
@@ -1421,7 +1441,8 @@ export class Session implements WaitTarget {
     ready?: (screen: string, phase: 'before' | 'submit') => boolean,
     onNudgeAbort?: (reason: NudgeAbortReason) => void,
     nudge = false, messageIds: string[] = [],
-    failedCheck: () => NudgeAbortReason = () => 'line-not-seen'): Promise<string | null> {
+    failedCheck: () => NudgeAbortReason = () => 'line-not-seen',
+    onTypedSubmit?: (result: Omit<TypedWriteResult, 'before'>) => void): Promise<string | null> {
     this.refuseIfInputFailed();
     if (ready !== undefined) await this.renderer.flush();
     if (!terminalReport && data.length > 0 &&
@@ -1497,6 +1518,9 @@ export class Session implements WaitTarget {
           }
         }
         this.pty.write(key);
+        if (!nudge) {
+          onTypedSubmit?.(await this.checkTypedSubmission(body, key, queuedInputVersion));
+        }
         if (!nudge && this.pendingNudgeLine !== null) {
           this.pendingQuietSince = Date.now();
           this.pendingTurnSubmitted = true;
@@ -1520,6 +1544,44 @@ export class Session implements WaitTarget {
     if (!terminalReport && this.pendingNudgeLine !== null &&
       data.endsWith(this.nudgeSubmit())) this.pendingTurnSubmitted = true;
     return screen;
+  }
+
+  private async checkTypedSubmission(body: string, key: string, queuedInputVersion: number):
+    Promise<Omit<TypedWriteResult, 'before'>> {
+    if (this.agentModule?.nudge === undefined) {
+      return { submitRetried: false,
+        message: 'Submit key sent; this programme has no readable composer.' };
+    }
+    await new Promise((resolve) => setTimeout(resolve, TYPED_SUBMIT_SETTLE_MS));
+    await this.renderer.flush();
+    if (this.inputQueueVersion !== queuedInputVersion) {
+      return { submitRetried: false,
+        message: 'Submit key sent; later input arrived before the composer check.' };
+    }
+    if (!this.nudgeReadyWithLine(body)) {
+      const verdict = this.pendingComposerVerdict();
+      if (verdict.ready) {
+        return { submitted: true, submitRetried: false };
+      }
+      return { submitRetried: false,
+        message: 'Submit key sent; the composer did not confirm submission.' };
+    }
+    this.refuseIfInputFailed();
+    this.refuseIfEnded();
+    this.pty.write(key);
+    await new Promise((resolve) => setTimeout(resolve, TYPED_SUBMIT_SETTLE_MS));
+    await this.renderer.flush();
+    if (this.inputQueueVersion !== queuedInputVersion) {
+      return { submitRetried: true,
+        message: 'Submit key retried; later input arrived before confirmation.' };
+    }
+    if (this.nudgeReadyWithLine(body)) {
+      return { submitted: false, submitRetried: true,
+        message: 'The typed text is still in the composer after one submit retry.' };
+    }
+    const verdict = this.pendingComposerVerdict();
+    return { ...(verdict.ready ? { submitted: true } : {}), submitRetried: true,
+      message: 'Submit key retried once after the typed text remained in the composer.' };
   }
 
   private async writeData(data: string): Promise<void> {

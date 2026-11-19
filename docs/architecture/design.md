@@ -445,6 +445,17 @@ ambiguous in clients that do not, so the prefix stays.
 | `terminal_start` | Launch a program in a new PTY session | `command`, `args[]`, `cwd`, `cols`, `rows`, `hold`, `label`, `purpose`, `agent`, `waitReady`, `readyTimeout`, `readyText`, `readyQuiet`, `shell`, `envNames` |
 | `terminal_snapshot` | Read the rendered screen as plain text | `session`, `lastLines`, `hideReasoning`, `wider`, `widerTimeout` |
 | `terminal_type` | Type text (optionally submit) | `session`, `text`, `submit`, `verify` |
+
+For a single typed line with Enter, the resolved agent module supplies a
+submit key and delay. The session writes the body first, waits, then writes
+the key separately inside one ordered input operation. No later queued input
+may interleave. Muse keeps its own delay. After a short settle, a module with
+a readable composer may find the exact typed line still there. In that case
+the session sends its submit key once more, without retyping the line, and
+checks again. A changed composer or later human input never triggers a retry.
+The input result reports a retry and reports `submitted: false` when the exact
+line remains after it. A module without a readable composer cannot confirm
+submission and reports that only the key was sent.
 | `terminal_key` | Press a semantic key | `session`, `key` |
 | `terminal_wait` | Wait for a screen condition, prompt or supported provider stall | `session` (id, list of ids or omitted for supervision), `text`\|`regex`\|`quiet` or `prompt` and/or `stalled`, `timeout`, `debounce`, `matchAfterInput`, `now`, `hideReasoning` |
 | `terminal_find` | Regex search the current screen, with line numbers | `session`, `pattern`, `hideReasoning` |

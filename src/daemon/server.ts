@@ -3291,9 +3291,9 @@ export class Daemon {
         // caller's request for a race in the session's lifetime. A session
         // whose input pipe has failed refuses the write too, and its error
         // says what to do.
-        let before: string;
+        let written: Awaited<ReturnType<typeof session.writeWithResult>>;
         try {
-          before = await session.write(data);
+          written = await session.writeWithResult(data);
         } catch (error) {
           json(res, 409, {
             error:
@@ -3318,11 +3318,18 @@ export class Daemon {
           json(res, 200, {
             ok: true,
             bytes: data.length,
-            verified: await this.verifyTyped(session, data, before),
+            verified: await this.verifyTyped(session, data, written.before),
+            ...(written.submitted !== undefined ? { submitted: written.submitted } : {}),
+            ...(written.submitRetried ? { submitRetried: true } : {}),
+            ...(written.message !== undefined ? { message: written.message } : {}),
           });
           return;
         }
-        json(res, 200, { ok: true, bytes: data.length });
+        json(res, 200, { ok: true, bytes: data.length,
+          ...(written.submitted !== undefined ? { submitted: written.submitted } : {}),
+          ...(written.submitRetried ? { submitRetried: true } : {}),
+          ...(written.message !== undefined ? { message: written.message } : {}),
+        });
         return;
       }
 

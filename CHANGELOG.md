@@ -7,6 +7,10 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Send typed Enter separately after the agent's submit pause, and retry once only when its readable composer still holds the exact typed line.
+
 ### Added
 
 - Nudge Claude Code, Grok Build and Muse Code sessions while they work, as soon as the composer is free: the line is queued (or handed to the running turn) instead of waiting for the turn to end.

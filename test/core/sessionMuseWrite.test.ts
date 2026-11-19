@@ -1,5 +1,5 @@
 import type { IPty } from 'node-pty';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { MUSE_SUBMIT_DELAY_MS, NUDGE_SUBMIT_DELAY_MS, NUDGE_SUBMIT_WAIT_MS, Session } from '../../src/core/session.js';
 
 class RecordingPty implements IPty {
@@ -101,14 +101,56 @@ describe('Muse input submission', () => {
     expect(pty.writes[1]!.at - pty.writes[0]!.at).toBeGreaterThanOrEqual(MUSE_SUBMIT_DELAY_MS - 5);
   });
 
-  it('keeps other agents and key or unfinished writes in one write', async () => {
+  it('separates typed Enter for Codex and leaves keys and unfinished writes alone', async () => {
     const codex = recordingSession('codex');
+    vi.spyOn(codex.session, 'nudgeReadyWithLine').mockReturnValue(false);
     await codex.session.write('hello\r');
-    expect(codex.pty.writes.map((entry) => entry.data)).toEqual(['hello\r']);
+    expect(codex.pty.writes.map((entry) => entry.data)).toEqual(['hello', '\r']);
+    expect(codex.pty.writes[1]!.at - codex.pty.writes[0]!.at)
+      .toBeGreaterThanOrEqual(NUDGE_SUBMIT_DELAY_MS - 5);
     const muse = recordingSession('muse');
     await muse.session.write('\r');
     await muse.session.write('hello');
     expect(muse.pty.writes.map((entry) => entry.data)).toEqual(['\r', 'hello']);
+  });
+
+  it('retries Enter only once when the exact typed draft remains', async () => {
+    const { session, pty } = recordingSession('codex');
+    vi.spyOn(session, 'nudgeReadyWithLine').mockReturnValue(true);
+    const result = await session.writeWithResult('hello\r');
+    expect(pty.writes.map((entry) => entry.data)).toEqual(['hello', '\r', '\r']);
+    expect(result).toMatchObject({ submitted: false, submitRetried: true });
+  });
+
+  it('does not retry when the composer shows something else', async () => {
+    const { session, pty } = recordingSession('codex');
+    vi.spyOn(session, 'nudgeReadyWithLine').mockReturnValue(false);
+    const result = await session.writeWithResult('hello\r');
+    expect(pty.writes.map((entry) => entry.data)).toEqual(['hello', '\r']);
+    expect(result.submitRetried).toBe(false);
+    expect(result.submitted).toBeUndefined();
+  });
+
+  it('does not retry when a person types during the settle', async () => {
+    const { session, pty } = recordingSession('codex');
+    vi.spyOn(session, 'nudgeReadyWithLine').mockReturnValue(true);
+    const pending = session.writeWithResult('hello\r');
+    while (pty.writes.length < 2) await new Promise((resolve) => setTimeout(resolve, 5));
+    const other = session.write('person');
+    const result = await pending;
+    await other;
+    expect(pty.writes.map((entry) => entry.data)).toEqual(['hello', '\r', 'person']);
+    expect(result.submitRetried).toBe(false);
+    expect(result.submitted).toBeUndefined();
+  });
+
+  it('sends one Enter and reports uncertainty when the module cannot read its composer', async () => {
+    const { session, pty } = recordingSession('generic');
+    const result = await session.writeWithResult('hello\r');
+    expect(pty.writes.map((entry) => entry.data)).toEqual(['hello', '\r']);
+    expect(result.submitRetried).toBe(false);
+    expect(result.submitted).toBeUndefined();
+    expect(result.message).toContain('no readable composer');
   });
 
   it('leaves a typed nudge unsubmitted when a prompt opens during the delay', async () => {
