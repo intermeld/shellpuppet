@@ -73,7 +73,7 @@ function lastIndexWhere(rows: readonly string[], matches: (row: string) => boole
 for (const [name, module] of Object.entries(modules)) {
   describe(`${name} nudge readiness`, () => {
     for (const [capture, expected] of [
-      ['empty', name === 'agy' ? 'ready' : 'unknown'],
+      ['empty', name === 'agy' || name === 'grok' ? 'ready' : 'unknown'],
       ['draft', name === 'opencode' || name === 'mimo' ? 'unknown' : 'draft'],
       ['after-empty', 'ready'], ['after-draft', 'draft'],
     ] as const) {
@@ -304,4 +304,40 @@ describe('the line before Enter', () => {
         .toEqual({ ready: true });
     });
   }
+});
+
+describe('Grok square composer', () => {
+  it('accepts the empty after-turn composer with an unfilled one per cent status', () => {
+    const screen = load('grok-square-after-empty');
+    expect(judgement(grok, screen)).toBe('ready');
+    expect(nudgeVerdict(grok, screen)).toEqual({ ready: true });
+  });
+
+  it('keeps typed words as a draft and accepts only the exact submitted line', () => {
+    const screen = load('grok-square-after-draft');
+    expect(judgement(grok, screen)).toBe('draft');
+    expect(judgement(grok, { ...screen, expectedDraft: 'draft words not sent' })).toBe('ready');
+    expect(judgement(grok, { ...screen, expectedDraft: 'other words' })).toBe('draft');
+  });
+
+  it('fails closed when the recorded draft has no proven status row', () => {
+    expect(judgement(grok, load('grok-square-draft-timeout'))).toBe('unknown');
+  });
+
+  it('accepts the empty welcome composer only with its live footer', () => {
+    const screen = load('grok-square-welcome');
+    expect(judgement(grok, screen)).toBe('ready');
+    expect(judgement(grok, { rows: screen.rows.slice(0, -1) })).toBe('unknown');
+    expect(judgement(grok, { rows: [...screen.rows, 'Later output'] })).toBe('unknown');
+    const draft = screen.rows.map((row) => row.replace('│ > ', '│ > typed '));
+    expect(judgement(grok, { rows: draft })).toBe('draft');
+  });
+
+  it('requires matching frame corners and the after-turn footer', () => {
+    const screen = load('grok-square-after-empty');
+    const mixed = screen.rows.map((row) => row.replace(/^ {2}└─/u, '  ╰─'));
+    expect(judgement(grok, { rows: mixed })).toBe('unknown');
+    const noHints = screen.rows.map((row) => row.replace('Shift+Tab:mode', 'Other text'));
+    expect(judgement(grok, { rows: noHints })).toBe('unknown');
+  });
 });

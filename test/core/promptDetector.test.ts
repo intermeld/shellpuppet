@@ -522,6 +522,7 @@ describe('detectPrompt: Grok shapes', () => {
     // The stale option block stays in the tail while Grok streams its
     // response; "Waiting for response…" below the block means it is history.
     expect(detectPrompt(GROK_RESPONDING_AFTER_ANSWER)).toBeNull();
+    expect(detectPrompt(GROK_RESPONDING_AFTER_ANSWER.replace('╭', '┌').replace('╰', '└'))).toBeNull();
   });
 
   it('does not read the 1/3:select footer as an option row', () => {
