@@ -6,7 +6,7 @@ import { captureViewer } from './browserCapture.js';
 import type { CaptureOptions } from '../../src/daemon/screenshot.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
 import { noticeFrameLimitScript } from './noticeFrameLimit.js';
-import { api, startTestDaemon } from './helpers.js';
+import { api, eventually, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 import { assessDeliveredCadence, deliveredNoticeScript, recordDeliveredCadence } from './noticeCadence.js';
 import type { DeliveredCadence } from './noticeCadence.js';
@@ -358,21 +358,41 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
           hidden: state.alert.hidden, cadence: observation.stop() };
       }`);
       await evaluate(deliveredNoticeScript);
-      await input('r'); await evaluate('__pause(1700)');
-      for (const key of ['r', 's', 'l']) {
-        if (key !== 'r') {
-          await input('b'); await evaluate('__pause(1150)');
-          await evaluate('window.__phaseStart = __noticePhases.length');
-          await input(key);
-          // The first prompt phase establishes the input acknowledgement.
-          // Begin measuring once the following header has actually parsed.
-          await evaluate(`(async () => {
-            const start = performance.now();
-            while (__noticePhases.length < __phaseStart + 2 && performance.now() - start < 5000) await __pause(4);
-          })()`);
-          expect(await evaluate('__noticePhases.length - __phaseStart')).toBeGreaterThanOrEqual(2);
-        }
-        const result = await evaluate(`__sampleRest(3500, 22, ${key === 'r' ? '0' : '5'})`) as {
+      // The fixture starts on row 1. Anchor startup to the first delivered
+      // prompt, including any placement that occurs before the input API replies.
+      await evaluate('window.__moving = observeDeliveredNotice(__noticeTest.term, __noticeTest.notices, performance.now(), 22)');
+      await input('r');
+      await eventually(async () => await evaluate('__moving.peek().legs.length > 0') === true,
+        10_000, 50, 'runner stalled before the first moving prompt was delivered');
+      const moving = await evaluate(`(async () => {
+        await __pause(6000);
+        return { cadence: __moving.stop(), hidden: __noticeTest.alert.hidden };
+      })()`) as { cadence: DeliveredCadence; hidden: boolean };
+      const trace = moving.cadence;
+      const judged = assessDeliveredCadence(trace);
+      recordDeliveredCadence(`${mode}-${String(period)}-r`, trace);
+      const steady = trace.samples.filter(sample => sample.time >= 2500);
+      const promptSamples = steady.filter(sample => sample.row === 22);
+      const promptMs = trace.legs.filter(leg => leg.row === 22).reduce((total, leg) =>
+        total + Math.max(0, leg.end - Math.max(leg.start, 2500)), 0);
+      const evidence = JSON.stringify({ assessment: judged, firstSteady: steady[0], lastSteady: steady.at(-1) });
+      expect(judged.violations, evidence).toEqual([]);
+      expect(moving.hidden, evidence).toBe(false);
+      if (!promptSamples.length || !steady.some(sample => sample.evaluation) ||
+          !trace.legs.some(leg => leg.row === 0) || trace.end < 6000) {
+        throw new Error(`runner stalled before the split repaint and steady prompt were observed: ${evidence}`);
+      }
+      expect(promptMs / (trace.end - 2500), evidence).toBeGreaterThan(0.6);
+      expect(trace.samples.find(sample => sample.side === 'top')?.time, evidence).toBeLessThanOrEqual(2500);
+      expect(new Set(steady.map(sample => sample.side)), evidence).toEqual(new Set(['top']));
+      expect(promptSamples.some(sample => sample.covered), evidence).toBe(false);
+      for (const key of ['s', 'l']) {
+        await input('b'); await evaluate('__pause(1150)');
+        await evaluate('window.__phaseStart = __noticePhases.length');
+        await input(key);
+        await eventually(async () => await evaluate('__noticePhases.length - __phaseStart >= 2') === true,
+          5000, 50, 'runner stalled before the prompt and header phases were parsed');
+        const result = await evaluate('__sampleRest(3500, 22, 5)') as {
           placements: string[]; covered: number; samples: number; restingSamples: number; hidden: boolean;
           phases: number; maxLeg: number; phaseMismatches: number;
           cadence: DeliveredCadence;
@@ -384,17 +404,10 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
         if (!result.restingSamples || result.frames < 2 || result.cadence.legs.length < 2) {
           throw new Error(`runner stalled before the moving prompt was observed: ${details}`);
         }
-        if (key === 'r') expect.soft(result.restingSamples / result.samples, details).toBeGreaterThan(0.6);
-        else {
-          expect.soft(result.phases, details).toBeGreaterThan(4);
-          expect.soft(result.phaseMismatches, details).toBe(0);
-          expect.soft(assessment.violations, details).toEqual([]);
-        }
+        expect.soft(result.phases, details).toBeGreaterThan(4);
+        expect.soft(result.phaseMismatches, details).toBe(0);
+        expect.soft(assessment.violations, details).toEqual([]);
         expect.soft(result.hidden, details).toBe(false);
-        if (key === 'r') {
-          expect.soft(result.covered, details).toBe(0);
-          expect.soft(result.placements, details).toEqual(['top']);
-        }
       }
       await input('t'); await evaluate('__pause(650)');
       await input('c'); await evaluate('__pause(900)');
