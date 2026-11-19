@@ -874,9 +874,9 @@ describe('Grok permission box (built in)', () => {
   });
 
   it('stops the bar at a box row even when no option rows are on screen to claim it', () => {
-    const plain = (text: string): StyledLine => ({
+    const plain = (text: string, ink = '#929292'): StyledLine => ({
       text,
-      spans: text === '' ? [] : [{ from: 0, to: text.length, bold: false, dim: false, italic: false, inverse: false, fg: null, bg: null }],
+      spans: text === '' ? [] : [{ from: 0, to: text.length, bold: false, dim: false, italic: false, inverse: false, fg: ink, bg: null }],
     });
     // A box whose options sit below the viewport: nothing here for the
     // prompt detection to claim, so the signature's own rules must stop.
@@ -885,8 +885,8 @@ describe('Grok permission box (built in)', () => {
       plain('  │  ♦ Thinking…'),
       plain('  │'),
       plain('  │  X xxxx xxxxxxxx 99 by 99 and xxxxx which of the xxxxx.'),
-      plain('  │  >  Allow Run the unit tests?'),
-      plain('  1/3:select  │  Tab:next option  │  Ctrl+o:always-approve'),
+      plain('  │  >  Allow Run the unit tests?', '#e1e1e1'),
+      plain('  1/3:select  │  Tab:next option  │  Ctrl+o:always-approve', '#808080'),
     ];
     const kept = hideReasoning(lines, grok)!.lines;
     expect(kept).toContain('  │  >  Allow Run the unit tests?');

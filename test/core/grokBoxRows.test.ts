@@ -13,9 +13,23 @@ const choices = [
   '  1/3:select  │  Tab:next option  │  Ctrl+f:expand',
 ];
 
-async function rendered(rows: string[], cols: number, height: number) {
+async function rendered(rows: string[], cols: number, height: number, greyOptions = false) {
   const renderer = new ScreenRenderer({ cols, rows: height });
-  await renderer.write(rows.join('\r\n'));
+  // Paint synthetic rows with the foreground inks measured in the Grok
+  // permission fixtures. Unrecognised rows retain the terminal's default ink.
+  const painted = rows.map((row) => {
+    if (row === header) return `   \x1b[38;2;108;108;108m♦ \x1b[1;38;2;120;120;120m${row.slice(5)}\x1b[0m`;
+    let ink: string | undefined;
+    if (/^ {2}│ {2}> {2}\S/.test(row)) ink = '225;225;225';
+    else if (/^ {2}│ {2}[123] \([○•●]\)/.test(row)) {
+      ink = greyOptions ? '146;146;146' : /\(○\)/.test(row) ? '200;200;200' : '225;225;225';
+    }
+    else if (/^ {2}1\/3:select/.test(row)) ink = '128;128;128';
+    else if (/^ {2}│ {2}♦ (?:Thinking|Thought)/.test(row)) ink = '108;108;108';
+    else if (/^ {2}│ {2}(?:[│:]|[A-Za-z$]|>|\.\.\.|…|♦)/.test(row)) ink = '146;146;146';
+    return ink === undefined ? row : `\x1b[38;2;${ink}m${row}\x1b[0m`;
+  });
+  await renderer.write(painted.join('\r\n'));
   const lines = renderer.styledLines({ last: 2000 }).lines;
   await renderer.dispose();
   return lines;
@@ -91,6 +105,46 @@ describe('Grok permission box rows after the question scrolls away', () => {
     expect(kept).not.toContain('plan the next step');
     expect(kept).not.toContain('more detail');
     expect(kept).toContain('The answer is ready');
+  });
+
+  it('hides marked commands above grey option-shaped rows', async () => {
+    const lines = await rendered([
+      header,
+      '  │  │ Write-Output sample',
+      '  │  : --configuration Debug',
+      ...choices,
+    ], 120, 40, true);
+    const kept = hideReasoning(lines, grok)!.lines.join('\n');
+    expect(kept).not.toContain('Write-Output sample');
+    expect(kept).not.toContain('--configuration Debug');
+    expect(kept).not.toContain('Yes, proceed');
+  });
+
+  it('hides marked commands when a reasoning start interrupts the run', async () => {
+    const lines = await rendered([
+      header,
+      '  │  │ Write-Output sample',
+      '  │  ♦ Thinking…',
+      '  │  : private continuation',
+      ...choices,
+    ], 120, 40);
+    const kept = hideReasoning(lines, grok)!.lines.join('\n');
+    expect(kept).not.toContain('Write-Output sample');
+    expect(kept).not.toContain('Thinking');
+    expect(kept).not.toContain('private continuation');
+    expect(kept).toContain('Yes, proceed');
+  });
+
+  it('hides a command run with an unmeasured row', async () => {
+    const lines = await rendered([
+      header,
+      '  │  │ Write-Output sample',
+      '  │  ▣ unmeasured continuation',
+      ...choices,
+    ], 120, 40);
+    const kept = hideReasoning(lines, grok)!.lines.join('\n');
+    expect(kept).not.toContain('Write-Output sample');
+    expect(kept).not.toContain('unmeasured continuation');
   });
 });
 

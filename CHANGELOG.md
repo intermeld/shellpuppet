@@ -58,6 +58,9 @@ version may change behaviour, and every such change is listed here.
 - Never type an unconfirmed message nudge twice: a line that could not be confirmed stays pending, is submitted with the submit key alone once the composer shows it exactly once, and is left for the person if they have typed since. The audit records why a nudge was not submitted.
 - Let a message wait name its sender by name: a wait for `from` set to a name never returned before.
 - Nudge an idle Claude Code session that shows a suggested next prompt in its composer.
+- Hide Grok reasoning when full-width repaints mark separate bar rows as wrapped, including on wide screens.
+- Keep Grok reasoning rows hidden after an ellipsis row when their text resembles permission box rows.
+- Distinguish Grok permission questions and options from reasoning by measured row ink, keeping a question only once a box option or live footer follows it.
 - Nudge an idle Claude Code session whose padded composer rows are marked as wraps, and an idle Muse Code session showing one of its rotating grey tips.
 - Nudge an idle Muse Code session after a reply, when its padded rows leave the rule above the composer marked as a wrap.
 - Find an agent's composer under a rule that fills the terminal width, so a session showing it can be nudged.
@@ -65,7 +68,7 @@ version may change behaviour, and every such change is listed here.
 - Bound viewport repair after resize and end only the affected session if terminal rendering fails.
 - Report MiMo output limits and other idle error blocks, including long errors whose marker scrolled away, plus a persistent OpenCode or MiMo Code server connection loss, as stalled sessions.
 - Detect OpenCode and MiMo Code question panels clipped by the terminal height, reporting the choices still visible.
-- Keep the command rows of a live Grok permission box visible when its question has scrolled off the screen, while reasoning above the box stays hidden.
+- Keep the marked command rows of a live Grok permission box visible when its question has scrolled off the screen, after verifying the option and footer inks, while reasoning above the box stays hidden.
 - Show idle MiMo sessions whose model request failed as stalled, including in session lists, supervisor events and stalled waits.
 - Keep waiting alerts and other notices clear of the prompt they announce and steady while a terminal repaints, following the cursor when it settles elsewhere, through staged and nested repaints, resizes, text size changes, reconnects and reattached sessions.
 - Let a dashboard pane take its grid when the controlling window releases it during a roster move to another window, while keeping the human's grid through socket loss, reload, pane dismissal, window close, Pop out, controller reconnect and a viewer link or another client connecting meanwhile.
