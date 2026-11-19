@@ -62,7 +62,9 @@ do it differently, and some offer none.
   messages do not change the condition. The
   recipient reads every waiting message from its inbox. The daemon records
   the ids covered by the pending body and the ids that arrived later. A
-  pending body clears without submission only after a submitted turn was seen
+  recovered line may name a message already read; the agent reads its inbox
+  and gets whatever is waiting. A pending body clears without submission
+  only after a submitted turn was seen
   busy and then idle with a positively empty composer, or after the composer
   has been positively empty and the screen unchanged for 30 seconds from the
   last input or output. Input, output, resize, prompt, stall or an unknown
