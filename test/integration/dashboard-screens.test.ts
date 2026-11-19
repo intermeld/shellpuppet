@@ -227,24 +227,32 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
     sharedPage.hash = 'screen=shared-screen&rank=1000';
     const sharedUrl = sharedPage.toString();
     const primary = await makePage(sameScreen ? sharedUrl : url, 1280,
-      watchedChild ? "Object.defineProperty(window, 'getScreenDetails', { configurable: true, value: undefined });" : '');
+      watchedChild ? `Object.defineProperty(window, 'getScreenDetails', { configurable: true, value: undefined });
+        const openChild = window.open.bind(window);
+        window.open = (...args) => {
+          const child = openChild(...args);
+          window.__watchedOpen = { url: args[0], opened: child !== null };
+          return child;
+        };` : '');
     pages.push(primary.sessionId);
     await waitFor(async () => (await ids(primary.sessionId) as string[] | undefined)?.length === 3);
     if (watchedChild) {
       await waitFor(async () => await evaluate(primary.sessionId,
         "document.querySelector('#screens button')?.textContent === 'Open another window'") === true);
-      const button = await evaluate(primary.sessionId,
-        "document.querySelector('#screens button').getBoundingClientRect().toJSON()") as { x: number; y: number; width: number; height: number };
-      const x = button.x + button.width / 2;
-      const y = button.y + button.height / 2;
-      await send('Input.dispatchMouseEvent', { type: 'mousePressed', x, y, button: 'left', clickCount: 1 }, primary.sessionId);
-      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', x, y, button: 'left', clickCount: 1 }, primary.sessionId);
+      const activation = await send('Runtime.evaluate', { userGesture: true, returnByValue: true,
+        expression: `(() => {
+          document.querySelector('#screens button').click();
+          return window.__watchedOpen;
+        })()` }, primary.sessionId) as { result: { value?: { url: string; opened: boolean } } };
+      const opened = activation.result.value;
+      if (!opened) throw new Error('The screen control did not request a child window.');
+      if (!opened.opened) throw new Error('runner stalled: Chromium blocked the requested child window.');
       let childTarget: { targetId: string; url: string } | undefined;
       await waitFor(async () => {
         const targets = await send('Target.getTargets') as { targetInfos?: { targetId: string; url: string }[] };
-        childTarget = targets.targetInfos?.find((target) => target.url.includes('/dashboard#screen='));
+        childTarget = targets.targetInfos?.find((target) => target.url === opened.url);
         return childTarget !== undefined;
-      });
+      }, 'requested child window to navigate');
       const childAttached = await send('Target.attachToTarget', { targetId: childTarget!.targetId, flatten: true });
       const childPage = { targetId: childTarget!.targetId, sessionId: String(childAttached.sessionId) };
       pages.push(childPage.sessionId);
