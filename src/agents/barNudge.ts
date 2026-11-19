@@ -52,7 +52,8 @@ export function barReadiness(view: NudgeView, reading: AgentSignature, placehold
   const busy = (reading.busy ?? []).some((test) => test.text !== undefined &&
     view.rows.some((row) => new RegExp(test.text!, 'u').test(row)));
   if (busy) return 'busy';
-  const result = readingReadiness({ rows: changed, styled, expectedDraft: view.expectedDraft }, { ...reading, composer: { text: '^> ' } }, {
+  const result = readingReadiness({ rows: changed, styled, expectedDraft: view.expectedDraft,
+    exactEmpty: view.exactEmpty }, { ...reading, composer: { text: '^> ' } }, {
     placeholder,
     continuations: false,
     placeholderInk: (line) => {

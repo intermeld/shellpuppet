@@ -15,7 +15,7 @@
  */
 
 import { moduleFor } from '../agents/index.js';
-import { nudgeVerdict } from './nudge.js';
+import { nudgeVerdict, NUDGE_QUIET_MS } from './nudge.js';
 import type { AgentModule, AgentSource } from '../agents/types.js';
 import { validateStall, possibleStall, resolveSessionAgent, signatureForSession, stallTranscriptContent, stallTurnVisible, StallScreenCache, StallTracker } from './reasoning.js';
 import { execFile } from 'node:child_process';
@@ -35,6 +35,7 @@ import { readinessFor, trackReadiness, waitUntilReady } from './readiness.js';
 import type { Readiness } from './readiness.js';
 import type { WaiterInternals } from './waiter.js';
 import type { WaitTarget } from './waiter.js';
+
 import {
   canReadExitCode,
   listenForTerminalErrors,
@@ -52,6 +53,9 @@ import {
   RESERVED_FEATURE_CREDENTIALS,
   SESSION_IDENTITY_ENV_NAMES,
 } from './types.js';
+
+type NudgeAbortReason = 'line-not-seen' | 'other-input-arrived' | 'screen-changed' |
+  'prompt-showing' | 'stalled' | 'messages-changed' | 'session-ended';
 import type {
   Logger,
   ScreenSnapshot,
@@ -439,6 +443,8 @@ function resolveExecutable(command: string, platform: NodeJS.Platform, cwd: stri
 }
 
 export interface SessionDeps {
+  /** Pending-body quiet period override for tests. */
+  pendingNudgeSettleMs?: number;
   /** Identity allocated by the daemon for this session. */
   identity?: { token: string; instanceId: string; cliPath: string; home?: string };
   /** A retry retains the identity resolved by its first start attempt. */
@@ -755,6 +761,16 @@ export class Session implements WaitTarget {
   private writeChain: Promise<void> = Promise.resolve();
   private inputVersion = 0;
   private inputQueueVersion = 0;
+  /** A nudge body accepted by the PTY without a confirmed submit. */
+  private pendingNudgeLine: string | null = null;
+  private pendingNudgeIds: string[] = [];
+  /** Any input from outside the daemon permanently claims this pending composer. */
+  private pendingNudgeTouched = false;
+  private pendingTouchRefusalAudited = false;
+  private pendingTurnSubmitted = false;
+  private pendingTurnBusy = false;
+  private pendingQuietSince = 0;
+  private readonly pendingNudgeSettleMs: number;
   private screenRevision = 0;
   private submissionsQueued = 0;
   /** Why the input pipe failed (Windows), once it has: input is refused from then on. */
@@ -816,6 +832,7 @@ export class Session implements WaitTarget {
     this.registerConsoleHost = deps.registerConsoleHostWindow ?? registerConsoleHostWindow;
     this.spawnPty = deps.spawn;
     this.pidWaitMs = deps.pidWaitMs ?? PROGRAM_PID_WAIT_MS;
+    this.pendingNudgeSettleMs = deps.pendingNudgeSettleMs ?? 30_000;
 
     // node-pty 1.2.0 is ConPTY-only on Windows: the winpty fallback is gone,
     // so a build below the ConPTY floor cannot start anything. Refused here,
@@ -945,6 +962,7 @@ export class Session implements WaitTarget {
     this.stallPtyRows = this.pty.rows;
     this.pty.onData((data) => {
       if (this.exitedFlag || this.isKilled) return;
+      if (this.pendingNudgeLine !== null) this.pendingQuietSince = Date.now();
       // node-pty can apply a requested resize later, after its first output.
       // Observe the dimensions it reports as well as our explicit requests.
       if (this.pty.cols !== this.stallPtyCols || this.pty.rows !== this.stallPtyRows) {
@@ -1218,11 +1236,12 @@ export class Session implements WaitTarget {
    * Rejects with `SessionInputFailedError` once the input pipe has failed,
    * including for the rest of a chunked write it fails part-way through.
    */
-  write(data: string, options: { terminalReport?: boolean } = {}): Promise<string> {
+  write(data: string, options: { terminalReport?: boolean; humanInput?: boolean } = {}): Promise<string> {
     this.inputQueueVersion++;
     const delayedSubmit = this.delayedSubmission(data);
     if (delayedSubmit) this.submissionsQueued++;
-    const queued = this.writeChain.then(() => this.writeInput(data, options.terminalReport === true));
+    const queued = this.writeChain.then(() =>
+      this.writeInput(data, options.terminalReport === true));
     // The chain must survive a failed write, or one rejection would wedge every
     // subsequent write on this session.
     this.writeChain = queued.then(
@@ -1232,18 +1251,80 @@ export class Session implements WaitTarget {
     return queued as Promise<string>;
   }
 
-  /** Queue a daemon nudge, checking the current rendered screen before any bytes are written. */
-  writeNudge(data: string, ready: (screen: string, phase: 'before' | 'submit') => boolean):
+  /** Queue a nudge and retain the original result expected by direct callers. */
+  async writeNudge(data: string, ready: (screen: string, phase: 'before' | 'submit') => boolean):
     Promise<'sent' | 'wait' | 'aborted'> {
-    let aborted = false;
+    const result = await this.writeNudgeWithReason(data, ready);
+    return result === 'sent' || result === 'wait' ? result : 'aborted';
+  }
+
+  /** Queue a daemon nudge, reporting why a typed body could not be submitted. */
+  writeNudgeWithReason(data: string, ready: (screen: string, phase: 'before' | 'submit') => boolean,
+    messageIds: string[] = [], failedCheck: () => NudgeAbortReason = () => 'line-not-seen'):
+    Promise<'sent' | 'wait' | `aborted-${NudgeAbortReason}`> {
+    let abortReason: NudgeAbortReason | null = null;
     const queued = this.writeChain.then(async () => {
       try {
-        const result = await this.writeInput(data, false, ready, () => { aborted = true; }, true);
-        return aborted ? 'aborted' as const : result === null ? 'wait' as const : 'sent' as const;
+        if (this.pendingNudgeLine !== null) return 'wait' as const;
+        const result = await this.writeInput(data, false, ready, (reason) => { abortReason = reason; }, true,
+          messageIds, failedCheck);
+        return abortReason !== null ? `aborted-${abortReason}` as const
+          : result === null ? 'wait' as const : 'sent' as const;
       } catch (error) {
-        if (aborted) return 'aborted' as const;
+        if (abortReason !== null) return `aborted-${abortReason}` as const;
         throw error;
       }
+    });
+    this.writeChain = queued.then(() => undefined, () => undefined);
+    return queued;
+  }
+
+  nudgePendingLine(): string | null { return this.pendingNudgeLine; }
+  nudgePendingIds(): readonly string[] { return this.pendingNudgeIds; }
+  nudgePendingUntouched(): boolean { return !this.pendingNudgeTouched; }
+  nudgePendingTouchRefusal(): boolean {
+    if (!this.pendingNudgeTouched || this.pendingTouchRefusalAudited) return false;
+    this.pendingTouchRefusalAudited = true;
+    return true;
+  }
+  /** Clear after an observed submitted turn or a whole quiet period of proven emptiness. */
+  async clearConsumedNudge(): Promise<boolean> {
+    if (this.pendingNudgeLine === null) return false;
+    await this.renderer.flush();
+    const verdict = this.pendingComposerVerdict();
+    if (!verdict.ready && verdict.reason === 'busy' && this.pendingTurnSubmitted) this.pendingTurnBusy = true;
+    if (!verdict.ready) {
+      this.pendingQuietSince = Date.now();
+      return false;
+    }
+    if (!(this.pendingTurnBusy || Date.now() - this.pendingQuietSince >= this.pendingNudgeSettleMs)) return false;
+    this.pendingNudgeLine = null;
+    this.pendingNudgeIds = [];
+    this.pendingNudgeTouched = false;
+    this.pendingTouchRefusalAudited = false;
+    this.pendingTurnSubmitted = false;
+    this.pendingTurnBusy = false;
+    return true;
+  }
+
+  /** A pending body may receive its submit key only after it is visible exactly once. */
+  submitPendingNudge(line: string, ready: (screen: string) => boolean): Promise<boolean> {
+    const queued = this.writeChain.then(async () => {
+      this.refuseIfInputFailed();
+      await this.renderer.flush();
+      this.refuseIfEnded();
+      if (this.pendingNudgeLine !== line || this.pendingNudgeTouched ||
+        !ready(this.renderer.snapshot().screen) ||
+        !this.nudgeReadyWithLine(line)) return false;
+      this.pty.write(this.nudgeSubmit());
+      this.pendingNudgeLine = null;
+      this.pendingNudgeIds = [];
+      this.pendingNudgeTouched = false;
+      this.pendingTouchRefusalAudited = false;
+      this.pendingTurnSubmitted = false;
+      this.pendingTurnBusy = false;
+      this.inputVersion++;
+      return true;
     });
     this.writeChain = queued.then(() => undefined, () => undefined);
     return queued;
@@ -1259,6 +1340,15 @@ export class Session implements WaitTarget {
       stall: this.getStalled(),
       unchangedMs: now - this.lastChangeAt(),
     }).ready;
+  }
+
+  private pendingComposerVerdict(): ReturnType<typeof nudgeVerdict> {
+    const rendered = this.renderer.snapshot();
+    const styled = this.renderer.styledLines().lines;
+    return nudgeVerdict(this.agentModule, {
+      rows: styled.map((line) => line.text), styled, viewportRows: rendered.rows,
+      stall: this.getStalled(), unchangedMs: NUDGE_QUIET_MS, exactEmpty: true,
+    });
   }
 
   nudgeSubmit(): string {
@@ -1285,7 +1375,9 @@ export class Session implements WaitTarget {
 
   private async writeInput(data: string, terminalReport: boolean,
     ready?: (screen: string, phase: 'before' | 'submit') => boolean,
-    onNudgeAbort?: () => void, nudge = false): Promise<string | null> {
+    onNudgeAbort?: (reason: NudgeAbortReason) => void,
+    nudge = false, messageIds: string[] = [],
+    failedCheck: () => NudgeAbortReason = () => 'line-not-seen'): Promise<string | null> {
     this.refuseIfInputFailed();
     if (ready !== undefined) await this.renderer.flush();
     if (!terminalReport && data.length > 0 &&
@@ -1296,6 +1388,9 @@ export class Session implements WaitTarget {
     if (ready !== undefined) {
       this.refuseIfEnded();
       if (!ready(this.renderer.snapshot().screen, 'before')) return null;
+    }
+    if (!nudge && !terminalReport && data !== '' && this.pendingNudgeLine !== null) {
+      this.pendingNudgeTouched = true;
     }
     // Recorded BEFORE the bytes go in, when the screen still shows what this
     // input is answering: the waiter's stale-prompt guard needs that prompt,
@@ -1322,6 +1417,15 @@ export class Session implements WaitTarget {
       const delayMs = nudge ? Math.max(NUDGE_SUBMIT_DELAY_MS, submit?.delayMs ?? 0) : submit!.delayMs!;
       const body = data.slice(0, -key.length);
       const queuedInputVersion = this.inputQueueVersion;
+      if (nudge) {
+        this.pendingNudgeLine = body;
+        this.pendingNudgeIds = [...messageIds];
+        this.pendingNudgeTouched = false;
+        this.pendingTouchRefusalAudited = false;
+        this.pendingTurnSubmitted = false;
+        this.pendingTurnBusy = false;
+        this.pendingQuietSince = Date.now();
+      }
       await this.writeData(body);
       try {
         await new Promise((resolve) => setTimeout(resolve, delayMs));
@@ -1336,12 +1440,12 @@ export class Session implements WaitTarget {
             await this.renderer.flush();
             this.refuseIfEnded();
             if (this.inputQueueVersion !== queuedInputVersion) {
-              onNudgeAbort?.();
+              onNudgeAbort?.('other-input-arrived');
               return null;
             }
             if (ready(this.renderer.snapshot().screen, 'submit')) break;
             if (Date.now() >= deadline) {
-              onNudgeAbort?.();
+              onNudgeAbort?.(failedCheck());
               return null;
             }
             await new Promise((resolve) => setTimeout(resolve, NUDGE_SUBMIT_POLL_MS));
@@ -1349,19 +1453,34 @@ export class Session implements WaitTarget {
           }
         }
         this.pty.write(key);
+        if (!nudge && this.pendingNudgeLine !== null) {
+          this.pendingQuietSince = Date.now();
+          this.pendingTurnSubmitted = true;
+        }
+        if (nudge) {
+          this.pendingNudgeLine = null;
+          this.pendingNudgeIds = [];
+          this.pendingNudgeTouched = false;
+          this.pendingTouchRefusalAudited = false;
+          this.pendingTurnSubmitted = false;
+          this.pendingTurnBusy = false;
+        }
       } catch (error) {
-        onNudgeAbort?.();
+        onNudgeAbort?.(failedCheck());
         throw error;
       }
       return screen;
     }
 
     await this.writeData(data);
+    if (!terminalReport && this.pendingNudgeLine !== null &&
+      data.endsWith(this.nudgeSubmit())) this.pendingTurnSubmitted = true;
     return screen;
   }
 
   private async writeData(data: string): Promise<void> {
     if (data.length <= WRITE_CHUNK_CHARS) {
+      if (data !== '' && this.pendingNudgeLine !== null) this.pendingQuietSince = Date.now();
       this.pty.write(data);
       return;
     }
@@ -1376,6 +1495,7 @@ export class Session implements WaitTarget {
       const body = newlineAt === -1 ? data : data.slice(0, newlineAt);
       const trailer = newlineAt === -1 ? '' : data.slice(newlineAt);
       this.lastWriteWrapped = true;
+      if (this.pendingNudgeLine !== null) this.pendingQuietSince = Date.now();
       this.pty.write(`${PASTE_START}${body}${PASTE_END}${trailer}`);
       return;
     }
@@ -1395,6 +1515,7 @@ export class Session implements WaitTarget {
         if (code >= 0xd800 && code <= 0xdbff) end -= 1;
       }
 
+      if (this.pendingNudgeLine !== null) this.pendingQuietSince = Date.now();
       this.pty.write(data.slice(offset, end));
       offset = end;
       if (offset < data.length) {
@@ -1466,6 +1587,7 @@ export class Session implements WaitTarget {
     const oldCols = this.renderer.cols;
     const oldRows = this.renderer.rows;
     this.pty.resize(cols, rows);
+    if (this.pendingNudgeLine !== null) this.pendingQuietSince = Date.now();
     this.screenRevision++;
     this.stallPtyCols = this.pty.cols; this.stallPtyRows = this.pty.rows;
     this.noteStallResize(cols !== this.renderer.cols || rows !== this.renderer.rows);

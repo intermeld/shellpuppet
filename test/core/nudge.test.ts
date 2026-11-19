@@ -255,6 +255,24 @@ describe('nudge readiness', () => {
       expect(readinessOf(claude, { ...screen, rows: styled.map((line) => line.text), styled })).toBe('draft');
     });
 
+    it('refuses a dim composer containing a written nudge and extra words when awaiting Enter', async () => {
+      const screen = await load('claude-answered');
+      const line = '[ShellPuppet] 2 messages are waiting';
+      const styled = replaceComposer(screen.styled ?? [], /^❯/u, `❯ ${line} extra`, { dim: true });
+      expect(nudgeVerdict(claude, { ...screen, rows: styled.map((row) => row.text), styled,
+        expectedDraft: line })).toEqual({ ready: false, reason: 'draft' });
+    });
+
+    it('refuses a later copy of the expected nudge as the only composer', async () => {
+      const screen = await load('claude-answered');
+      const line = '[ShellPuppet] 2 messages are waiting';
+      const styled = replaceComposer(screen.styled ?? [], /^❯/u, `❯ ${line}`, {});
+      const at = styled.map((row) => row.text.startsWith('❯')).lastIndexOf(true);
+      styled.splice(at, 0, { text: `❯ ${line}`, spans: [{ from: 0, to: line.length + 2, ...INK }] });
+      expect(nudgeVerdict(claude, { ...screen, rows: styled.map((row) => row.text), styled,
+        expectedDraft: line })).toEqual({ ready: false, reason: 'draft' });
+    });
+
     it('treats a suggestion marked as a wrap, between wrapped rules, as empty', async () => {
       // Seen live: the padded composer row carries the suggestion and is marked as a wrap.
       const screen = await load('claude-answered');
@@ -566,6 +584,8 @@ describe('nudge readiness', () => {
         'Other grey words',
       );
       expect(readinessOf(muse, { ...screen, rows: styled.map((line) => line.text), styled })).toBe('ready');
+      expect(nudgeVerdict(muse, { ...screen, rows: styled.map((line) => line.text), styled,
+        exactEmpty: true })).toEqual({ ready: false, reason: 'draft' });
     });
 
     it('treats the recorded hint in typed ink as a draft', async () => {

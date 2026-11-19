@@ -174,11 +174,11 @@ function composerRegion(
  * Blank, or the exact placeholder drawn in the placeholder's own ink, or, for
  * a module whose hint text rotates, any text drawn wholly in that ink.
  */
-function rowClear(line: StyledLine, rule: ReadingNudgeRule): boolean {
+function rowClear(line: StyledLine, rule: ReadingNudgeRule, exactEmpty = false): boolean {
   const text = stripGlyph(line.text);
   if (text === '') return true;
   if (!rule.placeholderInk(line)) return false;
-  return text === rule.placeholder || rule.anyHintInPlaceholderInk === true;
+  return text === rule.placeholder || (!exactEmpty && rule.anyHintInPlaceholderInk === true);
 }
 
 /**
@@ -267,8 +267,12 @@ export function readingReadiness(view: NudgeView, reading: AgentSignature, rule:
   const region = composerRegion(lines, reading, at, rule, view.expectedDraft !== undefined);
   if (region === null || region.unproven) return 'unknown';
   if (view.expectedDraft !== undefined) {
+    // A later copy may look like a fresh composer row. Do not select its
+    // prompt glyph and forget the earlier copy still waiting above it.
+    if (lines.slice(0, at).some((line) =>
+      composer.test(line.text) && stripGlyph(line.text) === view.expectedDraft)) return 'draft';
     if (rule.unprovenContinuations === true && !plainWrapRows(region.rows)) return 'draft';
     return holdsExpectedDraft(region.rows, view.expectedDraft) ? 'ready' : 'draft';
   }
-  return region.rows.every((line) => rowClear(line, rule)) ? 'ready' : 'draft';
+  return region.rows.every((line) => rowClear(line, rule, view.exactEmpty)) ? 'ready' : 'draft';
 }

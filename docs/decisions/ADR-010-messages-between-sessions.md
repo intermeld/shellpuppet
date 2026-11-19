@@ -50,6 +50,31 @@ do it differently, and some offer none.
   nudged. A session gets at most one nudge for its unread messages until it
   reads them, nudges are rate limited, and every nudge is recorded as the
   daemon's own input.
+- **An uncertain typed nudge is never typed again into the same session.**
+  Once the daemon has handed the body to the terminal, an unconfirmed submit
+  leaves that body pending, even when the composer still appears empty. The
+  daemon may send only the submit key after it sees exactly one copy of the
+  pending body in the composer, provided no other input has reached the
+  session since the body was written. This condition stays false for that
+  pending body once a person types, even if they restore the same line or it
+  paints late. Terminal reports are not a person's input; a paste identical
+  to a terminal report is treated as a report, as it is elsewhere. Later
+  messages do not change the condition. The
+  recipient reads every waiting message from its inbox. The daemon records
+  the ids covered by the pending body and the ids that arrived later. A
+  pending body clears without submission only after a submitted turn was seen
+  busy and then idle with a positively empty composer, or after the composer
+  has been positively empty and the screen unchanged for 30 seconds from the
+  last input or output. Input, output, resize, prompt, stall or an unknown
+  composer restarts that quiet period. The module must prove emptiness from a
+  blank composer or its known placeholder; a guess based on placeholder ink
+  alone cannot clear a pending body. A composer showing two copies cannot
+  authorise Enter. A refused recovery after other input is audited as
+  `person-input-since`. A programme that holds accepted input unpainted for longer
+  than the quiet period while showing an empty, idle composer can receive the
+  line a second time. The submit check still refuses a composer holding two
+  copies, so the daemon never submits that duplicate; a person can clear it.
+  An abort records the last failed guard, without recording the line itself.
 - **The daemon names the sender.** A daemon-started session sends under the
   identity the daemon gave it at start, proved by a per-session secret in that
   session's environment, not by a name the caller chooses. A client outside

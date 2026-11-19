@@ -55,6 +55,7 @@ version may change behaviour, and every such change is listed here.
 ### Fixed
 
 - Nudge idle Grok sessions with a square composer frame after a turn or on the welcome screen, while keeping typed drafts and incomplete footers unready.
+- Never type an unconfirmed message nudge twice: a line that could not be confirmed stays pending, is submitted with the submit key alone once the composer shows it exactly once, and is left for the person if they have typed since. The audit records why a nudge was not submitted.
 - Let a message wait name its sender by name: a wait for `from` set to a name never returned before.
 - Nudge an idle Claude Code session that shows a suggested next prompt in its composer.
 - Nudge an idle Claude Code session whose padded composer rows are marked as wraps, and an idle Muse Code session showing one of its rotating grey tips.
