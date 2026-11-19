@@ -40,14 +40,20 @@ export function assessDeliveredCadence(cadence: DeliveredCadence) {
   const changes = deliveredChanges(cadence);
   const between = (start: number, end: number) => changes.filter(change => change.time >= start && change.time < end);
   const runs: { edge: string; start: number; end: number }[] = [];
+  let currentRun: typeof runs[number] | undefined;
   for (const leg of cadence.legs) {
     const edge = leg.top ? 'top' : leg.bottom ? 'bottom' : null;
-    if (!edge) continue;
-    const previous = runs.at(-1);
-    if (previous?.edge === edge && Math.abs(previous.end - leg.start) < 1) previous.end = leg.end;
-    else runs.push({ edge, start: leg.start, end: leg.end });
+    if (!edge) {
+      currentRun = undefined;
+    } else if (currentRun?.edge === edge && Math.abs(currentRun.end - leg.start) < 1) {
+      currentRun.end = leg.end;
+    } else {
+      currentRun = { edge, start: leg.start, end: leg.end };
+      runs.push(currentRun);
+    }
   }
   const rectangleRests = runs.filter(run => run.end - run.start >= 1000);
+  const restEnds = new Set(rectangleRests.map(run => run.end));
   const restChange = (change: typeof changes[number]) => rectangleRests.some(run =>
     change.time >= run.start && change.time < run.end && change.side !== run.edge);
   const evidenceStart = (time: number, start: number) => Math.max(start,
@@ -68,6 +74,12 @@ export function assessDeliveredCadence(cadence: DeliveredCadence) {
     const leg = cadence.legs[change.leg];
     return leg && leg.end - leg.start < 1000 && !restChange(change);
   });
+  for (const change of repaintChanges) {
+    const start = evidenceStart(change.time, historyStart);
+    if (start > historyStart && change.time - start < 1200) {
+      violations.push({ rule: 'fresh startup evidence after a rectangle rest', start, change });
+    }
+  }
   for (let i = 1; i < repaintChanges.length; i++) {
     const current = repaintChanges[i]!, previous = repaintChanges[i - 1]!;
     // Observation brackets bound actual changes, without a timing allowance.
@@ -151,6 +163,12 @@ export function assessDeliveredCadence(cadence: DeliveredCadence) {
   };
   let shortLegs: DeliveredCadence['legs'] = [];
   for (const leg of cadence.legs) {
+    if (restEnds.has(leg.start)) {
+      // A row change within the same rectangle does not end the rest.
+      inspectRepaint(shortLegs);
+      shortLegs = [];
+      retainedSummaries.length = 0;
+    }
     const count = between(leg.start, leg.end).length;
     if (count > 1) violations.push({ rule: 'one change per delivered leg', start: leg.start, changes: count });
     const duration = leg.end - leg.start;
