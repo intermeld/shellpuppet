@@ -49,3 +49,21 @@ describe('clear-edge evidence after a rest', () => {
     expect(result.repaints.at(-1)?.start).toBe(1300);
   });
 });
+
+describe('repaint spacing on uncovered rows', () => {
+  // The recorded changing word held row 9 for 1112.5 ms. Its move to
+  // the bottom at 14503 ms left the cursor clear on that neutral row.
+  const visits: Visit[] = [[8, 13502.3], [9, 14384.5], [10, 15497], [11, 16381.3],
+    [12, 17310.5], [0, 18234.5], [22, 18424.5]];
+  const move: Observation[] = [[14384.5, 'top'], [14503, 'bottom']];
+
+  it('allows the recorded repaint to keep its edge through the next clear-edge deadline', () => {
+    expect(assess(visits, 19376.8, [...move, [19037.6, 'bottom']]).violations).toEqual([]);
+  });
+
+  it('rejects a second repaint during the ten seconds spent on the uncovered row', () => {
+    expect(assess(visits, 19376.8, [...move, [19037.6, 'top']]).violations).toMatchObject([
+      { rule: 'one repaint change per ten seconds', previous: { time: 14503 }, current: { time: 19037.6 } },
+    ]);
+  });
+});
