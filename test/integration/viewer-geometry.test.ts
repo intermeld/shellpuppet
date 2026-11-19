@@ -352,72 +352,40 @@ describe('geometry in the browser (design §5)', () => {
     }
     const id = await paintedSession(false);
 
-    // Page one finishes only once its size label gains "(following)": that
-    // is, only once the daemon has told it that it no longer drives.
-    const driverLost = captureViewer({
-      browser,
-      viewerUrl: await freshViewerUrl(id),
-      width: 1100,
-      height: 700,
-      drive: true,
-      timeoutMs: 120_000,
-      probe: `(() => {
-        const size = document.getElementById('size').textContent;
-        if (!size || !size.includes('(following)')) return null;
-        ${settlePrelude('__driverLost', 'size', 1000)}
-        return size;
-      })()`,
-    });
-
-    // Let page one connect and take the grid first.
-    await new Promise((resolve) => setTimeout(resolve, 6_000));
-
-    // Page two: a very narrow viewport. It adopts ("(following)"), then its
-    // window is resized, a deliberate act, which must hand control over.
-    const narrowActs = captureViewer({
-      browser,
-      viewerUrl: await freshViewerUrl(id),
-      width: 380,
-      height: 640,
-      drive: true,
-      timeoutMs: 120_000,
-      probe: `(() => {
-        const size = document.getElementById('size').textContent;
-        if (!size) return null;
-        const m = (window.__act = window.__act || {phase: 0, last: undefined, since: 0});
-        const now = Date.now();
-        if (m.last !== size) { m.last = size; m.since = now; }
-        if (now - m.since < 1000) return null;
-        if (m.phase === 0) {
-          // Adopted, and stable: now act. The debounce in the page's resize
-          // listener is what a real window resize goes through.
-          if (!size.includes('(following)')) return null;
-          m.phase = 1;
-          m.last = '';
-          m.since = now;
-          window.dispatchEvent(new Event('resize'));
-          return null;
-        }
-        // Acted: the answer must take the "(following)" away and give a grid
-        // of this page's own shape.
-        if (size.includes('(following)')) return null;
-        const parts = size.split(String.fromCharCode(215));
-        return JSON.stringify({cols: parseInt(parts[0], 10), rows: parseInt(parts[1], 10)});
-      })()`,
-    });
-
-    const [driver, narrow] = await Promise.all([driverLost, narrowActs]);
-    const took = JSON.parse(String(narrow.probe)) as { cols: number; rows: number };
-
-    // The narrow page ended up driving a grid narrower than the one it adopted.
-    expect(took.cols).toBeLessThan(100);
-    // The daemon agreed: the session now runs at the narrow page's grid.
-    const after = await api(td.port, td.token, `/sessions/${id}/snapshot`);
-    expect(after.body['cols']).toBe(took.cols);
-    expect(after.body['rows']).toBe(took.rows);
-    // And the old driver was told, out loud, that it now follows.
-    expect(String(driver.probe)).toContain('(following)');
-    expect(String(driver.probe)).toContain(`${String(took.cols)}×${String(took.rows)}`);
-    await api(td.port, td.token, `/sessions/${id}`, { method: 'DELETE' });
+    const size = "document.getElementById('size')?.textContent";
+    const chromium = browser;
+    try {
+      await captureViewer({
+        browser: chromium, viewerUrl: await freshViewerUrl(id), width: 1100, height: 700,
+        drive: true, probeOnly: true, timeoutMs: 120_000,
+        // The session starts at 100 columns. Wait for the wide page's own fit
+        // to be acknowledged before another document can become its driver.
+        probe: `(() => { const label = ${size}; return /^[0-9]+×[0-9]+$/.test(label) && parseInt(label, 10) !== 100; })()`,
+        interact: async ({ evaluate: first }) => {
+          const wide = String(await first(size));
+          await captureViewer({
+            browser: chromium, viewerUrl: await freshViewerUrl(id), width: 380, height: 640,
+            drive: true, probeOnly: true, timeoutMs: 120_000,
+            probe: `${size} === ${JSON.stringify(wide + ' (following)')}`,
+            interact: async ({ evaluate: second }) => {
+              await second("window.dispatchEvent(new Event('resize'))");
+              let owned = '';
+              await eventually(async () => {
+                owned = String(await second(size));
+                return /^\d+×\d+$/.test(owned);
+              }, 30_000, 50, 'narrow viewer to own the grid', () => owned);
+              await eventually(async () => await first(size) === owned + ' (following)',
+                30_000, 50, 'first viewer to follow the narrow grid', () => first(size));
+              const [cols, rows] = owned.split('×').map(Number);
+              expect(cols).toBeLessThan(100);
+              const after = await api(td.port, td.token, `/sessions/${id}/snapshot`);
+              expect(after.body).toMatchObject({ cols, rows });
+            },
+          });
+        },
+      });
+    } finally {
+      await api(td.port, td.token, `/sessions/${id}`, { method: 'DELETE' });
+    }
   }, 300_000);
 });
