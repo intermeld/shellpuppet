@@ -158,12 +158,45 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
         await evaluate(deliveredNoticeScript);
         await evaluate('window.__delivered = observeDeliveredNotice(__notice.term, __notice.notices, performance.now(), 0)');
         await input('r');
-        const cadence = await evaluate(`(async () => { await __pause(${kind === 'rlong' ? 45500 : 24500}); return __delivered.stop(); })()`) as DeliveredCadence;
+        // Row 8 starts the neutral section of each word. The fourth arrival in
+        // the long word closes the fourth top rest. The third in the rest word
+        // follows the extra held prompt and the repaint that resumes after it.
+        const neutralVisits = kind === 'rlong' ? 4 : 3;
+        const cadence = await evaluate(kind === 'rchange'
+          ? '(async () => { await __pause(24500); return __delivered.stop(); })()'
+          : `(async () => {
+              const start = performance.now();
+              while (__delivered.peek().legs.filter(leg => leg.row === 8).length < ${String(neutralVisits)} &&
+                     performance.now() - start < 60000) await __pause(100);
+              return __delivered.stop();
+            })()`) as DeliveredCadence;
         const assessment = assessDeliveredCadence(cadence);
         recordDeliveredCadence(`${mode}-24-${kind}`, cadence);
-        const details = JSON.stringify({ ...assessment, timing: await evaluate('__noticeFrameSummary(0)') });
-        expect.soft(cadence.legs.length, details).toBeGreaterThan(20);
-        expect.soft(assessment.violations, details).toEqual([]);
+        const details = JSON.stringify({ ...assessment, timing: await evaluate(`__noticeFrameSummary(${String(cadence.epoch)})`) });
+        expect(assessment.violations, details).toEqual([]);
+        if (kind === 'rchange') {
+          expect(cadence.legs.length, details).toBeGreaterThan(20);
+          return;
+        }
+        if (cadence.legs.filter(leg => leg.row === 8).length < neutralVisits) {
+          throw new Error(`runner stalled before the final neutral visit: ${details}`);
+        }
+        // A completed frame and a later observation during the same stay make
+        // its placement testable under the delivered-cadence rules.
+        const rests = (assessment.rests as { edge: string; start: number; end: number; deadline?: number }[])
+          .filter(({ deadline, end }) => deadline !== undefined && cadence.samples.some(sample =>
+            sample.time > deadline && sample.time < end));
+        if (kind === 'rlong') {
+          if (rests.filter(rest => rest.edge === 'top').length < 4 || rests.filter(rest => rest.edge === 'bottom').length < 3) {
+            throw new Error(`runner stalled before the alternating rectangle rests were observed: ${details}`);
+          }
+        } else {
+          const hold = cadence.legs.find((leg, i, legs) =>
+            leg.row === 22 && legs[i - 1]?.row === 12 && legs[i + 1]?.row === 0);
+          if (!hold || !rests.some(rest => rest.edge === 'bottom' && rest.start === hold.start && rest.end === hold.end)) {
+            throw new Error(`runner stalled before the inserted lower rest and return were observed: ${details}`);
+          }
+        }
       }, kind);
     }, 120_000);
   }
