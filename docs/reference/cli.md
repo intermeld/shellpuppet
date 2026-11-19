@@ -1,5 +1,13 @@
 # CLI reference
 
+`type <id> <text> --enter` writes a single line of text, pauses for the agent's
+submit delay, then sends Enter separately on the same input queue. A readable
+composer still showing exactly that line receives one further Enter. The result
+says when this retry happened; if the line remains, JSON reports
+`submitted: false` and plain text mode exits with an error. The text is never
+typed twice. `--verify` checks for visible text, which may have cleared after
+submission.
+
 ## Session messages
 
 `shellpuppet msg send <to> <text|->` sends a message; `-` reads the text from

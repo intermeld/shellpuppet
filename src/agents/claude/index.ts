@@ -2,9 +2,11 @@ import { readiness as nudgeReadiness } from './nudge.js';
 import { prompts } from './prompts.js';
 import type { AgentModule } from '../types.js';
 import { reading } from './reading.js';
+import { submittingText } from '../input.js';
 
 export const claude: AgentModule = {
   name: reading.name, programs: reading.programs, reading, prompts,
+  input: { submit: { key: '\r', delayMs: 150, matches: submittingText } },
   readiness: { readyText: ['? for shortcuts', 'shift+tab'] },
   nudge: { readiness: nudgeReadiness },
   env: {

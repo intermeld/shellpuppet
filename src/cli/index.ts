@@ -90,8 +90,9 @@ Usage:
       reasoning. --hide-reasoning is accepted but changes nothing: result
       always leaves reasoning out. Exits 3, with the reason on stderr, while
       the agent is still working or when no answer is recognised.
-  shellpuppet type <id> <text> [--enter] [--verify] Type text (--verify re-reads the screen,
-                                                    for up to 15 s on long text)
+  shellpuppet type <id> <text> [--enter] [--verify] Type text; --enter sends the text,
+                                                    pauses, then sends Enter separately.
+                                                    --verify re-reads the screen.
   shellpuppet key <id> <name>                       Press a key (enter, escape, ctrl+c, f1…)
   shellpuppet wait <id> [--text <s>|--regex <r>|--quiet <ms>|--prompt|--stalled]
                         [--timeout <ms>] [--debounce <ms>] [--match-after-input true|false]
@@ -589,6 +590,12 @@ async function main(): Promise<void> {
         ...(parsed.flags.get('verify') === true ? { verify: true } : {}),
       });
       if (wantJson) printJson(result);
+      else if (result['submitted'] === false) {
+        console.log(String(result['message']));
+        process.exit(1);
+      } else if (result['submitRetried'] === true) {
+        console.log(`typed ${String(result['bytes'])} bytes. ${String(result['message'])}`);
+      }
       else if (result['verified'] === false) {
         console.log(
           'typed, but the text did NOT appear on screen. The app may still be ' +
@@ -604,7 +611,8 @@ async function main(): Promise<void> {
         // same line as an unverified type.
         console.log(
           `typed ${String(result['bytes'])} bytes` +
-            (result['verified'] === true ? ' (verified on screen).' : '.'),
+            (result['verified'] === true ? ' (verified on screen).' : '.') +
+            (typeof result['message'] === 'string' ? ` ${result['message']}` : ''),
         );
       }
       break;

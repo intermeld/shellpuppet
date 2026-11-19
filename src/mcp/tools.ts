@@ -516,7 +516,9 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
     {
       title: 'Type text into the session',
       description:
-        'Type text into the PTY (optionally submitting with Enter). Set verify:true to confirm ' +
+        'Type text into the PTY. With submit:true, send text and Enter separately after the ' +
+        'agent\'s submit pause. If the same text remains in a readable composer, one Enter ' +
+        'retry is reported; submitted:false means it still remains. Set verify:true to confirm ' +
         'the text actually appeared on screen: TUIs silently swallow input while loading MCP ' +
         'servers and when a suggestion panel has stolen focus. Verify waits longer for longer ' +
         'text (up to 15 s), since some TUIs draw a long line seconds after it arrives. ' +
@@ -539,6 +541,13 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
           data: submit === true ? `${typed}\r` : typed,
           ...(verify === true ? { verify: true } : {}),
         });
+        if (payload['submitted'] === false) {
+          return text(withWarnings(warnings, String(payload['message'])), true);
+        }
+        if (payload['submitRetried'] === true) {
+          return text(withWarnings(warnings,
+            `Typed ${String(payload['bytes'])} bytes. ${String(payload['message'])}`));
+        }
         if (payload['verified'] === false) {
           return text(
             withWarnings(
@@ -560,7 +569,8 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
           withWarnings(
             warnings,
             `Typed ${String(payload['bytes'])} bytes` +
-              (payload['verified'] === true ? ' (verified on screen).' : '.'),
+              (payload['verified'] === true ? ' (verified on screen).' : '.') +
+              (typeof payload['message'] === 'string' ? ` ${payload['message']}` : ''),
           ),
         );
       }),

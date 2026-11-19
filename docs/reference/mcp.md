@@ -1,5 +1,13 @@
 # MCP reference
 
+`terminal_type` with `submit: true` sends a single line, waits for the agent's
+submit delay, then sends Enter separately on the same input queue. A readable
+composer still showing exactly that line gets one further Enter. The result
+reports `submitRetried: true` when this happens, or `submitted: false` with an
+error if the line remains. It never retypes the line. If the composer cannot
+be read, the result only says that the submit key was sent. `verify` checks
+for visible text, which may already have cleared on submission.
+
 ## Session messages
 
 Messaging starts off. The `session_*` tools below are offered only by an MCP
