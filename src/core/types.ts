@@ -109,6 +109,8 @@ export interface SessionOptions {
   env?: Record<string, string>;
   /** The verified caller session, when a session starts another session. */
   parent?: string;
+  /** Set internally from a launch profile, never from a client request. */
+  role?: 'chair' | 'delegate';
 }
 
 /** One session's public state, as returned by `terminal_list`. */
@@ -117,6 +119,7 @@ export interface SessionSummary {
   name?: string;
   id: string;
   label: string;
+  role?: 'chair' | 'delegate';
   /** What the session is for; empty when the caller did not say. */
   purpose: string;
   /** The audit actor that started it, e.g. `mcp:claude-code`, `cli`. */

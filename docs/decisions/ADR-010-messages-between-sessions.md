@@ -4,6 +4,16 @@
 **Date:** 2026-11-15
 **Proposed by:** Red Eagle Tech (product owner)
 
+**Amended:** 19 November 2026. Sessions join messaging groups only by a role
+from a launch profile a person started, never by name. Named group members
+are outside claims only. Messaging rules decide which participants the daemon
+will carry messages between. They are not a security boundary against a local
+process holding the daemon token: that process can already drive every session.
+Our clients refuse to claim when they know they run inside a session, and the
+daemon refuses claims presenting a session identity or the inside-session
+mark. A request presenting neither is treated as an outside claim. Member
+claims are audited.
+
 ## Context
 
 People run several agents at once, and some of those agents coordinate the
@@ -51,7 +61,7 @@ do it differently, and some offer none.
 - **A message carries at most its sender's authority.** It is never the
   user's approval, and it cannot answer a prompt that is waiting for a human.
   Who may message whom is set by the user in configuration, for example a
-  parent and its own children, or a named group of sessions. Messaging is off
+  parent and its own children, or a group of sessions and outside claims. Messaging is off
   until the user switches it on.
 - **Everything stays on the machine and in view.** Messages pass only through
   the local daemon. The dashboard has a view of every message between

@@ -18,6 +18,7 @@
   const messagesEmpty = document.getElementById('messages-empty');
   const shareCount = document.getElementById('share-count');
   const profileSelect = document.getElementById('profile');
+  const sessionName = document.getElementById('session-name');
   const folderField = document.getElementById('folder-field');
   const folderSelect = document.getElementById('folder');
   const folderFilter = document.getElementById('folder-filter');
@@ -54,11 +55,12 @@
     return unreadCounts[id] ?? 0;
   }
   function renderMessages() {
+    const participantLabel = (participant) => `${participant.name}${participant.kind === 'claim' || participant.id.startsWith('claim_') ? ' (outside claim)' : ''}`;
     const options = [{ value: '', label: 'All' }];
     const participants = new Map();
     for (const entry of messageEntries) {
-      participants.set(entry.from.id, entry.from.name);
-      participants.set(entry.to.id, entry.to.name);
+      participants.set(entry.from.id, participantLabel(entry.from));
+      participants.set(entry.to.id, participantLabel(entry.to));
     }
     for (const [id, name] of [...participants].sort((a, b) => a[1].localeCompare(b[1])))
       options.push({ value: `session:${id}`, label: `${name} (${id})` });
@@ -86,7 +88,8 @@
         return entry.from.id === id || entry.to.id === id;
       }
       const group = messageGroups.find((item) => item.group === messageFilter.slice(6));
-      return group?.members.includes(entry.from.name) || group?.members.includes(entry.to.name);
+      return group?.members.includes(entry.from.name) || group?.members.includes(entry.to.name) ||
+        group?.roles?.includes(entry.from.role) || group?.roles?.includes(panes.get(entry.to.id)?.summary.role);
     }).sort((a, b) => b.time - a.time || b.id.localeCompare(a.id));
     messagesOff.hidden = messagingEnabled;
     messagesEmpty.hidden = !messagingEnabled || filtered.length > 0;
@@ -99,7 +102,7 @@
       row.className = 'message-row';
       row.dataset.messageId = entry.id;
       row.setAttribute('aria-current', String(entry.id === messageSelection));
-      row.textContent = `${entry.from.name} → ${entry.to.name} · ${new Date(entry.time).toLocaleString()} · ${entry.id} · ${entry.state}`;
+      row.textContent = `${participantLabel(entry.from)} → ${participantLabel(entry.to)} · ${new Date(entry.time).toLocaleString()} · ${entry.id} · ${entry.state}`;
       row.addEventListener('click', () => { messageSelection = entry.id; renderMessages(); });
       const listItem = document.createElement('li');
       listItem.append(row);
@@ -182,6 +185,7 @@
   const LAUNCH_PREF = 'shellpuppet.dashboard.launches';
   const RECENT_PREF = 'shellpuppet.dashboard.recentFolders';
   const NAME = /^[a-z][a-z0-9-]{0,31}$/;
+  const SESSION_NAME = /^[A-Za-z0-9._-]{1,40}$/;
   let saved = {};
   try { saved = JSON.parse(window.localStorage.getItem(PREF) || '{}') || {}; } catch { /* Preferences are optional. */ }
   let order = Array.isArray(saved.order) ? saved.order.filter((id) => typeof id === 'string') : [];
@@ -612,9 +616,10 @@
     } catch { screenState = 'unavailable'; renderScreens(); }
   }
 
-  function rememberLaunch(id, profile, folder, rootIndex, chosenPath, recentPath) {
+  function rememberLaunch(id, profile, name, folder, rootIndex, chosenPath, recentPath) {
     if (typeof id !== 'string' || !NAME.test(profile)) return;
     const entry = { profile };
+    if (typeof name === 'string' && SESSION_NAME.test(name)) entry.name = name;
     if (typeof folder === 'string' && folder !== '') entry.folder = folder;
     if (Number.isInteger(rootIndex) && rootIndex >= 0) entry.rootIndex = rootIndex;
     if (typeof chosenPath === 'string' && chosenPath !== '') entry.folderPath = chosenPath;
@@ -631,6 +636,7 @@
   function launchBody(entry) {
     if (!entry || typeof entry.profile !== 'string') return null;
     const body = { profile: entry.profile };
+    if (typeof entry.name === 'string' && SESSION_NAME.test(entry.name)) body.name = entry.name;
     if (typeof entry.folder === 'string' && entry.folder !== '') body.folder = entry.folder;
     if (Number.isInteger(entry.rootIndex) && entry.rootIndex >= 0) body.rootIndex = entry.rootIndex;
     if (typeof entry.folderPath === 'string' && entry.folderPath !== '') body.folderPath = entry.folderPath;
@@ -649,6 +655,8 @@
     label.className = 'pane-label';
     const purpose = document.createElement('span');
     purpose.className = 'pane-purpose hint';
+    const role = document.createElement('span');
+    role.className = 'pane-role hint';
     const badge = document.createElement('span');
     badge.className = 'badge';
     const messageCount = makeButton('', () => openMessages(`session:${item.id}`));
@@ -665,7 +673,39 @@
     overflowNote.className = 'pane-overflow-note';
     overflowNote.textContent = 'Shift+wheel or drag the scrollbars to see the rest. Enlarge or Fit to show it whole.';
     overflowNote.hidden = true;
-    const item = { id: summary.id, summary, card, label, purpose, badge, messageCount, state, size, overflowNote, client: null, previousGrid: null };
+    const item = { id: summary.id, summary, card, label, purpose, role, badge, messageCount, state, size, overflowNote, client: null, previousGrid: null };
+    const renameForm = document.createElement('form');
+    renameForm.className = 'pane-rename';
+    renameForm.hidden = true;
+    const renameInput = document.createElement('input');
+    renameInput.type = 'text';
+    renameInput.maxLength = 40;
+    renameInput.setAttribute('aria-label', 'New session name');
+    const renameSave = document.createElement('button');
+    renameSave.type = 'submit';
+    renameSave.textContent = 'Save';
+    const renameCancel = makeButton('Cancel rename', () => { renameForm.hidden = true; });
+    renameForm.append(renameInput, renameSave, renameCancel);
+    renameForm.addEventListener('click', (event) => event.stopPropagation());
+    renameForm.addEventListener('submit', async (event) => {
+      event.preventDefault();
+      try {
+        const response = await fetch(`/dashboard/sessions/${encodeURIComponent(item.id)}/rename`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', 'x-shellpuppet-csrf': proof },
+          body: JSON.stringify({ name: renameInput.value }),
+        });
+        const result = await response.json();
+        if (!response.ok) { showError(result.error || 'The session could not be renamed.'); return; }
+        renameForm.hidden = true;
+      } catch { showError('The session could not be renamed.'); }
+    });
+    item.rename = makeButton('Rename', () => {
+      renameInput.value = item.summary.name || item.summary.label || item.id;
+      renameForm.hidden = false;
+      renameInput.focus();
+      renameInput.select();
+    });
     item.fit = makeButton('Fit', () => { select(item.id); item.client?.fitGrid(); });
     item.enlarge = makeButton('Enlarge', () => {
       select(item.id);
@@ -708,7 +748,7 @@
     item.dismiss.dataset.action = 'dismiss';
     menu.append(item.kill, item.copy, item.pop, item.restart, item.dismiss);
     item.menu = menu;
-    head.append(label, purpose, badge, messageCount, state, space, size, item.fit, item.enlarge,
+    head.append(label, renameForm, purpose, role, badge, messageCount, state, space, size, item.rename, item.fit, item.enlarge,
       item.pin, item.left, item.right, item.menuButton);
     head.addEventListener('dblclick', (event) => {
       if (!event.target.closest('button')) item.enlarge.click();
@@ -747,6 +787,7 @@
     const summary = item.summary;
     item.label.textContent = summary.label || summary.id;
     item.purpose.textContent = summary.purpose || '';
+    item.role.textContent = summary.role === 'chair' ? 'Chair' : 'Delegate';
     item.badge.textContent = summary.stalled ? '● Stalled' : attention(item) ? '● Waiting' : '';
     item.badge.title = summary.stalled
       ? `${summary.stalled.reason} since ${summary.stalled.since}: ${summary.stalled.description}` : '';
@@ -1210,7 +1251,11 @@
       }
     } else if (frame.type === 'session-updated' && frame.session?.id) {
       const item = panes.get(frame.session.id);
-      if (item) { item.summary = frame.session; updateAttention(); }
+      if (item) {
+        item.summary = frame.session;
+        updateAttention();
+        if (!messagesView.hidden && (frame.changed?.includes('label') || frame.changed?.includes('name'))) renderMessages();
+      }
     } else if (frame.type === 'session-removed' && typeof frame.session === 'string') {
       dismissed.delete(frame.session);
       dropLaunch(frame.session);
@@ -1361,7 +1406,7 @@
     const profile = profiles.find((item) => item?.name === body.profile);
     const root = profile?.anyFolder && body.rootIndex !== undefined
       ? profile.rootFolders?.find((item) => item.rootIndex === body.rootIndex && item.name === body.folder) : null;
-    rememberLaunch(payload.id, body.profile, body.folder, body.rootIndex, body.folderPath, root?.path);
+    rememberLaunch(payload.id, body.profile, body.name, body.folder, body.rootIndex, body.folderPath, root?.path);
     const item = panes.get(payload.id);
     if (item) updateCard(item);
     applyOpen(payload.id, payload.open);
@@ -1433,6 +1478,7 @@
     launcher.hidden = !loaded;
     watchOnly.hidden = loaded;
     renderFolders();
+    sessionName.value = selectedProfile()?.name || '';
   }
 
   async function loadProfiles() {
@@ -1459,7 +1505,7 @@
   function startSelected() {
     const profile = selectedProfile();
     if (profile === null) return;
-    const body = { profile: profile.name };
+    const body = { profile: profile.name, name: sessionName.value };
     if (profile.folderRequired) {
       if (profile.anyFolder) {
         if (folderPath.value === '') { showError('Choose a folder.'); return; }
@@ -1639,7 +1685,7 @@
     const waiting = shown().find((item) => attention(item) && item.id !== selected) || shown().find(attention);
     if (waiting) select(waiting.id);
   });
-  profileSelect.addEventListener('change', renderFolders);
+  profileSelect.addEventListener('change', () => { sessionName.value = selectedProfile()?.name || ''; renderFolders(); });
   folderFilter.addEventListener('input', renderFolders);
   folderFilter.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); startSelected(); } });
   folderPath.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); startSelected(); } });

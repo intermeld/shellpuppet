@@ -77,3 +77,6 @@ select { font: inherit; color: #d7e3ee; background: #1c2633; border: 1px solid #
 .pane-state:empty { display: none; }
 .xterm-viewport { overflow-y: auto !important; }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; animation: none !important; } }
+.pane-rename[hidden] { display: none; }
+.pane-rename { display: inline-flex; gap: .25rem; align-items: center; }
+.pane-rename input { width: 10rem; }

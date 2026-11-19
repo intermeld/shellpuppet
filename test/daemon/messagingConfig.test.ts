@@ -8,8 +8,8 @@ import { buildMessagingPolicy, parseDaemonConfig } from '../../src/daemon/config
 import type { MessagingConfig } from '../../src/daemon/config.js';
 import type { MessagingPolicy, ParticipantRef } from '../../src/core/mailbox.js';
 
-function session(id: string, name: string): ParticipantRef {
-  return { kind: 'session', id, name };
+function session(id: string, name: string, role: 'chair' | 'delegate' = 'delegate'): ParticipantRef {
+  return { kind: 'session', id, name, role };
 }
 
 function claim(id: string, name: string): ParticipantRef {
@@ -26,7 +26,7 @@ const relations = {
 describe('parseDaemonConfig: the messaging section', () => {
   it('warns when messaging is enabled without allow rules', () => {
     const result = parseDaemonConfig({ messaging: { enabled: true } });
-    expect(result.config.messaging).toEqual({ enabled: true, allow: [], nudgeIntervalMs: 30_000, nudgesPerMinute: 20 });
+    expect(result.config.messaging).toEqual({ enabled: true, allow: [], nudgeIntervalMs: 30_000, nudgesPerMinute: 20, claimIdleMinutes: 30 });
     expect(result.problems.join(' ')).toContain('without allow rules');
   });
 
@@ -61,13 +61,14 @@ describe('parseDaemonConfig: the messaging section', () => {
       allow: ['parent-child', { group: 'chairs', members: ['cdr', 'coding-plan', 'shellpuppet-chair'] }],
       nudgeIntervalMs: 30_000,
       nudgesPerMinute: 20,
+      claimIdleMinutes: 30,
     });
   });
 
   it('enabled is false when the key is missing: off until it is switched on', () => {
     const { config, problems } = parseDaemonConfig({ messaging: { allow: ['parent-child'] } });
     expect(problems).toEqual([]);
-    expect(config.messaging).toEqual({ enabled: false, allow: ['parent-child'], nudgeIntervalMs: 30_000, nudgesPerMinute: 20 });
+    expect(config.messaging).toEqual({ enabled: false, allow: ['parent-child'], nudgeIntervalMs: 30_000, nudgesPerMinute: 20, claimIdleMinutes: 30 });
   });
 
   it('accepts nudge limits and reports invalid values', () => {
@@ -176,29 +177,30 @@ describe('buildMessagingPolicy', () => {
 
   describe('a group', () => {
     const policy: MessagingPolicy = buildMessagingPolicy(
-      { enabled: true, allow: [{ group: 'chairs', members: ['cdr', 'coding-plan', 'shellpuppet-chair'] }] },
+      { enabled: true, allow: [{ group: 'chairs', members: ['shellpuppet-chair'], roles: ['chair'] }] },
       relations,
     );
 
-    it('allows every pair of members, by name', () => {
-      expect(policy(session('s5', 'cdr'), session('s6', 'coding-plan'))).toBe(true);
-      expect(policy(session('s6', 'coding-plan'), session('s5', 'cdr'))).toBe(true);
-      expect(policy(claim('c1', 'shellpuppet-chair'), session('s5', 'cdr'))).toBe(true);
+    it('allows chair sessions and named outside claims', () => {
+      expect(policy(session('s5', 'cdr', 'chair'), session('s6', 'coding-plan', 'chair'))).toBe(true);
+      expect(policy(session('s6', 'coding-plan', 'chair'), session('s5', 'cdr', 'chair'))).toBe(true);
+      expect(policy(claim('c1', 'shellpuppet-chair'), session('s5', 'cdr', 'chair'))).toBe(true);
     });
 
-    it('refuses everyone else, by name', () => {
-      expect(policy(session('s5', 'cdr'), session('s7', 'ops'))).toBe(false);
+    it('refuses delegates even when their names match an outside member', () => {
+      expect(policy(session('s5', 'shellpuppet-chair'), session('s6', 'coding-plan', 'chair'))).toBe(false);
+      expect(policy(session('s5', 'cdr', 'chair'), session('s7', 'ops'))).toBe(false);
       expect(policy(session('s7', 'ops'), session('s8', 'other'))).toBe(false);
     });
   });
 
   it('rules combine: either one is enough', () => {
     const policy = buildMessagingPolicy(
-      { enabled: true, allow: ['parent-child', { group: 'chairs', members: ['cdr', 'ops'] }] },
+      { enabled: true, allow: ['parent-child', { group: 'chairs', members: ['ops'], roles: ['chair'] }] },
       relations,
     );
     expect(policy(session('s1', 'chair'), session('s2', 'helper'))).toBe(true);
-    expect(policy(session('s5', 'cdr'), session('s7', 'ops'))).toBe(true);
-    expect(policy(session('s5', 'cdr'), session('s2', 'helper'))).toBe(false);
+    expect(policy(session('s5', 'cdr', 'chair'), claim('c1', 'ops'))).toBe(true);
+    expect(policy(session('s5', 'cdr'), claim('c1', 'ops'))).toBe(false);
   });
 });

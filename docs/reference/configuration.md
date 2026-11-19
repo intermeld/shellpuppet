@@ -12,19 +12,28 @@ For a session to speak with sessions it started, in either direction:
 { "messaging": { "enabled": true, "allow": ["parent-child"] } }
 ```
 
-For named chairs, including an outside client holding a claim:
+For chair-role sessions and an outside client holding a claim:
 
 ```json
 { "messaging": { "enabled": true, "allow": [
-  { "group": "chairs", "members": ["planner", "builder", "checker"] }
+  { "group": "chairs", "roles": ["chair"], "members": ["outside-chair"] }
 ] } }
 ```
 
-A session uses its label as its messaging name when it is a plain unique name
-of at most 40 letters, digits, dots, underscores or hyphens. Otherwise its
-session id is the name. The first live participant to hold a name keeps it
-until it ends or releases its claim. Names shaped like session ids (`s` followed
-by digits) are reserved for the session with that id.
+A session started through `POST /sessions` uses its label as its messaging
+name only if it has 1 to 40 ASCII letters, digits, dots, underscores or
+hyphens, is not already held or reserved for an outside claim, and does not
+match `s` followed by digits unless it is that session's own id. Otherwise it
+uses its session id. For `POST /dashboard/launch` without an explicit `name`,
+the daemon tries the expanded profile label if it is a valid name, or the
+profile name if the label is invalid. A configured group member name, or a
+session-id-shaped candidate other than the session's own id, makes the session
+use its id. If a valid, unreserved candidate is already held, the daemon tries
+numbered forms such as `-2` and `-3` within the 40-character limit. The
+dashboard Name box always sends an explicit `name`, which replaces the profile
+label: an invalid or reserved value returns 400 and starts no session, while
+an already-held valid, unreserved name is numbered. Group member names are
+reserved for outside claims. A session name never grants messaging rights.
 
 All configuration lives in one optional file: `~/.shellpuppet/config.json`
 (override the directory with the `SHELLPUPPET_HOME` environment variable).
@@ -122,7 +131,7 @@ Full example, everything optional:
     "nudgesPerMinute": 20,
     "allow": [
       "parent-child",
-      { "group": "chairs", "members": ["cdr", "coding-plan", "shellpuppet-chair"] }
+      { "group": "chairs", "roles": ["chair"], "members": ["outside-chair"] }
     ]
   },
 
@@ -538,6 +547,9 @@ so a daemon restart clears every mailbox.
 `nudgeIntervalMs` is the minimum time between typed nudges to one session
 (default 30,000 milliseconds). `nudgesPerMinute` caps typed nudges across the
 daemon in a rolling minute (default 20). Both must be positive integers.
+`claimIdleMinutes` is the time an outside claim may go without an authenticated
+messaging call (default 30 minutes; a positive number). A pending `msg wait`
+keeps the claim active. On lapse its unread messages become `not-delivered`.
 The daemon checks waiting messages on its existing screen scan. Only an idle
 supported session with an empty composer receives a fixed nudge; other messages
 stay in the inbox. The nudge names the `session_inbox` MCP tool, so a session
@@ -548,18 +560,31 @@ and waiting messages are unchanged, then sends the agent's submit key.
 `allow` says who may message whom, in both directions:
 
 - `"parent-child"`: a session and the sessions it started.
-- A group: every pair of `members`, by participant name.
+- A group: sessions listed by `roles` and outside claims listed by `members`.
+  The only accepted session role in a group is `"chair"`.
 
 Participant names are 1 to 40 characters of letters, digits, dots,
 underscores or hyphens, and unique among live participants. A daemon session
-holds the name the daemon gave it; an outside client holds a name for as long
-as it keeps its claim. Claims may hold configured group member names. Names
-are first come, first served among live participants. An `allow` entry that is neither `"parent-child"` nor
+holds the name the daemon gave it; an outside client holds a name while its
+claim remains active. Group member names are reserved for outside claims, so
+a session name cannot acquire group rights. A member equal to a launch profile
+name is reported as a configuration problem. A session's role is `delegate`
+unless its launch profile sets `"role": "chair"`; a session started by another
+session is always a delegate. An `allow` entry that is neither `"parent-child"` nor
 a group with `group` and `members` is ignored and reported in `daemon.log`;
 a section that cannot be read as written leaves messaging off, reported the
 same way. An enabled section without `allow` allows nobody and reports a
 warning. At most 64 `allow` entries and 64 group members are accepted; group
 labels follow the same pattern as participant names.
+
+Messaging rules decide which participants the daemon carries messages between.
+They are not a security boundary against a local process with the daemon token,
+which can already drive every session. A session's role comes only from a
+launch profile a person started; its name never grants messaging rights.
+Clients that know they run in a session refuse to claim, and the daemon refuses
+claims presenting session identity or the inside-session mark. A request
+presenting neither is treated as an outside claim. Claims of configured member
+names are recorded in the audit with `member: true`.
 
 One message holds at most 16 KiB of UTF-8 text. One recipient holds at most
 200 messages and 1 MiB of text: a send that would pass those first drops
@@ -614,6 +639,7 @@ Each entry has these keys. Unknown keys refuse that entry.
 | Key | Required | Meaning |
 |---|---|---|
 | `name` | yes | Unique, `^[a-z][a-z0-9-]{0,31}$`. The page names this. |
+| `role` | no | `"chair"` is the only accepted value. Other values are reported and ignored, leaving a delegate. A session started by another session is a delegate even through this profile. |
 | `command` | yes | The real program, not a shell wrapper. A bare name is found on `PATH` only; a relative path with a separator is taken from the profile's working directory. A launch whose command cannot be resolved is refused. |
 | `args` | no | Array of strings, stored literally. |
 | `shell` | no | Boolean. Omitted means the platform default. |
@@ -624,7 +650,7 @@ Each entry has these keys. Unknown keys refuse that entry.
 | `envFromDaemon` | no | An array of variable names copied from the daemon's environment, or `"all"` for its whole environment. |
 | `readyText` | no | A literal substring that marks the session ready. |
 | `readyQuiet` | no | Milliseconds of quiet that mark the session ready. Not with `readyText`. |
-| `label`, `purpose` | no | Non-empty text for the page. Placeholders: `{name}` and `{folder}`. The dashboard's profile list shows the label with the purpose after it in brackets. A session started from the profile takes the expanded label, so `"label": "{name}"` gives the session the profile's name, which is also its messaging name. |
+| `label`, `purpose` | no | Non-empty text for the profile list. Placeholders: `{name}` and `{folder}`. The dashboard Name box starts with the profile name and sets the session label and messaging name. |
 | `policy` | no | `{ "allow": [...], "deny": [...] }` regex lists. No `mode`, no `maxSessions`. |
 | `open` | no | `"grid"` (default), `"focus"` or `"window"`. Returned when the profile starts. |
 

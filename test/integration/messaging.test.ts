@@ -11,7 +11,7 @@ const marker = 'peer-marker-4f0b6a';
 describe('session messaging over a real daemon', () => {
   it('limits claim creation and ignores a stale claim on a new claim request', async () => {
     let now = 100_000;
-    const td = await startTestDaemon({ messaging: { enabled: true, allow: [] }, now: () => now });
+    const td = await startTestDaemon({ messaging: { enabled: true, allow: [], claimIdleMinutes: 120 }, now: () => now });
     try {
       const claims = [];
       for (let i = 0; i < 8; i++) {
@@ -115,6 +115,13 @@ describe('session messaging over a real daemon', () => {
       expect(token).toBeDefined();
       return { id, headers: { 'x-shellpuppet-session': id, 'x-shellpuppet-session-token': token! } };
     };
+    const claimParticipant = async (name: string) => {
+      const response = await api(td.port, td.token, '/messages/claims', { body: { name } });
+      expect(response.status).toBe(201);
+      const id = String(response.body['claimId']);
+      return { id, headers: { 'x-shellpuppet-claim': id,
+        'x-shellpuppet-claim-secret': String(response.body['secret']) } };
+    };
     try {
       const parent = await start('parent');
       socket = new WebSocket(`ws://127.0.0.1:${String(td.port)}/events?token=${td.token}`, {
@@ -126,13 +133,12 @@ describe('session messaging over a real daemon', () => {
       ));
       await new Promise<void>((resolve, reject) => { socket!.once('open', resolve); socket!.once('error', reject); });
       const child = await start('child', parent.headers);
-      const chair1 = await start('chair1');
-      const chair2 = await start('chair2');
+      const chair1 = await claimParticipant('chair1');
+      const chair2 = await claimParticipant('chair2');
       const reserved = await start('s99');
       const list = await api(td.port, td.token, '/sessions');
       expect(list.body['sessions']).toEqual(expect.arrayContaining([
         expect.objectContaining({ id: child.id, parent: parent.id, name: 'child' }),
-        expect.objectContaining({ id: chair1.id, name: 'chair1' }),
         expect.objectContaining({ id: reserved.id, name: reserved.id }),
       ]));
       for (const route of ['/messages/inbox', '/messages/outbox', '/messages/directory',
@@ -190,7 +196,9 @@ describe('session messaging over a real daemon', () => {
         body: { to: 'chair2', text: marker }, headers: claimHeaders,
       });
       expect(fromClaim.status).toBe(201);
-      expect((await api(td.port, td.token, `/sessions/${chair2.id}`, { method: 'DELETE' })).status).toBe(200);
+      expect((await api(td.port, td.token, `/messages/claims/${chair2.id}`, {
+        method: 'DELETE', headers: chair2.headers,
+      })).status).toBe(200);
       expect((await api(td.port, td.token, '/messages/outbox', { headers: claimHeaders })).body['messages'])
         .toEqual(expect.arrayContaining([expect.objectContaining({ id: fromClaim.body['id'], state: 'not-delivered' })]));
       const toClaim = await api(td.port, td.token, '/messages', { body: { to: 'outside', text: marker }, headers: chair1.headers });
@@ -201,7 +209,11 @@ describe('session messaging over a real daemon', () => {
       expect((await api(td.port, td.token, '/messages/outbox', { headers: chair1.headers })).body['messages'])
         .toEqual(expect.arrayContaining([expect.objectContaining({ id: toClaim.body['id'], state: 'not-delivered' })]));
       const cliClaim = await api(td.port, td.token, '/messages/claims', { body: { name: 'outside' } });
-      const cliEnv = { ...process.env, SHELLPUPPET_HOME: td.home,
+      const outsideEnv: NodeJS.ProcessEnv = { ...process.env, SHELLPUPPET_HOME: td.home };
+      delete outsideEnv['SHELLPUPPET_SESSION'];
+      delete outsideEnv['SHELLPUPPET_SESSION_TOKEN'];
+      delete outsideEnv['SHELLPUPPET_DAEMON_INSTANCE'];
+      const cliEnv = { ...outsideEnv,
         SHELLPUPPET_CLAIM: `${String(cliClaim.body['claimId'])}:${String(cliClaim.body['secret'])}` };
       const cli = path.join(repoRoot, 'dist', 'cli', 'index.js');
       const sent = await execFileAsync(process.execPath, [cli, 'msg', 'send', 'chair1', marker], { env: cliEnv });
@@ -226,12 +238,12 @@ describe('session messaging over a real daemon', () => {
       expect(printed.stdout).toContain('\\\\u202e');
       expect(printed.stdout).toContain('\\\\u200b');
       const claimCommand = await execFileAsync(process.execPath, [cli, 'msg', 'claim', 'temporary'], {
-        env: { ...process.env, SHELLPUPPET_HOME: td.home, SHELLPUPPET_CLAIM: '' },
+        env: { ...outsideEnv, SHELLPUPPET_CLAIM: '' },
       });
       const exported = /SHELLPUPPET_CLAIM=(claim_[a-f0-9]{32}:[A-Za-z0-9_-]+)/.exec(claimCommand.stdout)?.[1];
       expect(exported).toBeDefined();
       const released = await execFileAsync(process.execPath, [cli, 'msg', 'release'], {
-        env: { ...process.env, SHELLPUPPET_HOME: td.home, SHELLPUPPET_CLAIM: exported },
+        env: { ...outsideEnv, SHELLPUPPET_CLAIM: exported },
       });
       expect(released.stdout).toContain('released');
       expect(JSON.stringify(audit)).not.toContain(marker);

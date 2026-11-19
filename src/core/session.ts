@@ -684,7 +684,8 @@ export function setSessionEnvValue(env: Record<string, string>, platform: NodeJS
 
 export class Session implements WaitTarget {
   readonly id: string;
-  readonly label: string;
+  label: string;
+  readonly role: 'chair' | 'delegate';
   /** What this session is for, for the human watching it. */
   readonly purpose: string;
   /** The audit actor that started it: set by the daemon, not by the body. */
@@ -795,6 +796,7 @@ export class Session implements WaitTarget {
     this.command = options.command;
     this.args = options.args ?? [];
     this.label = options.label ?? options.command;
+    this.role = options.parent === undefined && options.role === 'chair' ? 'chair' : 'delegate';
     this.purpose = options.purpose ?? '';
     this.startedBy = options.startedBy ?? 'unknown';
     this.parent = options.parent;
@@ -1853,6 +1855,7 @@ export class Session implements WaitTarget {
     return {
       id: this.id,
       label: this.label,
+      role: this.role,
       purpose: this.purpose,
       startedBy: this.startedBy,
       ...(this.parent === undefined ? {} : { parent: this.parent }),

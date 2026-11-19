@@ -1,7 +1,18 @@
-import { describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { framePeerMessage, registerTools } from '../../src/mcp/tools.js';
 import { api, makeTempHome, startTestDaemon } from '../integration/helpers.js';
+
+const sessionEnvNames = ['SHELLPUPPET_SESSION', 'SHELLPUPPET_SESSION_TOKEN', 'SHELLPUPPET_DAEMON_INSTANCE'] as const;
+const savedSessionEnv = sessionEnvNames.map((name) => process.env[name]);
+beforeAll(() => { for (const name of sessionEnvNames) delete process.env[name]; });
+afterAll(() => {
+  sessionEnvNames.forEach((name, index) => {
+    const value = savedSessionEnv[index];
+    if (value === undefined) delete process.env[name];
+    else process.env[name] = value;
+  });
+});
 
 describe('peer message result', () => {
   it('names the sender and frames the text as untrusted peer data', () => {

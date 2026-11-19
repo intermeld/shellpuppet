@@ -132,6 +132,7 @@ export interface LaunchProfilePolicy {
 
 export interface LaunchProfile {
   name: string;
+  role?: 'chair';
   command: string;
   args: string[];
   shell?: boolean;
@@ -175,6 +176,7 @@ const PROFILE_KEYS = new Set([
   'purpose',
   'policy',
   'open',
+  'role',
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -276,7 +278,7 @@ function parseFolders(raw: unknown): { folders: LaunchFolder[] } | { problem: st
 export function parseLaunchProfile(
   raw: unknown,
   knownAgents: ReadonlySet<string>,
-): { profile: LaunchProfile } | { problem: string } {
+): { profile: LaunchProfile; problem?: string } | { problem: string } {
   if (!isRecord(raw)) return { problem: 'the entry must be an object' };
 
   for (const key of Object.keys(raw)) {
@@ -295,6 +297,7 @@ export function parseLaunchProfile(
   if (typeof name !== 'string' || !PROFILE_NAME_PATTERN.test(name)) {
     return { problem: `name must match ${PROFILE_NAME_PATTERN.source}` };
   }
+  const invalidRole = raw['role'] !== undefined && raw['role'] !== 'chair';
 
   const command = raw['command'];
   if (!isNonEmptyString(command)) {
@@ -396,8 +399,10 @@ export function parseLaunchProfile(
   }
 
   return {
+    ...(invalidRole ? { problem: 'role must be "chair": ignoring role' } : {}),
     profile: {
       name,
+      ...(raw['role'] === 'chair' ? { role: 'chair' as const } : {}),
       command,
       args: args ?? [],
       ...(typeof shell === 'boolean' ? { shell } : {}),
@@ -458,11 +463,14 @@ export function parseLauncher(
   const names = new Set<string>();
   for (const [index, entry] of entries.entries()) {
     const parsed = parseLaunchProfile(entry, knownAgents);
-    if ('problem' in parsed) {
+    if (!('profile' in parsed)) {
       problems.push(leftOut(index, entry, parsed.problem));
       continue;
     }
     const profile = parsed.profile;
+    if (parsed.problem !== undefined) {
+      problems.push(`launcher.profiles[${String(index)}] ("${profile.name}"): ${parsed.problem}`);
+    }
     if (names.has(profile.name)) {
       problems.push(
         leftOut(index, entry, `the name "${profile.name}" is already used by an earlier profile`),
