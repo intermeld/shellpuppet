@@ -178,6 +178,26 @@ export const NUDGE_SUBMIT_DELAY_MS = 150;
 /** How long a nudge may wait after that pause for the program to paint its line. */
 export const NUDGE_SUBMIT_WAIT_MS = 2000;
 const NUDGE_SUBMIT_POLL_MS = 50;
+/** Rows at the foot of the screen that hold a composer, its frame and its footer. */
+const COMPOSER_BLOCK_ROWS = 5;
+/** A horizontal rule or frame edge drawn around a composer. */
+const COMPOSER_RULE = /^\s*[─━┌╭└╰][^\n]*[─━]{10,}/u;
+
+/**
+ * The composer block: from the rule or frame edge above the composer to the
+ * foot of the screen. Agents draw a rule (or frame edge) above and below their
+ * composer, so the block starts at the second rule from the bottom. A running
+ * turn repaints its spinner and timer above that rule, not in the block.
+ * Without two rules, the last few non-blank rows stand in.
+ */
+function composerBlockKey(rows: readonly string[]): string {
+  const rules: number[] = [];
+  for (let i = rows.length - 1; i >= 0 && rules.length < 2; i--) {
+    if (COMPOSER_RULE.test(rows[i] ?? '')) rules.push(i);
+  }
+  if (rules.length === 2) return rows.slice(rules[1]).join('\n').trimEnd();
+  return rows.filter((row) => row.trim() !== '').slice(-COMPOSER_BLOCK_ROWS).join('\n');
+}
 
 /**
  * Bracketed paste (DEC private mode 2004). A TUI that enables it is telling us
@@ -772,6 +792,8 @@ export class Session implements WaitTarget {
   private pendingQuietSince = 0;
   private readonly pendingNudgeSettleMs: number;
   private screenRevision = 0;
+  private nudgeComposerKey = '';
+  private nudgeComposerSince = 0;
   private submissionsQueued = 0;
   /** Why the input pipe failed (Windows), once it has: input is refused from then on. */
   private inputFailure: Error | null = null;
@@ -1331,15 +1353,37 @@ export class Session implements WaitTarget {
   }
 
   nudgeReady(now: number): boolean {
+    return this.nudgeState(now).ready;
+  }
+
+  /**
+   * Whether a nudge may be typed now, and whether it would be queued behind a
+   * running turn. Each call also measures how long the composer block (the
+   * last rows on screen) has stayed the same, which a queued nudge waits on.
+   */
+  nudgeState(now: number): { ready: boolean; queued: boolean } {
     const rendered = this.renderer.snapshot();
     const styled = this.renderer.styledLines().lines;
-    return nudgeVerdict(this.agentModule, {
-      rows: styled.map((line) => line.text),
+    const rows = styled.map((line) => line.text);
+    const key = composerBlockKey(rows);
+    if (key !== this.nudgeComposerKey) {
+      this.nudgeComposerKey = key;
+      this.nudgeComposerSince = now;
+    }
+    const verdict = nudgeVerdict(this.agentModule, {
+      rows,
       styled,
       viewportRows: rendered.rows,
       stall: this.getStalled(),
       unchangedMs: now - this.lastChangeAt(),
-    }).ready;
+      composerUnchangedMs: now - this.nudgeComposerSince,
+    });
+    return { ready: verdict.ready, queued: verdict.ready && verdict.queued === true };
+  }
+
+  /** The composer block as last measured by nudgeState, compared again before typing. */
+  nudgeComposerBlock(): string {
+    return composerBlockKey(this.renderer.styledLines().lines.map((line) => line.text));
   }
 
   private pendingComposerVerdict(): ReturnType<typeof nudgeVerdict> {

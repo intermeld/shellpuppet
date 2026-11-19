@@ -2636,21 +2636,27 @@ export class Daemon {
         staleMessageIds: covered.filter((messageId) => !unread.some((entry) => entry.id === messageId)) });
       return 'sent';
     }
-    if (unread.some((entry) => entry.state === 'nudged') || unread.length === 0) return 'done';
-    const ids = unread.map((entry) => entry.id);
+    // Only a message that has not been nudged yet starts a nudge. One that was
+    // nudged but is still unread (the agent did not read its inbox) is listed
+    // in the line again when a later message arrives, so delivery never stops.
+    const ids = unread.filter((entry) => entry.state === 'waiting').map((entry) => entry.id);
+    if (ids.length === 0) return 'done';
     const line = buildNudge(unread);
     if (!session.hasPainted() || !session.nudgeReady(this.now())) return 'wait';
     const snapshot = await session.snapshot();
-    if (snapshot.exited || session.answerablePrompt(snapshot.screen) !== null ||
-      !session.nudgeReady(this.now())) return 'wait';
+    const state = session.nudgeState(this.now());
+    if (snapshot.exited || session.answerablePrompt(snapshot.screen) !== null || !state.ready) return 'wait';
+    // A running turn repaints above its composer, so a queued nudge holds only
+    // the composer block still; an idle one holds the whole screen still.
+    const queued = state.queued;
+    const composerBlock = session.nudgeComposerBlock();
     const outputAt = session.lastChangeAt();
     const inputVersion = session.nudgeInputVersion();
     const queuedInputVersion = session.nudgeQueuedInputVersion();
     const screenRevision = session.nudgeScreenRevision();
     const stillWaiting = (): boolean => {
       const current = this.mailbox.inbox(id, { markRead: false });
-      return !current.some((entry) => entry.state === 'nudged') &&
-        ids.every((messageId) => current.some((entry) => entry.id === messageId && entry.state === 'waiting'));
+      return ids.every((messageId) => current.some((entry) => entry.id === messageId && entry.state === 'waiting'));
     };
     let failedCheck: 'line-not-seen' | 'other-input-arrived' | 'screen-changed' |
       'prompt-showing' | 'stalled' | 'messages-changed' | 'session-ended' = 'line-not-seen';
@@ -2658,7 +2664,8 @@ export class Daemon {
       if (session.exited) { failedCheck = 'session-ended'; return false; }
       if (session.getStalled()) { failedCheck = 'stalled'; return false; }
       if (session.nudgeScreenRevision() !== screenRevision ||
-        (phase === 'before' && (session.lastChangeAt() !== outputAt || screen !== snapshot.screen))) {
+        (phase === 'before' && (queued ? session.nudgeComposerBlock() !== composerBlock
+          : session.lastChangeAt() !== outputAt || screen !== snapshot.screen))) {
         failedCheck = 'screen-changed'; return false;
       }
       if (session.nudgeQueuedInputVersion() !== queuedInputVersion ||
@@ -2685,7 +2692,7 @@ export class Daemon {
       throw error;
     }
     this.mailbox.markNudged(ids);
-    this.audit.record('daemon', 'nudge', id, { messageIds: ids, count: ids.length });
+    this.audit.record('daemon', 'nudge', id, { messageIds: ids, count: ids.length, ...(queued ? { queued: true } : {}) });
     return 'sent';
   }
 

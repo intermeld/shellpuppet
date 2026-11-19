@@ -258,7 +258,16 @@ of the session's agent. Readiness defaults apply only when a caller opts in
 with `waitReady`. Safety adapters remain a reserved optional module field.
 A module may also offer a nudge judgement. It reuses that module's composer,
 busy and turn lines, and it repeats that module's placeholder wording and ink
-rule. It reports ready, busy, draft or unknown. The composer is empty only
+rule. It reports ready, busy, queue, draft or unknown. `queue` is a running
+turn with a visible, empty composer, reported only by a module whose program
+takes a submitted line while it works (Claude Code and Grok Build queue it,
+Muse Code hands it to the turn). The core accepts `queue` once the composer
+block, from the rule or frame edge above the composer to the foot of the
+screen, has stayed unchanged for the quiet period; the spinner and timer above
+it may keep repainting. A draft during a turn stays busy. Grok Build paints its
+frame and footer rows to the full width, so xterm marks each following row as a
+wrap; once the frame and footer are matched, the Grok module ignores those marks.
+The composer is empty only
 when its text is blank, or when it shows that module's exact placeholder
 drawn in the placeholder's own ink. Claude Code may show a rotating suggestion
 in the same dim ink, which its module also treats as empty. Other text is a
@@ -336,8 +345,10 @@ message whom, and a clock.
   the participant id. A plain name may read like an instruction; the session
   starter or claim holder sets it locally. `NAME_PATTERN` restricts that name;
   it appears only inside the fixed sentence and is never a command. The daemon
-  checks delivery on its screen scan, types only when a supported module sees an idle empty composer,
-  and limits nudges to one per unread batch, one per session in 30 seconds and
+  checks delivery on its screen scan, types only when a supported module sees an idle empty composer
+  (or a queueing module sees an empty composer under a running turn, audited as `queued`),
+  and limits nudges to one per message (a later message brings a new nudge that lists every
+  unread one), one per session in 30 seconds and
   20 across the daemon in a rolling minute. The two rate limits are configurable.
   The fixed line names only the `session_inbox` MCP tool, never a command to
   run, so a session that messages needs the ShellPuppet MCP server.

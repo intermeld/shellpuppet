@@ -24,6 +24,8 @@ describe('queued nudge delivery', () => {
         exited: false,
         hasPainted: () => true,
         nudgeReady: () => true,
+        nudgeState: () => ({ ready: true, queued: false }),
+        nudgeComposerBlock: () => screen,
         snapshot: () => Promise.resolve({ screen, exited: false }),
         answerablePrompt: () => prompt ? { signature: 'prompt' } : null,
         lastChangeAt: () => 100,
@@ -64,4 +66,69 @@ describe('queued nudge delivery', () => {
       }
     },
   );
+});
+
+describe('a nudge the agent never answered', () => {
+  function stubSession(written: string[]) {
+    return {
+      exited: false,
+      hasPainted: () => true,
+      nudgeReady: () => true,
+      nudgeState: () => ({ ready: true, queued: false }),
+      nudgeComposerBlock: () => 'idle screen',
+      snapshot: () => Promise.resolve({ screen: 'idle screen', exited: false }),
+      answerablePrompt: () => null,
+      lastChangeAt: () => 100,
+      nudgeInputVersion: () => 0,
+      nudgeQueuedInputVersion: () => 0,
+      nudgeScreenRevision: () => 0,
+      getStalled: () => undefined,
+      nudgeSubmit: () => '\r',
+      nudgePendingLine: () => null,
+      writeNudgeWithReason: (data: string, ready: (current: string, phase: 'before' | 'submit') => boolean) => {
+        if (!ready('idle screen', 'before')) return Promise.resolve('wait');
+        written.push(data);
+        return Promise.resolve('sent');
+      },
+    };
+  }
+
+  it('does not repeat a nudge for the same unread message', async () => {
+    const mailbox = new Mailbox({ enabled: true, policy: () => true });
+    mailbox.register({ kind: 'session', id: 'recipient', name: 'recipient' });
+    const sender = mailbox.claim('sender');
+    mailbox.send(sender.claimId, 'recipient', 'first');
+    const written: string[] = [];
+    const daemon = Object.create(Daemon.prototype) as Daemon;
+    Object.assign(daemon, {
+      manager: { get: () => stubSession(written) }, mailbox, now: () => 10_000,
+      audit: { record: () => undefined },
+    });
+    expect(await daemon['deliverNudge']('recipient')).toBe('sent');
+    expect(await daemon['deliverNudge']('recipient')).toBe('done');
+    expect(written).toHaveLength(1);
+  });
+
+  it('nudges again for a later message, listing the unread one too', async () => {
+    const mailbox = new Mailbox({ enabled: true, policy: () => true });
+    mailbox.register({ kind: 'session', id: 'recipient', name: 'recipient' });
+    const sender = mailbox.claim('sender');
+    const first = mailbox.send(sender.claimId, 'recipient', 'first');
+    const written: string[] = [];
+    const actions: Array<{ action: string; meta: unknown }> = [];
+    const daemon = Object.create(Daemon.prototype) as Daemon;
+    Object.assign(daemon, {
+      manager: { get: () => stubSession(written) }, mailbox, now: () => 10_000,
+      audit: { record: (_actor: string, action: string, _id: string, meta: unknown) => actions.push({ action, meta }) },
+    });
+    expect(await daemon['deliverNudge']('recipient')).toBe('sent');
+    // The agent never read the first message. A second one arrives.
+    const second = mailbox.send(sender.claimId, 'recipient', 'second');
+    expect(await daemon['deliverNudge']('recipient')).toBe('sent');
+    expect(written).toHaveLength(2);
+    expect(written[1]).toContain(first.id);
+    expect(written[1]).toContain(second.id);
+    expect(actions.filter((entry) => entry.action === 'nudge').at(-1)?.meta).toMatchObject({ messageIds: [second.id] });
+    expect(mailbox.outbox(sender.claimId).map((entry) => entry.state)).toEqual(['nudged', 'nudged']);
+  });
 });

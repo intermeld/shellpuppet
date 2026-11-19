@@ -44,11 +44,15 @@ do it differently, and some offer none.
   the name the daemon holds for that session, shown only when it is a plain
   short name and otherwise replaced by the session id, so nothing a sender
   writes reaches the user's turn. The daemon types it only when the module for that session's agent
-  can tell the session is idle, with an empty composer and no prompt waiting.
+  can tell the session is idle, with an empty composer and no prompt waiting,
+  or, for an agent that takes a submitted line while it works (Claude Code,
+  Grok Build and Muse Code queue it or hand it to the running turn), when a
+  turn is running and the composer is visible, empty and unchanged; a
+  person's draft during a turn always waits.
   Otherwise the message waits, and the session sees it the next time it reads
   its inbox. A session whose agent has no module that can tell this is never
-  nudged. A session gets at most one nudge for its unread messages until it
-  reads them, nudges are rate limited, and every nudge is recorded as the
+  nudged. A session gets at most one nudge for each message; a later message
+  brings a new nudge that lists every unread one, nudges are rate limited, and every nudge is recorded as the
   daemon's own input.
 - **An uncertain typed nudge is never typed again into the same session.**
   Once the daemon has handed the body to the terminal, an unconfirmed submit
