@@ -515,6 +515,8 @@ Between the question and first option, a command begins with a `│` marker;
 its `│` or `:` rows and grey continuation rows remain with it when the options
 form a complete live set. Ordinary prose without that command marker remains
 hidden, while the question and individually box-inked options stay visible.
+A grey row after the marker has the same shape and ink as reasoning prose, so
+any such row inside a verified box is shown as part of the command.
 When the question has scrolled away, the marked command run above the three
 consecutive, uniformly box-inked options remains visible if its first row has
 the `│  │` marker, every text row has the measured command ink `#929292`, no
