@@ -4,7 +4,10 @@ import { describe, expect, it, vi } from 'vitest';
 
 /** Exercise the shipped pane script without starting a browser or a daemon. */
 function fixture(captureMode = false, withNotice = false) {
-  const screen = { addEventListener() {}, removeEventListener() {}, getBoundingClientRect: () => ({ top: 0, bottom: 240, height: 240 }) };
+  const fonts = new EventTarget();
+  const cell = { width: 8, height: 16 };
+  let glyphWidth = cell.width;
+  const screen = { clientWidth: 889, clientHeight: 606, addEventListener() {}, removeEventListener() {}, getBoundingClientRect: () => ({ top: 0, bottom: 240, height: 240 }) };
   const notice = { style: { top: '', bottom: '' }, getBoundingClientRect: () => ({ height: 20 }) };
   let move: (row: number) => void = () => {};
   const calls: string[] = [];
@@ -19,7 +22,8 @@ function fixture(captureMode = false, withNotice = false) {
     _core = {
       _coreBrowserService: { onDprChange: () => ({ dispose() {} }) },
       _viewport: { queueSync() {} },
-      _renderService: { addRefreshCallback() {} },
+      _renderService: { dimensions: { device: { cell } }, addRefreshCallback() {} },
+      _charSizeService: { measure() { cell.width = glyphWidth; } },
     };
     open() {}
     attachCustomKeyEventHandler() {}
@@ -46,7 +50,8 @@ function fixture(captureMode = false, withNotice = false) {
     close() {}
   }
   const window: Record<string, unknown> = {
-    queueMicrotask,
+    queueMicrotask, devicePixelRatio: 1,
+    getComputedStyle: () => ({ paddingLeft: 0, paddingRight: 0, paddingTop: 0, paddingBottom: 0 }),
     requestAnimationFrame: (callback: () => void) => { frames.push(callback); },
     cancelAnimationFrame() {},
     // Browser APIs the pane uses for notice placement.
@@ -54,17 +59,18 @@ function fixture(captureMode = false, withNotice = false) {
     ResizeObserver: class { observe() {} disconnect() {} },
   };
   vm.runInNewContext(fs.readFileSync('src/viewer/pane.js', 'utf8'), {
-    window, document: { addEventListener() {}, removeEventListener() {} },
+    window, document: { fonts, addEventListener() {}, removeEventListener() {} },
     navigator: { userAgent: 'test' }, location: { host: 'localhost' },
     Terminal, WebSocket: Socket, ArrayBuffer, Uint8Array, setTimeout, clearTimeout,
   });
   const pane = (window['ShellPuppetPane'] as { create(config: unknown): {
-    destroy(): void; relayout(deliberate: boolean): void; setFontOverride(value: number): void;
+    belowDashboardFloor(): boolean; destroy(): void; relayout(deliberate: boolean): void; setFontOverride(value: number): void;
   } }).create({ container: { parentElement: withNotice ? screen : null, dataset: {} },
     elements: withNotice ? { promptAlert: { parentElement: notice } } : {}, sessionId: 'fixture',
     captureMode, initialFontOverride: 13 });
   return {
     pane, calls, window, move, notice,
+    loadFont(width: number) { glyphWidth = width; fonts.dispatchEvent(new Event('loadingdone')); },
     frame: () => { for (const callback of frames.splice(0)) callback(); },
     bytes: () => { message({ data: new Uint8Array([65, 10]).buffer }); },
     geometry: (cols: number) => { message({ data: JSON.stringify({ type: 'geometry', cols, rows: 24, control: 'held' }) }); },
@@ -74,6 +80,18 @@ function fixture(captureMode = false, withNotice = false) {
 }
 
 describe('pane parser lifetime', () => {
+  it('uses the loaded font for a floor check before the font refresh frame', () => {
+    const f = fixture(false, true);
+    try {
+      expect(f.pane.belowDashboardFloor()).toBe(false);
+      f.loadFont(13);
+      const beforeRefresh = f.pane.belowDashboardFloor();
+      f.frame();
+      expect({ beforeRefresh, afterRefresh: f.pane.belowDashboardFloor() })
+        .toEqual({ beforeRefresh: true, afterRefresh: true });
+    } finally { f.pane.destroy(); }
+  });
+
   it('clears a covered rest on the first delivered frame even if its timer has not run', () => {
     vi.useFakeTimers();
     try {

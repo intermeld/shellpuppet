@@ -883,7 +883,10 @@ window.ShellPuppetPane = (() => {
       if (cellMetrics.has(key)) return cellMetrics.get(key);
       const drawn = term.options.fontSize;
       try {
-        term.options.fontSize = font;
+        // A fit can run after loadingdone but before the font refresh frame.
+        // Setting the current size again does not make xterm measure it.
+        if (font === drawn) term._core._charSizeService.measure();
+        else term.options.fontSize = font;
         // xterm's DOM renderer rounds the complete canvas to CSS pixels. Cache
         // the unrounded cell so a different grid cannot inherit that rounding.
         const cell = term._core._renderService.dimensions.device.cell;
