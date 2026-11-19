@@ -19,10 +19,9 @@
  * (`test/fixtures/reasoning/`), and config `agents.signatures` adds or
  * replaces one without a release.
  *
- * A question the program is waiting on is never hidden, whatever its
- * signature says: the rows the prompt detection (`promptDetector.ts`)
- * claims for a question on screen stay, so a permission box drawn in the
- * same style as the reasoning keeps every row of its own.
+ * Prompt detection (`promptDetector.ts`) claims question rows so they stay
+ * visible. A program's reading rule may reject a claim when the drawn rows
+ * cannot be distinguished safely from reasoning.
  *
  * Both readers fail closed. A session whose program has no signature is
  * refused rather than shown unfiltered, and `terminal_result` refuses when it
@@ -469,6 +468,11 @@ function lineFits(line: StyledLine, test: CompiledLine): boolean {
   return true;
 }
 
+/** A module may recognise its own separately painted row behind a wrap flag. */
+function reasoningRow(line: StyledLine, ownWrappedRow?: (line: StyledLine) => boolean): StyledLine {
+  return line.wrapped && ownWrappedRow?.(line) ? { ...line, wrapped: false } : line;
+}
+
 /**
  * Whether a line holds nothing of the transcript: blank, or blank once the
  * signature's `tidy` has taken away what is drawn beside the text (a side
@@ -485,11 +489,17 @@ function blockEnd(
   limit: number,
   tidy?: RegExp,
   claimed?: ReadonlySet<number> | null,
+  continueReasoning?: (lines: readonly StyledLine[], index: number) => boolean,
+  ownWrappedRow?: (line: StyledLine) => boolean,
 ): number {
   let end = at + 1;
   let i = at + 1;
   while (i < limit) {
-    if (lines[i]!.wrapped) {
+    // A live prompt owns its row even when a full-width repaint set the wrap
+    // flag. A flag alone cannot override a positive claim.
+    if (claimed?.has(i)) break;
+    const line = lines[i]!;
+    if (line.wrapped && !ownWrappedRow?.(line)) {
       i++;
       end = i;
       continue;
@@ -497,9 +507,7 @@ function blockEnd(
     if (block.continues === undefined) break;
     // A line a question on screen claims for itself is never part of a
     // block: the block ends before it rather than running over it.
-    if (claimed?.has(i)) break;
-    const line = lines[i]!;
-    if (!blank(line, tidy) && lineFits(line, block.continues)) {
+    if (!blank(line, tidy) && (lineFits(reasoningRow(line, ownWrappedRow), block.continues) || continueReasoning?.(lines, i))) {
       i++;
       end = i;
       continue;
@@ -508,7 +516,8 @@ function blockEnd(
       // A blank line stays inside the block only if the block carries on after it.
       let next = i;
       while (next < limit && blank(lines[next], tidy)) next++;
-      if (next < limit && lineFits(lines[next]!, block.continues)) {
+      if (next < limit && (lineFits(reasoningRow(lines[next]!, ownWrappedRow), block.continues) ||
+        (ownWrappedRow?.(lines[next]!) && continueReasoning?.(lines, next)))) {
         i = next;
         continue;
       }
@@ -534,6 +543,7 @@ function guarded<T>(signature: CompiledSignature, body: () => T): T | null {
 
 /** The index of the composer's line and the first line of chrome, or null. */
 function composerAt(lines: readonly StyledLine[], signature: CompiledSignature): { line: number; chrome: number } | null {
+  const ownWrappedRow = moduleFor(signature.name)?.readingRules?.ownWrappedRow;
   for (let i = lines.length - 1; i >= 0; i--) {
     const candidate = lines[i]!;
     const composerRule = moduleFor(signature.name)?.readingRules?.composer;
@@ -544,7 +554,7 @@ function composerAt(lines: readonly StyledLine[], signature: CompiledSignature):
     // dialog stands in its place: no composer is found, so the filter reads
     // the whole screen and a result is refused.
     for (let j = i + 1; j < lines.length; j++) {
-      if (signature.reasoning.some((block) => lineFits(lines[j]!, block.start))) return null;
+      if (signature.reasoning.some((block) => lineFits(reasoningRow(lines[j]!, ownWrappedRow), block.start))) return null;
     }
     let top = i;
     while (top > 0) {
@@ -577,9 +587,10 @@ function enclosedByReasoning(
  * The rows a question on screen claims for itself: the prompt detection's
  * own rows (`promptDetector.ts`), and the rows of nothing but border beside
  * them, which belong to the question's box. A filter that hides reasoning
- * must never hide a question, so a hidden block is cut at the first of
- * these rows and never starts on one. Null when no question is on screen,
- * so the block scan below runs as before.
+ * cuts a hidden block at the first accepted row and never starts on one.
+ * Null when no question is on screen,
+ * so the block scan below runs as before. A program's reading rule can reject
+ * an ambiguous claim before any row is kept.
  *
  * A detection whose only signal is a question with nothing below it is not
  * claimed when that whole span sits inside a reasoning block that began
@@ -596,11 +607,12 @@ function claimedRows(
   if (prompt === null) return null;
   const [first, last] = prompt.rows;
   if (prompt.basis === 'question' && enclosedByReasoning(lines, signature, first, last)) return null;
+  const claim = moduleFor(signature.name)?.readingRules?.claimPromptRows?.(lines, prompt);
+  if (claim === false) return null;
   let top = first;
   while (top > 0 && BORDER_ROW.test(lines[top - 1]!.text)) top--;
   let bottom = last;
   while (bottom + 1 < lines.length && BORDER_ROW.test(lines[bottom + 1]!.text)) bottom++;
-  const claim = moduleFor(signature.name)?.readingRules?.claimPromptRows?.(lines, prompt);
   if (claim !== undefined && claim !== null) {
     top = claim[0];
     bottom = claim[1];
@@ -633,6 +645,7 @@ function reasoningRanges(
   claimed?: ReadonlySet<number> | null,
 ): [number, number][] {
   const ranges: [number, number][] = [];
+  const rules = moduleFor(signature.name)?.readingRules;
   let i = 0;
   // The parent may have left the retained scrollback. There is no safe way
   // to classify a leading continuation, so hide it for reasoning signatures.
@@ -645,12 +658,13 @@ function reasoningRanges(
       i++;
       continue;
     }
-    const block = signature.reasoning.find((b) => lineFits(lines[i]!, b.start));
-    if (block === undefined) {
+    const block = signature.reasoning.find((b) => lineFits(reasoningRow(lines[i]!, rules?.ownWrappedRow), b.start));
+    if (block === undefined || rules?.startReasoning?.(lines, i) === false) {
       i++;
       continue;
     }
-    const end = blockEnd(lines, i, block, limit, signature.tidy, claimed);
+    const end = blockEnd(lines, i, block, limit, signature.tidy, claimed,
+      rules?.continueReasoning, rules?.ownWrappedRow);
     ranges.push([i, end]);
     i = end;
   }

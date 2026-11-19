@@ -3,9 +3,8 @@ import type { AgentSignature } from '../../core/reasoning.js';
 /**
  * Grok draws its permission box behind the same bar as its reasoning: a
  * question row (`> `), a command's rows (`│` starts one, `:` continues it)
- * and option rows (`1 (○)`). No Grok reasoning rule starts or continues on
- * them, so a permission box keeps every row of its own, whatever wording
- * its question is asked in.
+ * and option rows (`1 (○)`). The reading rule checks ink before treating
+ * these shapes as visible, both at the start of and within a reasoning block.
  */
 const GROK_BOX_ROW = ' {2}(?:> |\\d+ \\([○•●]\\) |[│:])';
 
@@ -28,15 +27,15 @@ export const reading: AgentSignature = {
   reasoning: [
     {
       start: { text: '^ {2}│ {2}♦ Thinking' },
-      continues: { text: `^ {2}│(?!${GROK_BOX_ROW})` },
+      continues: { text: `^ {2}│(?!\\s*$)(?!${GROK_BOX_ROW})` },
     },
     // The spinner's label can be the model's own words about what it is
     // doing; it goes too, and the busy state still shows in the result.
     { start: { text: '^ {3}[|/\\\\-] \\S' } },
     // The bar on its own: the heading may have scrolled away.
     {
-      start: { text: `^ {2}│(?!${GROK_BOX_ROW}) {2}\\S` },
-      continues: { text: `^ {2}│(?!${GROK_BOX_ROW})` },
+      start: { text: '^ {2}│ {2}\\S' },
+      continues: { text: `^ {2}│(?!\\s*$)(?!${GROK_BOX_ROW})` },
     },
   ],
   answer: {

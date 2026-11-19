@@ -91,6 +91,15 @@ function plain(text: string, italic = false): StyledLine {
   };
 }
 
+function grokBox(text: string): StyledLine {
+  const line = plain(text);
+  const ink = /^ {2}│ {2}> {2}\S/.test(text) || /^ {2}│ {2}\d+ \([•●]\) /.test(text)
+    ? '#e1e1e1'
+    : /^ {2}│ {2}\d+ \(○\) /.test(text) ? '#c8c8c8' : '#929292';
+  for (const span of line.spans) span.fg = ink;
+  return line;
+}
+
 describe('every reasoning fixture hides what it hid on main', () => {
   it('hides the same number of lines, except for the two box fixtures', async () => {
     for (const [name, mainCount] of Object.entries(MAIN_HIDDEN)) {
@@ -255,7 +264,9 @@ describe('Grok box question row', () => {
       '  │',
       '  │  1 (○) Yes',
       '  │  2 (•) No',
-    ].map((text) => plain(text));
+      '  │  3 (○) Reject',
+      '  1/3:select  │  Tab:next option',
+    ].map((text) => grokBox(text));
     const kept = hideReasoning(lines, grok)!.lines;
     expect(kept.join('\n')).not.toContain('Which file should be restored?');
     expect(kept.join('\n')).not.toContain('Thinking');
@@ -272,19 +283,17 @@ describe('Grok box question row', () => {
   });
 });
 
-describe('the option row and the border are what keep a box the detector missed', () => {
+describe('the box ink keeps rows when the detector declines them', () => {
   const grok = builtIn('grok');
 
   it('keeps a single option row when the detector claims nothing', () => {
-    // One radio is not a numbered block, so detection claims nothing. Only
-    // the option clause of the box row keeps it.
     const lines = [
       '     > run the tests',
       '  │  ♦ Thinking…',
       '  │  X xxxx reasoning',
       '  │  >  Allow Run the unit tests?',
       '  │  1 (•) Yes, proceed',
-    ].map((text) => plain(text));
+    ].map((text) => grokBox(text));
     expect(detectPrompt(lines.map((line) => line.text).join('\n'))).toBeNull();
     const kept = hideReasoning(lines, grok)!.lines;
     expect(kept).toContain('  │  >  Allow Run the unit tests?');
@@ -292,7 +301,7 @@ describe('the option row and the border are what keep a box the detector missed'
     expect(kept.join('\n')).not.toContain('X xxxx');
   });
 
-  it('keeps the box rows when a busy line makes the detector decline them', () => {
+  it('keeps box rows when a busy line makes the detector decline them', () => {
     const lines = [
       '     > run the tests',
       '  │  ♦ Thinking…',
@@ -301,7 +310,7 @@ describe('the option row and the border are what keep a box the detector missed'
       '  │  1 (○) Yes',
       '  │  2 (•) No',
       '   | Thinking… 3.1s',
-    ].map((text) => plain(text));
+    ].map((text) => grokBox(text));
     expect(detectPrompt(lines.map((line) => line.text).join('\n'))).toBeNull();
     const kept = hideReasoning(lines, grok)!.lines;
     expect(kept).toContain('  │  1 (○) Yes');
@@ -397,20 +406,18 @@ describe('a question-shaped line or a numbered list inside reasoning', () => {
   });
 });
 
-describe('stated limits: a live-looking row inside reasoning stays', () => {
-  it('keeps a filled radio drawn as a Grok option row', () => {
-    // The same row is a real option. The signature keeps it when detection
-    // claims nothing, so it also keeps one the reasoning happened to draw.
+describe('live-looking rows inside reasoning', () => {
+  it('keeps a filled radio in a box with its own question ink', () => {
     const lines = [
       '     > run the tests',
       '  │  ♦ Thinking…',
-      '  │  Which option?',
+      '  │  >  Which option?',
       '  │  1 (○) First',
       '  │  2 (•) Second',
       '  │ >',
-    ].map((text) => plain(text));
+    ].map((text) => grokBox(text));
     const kept = hideReasoning(lines, builtIn('grok'))!.lines;
-    expect(kept).toContain('  │  Which option?');
+    expect(kept).toContain('  │  >  Which option?');
     expect(kept).toContain('  │  2 (•) Second');
     expect(kept.join('\n')).not.toContain('Thinking');
   });
@@ -431,9 +438,7 @@ describe('stated limits: a live-looking row inside reasoning stays', () => {
     expect(kept).toContain(' │ 2 (•) Second');
   });
 
-  it('keeps a blockquoted numbered list drawn as a Grok question row', () => {
-    // `│  > 1.` is the box's question row and a sign-in marker. A numbered
-    // list the reasoning draws that way stays on screen.
+  it('hides a blockquoted numbered list in unrecognised ink', () => {
     const lines = [
       '     > run the tests',
       '  │  ♦ Thinking…',
@@ -446,15 +451,13 @@ describe('stated limits: a live-looking row inside reasoning stays', () => {
     expect(prompt?.rows).toEqual([2, 3]);
     expect(prompt?.basis).toBe('marker');
     const filtered = hideReasoning(lines.map((text) => plain(text)), builtIn('grok'))!;
-    expect(filtered.hiddenLines).toBe(1);
-    expect(filtered.lines).toContain('  │  > 1. First step');
-    expect(filtered.lines).toContain('  │  > 2. Second step');
+    expect(filtered.hiddenLines).toBe(3);
+    expect(filtered.lines).not.toContain('  │  > 1. First step');
+    expect(filtered.lines).not.toContain('  │  > 2. Second step');
     expect(filtered.lines.join('\n')).not.toContain('Thinking');
   });
 
-  it('keeps a letter menu at the end of a Grok reasoning block', () => {
-    // Letter keys are what show a selector is live. Dropping the claim
-    // would hide a real menu, so one drawn at the end of the reasoning stays.
+  it('hides a letter menu in unrecognised ink behind the reasoning bar', () => {
     const lines = [
       '     > run the tests',
       '  │  ♦ Thinking…',
@@ -467,49 +470,51 @@ describe('stated limits: a live-looking row inside reasoning stays', () => {
     expect(prompt?.options).toEqual(['[a] Apply', '[b] Skip']);
     expect(prompt?.basis).toBe('frame');
     const filtered = hideReasoning(lines.map((text) => plain(text)), builtIn('grok'))!;
-    expect(filtered.hiddenLines).toBe(1);
-    expect(filtered.lines).toContain('  │  Apply the change?');
-    expect(filtered.lines).toContain('  │  [a] Apply');
-    expect(filtered.lines).toContain('  │  [b] Skip');
+    expect(filtered.hiddenLines).toBe(4);
+    expect(filtered.lines).not.toContain('  │  Apply the change?');
+    expect(filtered.lines).not.toContain('  │  [a] Apply');
+    expect(filtered.lines).not.toContain('  │  [b] Skip');
     expect(filtered.lines.join('\n')).not.toContain('Thinking');
   });
 });
 
-describe('the older Grok command, plain bar text above the radios', () => {
+describe('Grok box commands and ambiguous bar text', () => {
   const grok = builtIn('grok');
   const closed = [
     '  │  reasoning that stays hidden',
     '  │',
-    '  │  Locate worktree and prod-related docs',
-    '  │  $wt = "D:/work/feature"; git rev-parse --abbrev-ref HEAD',
+    '  │  >  Allow the synthetic command?',
+    '  │  │ Locate worktree and prod-related docs',
+    '  │  : $wt = "D:/work/feature"; git rev-parse --abbrev-ref HEAD',
     '  │',
     '  │  1 (○) Yes, and don\'t ask again',
     '  │  2 (•) Yes, proceed',
     '  │  3 (○) No, and stop',
   ];
 
-  it('keeps the command when a bare bar closes it off from the reasoning', () => {
-    const kept = hideReasoning(closed.map((text) => plain(text)), grok)!.lines;
-    expect(kept).toContain('  │  Locate worktree and prod-related docs');
-    expect(kept).toContain('  │  $wt = "D:/work/feature"; git rev-parse --abbrev-ref HEAD');
+  it('keeps a command beneath a box-ink question', () => {
+    const kept = hideReasoning(closed.map((text) => grokBox(text)), grok)!.lines;
+    expect(kept).toContain('  │  │ Locate worktree and prod-related docs');
+    expect(kept).toContain('  │  : $wt = "D:/work/feature"; git rev-parse --abbrev-ref HEAD');
     expect(kept).toContain('  │  2 (•) Yes, proceed');
     expect(kept.join('\n')).not.toContain('reasoning that stays hidden');
   });
 
-  it('hides a question mark above the bare bar that closes the command', () => {
+  it('hides a reasoning question mark above a kept box command', () => {
     const lines = [
       '  │  Which file should be restored?',
       '  │',
-      '  │  Locate worktree and prod-related docs',
-      '  │  $wt = "D:/work/feature"; git rev-parse --abbrev-ref HEAD',
+      '  │  >  Allow the synthetic command?',
+      '  │  │ Locate worktree and prod-related docs',
+      '  │  : $wt = "D:/work/feature"; git rev-parse --abbrev-ref HEAD',
       '  │',
       '  │  1 (○) Yes, and don\'t ask again',
       '  │  2 (•) Yes, proceed',
       '  │  3 (○) No, and stop',
-    ].map((text) => plain(text));
+    ].map((text) => grokBox(text));
     const kept = hideReasoning(lines, grok)!.lines;
     expect(kept.join('\n')).not.toContain('Which file should be restored?');
-    expect(kept).toContain('  │  Locate worktree and prod-related docs');
+    expect(kept).toContain('  │  │ Locate worktree and prod-related docs');
     expect(kept).toContain('  │  2 (•) Yes, proceed');
   });
 
@@ -522,7 +527,7 @@ describe('the older Grok command, plain bar text above the radios', () => {
       '  │  1 (○) Yes',
       '  │  2 (•) No',
       '  │  3 (○) Stop',
-    ].map((text) => plain(text));
+    ].map((text) => grokBox(text));
     const kept = hideReasoning(lines, grok)!.lines.join('\n');
     expect(kept).not.toContain('Locate worktree');
     expect(kept).not.toContain('reasoning that stays hidden');
@@ -544,7 +549,7 @@ describe('the older Grok command, plain bar text above the radios', () => {
     ];
     const prompt = detectPrompt(lines.join('\n'));
     expect(prompt?.rows).toEqual([5, 6]);
-    const filtered = hideReasoning(lines.map((text) => plain(text)), grok)!;
+    const filtered = hideReasoning(lines.map((text) => grokBox(text)), grok)!;
     expect(filtered.hiddenLines).toBe(3);
     const kept = filtered.lines.join('\n');
     expect(kept).not.toContain('Thinking');
@@ -566,7 +571,7 @@ describe('the older Grok command, plain bar text above the radios', () => {
     ];
     const prompt = detectPrompt(lines.join('\n'));
     expect(prompt?.rows).toEqual([4, 5]);
-    const filtered = hideReasoning(lines.map((text) => plain(text)), grok)!;
+    const filtered = hideReasoning(lines.map((text) => grokBox(text)), grok)!;
     expect(filtered.hiddenLines).toBe(2);
     const kept = filtered.lines.join('\n');
     expect(kept).not.toContain('reasoning one');

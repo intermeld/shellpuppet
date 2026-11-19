@@ -477,43 +477,65 @@ safety checks flag another model's reasoning (Claude models at present) passes
 `hideReasoning: true` on every reading call; a session needing the full screen
 leaves it off. The `hideReasoning` filter reads 400 lines of scrollback over
 what it returns, so a block whose first line has scrolled away is still
-recognised. A question the program is waiting on is never
-hidden: the rows the prompt detection claims for a question on screen, and the
-border rows beside them, stay whatever the signature's rules would take, so a
-permission box drawn in the same style as the reasoning keeps every row of its
-own. Grok's box question is the row `│  > ` (two spaces between the bar and
-`>`); the composer is `│ >` with one space and is not that question. A numbered
-list is not claimed when the only live signal is a question with nothing below
-it and every row of the list sits inside a reasoning block that began above
-the question. A one-line reasoning summary drawn between a question and its
-options stays hidden. The older Grok box keeps a run of plain bar text above
-its radios when a bare bar, or a line that starts the reasoning, closes that
-run off and the run carries command evidence: the box's `│  > ` question row,
-a `$`, or a `:` continuation. When its question has scrolled away, Grok's
-`1/3:select` footer and three radio choices identify a live permission box;
-the filter then keeps every bar row from the top of the box's bar down to the
-choices, including plain command rows, wraps and expansion hints. The footer
-must be the live bottom row. That claim is made only when no question-shaped
-(`│  > `) row and no reasoning start is left in the run, and only when the run
-begins with a command's first-row marker (`│` inside the bar): reasoning sits
-above the question and its text can read `> ` or begin with a colon, so with
-any other row at the top the ordinary rules above decide, unchanged. Hiding wins over showing when reasoning
-and command text cannot be told apart, so plain command rows near `> ` command
-text, or a command whose footer a redraw has not yet painted, can stay hidden;
-rows carrying the box's own command marker always stay. The limits: a row
-shaped as a Grok option stays
-even when the reasoning drew it, because that shape is also a real option and
-the signature keeps it when detection claims nothing; a filled radio inside
-another program's reasoning stays, because that glyph is what shows a selector
-is live and dropping the claim would hide a real one; a blockquoted numbered
-list drawn as `│  > 1.` stays, because that row is also how the box draws its
-question and how a sign-in marker is drawn; a letter menu at the end of a
-reasoning block stays, because its letter keys are what show a selector is
-live and dropping the claim would hide a real one; a run of plain bar text
-stays with the reasoning when nothing closes it off, or when it carries no
-command evidence, because that run is the same shape as the reasoning. A wait
-result carries the
-question and the options, not the rows the filter uses. A result is refused while a prompt sits unsent in the
+recognised. A question the program is waiting on is normally kept: the rows
+prompt detection claims, and the border rows beside them, stay unless a
+program's reading rule rejects the claim. Grok's box needs its rendered ink
+to establish rows inside a reasoning block. Its question is the row `│  > ` (two
+spaces between the bar and `>`); the composer is `│ >` with one space.
+Within started Grok reasoning, a box-shaped question can be kept only if every
+non-blank text cell after the bar has the measured box question ink,
+`#e1e1e1`. The block rule keeps such a question when a uniformly box-inked
+option follows through only marked `│` or `:` command rows and blank bar rows,
+or when an adjacent, separately painted `1/3:select` footer has `#808080` ink
+and no wrap flag. Independently, an accepted live-prompt detection can keep
+the box-inked question alone even if its visible options are incomplete or
+reasoning-coloured, or other bar rows lie between the question and its
+options. The detector claims the whole question-to-options interval only for
+three consecutive uniformly box-inked numbered options with exactly one
+selected and only marked command or blank bar rows between the question and
+the options; otherwise it claims the question alone. Unclaimed
+reasoning-coloured rows stay hidden. With neither block evidence nor an
+accepted prompt claim, the question stays hidden until further box evidence
+appears. A numbered radio option is kept only
+when every such cell has the measured selected ink, `#e1e1e1`, or unselected
+ink, `#c8c8c8`, according to
+its radio mark. The bar's own ink and blank cells do not decide the row.
+The reasoning prose ink, `#929292`, remains hidden regardless of text
+or wrap flag. The heading is `#6c6c6c` in the Build 1.0.70 fixtures and
+`#6e6e6e` in Build 1.0.89; these also remain hidden. The colour values are
+an allowlist from those builds. Other themes or versions can hide a genuine
+box until measured and added, but do not expose text in an unknown colour.
+The same check applies when a bar row starts a new reasoning block after a
+visible question or option, so mixed-ink rows stay hidden at that boundary.
+
+Command rows have the same `#929292` ink as reasoning. They stay visible only
+when a uniformly box-inked question is followed by all three numbered options,
+each uniformly in its selected or unselected ink, with exactly one selected.
+Between the question and first option, only marked `│` or `:` command rows
+and blank bar rows may appear; the options follow consecutively. Ordinary
+prose in that interval remains hidden, while the question and individually
+box-inked options stay visible. A command whose question has scrolled away
+remains hidden; its box-ink options can still be kept. The same applies while
+the footer has not yet been painted. A bare border row immediately above a kept
+question or option stays with the box. Other bar rows behind an active
+reasoning block, including blockquoted lists, letter menus,
+selected-looking glyphs and footer-shaped text, stay hidden unless their
+shape and ink establish a box.
+
+Grok can paint each bar row out to the right edge, causing xterm to mark the
+next separately painted row as wrapped. For Grok reasoning starts and
+continuations, the reader treats a row with its own bar as independent despite
+that flag. Other signatures still treat wrapped text only as a continuation.
+A wrap flag alone never makes a bar row visible inside a reasoning block.
+Snapshot, wait, find and screenshot text filtering all read styled rows from
+the renderer. The screenshot overlay uses the same filtered row mapping.
+`terminal_result` also reads styled rows. List does not return screen rows; its
+filtered form omits prompt question and option text. Callers that supply rows
+without styles, such as an unstyled fixture or a future reader, cannot
+establish box ink and hide ambiguous rows inside an active reasoning block.
+
+A wait result carries the question and the options, not the rows the filter
+uses. A result is refused while a prompt sits unsent in the
 composer (Claude Code, Codex and Qoder, whose signatures tell typed text from the
 placeholder), and, for a program that always closes a finished turn with a summary line,
 until that line is drawn. A line with reasoning drawn below it is never taken for the

@@ -7,20 +7,24 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { findBrowser } from '../../src/daemon/viewerLauncher.js';
 import { api, eventually, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 
 const FIXTURES = path.join(__dirname, '..', 'fixtures', 'reasoning');
 
 let td: TestDaemon;
+let browser: string | null;
+const grokIds: string[] = [];
 
 beforeAll(async () => {
   td = await startTestDaemon({ policy: { mode: 'allow-all' } });
+  browser = await findBrowser();
 });
 afterAll(async () => {
   await td.stop();
-}, 120_000);
+}, 300_000);
 
 /** Start a session that draws a captured screen and then sits still. */
 async function replay(name: string, agent?: string): Promise<string> {
@@ -54,6 +58,144 @@ async function replay(name: string, agent?: string): Promise<string> {
   }, 30_000, 100, 'the replay composer', () => composerScreen.slice(-500));
   return id;
 }
+
+/** Draw only invented text; each row exercises one ambiguous bar prefix. */
+async function replayGrokContinuation(
+  cols: number, rows: number, prose: string, afterInput = false, paintWrapped = false,
+): Promise<string> {
+  const file = path.join(td.home, `grok-continuation-${cols}-${rows}-${Math.random()}.ansi`);
+  const physical = [
+    '     > synthetic input',
+    '  │  ♦ Thinking…',
+    '  │',
+    '  │  …',
+    prose,
+    '  │ >',
+  ];
+  fs.writeFileSync(file, paintWrapped
+    ? physical.slice(0, -2).map((text) => text.padEnd(cols, ' ')).join('') + prose + '\r\n  │ >'
+    : physical.join('\r\n'));
+  const started = await api(td.port, td.token, '/sessions', { body: {
+    command: process.execPath,
+    args: ['-e', afterInput
+      ? `process.stdin.once('data', () => { process.stdout.write('\\x1b[2J\\x1b[H'); process.stdout.write(require('fs').readFileSync(${JSON.stringify(file)}, 'utf8')); setTimeout(() => process.exit(0), 1500); });`
+      : `process.stdout.write(require('fs').readFileSync(${JSON.stringify(file)}, 'utf8')); setTimeout(() => process.exit(0), 1500);`],
+    shell: false, agent: 'grok', cols, rows, hold: true,
+  } });
+  expect(started.status).toBe(200);
+  const id = String(started.body['id']);
+  grokIds.push(id);
+  if (afterInput) {
+    const sent = await api(td.port, td.token, `/sessions/${id}/input`, { body: { data: 'synthetic input\r' } });
+    expect(sent.status).toBe(200);
+  }
+  await eventually(async () => String((await api(td.port, td.token, `/sessions/${id}/snapshot`)).body['screen'])
+    .includes('SYNTHETIC_SECRET'), 30_000);
+  return id;
+}
+
+describe('Grok continuation across filtered readers', () => {
+  afterEach(async () => {
+    for (const id of grokIds.splice(0)) {
+      const deleted = await api(td.port, td.token, `/sessions/${id}`, { method: 'DELETE' });
+      expect(deleted.status).toBe(200);
+    }
+  }, 60_000);
+
+  it('hides the reported wrapped prose after input in a filtered wait and snapshot', async () => {
+    const prose = '  │  SYNTHETIC_SECRET This sentence uses invented words to fill the terminal row and continues after a short digit run 12345 onto the next line';
+    const id = await replayGrokContinuation(129, 49, prose, true, true);
+    const raw = await api(td.port, td.token,
+      `/sessions/${id}/wait?regex=SYNTHETIC_SECRET&timeout=0&matchAfterInput=1`);
+    expect(raw.body['matched']).toBe(true);
+    const waited = await api(td.port, td.token,
+      `/sessions/${id}/wait?regex=SYNTHETIC_SECRET&timeout=0&matchAfterInput=1&hideReasoning=1`);
+    expect(waited.body['matched']).toBe(false);
+    expect(String(waited.body['screen'])).not.toContain('SYNTHETIC_SECRET');
+    const snapshot = await api(td.port, td.token, `/sessions/${id}/snapshot?hideReasoning=1`);
+    expect(String(snapshot.body['screen'])).not.toContain('SYNTHETIC_SECRET');
+    const found = await api(td.port, td.token, `/sessions/${id}/find?pattern=SYNTHETIC_SECRET&hideReasoning=1`);
+    expect(found.body['matches']).toEqual([]);
+    const result = await api(td.port, td.token, `/sessions/${id}/result`);
+    expect(JSON.stringify(result.body)).not.toContain('SYNTHETIC_SECRET');
+    if (browser !== null) {
+      const screenshot = await api(td.port, td.token, `/sessions/${id}/screenshot`, {
+        method: 'POST', body: { hideReasoning: true },
+      });
+      expect(screenshot.status, String(screenshot.body['error'])).toBe(200);
+      expect((screenshot.body['lines'] as string[]).join('\n')).not.toContain('SYNTHETIC_SECRET');
+    }
+  }, 60_000);
+
+  for (const cols of [300, 398]) {
+    for (const paintWrapped of [false, true]) {
+      it(`hides wide ${cols}-column reasoning with wrapped paint ${paintWrapped}`, async () => {
+        const id = await replayGrokContinuation(cols, 49,
+          '  │  SYNTHETIC_SECRET ordinary prose 12345', true, paintWrapped);
+        const snapshot = await api(td.port, td.token, `/sessions/${id}/snapshot?hideReasoning=1`);
+        expect(String(snapshot.body['screen'])).not.toContain('SYNTHETIC_SECRET');
+        for (const after of ['', '&matchAfterInput=1']) {
+          const waited = await api(td.port, td.token,
+            `/sessions/${id}/wait?regex=SYNTHETIC_SECRET&timeout=0${after}&hideReasoning=1`);
+          expect(waited.body['matched']).toBe(false);
+          expect(String(waited.body['screen'])).not.toContain('SYNTHETIC_SECRET');
+        }
+        const found = await api(td.port, td.token, `/sessions/${id}/find?pattern=SYNTHETIC_SECRET&hideReasoning=1`);
+        expect(found.body['matches']).toEqual([]);
+        const result = await api(td.port, td.token, `/sessions/${id}/result`);
+        expect(JSON.stringify(result.body)).not.toContain('SYNTHETIC_SECRET');
+        if (browser !== null) {
+          const screenshot = await api(td.port, td.token, `/sessions/${id}/screenshot`, {
+            method: 'POST', body: { hideReasoning: true },
+          });
+          expect(screenshot.status, String(screenshot.body['error'])).toBe(200);
+          expect((screenshot.body['lines'] as string[]).join('\n')).not.toContain('SYNTHETIC_SECRET');
+        }
+      }, 120_000);
+    }
+  }
+
+  const shapes: { name: string; prose: (cols: number) => string; paintWrapped?: boolean }[] = [
+    { name: 'full width', prose: (cols: number) => '  │  > SYNTHETIC_SECRET'.padEnd(cols - 1, 'x') },
+    { name: 'soft wrap', prose: (cols: number) => '  │  > SYNTHETIC_SECRET'.padEnd(cols + 22, 'x') },
+    { name: 'ordinary soft wrap', prose: (cols: number) =>
+      '  │  SYNTHETIC_SECRET ordinary prose '.padEnd(cols - 12, 'x') + '12345 continuing' },
+    { name: 'wrapped bar repaint', prose: () => '  │  SYNTHETIC_SECRET ordinary prose 12345', paintWrapped: true },
+    { name: 'ellipsis alone', prose: () => '  │  … SYNTHETIC_SECRET' },
+    { name: 'question prefix', prose: () => '  │  > SYNTHETIC_SECRET' },
+    { name: 'colon prefix', prose: () => '  │  : SYNTHETIC_SECRET' },
+    { name: 'command prefix', prose: () => '  │  │ SYNTHETIC_SECRET' },
+    { name: 'radio prefix', prose: () => '  │  1 (○) SYNTHETIC_SECRET' },
+  ];
+
+  for (const [cols, rows] of [[80, 24], [129, 49]]) {
+    for (const shape of shapes) {
+      it(`hides ${shape.name} at ${cols}x${rows}`, async () => {
+        const id = await replayGrokContinuation(cols!, rows!, shape.prose(cols!), false, shape.paintWrapped ?? false);
+        const snapshot = await api(td.port, td.token, `/sessions/${id}/snapshot?hideReasoning=1&lastLines=3`);
+        expect(JSON.stringify(snapshot.body)).not.toContain('SYNTHETIC_SECRET');
+        for (const suffix of ['wait?regex=SYNTHETIC_SECRET&timeout=0&hideReasoning=1',
+          'wait?regex=SYNTHETIC_SECRET&timeout=0&matchAfterInput=1&hideReasoning=1']) {
+          const waited = await api(td.port, td.token, `/sessions/${id}/${suffix}`);
+          expect(waited.status).toBe(200);
+          expect(waited.body['matched']).toBe(false);
+          expect(JSON.stringify(waited.body)).not.toContain('SYNTHETIC_SECRET');
+        }
+        const found = await api(td.port, td.token, `/sessions/${id}/find?pattern=SYNTHETIC_SECRET&hideReasoning=1`);
+        expect(found.body['matches']).toEqual([]);
+        const result = await api(td.port, td.token, `/sessions/${id}/result`);
+        expect(JSON.stringify(result.body)).not.toContain('SYNTHETIC_SECRET');
+        if (browser !== null) {
+          const screenshot = await api(td.port, td.token, `/sessions/${id}/screenshot`, {
+            method: 'POST', body: { hideReasoning: true },
+          });
+          expect(screenshot.status, String(screenshot.body['error'])).toBe(200);
+          expect((screenshot.body['lines'] as string[]).join('\n')).not.toContain('SYNTHETIC_SECRET');
+        }
+      }, 120_000);
+    }
+  }
+});
 
 async function longWrappedLine(name: string, line: string): Promise<string> {
   const file = path.join(td.home, `${name}.ansi`);
