@@ -2587,8 +2587,53 @@ export class Daemon {
   private async deliverNudge(id: string): Promise<'sent' | 'wait' | 'done'> {
     const session = this.manager.get(id);
     if (session === undefined || session.exited || this.mailbox.participant(id)?.kind !== 'session') return 'done';
+    const pendingIds = session.nudgePendingLine() !== null ? [...session.nudgePendingIds()] : [];
+    const clearedIds = pendingIds.length > 0 && await session.clearConsumedNudge() ? pendingIds : [];
     const unread = this.mailbox.inbox(id, { markRead: false });
+    if (clearedIds.length > 0) {
+      this.audit.record('daemon', 'nudge-cleared', id, { messageIds: clearedIds,
+        waitingMessageIds: unread.map((entry) => entry.id) });
+    }
     if (unread.some((entry) => entry.state === 'nudged') || unread.length === 0) return 'done';
+    const ids = unread.map((entry) => entry.id);
+    const pending = session.nudgePendingLine();
+    if (pending !== null) {
+      const covered = session.nudgePendingIds();
+      if (!session.nudgePendingUntouched()) {
+        if (session.nudgeReadyWithLine(pending) && session.nudgePendingTouchRefusal()) {
+          this.audit.record('daemon', 'nudge-aborted', id, {
+            messageIds: [...covered], count: covered.length, reason: 'person-input-since',
+          });
+        }
+        return 'wait';
+      }
+      if (!session.nudgeReadyWithLine(pending) ||
+        !covered.every((messageId) => ids.includes(messageId))) return 'wait';
+      const inputVersion = session.nudgeInputVersion();
+      const queuedInputVersion = session.nudgeQueuedInputVersion();
+      const screenRevision = session.nudgeScreenRevision();
+      const submitted = await session.submitPendingNudge(pending, (screen) =>
+        !session.exited && !session.getStalled() &&
+        session.nudgeInputVersion() === inputVersion &&
+        session.nudgeQueuedInputVersion() === queuedInputVersion &&
+        session.nudgeScreenRevision() === screenRevision &&
+        session.answerablePrompt(screen) === null &&
+        ids.every((messageId) => this.mailbox.inbox(id, { markRead: false })
+          .some((entry) => entry.id === messageId && entry.state === 'waiting')));
+      if (!submitted) {
+        if (session.nudgePendingTouchRefusal()) {
+          this.audit.record('daemon', 'nudge-aborted', id, {
+            messageIds: [...covered], count: covered.length, reason: 'person-input-since',
+          });
+        }
+        return 'wait';
+      }
+      this.mailbox.markNudged(ids);
+      this.audit.record('daemon', 'nudge', id, { messageIds: [...covered], count: covered.length,
+        waitingMessageIds: ids.filter((messageId) => !covered.includes(messageId)) });
+      return 'sent';
+    }
+    const line = buildNudge(unread);
     if (!session.hasPainted() || !session.nudgeReady(this.now())) return 'wait';
     const snapshot = await session.snapshot();
     if (snapshot.exited || session.answerablePrompt(snapshot.screen) !== null ||
@@ -2597,27 +2642,37 @@ export class Daemon {
     const inputVersion = session.nudgeInputVersion();
     const queuedInputVersion = session.nudgeQueuedInputVersion();
     const screenRevision = session.nudgeScreenRevision();
-    const line = buildNudge(unread);
-    const ids = unread.map((entry) => entry.id);
     const stillWaiting = (): boolean => {
       const current = this.mailbox.inbox(id, { markRead: false });
       return !current.some((entry) => entry.state === 'nudged') &&
         ids.every((messageId) => current.some((entry) => entry.id === messageId && entry.state === 'waiting'));
     };
-    const ready = (screen: string, phase: 'before' | 'submit'): boolean =>
-      !session.exited && !session.getStalled() &&
-      session.nudgeScreenRevision() === screenRevision &&
-      session.nudgeQueuedInputVersion() === queuedInputVersion &&
-      session.answerablePrompt(screen) === null && stillWaiting() &&
-      (phase === 'before'
-        ? session.lastChangeAt() === outputAt && session.nudgeInputVersion() === inputVersion &&
-          screen === snapshot.screen && session.nudgeReady(this.now())
-        : session.nudgeInputVersion() === inputVersion + 1 && session.nudgeReadyWithLine(line));
+    let failedCheck: 'line-not-seen' | 'other-input-arrived' | 'screen-changed' |
+      'prompt-showing' | 'stalled' | 'messages-changed' | 'session-ended' = 'line-not-seen';
+    const ready = (screen: string, phase: 'before' | 'submit'): boolean => {
+      if (session.exited) { failedCheck = 'session-ended'; return false; }
+      if (session.getStalled()) { failedCheck = 'stalled'; return false; }
+      if (session.nudgeScreenRevision() !== screenRevision ||
+        (phase === 'before' && (session.lastChangeAt() !== outputAt || screen !== snapshot.screen))) {
+        failedCheck = 'screen-changed'; return false;
+      }
+      if (session.nudgeQueuedInputVersion() !== queuedInputVersion ||
+        session.nudgeInputVersion() !== inputVersion + (phase === 'submit' ? 1 : 0)) {
+        failedCheck = 'other-input-arrived'; return false;
+      }
+      if (session.answerablePrompt(screen) !== null) { failedCheck = 'prompt-showing'; return false; }
+      if (!stillWaiting()) { failedCheck = 'messages-changed'; return false; }
+      if (phase === 'before' ? !session.nudgeReady(this.now()) : !session.nudgeReadyWithLine(line)) {
+        failedCheck = 'line-not-seen'; return false;
+      }
+      return true;
+    };
     try {
-      const result = await session.writeNudge(line + session.nudgeSubmit(), ready);
+      const result = await session.writeNudgeWithReason(line + session.nudgeSubmit(), ready, ids, () => failedCheck);
       if (result === 'wait') return 'wait';
-      if (result === 'aborted') {
-        this.audit.record('daemon', 'nudge-aborted', id, { messageIds: ids, count: ids.length });
+      if (result.startsWith('aborted-')) {
+        const reason = result.slice('aborted-'.length);
+        this.audit.record('daemon', 'nudge-aborted', id, { messageIds: ids, count: ids.length, reason });
         return 'wait';
       }
     } catch (error) {
@@ -4906,7 +4961,7 @@ export class Daemon {
       // race, the session dying mid-write, from escaping as an unhandled
       // rejection.
       const report = terminalReportKind(text);
-      void session.write(text, { terminalReport: report !== null }).catch((error: unknown) => {
+      void session.write(text, { terminalReport: report !== null, humanInput: report === null }).catch((error: unknown) => {
         this.logger.warn('viewer input failed', {
           id: session.id,
           error: String(error),

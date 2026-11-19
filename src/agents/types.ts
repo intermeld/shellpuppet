@@ -102,6 +102,8 @@ export interface NudgeView {
   styled?: readonly StyledLine[];
   /** Exact daemon line allowed in the composer during a delayed submission. */
   expectedDraft?: string;
+  /** Require a blank composer or the module's exact known placeholder. */
+  exactEmpty?: boolean;
 }
 
 /** Internal harness data and the few detector walks not yet expressed as data. */

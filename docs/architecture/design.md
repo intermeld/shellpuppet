@@ -260,8 +260,10 @@ A module may also offer a nudge judgement. It reuses that module's composer,
 busy and turn lines, and it repeats that module's placeholder wording and ink
 rule. It reports ready, busy, draft or unknown. The composer is empty only
 when its text is blank, or when it shows that module's exact placeholder
-drawn in the placeholder's own ink. Any other text is a draft, whatever its
-ink. Plain rows and styled rows are the same visible viewport, and the
+drawn in the placeholder's own ink. Claude Code may show a rotating suggestion
+in the same dim ink, which its module also treats as empty. Other text is a
+draft. This screen judgement never overrides a pending nudge body. Plain rows
+and styled rows are the same visible viewport, and the
 terminal height is required so clipped prompt detection can use it. The core
 then requires that ready judgement, no prompt waiting for a person, no settled
 stall, and a screen that has stayed unchanged for 1,500 ms. A module without
@@ -344,11 +346,31 @@ message whom, and a clock.
   pause. Some programs paint a pasted line late, so the check before Enter
   repeats for up to 2 s until the composer shows exactly the line; other input
   in that time ends the wait at once. If anything changed in between,
-  nothing more is sent and the messages stay `waiting` (audit `nudge-aborted`).
-  A line already typed is left visible rather than erased; the composer then
-  reads as a draft and receives no further nudge until it is cleared. The
-  composer comparison sees the rendered text, so trailing spaces and blank
-  rows cannot be told apart from the line itself.
+  nothing more is sent and the messages stay `waiting` (audit `nudge-aborted`,
+  with the last failed guard as the reason). Once the body reaches the PTY,
+  it remains pending if Enter is not confirmed. The daemon must never type
+  another body into that session while it is pending. It may send only the
+  submit key after the live composer visibly holds exactly one copy of the
+  pending body, provided no other input has reached the session since it was
+  written. Once a person types, the pending body belongs to them to send or
+  clear; restoring the same visible line or painting it late never restores
+  submit-only recovery for that body. Terminal reports are not a person's
+  input; a paste identical to a report is treated as a report, as elsewhere.
+  A refused recovery is audited as
+  `person-input-since`. Later messages do not change the pending body.
+  The recipient then reads every waiting message in its inbox. The audit
+  identifies the ids covered by the pending body and those waiting later,
+  without message text. A pending body clears without Enter only after input
+  ending in the submit key has gone in, the session was then seen busy and
+  afterwards idle with a positively empty composer; or after a positively
+  empty composer and unchanged screen have persisted for 30 seconds since
+  the last input or output. Input, output, resize, prompt, stall or unknown
+  reading restarts the period. A module's known placeholder counts as empty;
+  placeholder ink alone does not. A programme that holds accepted input
+  unpainted beyond that period while showing an empty, idle composer can
+  receive a second line. The submit check still refuses two copies, leaving
+  them for a person to clear. The composer comparison sees the rendered text, so trailing
+  spaces and blank rows cannot be told apart from the line itself.
 
 Who may message whom is configuration (`messaging` in config.json): off by
 default, then a session and the sessions it started, or groups. Sessions join

@@ -30,6 +30,8 @@ export interface NudgeObservation {
   unchangedMs: number;
   /** The daemon line already typed into the composer, for a delayed Enter. */
   expectedDraft?: string;
+  /** Require positive proof of an empty composer for pending-body clearance. */
+  exactEmpty?: boolean;
 }
 
 /**
@@ -60,7 +62,7 @@ export function nudgeVerdict(module: AgentModule | undefined, observation: Nudge
   if (prompt !== null) return { ready: false, reason: 'prompt' };
   if (observation.stall !== undefined) return { ready: false, reason: 'stalled' };
   const reading = module.nudge.readiness({ rows: screen.rows, styled: screen.styled,
-    expectedDraft: observation.expectedDraft });
+    expectedDraft: observation.expectedDraft, exactEmpty: observation.exactEmpty });
   if (reading !== 'ready') return { ready: false, reason: reading };
   if (observation.expectedDraft !== undefined) return { ready: true };
   if (!Number.isFinite(observation.unchangedMs) || observation.unchangedMs < NUDGE_QUIET_MS) {

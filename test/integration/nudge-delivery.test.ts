@@ -8,6 +8,99 @@ import { createFileLogger } from '../../src/daemon/logger.js';
 import { api, eventually, makeTempHome, repoRoot, startTestDaemon } from './helpers.js';
 
 describe('fixed message nudges through a real terminal', () => {
+  it('clears a pending body after the composer stays empty for a quiet period', async () => {
+    const home = makeTempHome('nudge-clearable-');
+    const td = await startTestDaemon({ home, audit: createAuditor(home), promptScanIntervalMs: 250,
+      messaging: { enabled: true, allow: [{ group: 'peers', members: ['sender'] }],
+        nudgeIntervalMs: 1_000 } });
+    // Nudge delivery is independent of group admission.
+    (td.daemon as unknown as { mailbox: { policy: (from: unknown, to: unknown) => boolean } }).mailbox.policy = () => true;
+    try {
+      const input = path.join(home, 'recipient.input');
+      const fixture = path.join(repoRoot, 'test', 'fixtures', 'nudge-tui.mjs');
+      const started = await api(td.port, td.token, '/sessions', { body: {
+        command: process.execPath, args: [fixture, 'clearable', input, path.join(home, 'unused.read')],
+        shell: false, openViewer: false, cols: 120, rows: 34, label: 'recipient', agent: 'claude',
+      } });
+      expect(started.status).toBe(200);
+      const id = String(started.body['id']);
+      const session = td.daemon['manager'].get(id)!;
+      (session as unknown as { pendingNudgeSettleMs: number }).pendingNudgeSettleMs = 2_500;
+      const claim = await api(td.port, td.token, '/messages/claims', { body: { name: 'sender' } });
+      const headers = { 'x-shellpuppet-claim': String(claim.body['claimId']),
+        'x-shellpuppet-claim-secret': String(claim.body['secret']) };
+      const first = await api(td.port, td.token, '/messages', { body: { to: 'recipient', text: 'first' }, headers });
+      const firstLine = buildNudge([{ id: String(first.body['id']), from: {
+        id: String(claim.body['claimId']), name: 'sender' } }]);
+      await eventually(() => fs.existsSync(input) && fs.readFileSync(input, 'utf8') === firstLine, 10_000);
+      const audit = () => fs.existsSync(auditLogPath(home))
+        ? fs.readFileSync(auditLogPath(home), 'utf8').split('\n').filter(Boolean)
+          .map((row) => JSON.parse(row) as { action: string; meta?: { messageIds?: string[] } }) : [];
+      await eventually(() => audit().some((entry) => entry.action === 'nudge-aborted'), 10_000);
+      const second = await api(td.port, td.token, '/messages', { body: { to: 'recipient', text: 'second' }, headers });
+      await session.write('\x15', { humanInput: true });
+      await eventually(() => fs.existsSync(input) && fs.readFileSync(input, 'utf8') === `${firstLine}\x15`, 5_000);
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      await td.daemon['nudges'].tick();
+      expect(audit().some((entry) => entry.action === 'nudge-cleared')).toBe(false);
+      await eventually(() => audit().some((entry) => entry.action === 'nudge-cleared'), 5_000);
+      const next = buildNudge([{ id: String(first.body['id']), from: {
+        id: String(claim.body['claimId']), name: 'sender' } }, { id: String(second.body['id']), from: {
+          id: String(claim.body['claimId']), name: 'sender' } }]);
+      await eventually(() => fs.readFileSync(input, 'utf8') === `${firstLine}\x15${next}`, 10_000);
+      await td.daemon['nudges'].tick();
+      expect(fs.readFileSync(input, 'utf8')).toBe(`${firstLine}\x15${next}`);
+      expect(audit().find((entry) => entry.action === 'nudge-cleared')?.meta?.messageIds)
+        .toEqual([first.body['id']]);
+    } finally { await td.stop(); }
+  }, 120_000);
+
+  it.each(['late', 'dim-extra'] as const)('does not type a second body after %s paint aborts', async (mode) => {
+    const home = makeTempHome(`nudge-${mode}-`);
+    const td = await startTestDaemon({ home, audit: createAuditor(home), promptScanIntervalMs: 250,
+      messaging: { enabled: true, allow: [{ group: 'peers', members: ['sender'] }],
+        nudgeIntervalMs: 1_000 } });
+    // Nudge delivery is independent of group admission.
+    (td.daemon as unknown as { mailbox: { policy: (from: unknown, to: unknown) => boolean } }).mailbox.policy = () => true;
+    try {
+      const input = path.join(home, 'recipient.input');
+      const fixture = path.join(repoRoot, 'test', 'fixtures', 'nudge-tui.mjs');
+      const started = await api(td.port, td.token, '/sessions', { body: {
+        command: process.execPath, args: [fixture, mode, input, path.join(home, 'unused.read')],
+        shell: false, openViewer: false, cols: 120, rows: 34, label: 'recipient', agent: 'claude',
+      } });
+      expect(started.status).toBe(200);
+      const claim = await api(td.port, td.token, '/messages/claims', { body: { name: 'sender' } });
+      const headers = { 'x-shellpuppet-claim': String(claim.body['claimId']),
+        'x-shellpuppet-claim-secret': String(claim.body['secret']) };
+      const sent = await api(td.port, td.token, '/messages', { body: { to: 'recipient', text: 'private text' }, headers });
+      expect(sent.status).toBe(201);
+      const line = buildNudge([{ id: String(sent.body['id']), from: {
+        id: String(claim.body['claimId']), name: 'sender' } }]);
+      await eventually(() => fs.existsSync(input) && fs.readFileSync(input, 'utf8').includes(line), 10_000);
+      const audit = () => fs.existsSync(auditLogPath(home))
+        ? fs.readFileSync(auditLogPath(home), 'utf8').split('\n').filter(Boolean)
+          .map((row) => JSON.parse(row) as { action: string; meta?: { reason?: string } })
+        : [];
+      await eventually(() => audit().some((entry) => entry.action === 'nudge-aborted'), 10_000);
+      // Let the first scheduler run finish, then force a retry before
+      // explicitly asking the late fixture to paint.
+      await eventually(() => td.daemon['nudges']['running'] === null, 5_000);
+      await td.daemon['nudges'].tick();
+      expect(fs.readFileSync(input, 'utf8')).toBe(line);
+      expect(audit().some((entry) => entry.action === 'nudge-aborted' &&
+        entry.meta?.reason === 'line-not-seen')).toBe(true);
+      if (mode === 'late') {
+        await td.daemon['nudges'].tick();
+        expect(fs.readFileSync(input, 'utf8')).toBe(line);
+        fs.writeFileSync(`${input}.paint`, 'paint');
+        await eventually(() => fs.readFileSync(input, 'utf8') === `${line}\r`, 15_000);
+        expect(fs.readFileSync(input, 'utf8')).toBe(`${line}\r`);
+        await eventually(() => audit().some((entry) => entry.action === 'nudge'), 5_000);
+      }
+    } finally { await td.stop(); }
+  }, 60_000);
+
   it('types once only to an idle covered session and records a text-free audit', async () => {
     const home = makeTempHome('nudge-delivery-');
     const logFile = path.join(home, 'daemon.log');
@@ -53,10 +146,14 @@ describe('fixed message nudges through a real terminal', () => {
       await eventually(async () => (await outbox()).find((entry) => entry.id === sent.get('ready'))?.state === 'nudged',
         15_000);
       const expected = buildNudge([{ id: sent.get('ready')!, from: { id: String(claim.body['claimId']), name: 'sender' } }]);
-      await eventually(() => fs.existsSync(files('ready').input));
+      await eventually(() => fs.existsSync(files('ready').input) &&
+        fs.readFileSync(files('ready').input, 'utf8') === `${expected}\r`);
       expect(fs.readFileSync(files('ready').input, 'utf8')).toBe(`${expected}\r`);
-      const events = fs.readFileSync(`${files('ready').input}.events`, 'utf8').trim().split('\n')
-        .map((row) => JSON.parse(row) as { data: string; at: number });
+      const readEvents = () => fs.existsSync(`${files('ready').input}.events`)
+        ? fs.readFileSync(`${files('ready').input}.events`, 'utf8').trim().split('\n')
+          .map((row) => JSON.parse(row) as { data: string; at: number }) : [];
+      await eventually(() => readEvents().length === 2, 5_000);
+      const events = readEvents();
       expect(events.map((event) => event.data)).toEqual([expected, '\r']);
       // PTY delivery can lag behind the write clock, unlike the recording PTY.
       expect(events[1]!.at - events[0]!.at).toBeGreaterThanOrEqual(NUDGE_SUBMIT_DELAY_MS - 50);
@@ -100,5 +197,5 @@ describe('fixed message nudges through a real terminal', () => {
       expect(logFile && fs.readFileSync(logFile, 'utf8')).not.toContain(marker);
       expect(audit).not.toContain(expected);
     } finally { await td.stop(); }
-  }, 60_000);
+  }, 90_000);
 });

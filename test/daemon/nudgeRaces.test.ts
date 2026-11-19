@@ -32,7 +32,8 @@ describe('queued nudge delivery', () => {
         nudgeScreenRevision: () => revision,
         getStalled: () => undefined,
         nudgeSubmit: () => '\r',
-        writeNudge: async (data: string, ready: (current: string, phase: 'before' | 'submit') => boolean) => {
+        nudgePendingLine: () => null,
+        writeNudgeWithReason: async (data: string, ready: (current: string, phase: 'before' | 'submit') => boolean) => {
           reached();
           await gate;
           if (!ready(screen, 'before')) return 'wait';
