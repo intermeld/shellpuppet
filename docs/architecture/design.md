@@ -360,7 +360,9 @@ message whom, and a clock.
   `person-input-since`. Later messages do not change the pending body.
   The recipient then reads every waiting message in its inbox. The audit
   identifies the ids covered by the pending body and those waiting later,
-  without message text. A pending body clears without Enter only after input
+  without message text. A recovered line may name a message already read;
+  the agent reads its inbox and gets whatever is waiting. A pending body
+  clears without Enter only after input
   ending in the submit key has gone in, the session was then seen busy and
   afterwards idle with a positively empty composer; or after a positively
   empty composer and unchanged screen have persisted for 30 seconds since

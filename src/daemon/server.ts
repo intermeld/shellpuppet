@@ -2594,10 +2594,10 @@ export class Daemon {
       this.audit.record('daemon', 'nudge-cleared', id, { messageIds: clearedIds,
         waitingMessageIds: unread.map((entry) => entry.id) });
     }
-    if (unread.some((entry) => entry.state === 'nudged') || unread.length === 0) return 'done';
-    const ids = unread.map((entry) => entry.id);
     const pending = session.nudgePendingLine();
     if (pending !== null) {
+      const ids = unread.filter((entry) => entry.state === 'waiting').map((entry) => entry.id);
+      if (ids.length === 0) return 'done';
       const covered = session.nudgePendingIds();
       if (!session.nudgePendingUntouched()) {
         if (session.nudgeReadyWithLine(pending) && session.nudgePendingTouchRefusal()) {
@@ -2607,19 +2607,21 @@ export class Daemon {
         }
         return 'wait';
       }
-      if (!session.nudgeReadyWithLine(pending) ||
-        !covered.every((messageId) => ids.includes(messageId))) return 'wait';
+      if (!session.nudgeReadyWithLine(pending)) return 'wait';
       const inputVersion = session.nudgeInputVersion();
       const queuedInputVersion = session.nudgeQueuedInputVersion();
       const screenRevision = session.nudgeScreenRevision();
-      const submitted = await session.submitPendingNudge(pending, (screen) =>
-        !session.exited && !session.getStalled() &&
-        session.nudgeInputVersion() === inputVersion &&
-        session.nudgeQueuedInputVersion() === queuedInputVersion &&
-        session.nudgeScreenRevision() === screenRevision &&
-        session.answerablePrompt(screen) === null &&
-        ids.every((messageId) => this.mailbox.inbox(id, { markRead: false })
-          .some((entry) => entry.id === messageId && entry.state === 'waiting')));
+      const submitted = await session.submitPendingNudge(pending, (screen) => {
+        const waitingIds = this.mailbox.inbox(id, { markRead: false })
+          .filter((entry) => entry.state === 'waiting').map((entry) => entry.id);
+        return !session.exited && !session.getStalled() &&
+          session.nudgeInputVersion() === inputVersion &&
+          session.nudgeQueuedInputVersion() === queuedInputVersion &&
+          session.nudgeScreenRevision() === screenRevision &&
+          session.answerablePrompt(screen) === null &&
+          waitingIds.length === ids.length &&
+          ids.every((messageId) => waitingIds.includes(messageId));
+      });
       if (!submitted) {
         if (session.nudgePendingTouchRefusal()) {
           this.audit.record('daemon', 'nudge-aborted', id, {
@@ -2630,9 +2632,12 @@ export class Daemon {
       }
       this.mailbox.markNudged(ids);
       this.audit.record('daemon', 'nudge', id, { messageIds: [...covered], count: covered.length,
-        waitingMessageIds: ids.filter((messageId) => !covered.includes(messageId)) });
+        waitingMessageIds: ids.filter((messageId) => !covered.includes(messageId)),
+        staleMessageIds: covered.filter((messageId) => !unread.some((entry) => entry.id === messageId)) });
       return 'sent';
     }
+    if (unread.some((entry) => entry.state === 'nudged') || unread.length === 0) return 'done';
+    const ids = unread.map((entry) => entry.id);
     const line = buildNudge(unread);
     if (!session.hasPainted() || !session.nudgeReady(this.now())) return 'wait';
     const snapshot = await session.snapshot();
