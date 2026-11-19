@@ -5,7 +5,8 @@ export const deliveredNoticeScript = fs.readFileSync(new URL('../fixtures/notice
 export interface DeliveredCadence {
   end: number; epoch?: number; cycleRows?: number[];
   legs: { row: number; start: number; end: number; top: boolean; bottom: boolean }[];
-  samples: { time: number; row: number; side: string; leg: number; deadline: boolean; covered: boolean; evaluation?: boolean }[];
+  samples: { time: number; row: number; side: string; leg: number; deadline: boolean; covered: boolean;
+    evaluation?: boolean; frameTime?: number }[];
 }
 interface RepaintAssessment {
   start: number; end: number; top: number; bottom: number; target: string | null;
@@ -61,7 +62,8 @@ export function assessDeliveredCadence(cadence: DeliveredCadence) {
   for (const run of rectangleRests) {
     const runChanges = between(run.start, run.end);
     if (runChanges.length > 1) violations.push({ rule: 'one change per rectangle rest', run, changes: runChanges });
-    const frames = cadence.samples.filter(sample => sample.deadline && sample.time >= run.start + 1000 && sample.time < run.end);
+    const frames = cadence.samples.filter(sample => sample.deadline &&
+      (sample.frameTime ?? sample.time) >= run.start + 1000 && sample.time < run.end);
     const firstEligible = frames[0];
     // The rest must outlast that frame for its placement to be observable:
     // a rest that ends before the next delivered frame cannot show a clear.

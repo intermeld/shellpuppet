@@ -15,23 +15,24 @@ window.observeDeliveredNotice = (term, notices, startedAt = performance.now(), f
     if (edge !== stayEdge) { stayEdge = edge; stayStart = start; deadlineFrames = 0; }
     legs.push({ row, start, end: null, top, bottom });
   };
-  const sample = (deadline = false, evaluation = false) => {
+  const sample = (deadline = false, evaluation = false, frameTime) => {
     if (!legs.length) return;
     const time = performance.now() - epoch, row = term.buffer.active.cursorY;
     const box = rect(notices);
     samples.push({ time, row, side: notices.style.top === 'auto' ? 'bottom' : 'top',
-      leg: legs.length - 1, deadline, evaluation,
+      leg: legs.length - 1, deadline, evaluation, frameTime,
       covered: box.top < screen.top + (row + 1) * cell && box.bottom > screen.top + row * cell });
   };
-  const quietFrame = () => {
+  const quietFrame = timestamp => {
     const leg = legs.at(-1);
-    const due = stayEdge !== null && deadlineFrames < 2 && performance.now() - epoch - stayStart >= 1000;
+    const frameTime = timestamp - epoch;
+    const due = stayEdge !== null && deadlineFrames < 2 && frameTime - stayStart >= 1000;
     frame = requestAnimationFrame(quietFrame);
     if (due) {
       deadlineFrames++;
-      // Sample after the completed frame, including placement callbacks in
-      // its rAF batch. The assessor allows this frame and checks the next.
-      setTimeout(() => { if (!stopped && legs.at(-1) === leg) sample(true); }, 0);
+      // All callbacks in this update share its rendering timestamp. Read the
+      // placement after they finish, even if another callback crossed the deadline.
+      setTimeout(() => { if (!stopped && legs.at(-1) === leg) sample(true, false, frameTime); }, 0);
     }
   };
   const arm = () => {
