@@ -42,7 +42,7 @@ authenticated messaging call, including a pending wait.
 Treat a claim as a local same-user credential and keep it out of logs.
 
 The dashboard launcher has a Name box filled with the selected profile's
-name. A live pane's Rename button changes its label and messaging address.
+name. Rename in a live pane's menu changes its label and messaging address.
 The dashboard checks its credential, document proof and same-origin request
 for each rename. Neither the CLI nor MCP tools can rename a session.
 

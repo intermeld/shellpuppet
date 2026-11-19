@@ -746,9 +746,9 @@
     item.restart.dataset.action = 'restart';
     item.dismiss = makeButton('Dismiss', () => dismiss(item.id));
     item.dismiss.dataset.action = 'dismiss';
-    menu.append(item.kill, item.copy, item.pop, item.restart, item.dismiss);
+    menu.append(item.rename, item.kill, item.copy, item.pop, item.restart, item.dismiss);
     item.menu = menu;
-    head.append(label, renameForm, purpose, role, badge, messageCount, state, space, size, item.rename, item.fit, item.enlarge,
+    head.append(label, renameForm, purpose, role, badge, messageCount, state, space, size, item.fit, item.enlarge,
       item.pin, item.left, item.right, item.menuButton);
     head.addEventListener('dblclick', (event) => {
       if (!event.target.closest('button')) item.enlarge.click();
@@ -787,7 +787,10 @@
     const summary = item.summary;
     item.label.textContent = summary.label || summary.id;
     item.purpose.textContent = summary.purpose || '';
-    item.role.textContent = summary.role === 'chair' ? 'Chair' : 'Delegate';
+    // Only a chair is marked in the header: a label on every pane would wrap a narrow header onto a second row.
+    item.role.textContent = summary.role === 'chair' ? 'Chair' : '';
+    item.role.hidden = summary.role !== 'chair';
+    item.card.dataset.role = summary.role === 'chair' ? 'chair' : 'delegate';
     item.badge.textContent = summary.stalled ? '● Stalled' : attention(item) ? '● Waiting' : '';
     item.badge.title = summary.stalled
       ? `${summary.stalled.reason} since ${summary.stalled.since}: ${summary.stalled.description}` : '';
