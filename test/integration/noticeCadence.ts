@@ -72,7 +72,8 @@ export function assessDeliveredCadence(cadence: DeliveredCadence) {
   }
   const repaintChanges = changes.filter(change => {
     const leg = cadence.legs[change.leg];
-    return leg && leg.end - leg.start < 1000 && !restChange(change);
+    if (!leg || restChange(change)) return false;
+    return (!leg.top && !leg.bottom) || leg.end - leg.start < 1000;
   });
   for (const change of repaintChanges) {
     const start = evidenceStart(change.time, historyStart);
