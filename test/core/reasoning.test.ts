@@ -765,14 +765,44 @@ describe('OpenCode (built in)', () => {
 describe('Grok (built in)', () => {
   const grok = builtIn('grok');
 
+  it('reads the same answer with rounded or square composer chrome', async () => {
+    const rounded = await screen('grok-answered');
+    const square = rounded.map((line) => ({
+      ...line,
+      text: line.text.replace(/^ {2}╭/u, '  ┌').replace(/^ {2}╰/u, '  └'),
+    }));
+    expect(latestResult(square, grok)).toEqual(latestResult(rounded, grok));
+    expect(latestResult(square, grok)).toMatchObject({ found: true, answer: ['     MANGO'] });
+    expect(hideReasoning(square, grok)!.hiddenLines).toBeGreaterThanOrEqual(hideReasoning(rounded, grok)!.hiddenLines);
+    expect(grok.chrome[0]!.text!.test('  ╭────')).toBe(true);
+    expect(grok.chrome[0]!.text!.test('  ┌────')).toBe(true);
+    expect(grok.frame!.text!.test('  ╰────')).toBe(true);
+    expect(grok.frame!.text!.test('  └────')).toBe(true);
+  });
+
   it('hides the live Thinking block behind its bar, and keeps the rest', async () => {
     for (const name of ['grok-thinking', 'grok-thinking-second-turn', 'grok-thinking-after-tool']) {
-      const filtered = hideReasoning(await screen(name), grok);
+      const rounded = await screen(name);
+      const filtered = hideReasoning(rounded, grok);
       expect(filtered?.hiddenBlocks, name).toBeGreaterThanOrEqual(1);
       const kept = filtered?.lines.join('\n') ?? '';
       // Every bar line went; the composer's own "│ >" row stays.
       expect(kept, name).not.toMatch(/^ {2}│(?! >)/m);
       expect(kept, name).toMatch(/^ {2}│ >/m);
+      const square = rounded.map((line) => ({ ...line,
+        text: line.text.replace(/^ {2}╭/u, '  ┌').replace(/^ {2}╰/u, '  └') }));
+      expect(hideReasoning(square, grok)!.hiddenLines, name).toBeGreaterThanOrEqual(filtered!.hiddenLines);
+    }
+  });
+
+  it('keeps a permission question under either frame style', async () => {
+    const rounded = await screen('grok-permission-box');
+    const square = rounded.map((line) => ({ ...line,
+      text: line.text.replace(/^ {2}╭/u, '  ┌').replace(/^ {2}╰/u, '  └') }));
+    for (const lines of [rounded, square]) {
+      const filtered = hideReasoning(lines, grok)!;
+      expect(filtered.lines.join('\n')).toContain('  │  >');
+      expect(filtered.hiddenLines).toBeGreaterThanOrEqual(3);
     }
   });
 

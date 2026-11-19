@@ -10,7 +10,7 @@ import type { AgentSignature } from '../../core/reasoning.js';
 const GROK_BOX_ROW = ' {2}(?:> |\\d+ \\([○•●]\\) |[│:])';
 
 export const reading: AgentSignature = {
-  // Grok Build 1.0.70. While the model thinks, its
+  // Grok Build 1.0.70, with the square composer frame seen in 1.0.89. While the model thinks, its
   // reasoning streams into a block behind a fading "│" bar, headed
   // "♦ Thinking…"; once it is done the block collapses to "♦ Thought for
   // Ns" with nothing under it. Messages and the answer are plain text
@@ -21,8 +21,8 @@ export const reading: AgentSignature = {
   programs: ['grok'],
   measured: 'Grok Build 1.0.70',
   composer: { text: '^ {2}│ >' },
-  chrome: [{ text: '^ {2}╭' }, { text: '^ {3}[|/\\\\-] \\S' }, { text: '^ {3}\\S.*shift\\+tab', }],
-  frame: { text: '^ {2}[╭╰]' },
+  chrome: [{ text: '^ {2}[╭┌]' }, { text: '^ {3}[|/\\\\-] \\S' }, { text: '^ {3}\\S.*shift\\+tab', }],
+  frame: { text: '^ {2}[╭╰┌└]' },
   busy: [{ text: '^ {3}[|/\\\\-] .* \\d+(?:\\.\\d+)?s\\s*$' }, { text: '♦ Thinking…' }],
   turn: { text: '^ {5}> \\S' },
   reasoning: [
