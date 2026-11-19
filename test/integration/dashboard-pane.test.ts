@@ -555,8 +555,11 @@ describe('a dashboard stream is passive without drive=0', () => {
 
   it('forgets a dashboard controller when its programme exits naturally', async () => {
     const daemon = await startPane();
+    const release = path.join(daemon.home, 'finish-programme');
     const started = await api(daemon.port, daemon.token, '/sessions', { body: {
-      command: process.execPath, args: ['-e', "setTimeout(() => process.exit(0), 1500)"],
+      command: process.execPath, args: ['-e',
+        "const fs = require('node:fs'); setInterval(() => { if (fs.existsSync(process.argv[1])) process.exit(0); }, 25);",
+        release],
       shell: false, openViewer: false, cols: 120, rows: 34,
     } });
     expect(started.status).toBe(200);
@@ -567,6 +570,7 @@ describe('a dashboard stream is passive without drive=0', () => {
     first.send(JSON.stringify({ type: 'resize', cols: 100, rows: 40, take: true }));
     await first.waitForControl((frame) => frame['type'] === 'geometry' && frame['control'] === 'yours');
     first.close();
+    fs.writeFileSync(release, '');
     await eventually(async () => (await api(daemon.port, daemon.token, `/sessions/${id}/snapshot`)).body['exited'] === true);
     const reconnect = await connectDash(daemon.port, id, cookie, proof);
     expect((await reconnect.waitForControl((frame) => frame['type'] === 'geometry'))['control']).toBe('adopt');
