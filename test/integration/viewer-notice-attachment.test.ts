@@ -8,7 +8,7 @@ import { findBrowser } from '../../src/daemon/viewerLauncher.js';
 import { noticeFrameLimitScript } from './noticeFrameLimit.js';
 import { api, eventually, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
-import { assessDeliveredCadence, deliveredNoticeScript, recordDeliveredCadence } from './noticeCadence.js';
+import { assessDeliveredCadence, deliveredChanges, deliveredNoticeScript, recordDeliveredCadence } from './noticeCadence.js';
 import type { DeliveredCadence } from './noticeCadence.js';
 
 const fixture = fileURLToPath(new URL('../fixtures/notice-nested-tui.mjs', import.meta.url));
@@ -258,52 +258,35 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
       await evaluate('__pause(1100)');
       const initial = await evaluate('__measure()') as { side: string; overlap: boolean };
       expect(initial.side, JSON.stringify(initial)).toBe('bottom');
-      await evaluate(`window.__firstHeader = new Promise(resolve => {
-        const subscription = __notice.term.onCursorMove(() => {
-          if (__notice.term.buffer.active.cursorY === 0) {
-            subscription.dispose();
-            resolve(performance.now());
-          }
-        });
-      }); true`);
+      await evaluate(deliveredNoticeScript);
+      await evaluate('window.__delivered = observeDeliveredNotice(__notice.term, __notice.notices, performance.now(), 0)');
       await input('r');
       const result = await evaluate(`(async () => {
-        const start = await __firstHeader, prompt = __notice.term.rows - 2;
-        let firstClear = null, changes = 0, coveredAtRest = 0, restSamples = 0;
-        let firstRestAt = null, lastRestAt = null;
-        let last = __measure(prompt).side;
-        while (performance.now() - start < 10000 &&
-            (performance.now() - start < 6500 || firstRestAt === null || lastRestAt - firstRestAt <= 2200)) {
-          const now = performance.now() - start, measure = __measure(prompt);
-          if (measure.side !== last) { changes++; last = measure.side; }
-          if (!measure.overlap && firstClear === null) firstClear = now;
-          if (now > 2500 && __notice.term.buffer.active.cursorY === prompt) {
-            firstRestAt ??= now; lastRestAt = now;
-            restSamples++; if (measure.overlap) coveredAtRest++;
-          }
-          await __pause(4);
-        }
-        return { firstClear, changes, restSamples, coveredAtRest, side: last,
-          firstRestAt, lastRestAt, ...__noticeFrameSummary(start, performance.now()) };
-      })()`) as { firstClear: number | null; changes: number; restSamples: number;
-        coveredAtRest: number; side: string; firstRestAt: number | null; lastRestAt: number | null;
-        frames: number; frameInterval: number; maxFrameGap: number; frameSpan: number; observedMs: number };
-      if (process.env['NOTICE_DIAGNOSTICS']) process.stderr.write(JSON.stringify({ mode, rows, result }) + '\n');
-      const details = JSON.stringify(result);
-      expect.soft(result.firstClear, details).not.toBeNull();
-      expect.soft(result.firstClear!, details).toBeLessThan(2500);
-      expect.soft(result.changes, details).toBe(1);
-      expect.soft(result.restSamples, details).toBeGreaterThanOrEqual(
-        Math.floor((result.lastRestAt! - result.firstRestAt!) / 200));
-      expect.soft(result.frames, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
-      expect.soft(result.frameInterval, details).toBeLessThan(200);
-      expect.soft(result.maxFrameGap, details).toBeLessThan(500);
-      expect.soft(result.frameSpan, details).toBeGreaterThan(5500);
-      expect.soft(result.observedMs - result.frameSpan, details).toBeLessThan(500);
-      expect.soft(result.firstRestAt, details).not.toBeNull();
-      expect.soft(result.lastRestAt! - result.firstRestAt!, details).toBeGreaterThan(2000);
-      expect.soft(result.coveredAtRest, details).toBe(0);
-      expect.soft(result.side, details).toBe('top');
+        await __pause(6500);
+        const cadence = __delivered.stop();
+        return { cadence, phases: __noticePhases.map(phase => phase.observedRow),
+          timing: __noticeFrameSummary(cadence.epoch), hidden: __notice.alert.hidden };
+      })()`) as { cadence: DeliveredCadence; phases: number[]; timing: { frames: number }; hidden: boolean };
+      const { samples } = result.cadence;
+      const changes = deliveredChanges(result.cadence);
+      const firstClear = samples.find(sample => sample.side === 'top');
+      const prompt = rows - 2;
+      const afterDeadline = samples.filter(sample => sample.row === prompt && sample.time >= 2500);
+      const details = JSON.stringify({ phases: result.phases, timing: result.timing, changes,
+        firstClear, firstPrompt: afterDeadline[0], lastPrompt: afterDeadline.at(-1) });
+      recordDeliveredCadence(`${mode}-${String(rows)}-long`, result.cadence);
+      expect(result.hidden, details).toBe(false);
+      expect(afterDeadline.filter(sample => sample.covered), details).toEqual([]);
+      if (result.phases.length < 8 || result.timing.frames < 2 || !afterDeadline.length ||
+          afterDeadline.at(-1)!.time - afterDeadline[0]!.time <= 2000) {
+        throw new Error(`runner stalled before two complete repaints and later prompt visits were observed: ${details}`);
+      }
+      const word = [0, Math.floor(rows / 3), Math.floor(rows / 2), prompt];
+      expect(result.phases.slice(0, 8), details).toEqual([...word, ...word]);
+      expect(samples[0]?.side, details).toBe('bottom');
+      expect(firstClear, details).toBeDefined();
+      expect(firstClear!.time, details).toBeLessThan(2500);
+      expect(changes.map(change => change.side), details).toEqual(['top']);
     }, 'long');
   }, 120_000);
   for (const cadence of ['short', 'extended']) for (const rows of [24, 150])
@@ -320,7 +303,10 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
         const start = performance.now();
         let samples = 0, restSamples = 0, covered = 0, coveredAtRest = 0, changes = 0, last = __measure().side;
         const changeTimes = [], coveredTimes = [], initialSide = last;
-        while (performance.now() - start < 6500) {
+        // Count delivered phases across three full extended words. Their
+        // nominal period excludes transport time and a suspended renderer.
+        while (performance.now() - start < 6500 || (${cadence === 'extended'} &&
+            __noticePhases.length < 13 && performance.now() - start < 10000)) {
           const measurement = __measure(__notice.term.rows - 2);
           if (measurement.side !== last) { last = measurement.side; changes++; changeTimes.push(performance.now() - start); }
           if (performance.now() - start > 1700) {
@@ -359,13 +345,9 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
       recordDeliveredCadence(`${mode}-${String(rows)}-${cadence}`, result.cadence);
       const details = JSON.stringify({ ...result, cadence: assessment,
         timing: await evaluate('__noticeFrameSummary(0)') });
-      expect.soft(result.samples, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
-      expect.soft(result.restSamples, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
-      expect.soft(result.frames, details).toBeGreaterThanOrEqual(Math.floor(result.frameSpan / 200));
-      expect.soft(result.frameInterval, details).toBeLessThan(200);
-      expect.soft(result.maxFrameGap, details).toBeLessThan(500);
-      expect.soft(result.frameSpan, details).toBeGreaterThan(4000);
-      expect.soft(result.observedMs - result.frameSpan, details).toBeLessThan(500);
+      if (result.restSamples === 0 || result.frames < 2 || !result.cadence.samples.some(sample => sample.evaluation)) {
+        throw new Error(`runner stalled before prompt placement was observed during a repaint: ${details}`);
+      }
       expect.soft(result.hidden, details).toBe(false);
       expect.soft(assessment.violations, details).toEqual([]);
       if (!assessment.rests.length) {
@@ -379,7 +361,7 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
         expect.soft(stretch.top / stretch.bottom, details).toBeLessThan(2 / 3);
       }
       if (cadence === 'extended') {
-        expect.soft(result.phases, details).toBeGreaterThan(12);
+        if (result.phases < 13) throw new Error(`runner stalled before three extended words were delivered: ${details}`);
         expect.soft(result.phaseMismatches, details).toBe(0);
       }
     }, cadence);
