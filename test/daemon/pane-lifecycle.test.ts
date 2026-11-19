@@ -3,7 +3,7 @@ import * as vm from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
 
 /** Exercise the shipped pane script without starting a browser or a daemon. */
-function fixture(captureMode = false, withNotice = false) {
+function fixture(captureMode = false, withNotice = false, initialRow = 0) {
   const fonts = new EventTarget();
   const cell = { width: 8, height: 16 };
   let glyphWidth = cell.width;
@@ -18,7 +18,7 @@ function fixture(captureMode = false, withNotice = false) {
     rows = 24;
     options = { fontSize: 13 };
     element = { querySelector: (selector: string) => withNotice && selector === '.xterm-screen' ? screen : null, style: {} };
-    buffer = { active: { cursorX: 0, cursorY: 0, baseY: 0, viewportY: 0 } };
+    buffer = { active: { cursorX: 0, cursorY: initialRow, baseY: 0, viewportY: 0 } };
     _core = {
       _coreBrowserService: { onDprChange: () => ({ dispose() {} }) },
       _viewport: { queueSync() {} },
@@ -105,6 +105,30 @@ describe('pane parser lifetime', () => {
         vi.setSystemTime(1100);
         f.frame();
         expect(f.notice.style.bottom).toBe('auto');
+      } finally { f.pane.destroy(); }
+    } finally { vi.useRealTimers(); }
+  });
+
+  it.each([
+    { word: 'rlong', nextRowAt: 906, earlyFrame: 990, deadlineFrame: 1001 },
+    { word: 'rrest', nextRowAt: null, earlyFrame: 300, deadlineFrame: 1065 },
+  ])('clears the observed $word upper rest before the delayed timer', ({ nextRowAt, earlyFrame, deadlineFrame }) => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(0);
+      const f = fixture(false, true, 22);
+      try {
+        f.move(0);
+        if (nextRowAt !== null) {
+          vi.setSystemTime(nextRowAt);
+          f.move(1);
+        }
+        vi.setSystemTime(earlyFrame);
+        f.frame();
+        expect(f.notice.style.bottom).toBe('auto');
+        vi.setSystemTime(deadlineFrame);
+        f.frame();
+        expect(f.notice.style.top).toBe('auto');
       } finally { f.pane.destroy(); }
     } finally { vi.useRealTimers(); }
   });
