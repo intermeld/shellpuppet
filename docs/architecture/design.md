@@ -511,12 +511,19 @@ visible question or option, so mixed-ink rows stay hidden at that boundary.
 Command rows have the same `#929292` ink as reasoning. They stay visible only
 when a uniformly box-inked question is followed by all three numbered options,
 each uniformly in its selected or unselected ink, with exactly one selected.
-Between the question and first option, only marked `│` or `:` command rows
-and blank bar rows may appear; the options follow consecutively. Ordinary
-prose in that interval remains hidden, while the question and individually
-box-inked options stay visible. A command whose question has scrolled away
-remains hidden; its box-ink options can still be kept. The same applies while
-the footer has not yet been painted. A bare border row immediately above a kept
+Between the question and first option, a command begins with a `│` marker;
+its `│` or `:` rows and grey continuation rows remain with it when the options
+form a complete live set. Ordinary prose without that command marker remains
+hidden, while the question and individually box-inked options stay visible.
+When the question has scrolled away, the marked command run above the three
+consecutive, uniformly box-inked options remains visible if its first row has
+the `│  │` marker, every text row has the measured command ink `#929292`, no
+reasoning start or question-shaped row interrupts it, and the live footer
+follows as its own unwrapped row in `#808080` ink. Exactly one option must be
+selected, and no later transcript text may follow the footer. Unknown ink or
+a forged option set leaves the command hidden. While the footer has not yet
+been painted, only individually verified option rows can remain visible.
+A bare border row immediately above a kept
 question or option stays with the box. Other bar rows behind an active
 reasoning block, including blockquoted lists, letter menus,
 selected-looking glyphs and footer-shaped text, stay hidden unless their

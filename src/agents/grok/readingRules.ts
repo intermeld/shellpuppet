@@ -7,6 +7,10 @@ const OPTION = /^ {2}│ {2}[123] \(([○•●])\) \S/;
 const COMMAND = /^ {2}│ {2}[│:]/;
 const BLANK_BAR = /^ {2}│\s*$/;
 const FOOTER = /^ {2}[123]\/3:select(?:\s|$)/;
+const COMMAND_FIRST = /^ {2}│ {2}│ /;
+const QUESTION_SHAPED = /^ {2}│ {2}> /;
+const LITERAL_REDIRECTION = /^ {2}│ {2}> \S/;
+const REASONING_START = /^ {2}│ {2}♦ (?:Thinking|Thought)/;
 
 // Grok Build 1.0.70 permission fixtures. Build 1.0.89 also uses the prose
 // colour and draws the heading at #6e6e6e rather than #6c6c6c.
@@ -53,6 +57,50 @@ function liveFooter(line: StyledLine | undefined): boolean {
     wholeRowInk(line, BOX_FOOTER_INK, 2);
 }
 
+/** The complete, live radio set at the foot of a permission box. */
+function liveOptions(lines: readonly StyledLine[], rows: readonly number[] | undefined): boolean {
+  if (rows?.length !== 3 || rows.some((row, index) => row !== rows[0]! + index ||
+    lines[row]?.text[5] !== String(index + 1) || !boxOption(lines[row]))) return false;
+  if (rows.filter((row) => /^ {2}│ {2}[123] \([•●]\)/.test(lines[row]!.text)).length !== 1) return false;
+  const after = rows[2]! + 1;
+  return BLANK_BAR.test(lines[after]?.text ?? '') && liveFooter(lines[after + 1]) &&
+    lines.slice(after + 2).every((line) => line.wrapped || line.text.trim() === '');
+}
+
+/** A visible question followed by a marked command and its complete live choices. */
+function visibleCommandInterval(lines: readonly StyledLine[], index: number): boolean {
+  let question = index;
+  while (question > 0 && (BAR.test(lines[question - 1]!.text) || lines[question - 1]!.wrapped)) question--;
+  for (; question <= index; question++) {
+    if (!boxQuestion(lines[question])) continue;
+    let firstOption = question + 1;
+    while (firstOption < lines.length && !boxOption(lines[firstOption])) firstOption++;
+    if (index >= firstOption || !liveOptions(lines, [firstOption, firstOption + 1, firstOption + 2])) continue;
+    const run = lines.slice(question + 1, firstOption);
+    if (!COMMAND_FIRST.test(run[0]?.text ?? '') ||
+      run.some((line) => REASONING_START.test(line.text) || QUESTION_SHAPED.test(line.text) ||
+        (!BAR.test(line.text) && !line.wrapped) ||
+        (!BLANK_BAR.test(line.text) && !wholeRowInk(line, REASONING_INK, line.wrapped ? 0 : 5)))) continue;
+    return true;
+  }
+  return false;
+}
+
+/** A command's first marker before literal redirection and live choices. */
+function literalCommandStart(lines: readonly StyledLine[], index: number): boolean {
+  if (!COMMAND_FIRST.test(lines[index]?.text ?? '') || !wholeRowInk(lines[index]!, REASONING_INK)) return false;
+  let redirection = index + 1;
+  while (redirection < lines.length && !LITERAL_REDIRECTION.test(lines[redirection]!.text)) {
+    const line = lines[redirection]!;
+    if ((!BAR.test(line.text) && !line.wrapped) || REASONING_START.test(line.text) ||
+      QUESTION.test(line.text) || boxOption(line) ||
+      (!BLANK_BAR.test(line.text) && !wholeRowInk(line, REASONING_INK, line.wrapped ? 0 : 5))) return false;
+    redirection++;
+  }
+  if (redirection >= lines.length || !wholeRowInk(lines[redirection]!, REASONING_INK)) return false;
+  return liveOptions(lines, [redirection + 1, redirection + 2, redirection + 3]);
+}
+
 /** An option after only box command rows, or the separately painted footer. */
 function boxQuestionWithEvidence(lines: readonly StyledLine[], index: number): boolean {
   if (!boxQuestion(lines[index])) return false;
@@ -68,6 +116,8 @@ function boxQuestionWithEvidence(lines: readonly StyledLine[], index: number): b
 function reasoningBar(lines: readonly StyledLine[], index: number): boolean {
   const line = lines[index];
   if (line === undefined || !BAR.test(line.text)) return false;
+  if (visibleCommandInterval(lines, index)) return false;
+  if (literalCommandStart(lines, index)) return false;
   if (line.text.trim() === '│') {
     let next = index + 1;
     while (lines[next]?.text.trim() === '') next++;
@@ -95,6 +145,7 @@ export const readingRules: ReadingRules = {
     // intervening command rows establish one box. Otherwise the box-inked
     // question and options stand alone while reasoning continues to hide.
     const question = lines.findIndex((line, index) => index >= first && index <= last && boxQuestion(line));
+    if (lines.some((_, index) => literalCommandStart(lines, index))) return null;
     const options = prompt.optionRows?.filter((row) => row >= first && row <= last && boxOption(lines[row])) ?? [];
     if (question >= 0) {
       if (options.length !== 3 || prompt.optionRows?.length !== 3 ||
@@ -106,6 +157,20 @@ export const readingRules: ReadingRules = {
         return [question, question];
       }
       return [question, options[2]!];
+    }
+    if (liveOptions(lines, prompt.optionRows)) {
+      const firstOption = prompt.optionRows![0]!;
+      let above = firstOption - 1;
+      while (above >= 0 && (BAR.test(lines[above]!.text) || lines[above]!.wrapped)) above--;
+      const run = lines.slice(above + 1, firstOption);
+      // The first command marker establishes a truncated box. A heading or
+      // question in the run makes its boundary ambiguous, so claim nothing.
+      if (COMMAND_FIRST.test(run[0]?.text ?? '') &&
+        run.every((line) => !QUESTION_SHAPED.test(line.text) && !REASONING_START.test(line.text) &&
+          (BAR.test(line.text) || line.wrapped) &&
+          (BLANK_BAR.test(line.text) || wholeRowInk(line, REASONING_INK, line.wrapped ? 0 : 5)))) {
+        return [above + 1, firstOption + 4];
+      }
     }
     if (options.length > 0 && options.every((row, index) => row === options[0]! + index)) {
       return [options[0]!, options[options.length - 1]!];
