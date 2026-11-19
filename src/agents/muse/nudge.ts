@@ -23,6 +23,8 @@ export function readiness(view: NudgeView): NudgeReadiness {
     // Muse Code 1.4.23 rotates grey tips in the empty composer (for example a
     // /resume tip); typed text is always drawn in TYPED_INK, never in this grey.
     anyHintInPlaceholderInk: true,
+    // Enter during a running turn hands the line to that turn.
+    queueWhileBusy: true,
     // The Voice input rule above the composer and the plain rule under it.
     ruleRows: [/^── Voice input \(Alt\+V to start\) ─+$/u, /^─{10,}$/u],
     ruleInk: (line) => line.spans.some((span) => span.from === 0 && span.dim && span.fg === RULE_INK) &&

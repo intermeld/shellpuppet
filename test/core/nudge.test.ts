@@ -303,9 +303,15 @@ describe('nudge readiness', () => {
       expect(readinessOf(claude, plain(CLAUDE_CODE_DRAFT))).toBe('draft');
     });
 
-    it('is busy while a captured turn is thinking or calling a tool', async () => {
-      expect(readinessOf(claude, await load('claude-thinking'))).toBe('busy');
-      expect(readinessOf(claude, await load('claude-tool-call-running'))).toBe('busy');
+    it('queues behind a captured turn that is thinking or calling a tool', async () => {
+      // A running turn with an empty composer takes a queued line, never an idle nudge.
+      for (const name of ['claude-thinking', 'claude-tool-call-running']) {
+        const screen = await load(name);
+        expect(readinessOf(claude, screen)).toBe('queue');
+        expect(nudgeVerdict(claude, screen)).toEqual({ ready: false, reason: 'quiet' });
+        expect(nudgeVerdict(claude, { ...screen, composerUnchangedMs: NUDGE_QUIET_MS - 1 })).toEqual({ ready: false, reason: 'quiet' });
+        expect(nudgeVerdict(claude, { ...screen, composerUnchangedMs: NUDGE_QUIET_MS })).toEqual({ ready: true, queued: true });
+      }
     });
 
     it('does not treat a captured transcript echo as an empty composer', async () => {
@@ -612,8 +618,11 @@ describe('nudge readiness', () => {
       expect(nudgeVerdict(muse, screen)).toEqual({ ready: false, reason: 'draft' });
     });
 
-    it('is busy while a captured turn is thinking', async () => {
-      expect(readinessOf(muse, await load('muse-busy-first'))).toBe('busy');
+    it('queues behind a captured turn that is thinking', async () => {
+      const screen = await load('muse-busy-first');
+      expect(readinessOf(muse, screen)).toBe('queue');
+      expect(nudgeVerdict(muse, screen)).toEqual({ ready: false, reason: 'quiet' });
+      expect(nudgeVerdict(muse, { ...screen, composerUnchangedMs: NUDGE_QUIET_MS })).toEqual({ ready: true, queued: true });
     });
 
     it('is not ready while a captured approval menu is open', async () => {
@@ -827,7 +836,7 @@ describe('a typed Muse voice rule after the real one has scrolled away', () => {
 });
 
 describe('a busy Muse turn painted after a full-width row', () => {
-  it('stays busy when xterm marks the busy row as a wrap', async () => {
+  it('still sees the busy turn when xterm marks the busy row as a wrap', async () => {
     const cols = 80;
     const voice = `── Voice input (Alt+V to start) ${'─'.repeat(cols - 32)}`;
     const stream = 'output '.repeat(11) + 'x'.repeat(cols - 77) +
@@ -840,6 +849,7 @@ describe('a busy Muse turn painted after a full-width row', () => {
     await renderer.dispose();
     expect(styled.find((line) => line.text.startsWith('◈ Thinking'))?.wrapped).toBe(true);
     const view = { rows: styled.map((line) => line.text), styled, viewportRows: 12, unchangedMs: NUDGE_QUIET_MS };
-    expect(muse.nudge?.readiness(view)).toBe('busy');
+    // Busy is detected, so the empty composer can only take a queued line.
+    expect(muse.nudge?.readiness(view)).toBe('queue');
   });
 });

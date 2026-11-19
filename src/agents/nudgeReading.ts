@@ -45,6 +45,12 @@ export interface ReadingNudgeRule {
   ruleRows?: readonly RegExp[];
   /** The ink a declared rule row is drawn in. Typed text in a draft has other ink. */
   ruleInk?: (line: StyledLine) => boolean;
+  /**
+   * The program takes a submitted line while a turn runs (it queues it or
+   * hands it to the turn). A busy turn with a visible, empty composer is then
+   * `queue`, and a typed line is judged in the composer as usual.
+   */
+  queueWhileBusy?: boolean;
 }
 
 const GLYPH = /^\s*[❯›>]/u;
@@ -263,9 +269,10 @@ export function readingReadiness(view: NudgeView, reading: AgentSignature, rule:
   const lines = unwrapBelowRules(viewport, rule);
   const at = composerIndex(lines, composer);
   if (at < 0) return 'unknown';
-  if (turnIsBusy(lines, reading, at)) return 'busy';
+  const busy = turnIsBusy(lines, reading, at);
+  if (busy && rule.queueWhileBusy !== true) return 'busy';
   const region = composerRegion(lines, reading, at, rule, view.expectedDraft !== undefined);
-  if (region === null || region.unproven) return 'unknown';
+  if (region === null || region.unproven) return busy ? 'busy' : 'unknown';
   if (view.expectedDraft !== undefined) {
     // A later copy may look like a fresh composer row. Do not select its
     // prompt glyph and forget the earlier copy still waiting above it.
@@ -274,5 +281,8 @@ export function readingReadiness(view: NudgeView, reading: AgentSignature, rule:
     if (rule.unprovenContinuations === true && !plainWrapRows(region.rows)) return 'draft';
     return holdsExpectedDraft(region.rows, view.expectedDraft) ? 'ready' : 'draft';
   }
-  return region.rows.every((line) => rowClear(line, rule, view.exactEmpty)) ? 'ready' : 'draft';
+  const clear = region.rows.every((line) => rowClear(line, rule, view.exactEmpty));
+  // A draft during a running turn waits: the person may be typing a reply.
+  if (busy) return clear ? 'queue' : 'busy';
+  return clear ? 'ready' : 'draft';
 }

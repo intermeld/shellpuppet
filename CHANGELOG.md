@@ -9,6 +9,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Added
 
+- Nudge Claude Code, Grok Build and Muse Code sessions while they work, as soon as the composer is free: the line is queued (or handed to the running turn) instead of waiting for the turn to end.
 - Show a chair or delegate role for sessions, with chair set only by a launch profile.
 - Match session messaging groups by role and reserve named members for outside claims.
 - Offer a Name box in the dashboard launcher and number repeated session names.
@@ -54,6 +55,8 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Nudge Grok Build sessions whose full-width frame rows the terminal marks as wraps, and at the start screen whatever hint line it shows.
+- Nudge a session again when a new message arrives after an earlier nudge went unanswered.
 - Submit an untouched pending nudge line when its named messages were read but another message is waiting, and audit the stale ids.
 - Nudge idle Grok sessions with a square composer frame after a turn or on the welcome screen, while keeping typed drafts and incomplete footers unready.
 - Never type an unconfirmed message nudge twice: a line that could not be confirmed stays pending, is submitted with the submit key alone once the composer shows it exactly once, and is left for the person if they have typed since. The audit records why a nudge was not submitted.

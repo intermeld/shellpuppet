@@ -13,7 +13,7 @@ export const NUDGE_QUIET_MS = 1_500;
 
 export type NudgeBlock = 'busy' | 'draft' | 'unknown' | 'prompt' | 'stalled' | 'quiet';
 
-export type NudgeVerdict = { ready: true } | { ready: false; reason: NudgeBlock };
+export type NudgeVerdict = { ready: true; queued?: true } | { ready: false; reason: NudgeBlock };
 
 export interface NudgeObservation {
   /**
@@ -28,6 +28,11 @@ export interface NudgeObservation {
   stall?: StallState;
   /** How long the screen has stayed unchanged, in milliseconds. */
   unchangedMs: number;
+  /**
+   * How long the composer and the rows under it have stayed unchanged. A running
+   * turn repaints elsewhere, so a queued nudge waits on this, not the whole screen.
+   */
+  composerUnchangedMs?: number;
   /** The daemon line already typed into the composer, for a delayed Enter. */
   expectedDraft?: string;
   /** Require positive proof of an empty composer for pending-body clearance. */
@@ -63,6 +68,12 @@ export function nudgeVerdict(module: AgentModule | undefined, observation: Nudge
   if (observation.stall !== undefined) return { ready: false, reason: 'stalled' };
   const reading = module.nudge.readiness({ rows: screen.rows, styled: screen.styled,
     expectedDraft: observation.expectedDraft, exactEmpty: observation.exactEmpty });
+  if (reading === 'queue') {
+    if (observation.expectedDraft !== undefined) return { ready: false, reason: 'busy' };
+    const quiet = observation.composerUnchangedMs;
+    if (quiet === undefined || !Number.isFinite(quiet) || quiet < NUDGE_QUIET_MS) return { ready: false, reason: 'quiet' };
+    return { ready: true, queued: true };
+  }
   if (reading !== 'ready') return { ready: false, reason: reading };
   if (observation.expectedDraft !== undefined) return { ready: true };
   if (!Number.isFinite(observation.unchangedMs) || observation.unchangedMs < NUDGE_QUIET_MS) {

@@ -89,8 +89,12 @@ export interface StallSignature {
   overlay?: { message: LineTest; background: string; centreOffset: number };
 }
 
-/** What a module can tell about typing into the composer it already describes. */
-export type NudgeReadiness = 'ready' | 'busy' | 'draft' | 'unknown';
+/**
+ * What a module can tell about typing into the composer it already describes.
+ * `queue` is a running turn whose composer is visible and empty, for a program
+ * that takes a submitted line while it works (queued or handed to the turn).
+ */
+export type NudgeReadiness = 'ready' | 'busy' | 'queue' | 'draft' | 'unknown';
 
 /**
  * One visible viewport. Plain rows are enough for a recorded transcript.
