@@ -304,12 +304,33 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
       expect(result.hidden, details).toBe(false);
       expect(result.longestPromptStay >= 1000 ||
         (promptTime - upperTime >= 20 && upperTime <= promptTime * 2 / 3), details).toBe(true);
-      expect(result.covered, details).toBe(0);
       expect(result.follow, details).not.toBeNull();
       expect(result.deadlineFrame, details).toBeGreaterThanOrEqual(2500);
       expect(result.follow, details).toBeLessThanOrEqual(result.deadlineFrame);
-      expect(result.placements, details).toEqual(['top']);
       expect(assessment.repaints.some(repaint => repaint.target === 'top'), details).toBe(true);
+      const upperRest = (assessment.rests as { edge: string; start: number; end: number; deadline?: number }[])
+        .find(rest => rest.edge === 'top');
+      if (!upperRest) {
+        expect(result.covered, details).toBe(0);
+        expect(result.placements, details).toEqual(['top']);
+        return;
+      }
+      // A delayed header can become a genuine upper rest. First prove startup
+      // and a complete steady repaint, then require clearance of that rest.
+      // The delivered assessor still checks all later visits and moves.
+      const epoch = result.cadence.epoch!;
+      const legs = result.cadence.legs.filter(leg => epoch + leg.start >= result.startedAt + result.deadlineFrame &&
+        leg.end <= upperRest.start);
+      const word = [0, Math.floor(rows / 3), Math.floor(rows / 2), result.row];
+      const complete = legs.some((_, i) => word.every((row, j) => legs[i + j]?.row === row));
+      const deadline = upperRest.deadline;
+      if (!complete || deadline === undefined || !result.cadence.samples.some(sample =>
+        sample.time > deadline && sample.time < upperRest.end)) {
+        throw new Error(`runner stalled before both a steady post-deadline word and a completed upper rest could be judged: ${details}`);
+      }
+      const restDue = epoch + upperRest.start + 1000 - result.startedAt;
+      expect(result.firstCoveredAt ?? Infinity, details).toBeGreaterThanOrEqual(restDue);
+      expect(result.firstWrongSideAt ?? Infinity, details).toBeGreaterThanOrEqual(restDue);
     }, 200, rows);
   }, 240_000);
 
