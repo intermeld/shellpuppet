@@ -11,6 +11,10 @@ a live id wins when a name equals one. `shellpuppet inbox` is an alias for
 `msg inbox`.
 `msg log [--participant <id>] [--limit <n>]` gives the caller's own retained
 message history, including text; `--participant` accepts only the caller's id.
+`msg send` returns `waiting` when queued; `msg outbox` shows each message's
+latest state, including `not-delivered` when its recipient ended or its outside
+claim lapsed. A live recipient refused by `messaging.allow` returns 403 with
+both names; an absent name returns 404.
 Control characters in printed message text appear as visible escapes. All
 commands accept `--json`.
 
@@ -22,7 +26,25 @@ value, including with `envFromDaemon: "all"`. The CLI presents the session's
 identity automatically. Outside a session, run `msg claim <name>`, then set
 the printed `SHELLPUPPET_CLAIM=<id>:<secret>`
 in that client's environment for later commands. `msg release` frees it.
+The CLI refuses `msg claim` when its environment identifies a session, which
+already messages under its own name. The daemon refuses claims presenting a
+session identity, a valid claim or the inside-session mark, and says which of
+them the request presented. The CLI and MCP server add the mark when
+`SHELLPUPPET_SESSION`, `SHELLPUPPET_SESSION_TOKEN` or
+`SHELLPUPPET_DAEMON_INSTANCE` is set, so a client that is not a session but
+inherited one clears them; a client that already holds a claim releases it
+first. A request can present both. A request presenting neither is
+treated as outside. A local process with the daemon token can omit those
+signals and already has access to every session. Messaging rules govern which
+participants the daemon carries messages between, not that token's authority.
+Claims lapse after the configured idle period unless their holder makes an
+authenticated messaging call, including a pending wait.
 Treat a claim as a local same-user credential and keep it out of logs.
+
+The dashboard launcher has a Name box filled with the selected profile's
+name. A live pane's Rename button changes its label and messaging address.
+The dashboard checks its credential, document proof and same-origin request
+for each rename. Neither the CLI nor MCP tools can rename a session.
 
 ```text
 shellpuppet start [options] <command> [args...]

@@ -25,6 +25,11 @@ async function fixture(enabled = true, members?: string[]): Promise<Fixture> {
     launcher: (url) => { urls.push(url); return Promise.resolve({ launched: true, mode: 'isolated-app', browser: 'mock' }); },
   });
   const mailbox = (daemon.daemon as unknown as { mailbox: Mailbox }).mailbox;
+  // These cases seed message history directly to exercise its presentation.
+  // Permission and reserved-name rules have their own focused tests.
+  const seeded = mailbox as unknown as { reservedNames: Set<string>; policy: () => boolean };
+  seeded.reservedNames.clear();
+  seeded.policy = () => true;
   const result = Object.assign(daemon, { urls, mailbox });
   running.push(result);
   return result;
@@ -71,6 +76,24 @@ function addPeers(daemon: Fixture): void {
 }
 
 describe('dashboard message access', () => {
+  it('labels a member claim as outside in the Messages view', async (context) => {
+    const browser = await findBrowser();
+    if (!browser) { context.skip(); return; }
+    const daemon = await fixture();
+    daemon.mailbox.register({ kind: 'session', id: 's1', name: 'beta' });
+    const claim = daemon.mailbox.claim('alpha');
+    daemon.mailbox.send(claim.claimId, 'beta', 'hello');
+    const shot = await captureDashboard({ browser, viewerUrl: await dashboardUrl(daemon), width: 900, height: 650,
+      drive: true, timeoutMs: 60_000,
+      probe: `(() => { if (document.getElementById('messages-view').hidden) document.getElementById('messages-toggle')?.click();
+        const row = document.querySelector('#messages-list button');
+        const options = [...document.querySelectorAll('#messages-filter option')].map(item => item.textContent);
+        return row?.textContent.includes('alpha (outside claim)') &&
+          options.some(label => label.includes('alpha (outside claim)')) || null; })()`,
+    });
+    expect(shot.probe).toBe(true);
+  }, 90_000);
+
   it('keeps the badge response bounded at the mailbox limit', async () => {
     const names = ['alpha', ...Array.from({ length: 10 }, (_, index) => `peer${index}`)];
     const daemon = await fixture(true, names);

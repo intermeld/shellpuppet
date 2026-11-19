@@ -755,6 +755,8 @@ export async function request(
       signal: options.signal,
       headers: {
         authorization: `Bearer ${conn.token}`,
+        ...(session !== undefined || sessionToken !== undefined || sessionInstance !== undefined
+          ? { 'x-shellpuppet-inside-session': '1' } : {}),
         ...(actor !== undefined ? { 'x-shellpuppet-actor': actor } : {}),
         ...(presentIdentity ? {
           'x-shellpuppet-session': session,

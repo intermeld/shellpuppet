@@ -16,6 +16,7 @@ import { promisify } from 'node:util';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createAuditor } from '../../src/daemon/audit.js';
 import { parseDaemonConfig } from '../../src/daemon/config.js';
+import type { MessagingConfig } from '../../src/daemon/config.js';
 import { createFileLogger } from '../../src/daemon/logger.js';
 import { chooseFolder } from '../../src/daemon/folderPicker.js';
 import { readDaemonState } from '../../src/daemon/paths.js';
@@ -150,6 +151,7 @@ async function startLaunchDaemon(options: {
   folderPicker?: (signal: AbortSignal) => Promise<string | null>;
   folderPickerTimeoutMs?: number;
   dashboardSessionFactory?: (options: SessionOptions) => Session;
+  messaging?: MessagingConfig;
 } = {}): Promise<LaunchDaemon> {
   const home = makeTempHome('dash-launch-');
   const logPath = path.join(home, 'daemon.log');
@@ -159,6 +161,7 @@ async function startLaunchDaemon(options: {
     logger: createFileLogger(logPath),
     audit: createAuditor(home),
     ...(options.policy !== undefined ? { policy: options.policy } : {}),
+    ...(options.messaging !== undefined ? { messaging: options.messaging } : {}),
     ...(options.daemonEnv !== undefined ? { daemonEnv: options.daemonEnv } : {}),
     ...(options.sessionEnv !== undefined ? { sessionEnv: options.sessionEnv } : {}),
     launchProfiles: options.launcher ?? { profiles: [], problems: [] },
@@ -426,6 +429,57 @@ describe('the body names a profile and cannot widen it', () => {
     expect(form.status).toBe(415);
     expect(await sessionIds(daemon)).toEqual(before);
   });
+});
+
+describe('dashboard session names', () => {
+  it('numbers repeated profile names and renames with dashboard authority', async () => {
+    const identityFile = path.join(makeDir('chair-role-'), 'identity.json');
+    const daemon = await startLaunchDaemon({
+      launcher: profilesOf([{ name: 'lead', command: process.execPath,
+        args: ['-e', `require('node:fs').writeFileSync(${JSON.stringify(identityFile)}, JSON.stringify({id:process.env.SHELLPUPPET_SESSION,token:process.env.SHELLPUPPET_SESSION_TOKEN}));setInterval(() => {}, 1000)`],
+        shell: false, role: 'chair' }]),
+      messaging: { enabled: true, allow: [{ group: 'chairs', members: ['outside'], roles: ['chair'] }] },
+    });
+    const first = await launch(daemon, { profile: 'lead' });
+    await eventually(() => fs.existsSync(identityFile));
+    const identity = JSON.parse(fs.readFileSync(identityFile, 'utf8')) as { id: string; token: string };
+    const second = await launch(daemon, { profile: 'lead' });
+    const third = await launch(daemon, { profile: 'lead', name: 'lead' });
+    expect([first.status, second.status, third.status]).toEqual([200, 200, 200]);
+    const ids = [first, second, third].map((response) => String((JSON.parse(response.body) as Record<string, unknown>)['id']));
+    const listed = await api(daemon.port, daemon.token, '/sessions');
+    const summaries = listed.body['sessions'] as { id: string; name: string; label: string; role: string }[];
+    expect(ids.map((id) => summaries.find((summary) => summary.id === id)?.name)).toEqual(['lead', 'lead-2', 'lead-3']);
+    expect(summaries.find((summary) => summary.id === ids[0])?.role).toBe('chair');
+    const child = await launch(daemon, { profile: 'lead', name: 'child' }, {
+      'x-shellpuppet-session': identity.id, 'x-shellpuppet-session-token': identity.token,
+    });
+    expect(child.status).toBe(200);
+    const childId = String((JSON.parse(child.body) as Record<string, unknown>)['id']);
+    const withChild = await api(daemon.port, daemon.token, '/sessions');
+    expect((withChild.body['sessions'] as { id: string; role: string; parent?: string }[])
+      .find((summary) => summary.id === childId)).toMatchObject({ role: 'delegate', parent: ids[0] });
+
+    const route = `/dashboard/sessions/${ids[0]}/rename`;
+    expect((await raw(daemon.port, 'POST', route, { origin: `http://127.0.0.1:${String(daemon.port)}` }, '{"name":"new-lead"}')).status).toBe(401);
+    expect((await raw(daemon.port, 'POST', route, launchHeaders(daemon, { 'x-shellpuppet-csrf': '' }), '{"name":"new-lead"}')).status).toBe(403);
+    expect((await raw(daemon.port, 'POST', route, launchHeaders(daemon), '{"name":"outside"}')).status).toBe(400);
+    expect((await raw(daemon.port, 'POST', route, launchHeaders(daemon), '{"name":"lead-2"}')).status).toBe(409);
+    expect((await raw(daemon.port, 'POST', route, launchHeaders(daemon), '{"name":"new-lead"}')).status).toBe(200);
+    const after = await api(daemon.port, daemon.token, '/sessions');
+    const changed = (after.body['sessions'] as { id: string; name: string; label: string }[]).find((summary) => summary.id === ids[0]);
+    expect(changed).toMatchObject({ name: 'new-lead', label: 'new-lead' });
+    expect(auditEntries(daemon.home).some((entry) => entry['action'] === 'rename' &&
+      (entry['meta'] as Record<string, unknown>)['oldName'] === 'lead')).toBe(true);
+    const fourth = await launch(daemon, { profile: 'lead', name: 'lead' });
+    expect(fourth.status).toBe(200);
+    const latest = await api(daemon.port, daemon.token, '/sessions');
+    const fourthId = String((JSON.parse(fourth.body) as Record<string, unknown>)['id']);
+    expect((latest.body['sessions'] as { id: string; name: string }[]).find((summary) => summary.id === fourthId)?.name).toBe('lead');
+    expect((await api(daemon.port, daemon.token, `/sessions/${childId}`, { method: 'DELETE' })).status).toBe(200);
+    expect((await raw(daemon.port, 'POST', `/dashboard/sessions/${childId}/rename`,
+      launchHeaders(daemon), '{"name":"ended-child"}')).status).toBe(404);
+  }, 90_000);
 });
 
 describe('a bad profile is left out and its siblings load', () => {

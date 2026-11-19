@@ -311,9 +311,12 @@ message whom, and a clock.
   claim with a secret) holds a name unique among live participants. A message
   is bound to the recipient INSTANCE that held the name when it was sent: if
   that participant ends before reading, the message is `not-delivered`, and a
-  later holder of the same name never receives it. Claims may hold names in
-  configured groups, including names a session may later want. The first live
-  participant to take a name holds it until it ends.
+  later holder of the same name never receives it. Group member names are
+  reserved for outside claims. A session takes its valid, available label as
+  its name; repeated dashboard launch names are numbered `-2`, `-3` and so on
+  within the 40-character limit. A dashboard owner may rename a live session. Rename
+  changes its label and mailbox address together; earlier messages retain
+  their recorded names and recipient ids.
 - **Limits.** One message holds at most 16 KiB of UTF-8 text. One recipient
   holds at most 200 messages and 1 MiB of text; a send that would pass those
   first drops that recipient's oldest READ messages, never unread ones, and is
@@ -348,14 +351,31 @@ message whom, and a clock.
   rows cannot be told apart from the line itself.
 
 Who may message whom is configuration (`messaging` in config.json): off by
-default, then a session and the sessions it started, or named groups. The
-dashboard view arrives as separate work.
+default, then a session and the sessions it started, or groups. Sessions join
+groups only by their immutable role, `chair` or `delegate`; a role of `chair`
+comes only from a launch profile on a start without a session caller. Group
+`members` name outside claims only. A session name never grants messaging
+rights. A send to a live but disallowed recipient returns 403 and names both
+participants; an absent name returns 404. The dashboard shows owner-wide
+message history and delivery states.
+
+Messaging rules decide which participants the daemon will carry messages
+between. They are not a security boundary against a local process holding
+the daemon token: that process can already drive every session. A session's
+role comes only from a launch profile a person started. The daemon enforces
+role-based admission independently of session names.
 
 The daemon registers each started session in one mailbox and ends it on
 exit. The caller is a verified session identity or a claim proved by its id
 and secret; a client token alone cannot act as a messaging participant.
 At most 64 outside claims may be live, and at most eight may be created in
 60 seconds. A stale claim header is ignored when creating a new claim.
+An outside claim lapses after `claimIdleMinutes` without an authenticated
+messaging call; a pending wait keeps it active. Lapse releases its name and
+marks unread messages `not-delivered`. A client that knows it runs inside a
+session refuses to make a claim. The daemon refuses a claim presenting a
+session identity or the inside-session mark. A request presenting neither is
+treated as an outside claim, and a claim of a configured member name is audited.
 The client-token HTTP routes are `POST /messages`, `GET /messages/inbox`,
 `GET /messages/outbox`, `GET /messages/directory`, `GET /messages/wait`,
 `POST /messages/claims`, `DELETE /messages/claims/:id` and
@@ -1257,7 +1277,7 @@ Residual folder start risks:
 `open` is `grid` by default, or `focus` or `window`, and sets the
 session's initial dashboard placement.
 
-`POST /dashboard/launch` accepts JSON containing `profile` and, only when
+`POST /dashboard/launch` accepts JSON containing `profile`, an optional `name`, and, only when
 that profile has `cwd: "ask"`, one listed `folder` name and, for a root choice,
 its `rootIndex`. An `any` profile may instead send `folderPath`. Any other key
 is `400` and starts nothing. The folder resolves to its configured existing
@@ -1624,6 +1644,7 @@ gets a fresh proof, without replacing the cookie. The routes are:
 | `GET /dashboard/profiles` | Cookie read; profile descriptions and problems, never environment values |
 | `GET /dashboard/messages` | Cookie and document proof; owner-wide message history, or unread counts per session for `summary=1` |
 | `POST /dashboard/launch` | Cookie, document proof and JSON profile name; limits in §4.3 |
+| `POST /dashboard/sessions/:id/rename` | Cookie, document proof and JSON name; live sessions only. Changes the label and mailbox address, then sends a feed update |
 | `POST /dashboard/folder-picker` | Cookie, same-origin mutation proof and JSON name of an `any` profile; opens one desktop picker at a time for at most ten minutes |
 | `GET /sessions` | Cookie may read the existing list, including prompt and stall state |
 | `DELETE /sessions/<id>` | Cookie plus document proof may kill |

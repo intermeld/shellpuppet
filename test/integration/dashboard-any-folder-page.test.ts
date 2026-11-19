@@ -81,14 +81,14 @@ describe('any-folder dashboard controls', () => {
           rootPath, rootOffered };
       })()`),
     });
-    const result = shot.probe as { visible: boolean; picked: string; bodies: { folderPath?: string; folder?: string; rootIndex?: number }[]; recent: string[]; rootPath: string; rootOffered: boolean };
+    const result = shot.probe as { visible: boolean; picked: string; bodies: { name?: string; folderPath?: string; folder?: string; rootIndex?: number }[]; recent: string[]; rootPath: string; rootOffered: boolean };
     expect(result.visible).toBe(true);
     expect(result.picked).toBe(chosen);
     expect(result.bodies[0]?.folderPath).toBe('C:\\typed\\folder');
     expect(result.recent).toContain('C:\\typed\\folder');
     expect(result.rootPath).toBe(rootPath);
     expect(result.rootOffered).toBe(true);
-    expect(result.bodies[1]).toEqual({ profile: 'open', folder: 'child', rootIndex: 0 });
+    expect(result.bodies[1]).toEqual({ profile: 'open', name: 'open', folder: 'child', rootIndex: 0 });
     expect(result.recent).toContain(rootPath);
   });
 });

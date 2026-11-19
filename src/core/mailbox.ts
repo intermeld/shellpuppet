@@ -53,6 +53,7 @@ export interface ParticipantRef {
   kind: ParticipantKind;
   id: string;
   name: string;
+  role?: 'chair' | 'delegate';
 }
 
 /** A daemon session joining the name registry. */
@@ -60,6 +61,7 @@ export interface SessionRegistration {
   kind: 'session';
   id: string;
   name: string;
+  role?: 'chair' | 'delegate';
 }
 
 export type MessageState = 'waiting' | 'nudged' | 'read' | 'not-delivered';
@@ -128,6 +130,8 @@ export interface MailboxDeps {
   policy?: MessagingPolicy;
   /** The clock behind message times. Defaults to the wall clock. */
   now?: () => number;
+  reservedNames?: ReadonlySet<string>;
+  claimIdleMinutes?: number;
 }
 
 // ------------------------------------------------------------------ internals
@@ -136,6 +140,8 @@ interface ParticipantRecord {
   kind: ParticipantKind;
   id: string;
   name: string;
+  role?: 'chair' | 'delegate';
+  lastActivity?: number;
   generation: number;
   /** Claims only: the secret handed out with the claim id. */
   secret?: string;
@@ -178,6 +184,8 @@ export class Mailbox extends EventEmitter {
   private readonly enabled: boolean;
   private readonly policy: MessagingPolicy;
   private readonly now: () => number;
+  private readonly reservedNames: ReadonlySet<string>;
+  private readonly claimIdleMs: number;
 
   private readonly participants = new Map<string, ParticipantRecord>();
   private readonly byName = new Map<string, string>();
@@ -192,6 +200,8 @@ export class Mailbox extends EventEmitter {
     // An absent policy refuses everything: the safe default.
     this.policy = deps.policy ?? (() => false);
     this.now = deps.now ?? Date.now;
+    this.reservedNames = deps.reservedNames ?? new Set();
+    this.claimIdleMs = (deps.claimIdleMinutes ?? 30) * 60_000;
   }
 
   /** Keep recent tombstones per sender, then enforce the daemon-wide budget. */
@@ -238,15 +248,48 @@ export class Mailbox extends EventEmitter {
       throw new MailboxError('duplicate-id', `A participant with the id "${session.id}" is already live.`);
     }
     this.checkName(session.name);
-    this.participants.set(session.id, { kind: 'session', id: session.id, name: session.name, generation: ++this.generation });
+    if (this.reservedNames.has(session.name)) throw new MailboxError('invalid-name', `The name "${session.name}" is reserved for an outside claim.`);
+    this.participants.set(session.id, { kind: 'session', id: session.id, name: session.name, role: session.role ?? 'delegate', generation: ++this.generation });
     this.byName.set(session.name, session.id);
   }
 
-  nameTaken(name: string): boolean { return this.byName.has(name); }
+  nameTaken(name: string): boolean { return this.byName.has(name) || this.reservedNames.has(name); }
 
   participant(id: string): ParticipantRef | undefined {
     const record = this.participants.get(id);
-    return record === undefined ? undefined : { kind: record.kind, id: record.id, name: record.name };
+    return record === undefined ? undefined : { kind: record.kind, id: record.id, name: record.name, ...(record.role === 'chair' ? { role: record.role } : {}) };
+  }
+
+  rename(id: string, name: string): void {
+    const record = this.participants.get(id);
+    if (record?.kind !== 'session') throw new MailboxError('unknown-sender', 'The session has ended.');
+    if (record.name === name) return;
+    if (this.reservedNames.has(name)) throw new MailboxError('invalid-name', `The name "${name}" is reserved for an outside claim.`);
+    this.checkName(name);
+    this.byName.delete(record.name);
+    record.name = name;
+    this.byName.set(name, id);
+  }
+
+  expiredClaims(): string[] {
+    const lapsed: string[] = [];
+    for (const record of [...this.participants.values()]) {
+      if (record.kind === 'claim' && ![...this.waiters].some((waiter) => waiter.readerId === record.id) && this.now() - (record.lastActivity ?? 0) >= this.claimIdleMs) {
+        lapsed.push(record.id);
+      }
+    }
+    return lapsed;
+  }
+
+  lapseClaims(): string[] {
+    const lapsed = this.expiredClaims();
+    for (const id of lapsed) this.end(id);
+    return lapsed;
+  }
+
+  touchClaim(id: string): void {
+    const record = this.participants.get(id);
+    if (record?.kind === 'claim') record.lastActivity = this.now();
   }
 
   private checkName(name: string): void {
@@ -261,10 +304,7 @@ export class Mailbox extends EventEmitter {
     }
   }
 
-  /**
-   * Hold a name from outside the daemon. The claim lasts until it is released
-   * or the process ends, and is proved by the secret handed back here.
-   */
+  /** Hold an outside name until release or idle expiry, proved by its secret. */
   private newClaimId(): string {
     return `claim_${randomBytes(16).toString('hex')}`;
   }
@@ -279,7 +319,7 @@ export class Mailbox extends EventEmitter {
       claimId = this.newClaimId();
     } while (this.participants.has(claimId));
     const secret = randomBytes(32).toString('base64url');
-    this.participants.set(claimId, { kind: 'claim', id: claimId, name, generation: ++this.generation, secret });
+    this.participants.set(claimId, { kind: 'claim', id: claimId, name, generation: ++this.generation, secret, lastActivity: this.now() });
     this.byName.set(name, claimId);
     return { claimId, secret };
   }
@@ -293,7 +333,11 @@ export class Mailbox extends EventEmitter {
     const record = this.participants.get(claimId);
     const matched = this.compareSecrets(typeof secret === 'string' ? secret : '',
       record?.kind === 'claim' ? (record.secret ?? DUMMY_CLAIM_SECRET) : DUMMY_CLAIM_SECRET);
-    return record?.kind === 'claim' && typeof secret === 'string' && matched;
+    if (record?.kind === 'claim' && typeof secret === 'string' && matched) {
+      record.lastActivity = this.now();
+      return true;
+    }
+    return false;
   }
 
   /** End a claim. The name is freed and its unread messages are not delivered. */
@@ -355,7 +399,7 @@ export class Mailbox extends EventEmitter {
     if (!this.policy(from, to)) {
       throw new MailboxError(
         'not-allowed',
-        `The messaging policy does not allow ${from.name} to send to ${to.name}.`,
+        `Messages from ${from.name} to ${to.name} are not allowed by messaging.allow.`,
       );
     }
     if (typeof text !== 'string' || text.length === 0) {
@@ -421,7 +465,7 @@ export class Mailbox extends EventEmitter {
     const message: StoredMessage = {
       id: `m${String(this.seq)}`,
       seq: this.seq,
-      from: { kind: from.kind, id: from.id, name: from.name },
+      from: { kind: from.kind, id: from.id, name: from.name, ...(from.role === 'chair' ? { role: from.role } : {}) },
       fromGeneration: from.generation,
       toId: to.id,
       toName: to.name,
@@ -517,7 +561,7 @@ export class Mailbox extends EventEmitter {
     if (sender === undefined || !this.enabled) return [];
     return [...this.participants.values()]
       .filter((recipient) => this.policy(sender, recipient))
-      .map(({ kind, id, name }) => ({ kind, id, name }));
+      .map(({ kind, id, name, role }) => ({ kind, id, name, ...(role === 'chair' ? { role } : {}) }));
   }
 
   /**

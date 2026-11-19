@@ -109,6 +109,7 @@ export interface DaemonConfig {
 export interface MessagingGroupRule {
   group: string;
   members: string[];
+  roles?: ('chair')[];
 }
 
 export type MessagingAllowRule = 'parent-child' | MessagingGroupRule;
@@ -119,6 +120,7 @@ export interface MessagingConfig {
   allow: MessagingAllowRule[];
   nudgeIntervalMs?: number;
   nudgesPerMinute?: number;
+  claimIdleMinutes?: number;
 }
 
 /** How the policy asks about sessions: the id of the session that started it. */
@@ -340,7 +342,7 @@ function parsePolicy(raw: unknown, problems: string[]): PolicyConfig {
   };
 }
 
-const MESSAGING_KEYS = new Set(['enabled', 'allow', 'nudgeIntervalMs', 'nudgesPerMinute']);
+const MESSAGING_KEYS = new Set(['enabled', 'allow', 'nudgeIntervalMs', 'nudgesPerMinute', 'claimIdleMinutes']);
 export const DEFAULT_NUDGE_INTERVAL_MS = 30_000;
 export const DEFAULT_NUDGES_PER_MINUTE = 20;
 const MAX_MESSAGING_ALLOW = 64;
@@ -370,13 +372,17 @@ function parseMessaging(raw: unknown, problems: string[]): MessagingConfig | und
   if (typeof enabled !== 'boolean') return off('enabled must be a boolean');
   const interval = raw['nudgeIntervalMs'] === undefined ? DEFAULT_NUDGE_INTERVAL_MS : raw['nudgeIntervalMs'];
   const perMinute = raw['nudgesPerMinute'] === undefined ? DEFAULT_NUDGES_PER_MINUTE : raw['nudgesPerMinute'];
+  const claimIdle = raw['claimIdleMinutes'] === undefined ? 30 : raw['claimIdleMinutes'];
   if (!Number.isSafeInteger(interval) || (interval as number) < 1) {
     return off('nudgeIntervalMs must be a positive integer');
   }
   if (!Number.isSafeInteger(perMinute) || (perMinute as number) < 1) {
     return off('nudgesPerMinute must be a positive integer');
   }
-  const limits = { nudgeIntervalMs: interval as number, nudgesPerMinute: perMinute as number };
+  if (typeof claimIdle !== 'number' || !Number.isFinite(claimIdle) || claimIdle <= 0) {
+    return off('claimIdleMinutes must be a positive number');
+  }
+  const limits = { nudgeIntervalMs: interval as number, nudgesPerMinute: perMinute as number, claimIdleMinutes: claimIdle };
   const allowRaw = raw['allow'];
   if (allowRaw === undefined) {
     if (enabled) problems.push('messaging is enabled without allow rules: no participants may message each other');
@@ -396,7 +402,7 @@ function parseMessaging(raw: unknown, problems: string[]): MessagingConfig | und
       allow.push(entry);
       continue;
     }
-    if (!isRecord(entry) || !Object.keys(entry).every((key) => key === 'group' || key === 'members')) {
+    if (!isRecord(entry) || !Object.keys(entry).every((key) => key === 'group' || key === 'members' || key === 'roles')) {
       problems.push(`${where} must be "parent-child" or an object with "group" and "members": that entry is ignored`);
       continue;
     }
@@ -406,19 +412,24 @@ function parseMessaging(raw: unknown, problems: string[]): MessagingConfig | und
       problems.push(`${where}.group must be a short name for the group: that entry is ignored`);
       continue;
     }
-    if (!Array.isArray(members) || members.length < 1 || members.length > MAX_MESSAGING_MEMBERS) {
+    if (!Array.isArray(members) || members.length > MAX_MESSAGING_MEMBERS) {
       problems.push(`${where}.members must list the participant names that may message each other: that entry is ignored`);
       continue;
     }
-    const valid = members.filter((name): name is string => typeof name === 'string' && NAME_PATTERN.test(name));
+    const roles = entry['roles'];
+    if (roles !== undefined && (!Array.isArray(roles) || roles.length === 0 || roles.some((role) => role !== 'chair'))) {
+      problems.push(`${where}.roles may contain only "chair": that entry is ignored`);
+      continue;
+    }
+    const valid = members.filter((name): name is string => typeof name === 'string' && NAME_PATTERN.test(name) && !/^s[0-9]+$/.test(name));
     if (valid.length !== members.length) {
       problems.push(`${where}: ignoring members that are not participant names`);
     }
-    if (valid.length < 1) {
+    if (valid.length < 1 && roles === undefined) {
       problems.push(`${where} names no valid participant: that entry is ignored`);
       continue;
     }
-    allow.push({ group, members: valid });
+    allow.push({ group, members: valid, ...(roles === undefined ? {} : { roles: ['chair'] }) });
   }
   return { enabled, allow, ...limits };
 }
@@ -444,7 +455,9 @@ export function buildMessagingPolicy(
         if (relations.parentOf(from.id) === to.id || relations.parentOf(to.id) === from.id) return true;
         continue;
       }
-      if (rule.members.includes(from.name) && rule.members.includes(to.name)) return true;
+      const member = (participant: ParticipantRef): boolean => participant.kind === 'claim'
+        ? rule.members.includes(participant.name) : rule.roles?.includes(participant.role as 'chair') === true;
+      if (member(from) && member(to)) return true;
     }
     return false;
   };
@@ -657,7 +670,16 @@ export function parseDaemonConfig(raw: unknown): ParsedDaemonConfig {
   // messaging on by accident: only "enabled": true does that.
   if (raw['messaging'] !== undefined) {
     const messaging = parseMessaging(raw['messaging'], problems);
-    if (messaging !== undefined) config.messaging = messaging;
+    if (messaging !== undefined) {
+      config.messaging = messaging;
+      const profiles = new Set(config.launcher?.profiles.map((profile) => profile.name) ?? []);
+      for (const rule of messaging.allow) {
+        if (rule === 'parent-child') continue;
+        for (const member of rule.members) if (profiles.has(member)) {
+          problems.push(`messaging member "${member}" equals a launch profile name: sessions join groups by role; members are for outside claims.`);
+        }
+      }
+    }
   }
 
   const mcp = raw['mcp'];

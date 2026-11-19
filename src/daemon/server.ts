@@ -773,6 +773,9 @@ export class Daemon {
     });
     this.mailbox = new Mailbox({
       enabled: options.messaging?.enabled === true,
+      reservedNames: new Set((options.messaging?.allow ?? []).flatMap((rule) => rule === 'parent-child' ? [] : rule.members)),
+      claimIdleMinutes: options.messaging?.claimIdleMinutes,
+      now: () => this.now(),
       policy: buildMessagingPolicy(options.messaging, {
         parentOf: (id) => this.manager.get(id)?.parent,
       }),
@@ -980,6 +983,7 @@ export class Daemon {
 
     const idleMs = this.options.idleMs ?? DEFAULT_IDLE_MS;
     this.idleTimer = setInterval(() => {
+      this.lapseIdleClaims();
       // Reap sessions whose grace has lapsed before judging idleness. A
       // rejected sweep must be caught here, or it becomes an
       // unhandledRejection and the handler in index.ts stops the daemon.
@@ -1602,7 +1606,7 @@ export class Daemon {
     }
     const summary = url.searchParams.get('summary') === '1';
     const groups = (this.options.messaging?.allow ?? []).filter((rule) => typeof rule !== 'string')
-      .map((rule) => ({ group: rule.group, members: rule.members }));
+      .map((rule) => ({ group: rule.group, members: rule.members, roles: rule.roles ?? [] }));
     this.audit.record('dashboard', 'msg-log', undefined, { count: messages.length });
     this.lastActivity = Date.now();
     json(res, 200, { enabled: this.options.messaging?.enabled === true,
@@ -1637,6 +1641,7 @@ export class Daemon {
   private async profileDescription(profile: LaunchProfile): Promise<Record<string, unknown>> {
     return {
       name: profile.name,
+      role: profile.role ?? 'delegate',
       label: describeProfileText(profile.label ?? '', profile.name),
       purpose: describeProfileText(profile.purpose ?? '', profile.name),
       command: profile.command,
@@ -1845,11 +1850,11 @@ export class Daemon {
       return;
     }
     for (const key of Object.keys(body)) {
-      if (key !== 'profile' && key !== 'folder' && key !== 'rootIndex' && key !== 'folderPath') {
+      if (key !== 'profile' && key !== 'folder' && key !== 'rootIndex' && key !== 'folderPath' && key !== 'name') {
         this.auditDashboardRefusal(req, 'body');
         json(res, 400, {
           error:
-            `The launch body may name only profile, folder, rootIndex and folderPath: "${key}" is not accepted. ` +
+            `The launch body may name only profile, name, folder, rootIndex and folderPath: "${key}" is not accepted. ` +
             'A command, arguments and environment value come from the profile.',
         });
         return;
@@ -1858,6 +1863,17 @@ export class Daemon {
     const profile = this.launchProfiles.profiles.find((entry) => entry.name === profileName);
     if (profile === undefined) {
       json(res, 400, { error: `No such launch profile: ${profileName}` });
+      return;
+    }
+    const caller = this.resolveCallerIdentity(req);
+    if (caller.presented && caller.session === undefined) {
+      json(res, 403, { error: 'Session identity was not recognised.' });
+      return;
+    }
+    const requestedName = body['name'] === undefined ? profile.name : body['name'];
+    if (typeof requestedName !== 'string' || !NAME_PATTERN.test(requestedName) ||
+      (body['name'] !== undefined && (/^s[0-9]+$/.test(requestedName) || this.isReservedClaimName(requestedName)))) {
+      json(res, 400, { error: 'Name must be 1 to 40 letters, digits, dots, underscores or hyphens, and must not be reserved.' });
       return;
     }
 
@@ -1996,11 +2012,13 @@ export class Daemon {
       ...(profile.agent !== undefined ? { agent: profile.agent } : {}),
       ...(profile.readyText !== undefined ? { readyText: profile.readyText } : {}),
       ...(profile.readyQuiet !== undefined ? { readyQuiet: profile.readyQuiet } : {}),
-      // The written command stays the session's label, as it was before the
-      // path was resolved: the page shows the profile, not a machine path.
-      ...(profile.label !== undefined
-        ? { label: expandProfileText(profile.label, profile.name, folderLabel) }
-        : { label: profile.command }),
+      // An explicit launcher name becomes the label. A configured profile
+      // label remains the default when the launch request omits a name.
+      label: body['name'] === undefined
+        ? (profile.label !== undefined ? expandProfileText(profile.label, profile.name, folderLabel) : profile.name)
+        : requestedName,
+      role: caller.session === undefined ? (profile.role ?? ('delegate' as const)) : ('delegate' as const),
+      ...(caller.session === undefined ? {} : { parent: caller.session }),
       ...(profile.purpose !== undefined
         ? { purpose: expandProfileText(profile.purpose, profile.name, folderLabel) }
         : {}),
@@ -2072,7 +2090,8 @@ export class Daemon {
     // that has just started is not reaped sooner than `idleMinutes` allows.
     this.lastActivity = Date.now();
 
-    this.registerMailboxSession(session);
+    this.registerMailboxSession(session,
+      body['name'] === undefined && NAME_PATTERN.test(session.label) ? undefined : requestedName, true);
     this.sessionFeed.add(this.summaryWithPrompt(session.summary()));
     session.onExit(() => {
       this.geometryController.delete(session.id);
@@ -2167,6 +2186,64 @@ export class Daemon {
     await this.manager.kill(id);
     this.dropSessionArtifacts(id);
     json(res, 200, { ok: true, killed: id });
+  }
+
+  private async handleDashboardRename(
+    req: http.IncomingMessage, res: http.ServerResponse, id: string,
+  ): Promise<void> {
+    const presented = this.dashboardCookiePresented(req.headers.cookie);
+    if (this.dashboardCookieToken(req.headers.cookie) === null) {
+      if (presented) this.auditDashboardRefusal(req, 'unauthenticated');
+      json(res, 401, { error: 'A dashboard credential is required.' });
+      return;
+    }
+    if (!this.isSameOriginMutation(req)) {
+      this.auditDashboardRefusal(req, this.mutationRefusalReason(req));
+      json(res, 403, { error: 'Forbidden.' });
+      return;
+    }
+    if (!this.tokens.acceptsDashboardProof(headerOne(req, 'x-shellpuppet-csrf'))) {
+      this.auditDashboardRefusal(req, 'proof');
+      json(res, 403, { error: 'Forbidden.' });
+      return;
+    }
+    if ((headerOne(req, 'content-type') ?? '').split(';', 1)[0]?.trim().toLowerCase() !== 'application/json') {
+      json(res, 415, { error: 'The rename body must be JSON.' });
+      return;
+    }
+    let body: JsonBody;
+    try { body = await readBody(req); }
+    catch (error) {
+      if (error instanceof RequestBodyTooLargeError) { json(res, 413, { error: error.message }); return; }
+      if (error instanceof Error && error.message.startsWith('Request body')) {
+        json(res, 400, { error: error.message }); return;
+      }
+      throw error;
+    }
+    if (Object.keys(body).some((key) => key !== 'name') || typeof body['name'] !== 'string' ||
+      !NAME_PATTERN.test(body['name']) || /^s[0-9]+$/.test(body['name'])) {
+      json(res, 400, { error: 'Name must be 1 to 40 letters, digits, dots, underscores or hyphens, and must not be reserved.' });
+      return;
+    }
+    const session = this.manager.get(id);
+    if (session === undefined) { json(res, 404, { error: `No such session: ${id}` }); return; }
+    if (session.exited) { json(res, 409, { error: `Session ${id} has ended and cannot be renamed.` }); return; }
+    const previous = this.mailbox.participant(id)?.name;
+    if (previous === undefined) { json(res, 409, { error: 'The session has ended.' }); return; }
+    try {
+      this.mailbox.rename(id, body['name']);
+    } catch (error) {
+      if (error instanceof MailboxError) {
+        json(res, error.code === 'duplicate-name' ? 409 : 400, { error: error.message });
+        return;
+      }
+      throw error;
+    }
+    const oldLabel = session.label;
+    session.label = body['name'];
+    this.audit.record('dashboard', 'rename', id, { oldName: previous, newName: body['name'], oldLabel });
+    this.updateFeedSession(id);
+    json(res, 200, { id, name: body['name'], label: session.label });
   }
 
   /**
@@ -2407,6 +2484,10 @@ export class Daemon {
       await this.handleDashboardLaunch(req, res);
       return;
     }
+    if (req.method === 'POST' && segments.length === 4 && segments[0] === 'dashboard' && segments[1] === 'sessions' && segments[3] === 'rename') {
+      await this.handleDashboardRename(req, res, segments[2] ?? '');
+      return;
+    }
     if (req.method === 'POST' && url.pathname === '/dashboard/folder-picker') {
       const handler = this.handleDashboardFolderPicker(req, res);
       this.folderPickerHandlers.add(handler);
@@ -2495,6 +2576,14 @@ export class Daemon {
     }
   }
 
+  private lapseIdleClaims(): void {
+    for (const id of this.mailbox.expiredClaims()) {
+      this.claimCount--;
+      this.endMailboxParticipant(id);
+      this.audit.record('daemon', 'msg-lapse', id);
+    }
+  }
+
   private async deliverNudge(id: string): Promise<'sent' | 'wait' | 'done'> {
     const session = this.manager.get(id);
     if (session === undefined || session.exited || this.mailbox.participant(id)?.kind !== 'session') return 'done';
@@ -2540,14 +2629,26 @@ export class Daemon {
     return 'sent';
   }
 
-  private registerMailboxSession(session: Session): void {
-    const label = session.label;
-    const name = label !== undefined && NAME_PATTERN.test(label) &&
+  private registerMailboxSession(session: Session, preferredName?: string, numberTaken = false): void {
+    const label = preferredName ?? session.label;
+    let name = label !== undefined && NAME_PATTERN.test(label) &&
       (!/^s[0-9]+$/.test(label) || label === session.id) &&
       !this.mailbox.nameTaken(label) ? label : session.id;
-    this.mailbox.register({ kind: 'session', id: session.id, name });
+    if (numberTaken && name === session.id && NAME_PATTERN.test(label) &&
+      !/^s[0-9]+$/.test(label) && !this.isReservedClaimName(label)) {
+      for (let index = 2; index < 10_000; index++) {
+        const candidate = `${label.slice(0, 40 - String(index).length - 1)}-${index}`;
+        if (!this.mailbox.nameTaken(candidate)) { name = candidate; break; }
+      }
+    }
+    this.mailbox.register({ kind: 'session', id: session.id, name, role: session.role });
+    if (NAME_PATTERN.test(session.label)) session.label = name;
     session.onExit(() => this.endMailboxParticipant(session.id));
     if (session.exited) this.endMailboxParticipant(session.id);
+  }
+
+  private isReservedClaimName(name: string): boolean {
+    return (this.options.messaging?.allow ?? []).some((rule) => rule !== 'parent-child' && rule.members.includes(name));
   }
 
   private async handleMessages(req: http.IncomingMessage, res: http.ServerResponse,
@@ -2556,6 +2657,7 @@ export class Daemon {
       json(res, 403, { error: 'Messaging is off.' });
       return;
     }
+    this.lapseIdleClaims();
     const claimId = req.headers['x-shellpuppet-claim'];
     const claimSecret = req.headers['x-shellpuppet-claim-secret'];
     const claimPresented = claimId !== undefined || claimSecret !== undefined;
@@ -2569,7 +2671,25 @@ export class Daemon {
     }
     const caller = this.callerContext.getStore() ?? (claimValid ? claimId : undefined);
     if (creatingClaim) {
-      if (caller !== undefined) { json(res, 409, { error: 'Already a messaging participant.' }); return; }
+      // Each refusal says only what the daemon knows: a verified session, a valid claim, a mark on the request.
+      if (this.callerContext.getStore() !== undefined) {
+        json(res, 409, { error: 'This session already messages under its own name.' }); return;
+      }
+      const marked = req.headers['x-shellpuppet-inside-session'] === '1';
+      if (claimValid || marked) {
+        const reasons: string[] = [];
+        if (claimValid) {
+          reasons.push('This client already holds a messaging claim: release it first (msg release), or stop ' +
+            'presenting it (SHELLPUPPET_CLAIM), to make another.');
+        }
+        if (marked) {
+          reasons.push('This request is marked as coming from inside a ShellPuppet session, and a session ' +
+            'messages under its own name. A ShellPuppet client adds that mark when SHELLPUPPET_SESSION, ' +
+            'SHELLPUPPET_SESSION_TOKEN or SHELLPUPPET_DAEMON_INSTANCE is set in its environment; if this is not ' +
+            'a session, clear them.');
+        }
+        json(res, 409, { error: reasons.join(' ') }); return;
+      }
       const body = await readBody(req);
       if (typeof body['name'] !== 'string') { json(res, 400, { error: 'A valid name is required.' }); return; }
       const now = this.now();
@@ -2585,12 +2705,13 @@ export class Daemon {
       this.claimCount++;
       this.audit.record(actor, 'msg-claim', claim.claimId, {
         fromId: claim.claimId, fromName: body['name'], toId: null, toName: null,
-        messageId: null, length: 0,
+        messageId: null, length: 0, member: this.isReservedClaimName(body['name']),
       });
       json(res, 201, claim);
       return;
     }
     if (caller === undefined) { json(res, 403, { error: 'Not a messaging participant.' }); return; }
+    if (claimValid) this.mailbox.touchClaim(claimId);
     if (req.method === 'DELETE' && route === 'claims' && segments.length === 3) {
       if (!claimValid || claimId !== segments[2]) {
         json(res, 403, { error: 'The matching claim is required.' }); return;
@@ -2651,6 +2772,7 @@ export class Daemon {
       } catch (error) {
         if (!(error instanceof Error) || error.name !== 'AbortError') throw error;
       } finally { res.off('close', onClose); }
+      if (claimValid) this.mailbox.touchClaim(claimId);
       return;
     }
     if (req.method === 'GET' && route === 'log') {
@@ -3392,7 +3514,7 @@ export class Daemon {
           'messaging-disabled': 'Messaging is off.',
           'unknown-sender': 'Not a messaging participant.',
           'unknown-name': 'No live participant has that name.',
-          'not-allowed': 'The messaging policy does not allow this message.',
+          'not-allowed': error.message,
           'empty-text': 'A message cannot be empty.',
           'text-too-large': 'A message exceeds the 16 KiB limit.',
           'mailbox-full': 'The mailbox is full.',
@@ -4170,6 +4292,7 @@ export class Daemon {
       const claimId = req.headers['x-shellpuppet-claim'];
       const claimSecret = req.headers['x-shellpuppet-claim-secret'];
       const claimPresented = claimId !== undefined || claimSecret !== undefined;
+      if (claimPresented) this.lapseIdleClaims();
       if (claimPresented && (typeof claimId !== 'string' || typeof claimSecret !== 'string' ||
           !this.mailbox.verifyClaim(claimId, claimSecret))) {
         reject(403, 'Forbidden');

@@ -14,7 +14,9 @@ describe('fixed message nudges through a real terminal', () => {
     const td = await startTestDaemon({ home, logger: createFileLogger(logFile),
       audit: createAuditor(home, { captureContent: true }), promptScanIntervalMs: 250,
       messaging: { enabled: true, allow: [{ group: 'peers',
-        members: ['sender', 'ready', 'draft', 'shell', 'outside'] }], nudgeIntervalMs: 1_000 } });
+        members: ['sender', 'outside'] }], nudgeIntervalMs: 1_000 } });
+    // This fixture exercises nudge delivery; group admission has separate tests.
+    (td.daemon as unknown as { mailbox: { policy: (from: unknown, to: unknown) => boolean } }).mailbox.policy = () => true;
     try {
       const fixture = path.join(repoRoot, 'test', 'fixtures', 'nudge-tui.mjs');
       const files = (name: string) => ({ input: path.join(home, `${name}.input`),

@@ -9,6 +9,15 @@ version may change behaviour, and every such change is listed here.
 
 ### Added
 
+- Show a chair or delegate role for sessions, with chair set only by a launch profile.
+- Match session messaging groups by role and reserve named members for outside claims.
+- Offer a Name box in the dashboard launcher and number repeated session names.
+- Let dashboard owners rename live sessions, updating the pane and messaging address together.
+- Return a clear permission error for a live recipient disallowed by messaging rules.
+- Lapse idle outside claims and mark their unread messages not delivered.
+- Show delivery states in send results and outboxes.
+- Refuse claims when a client knows it runs inside a session or the request presents session identity; audit configured member claims.
+
 - Type a fixed, rate limited nudge into an idle supported session when a message waits for it, through the normal input queue; name the session_inbox tool, pause before submitting, recheck the screen, waiting messages and terminal size before Enter, and record message ids, never text, in the audit.
 - Show owner-wide messages in the dashboard with session and group filters, safe text display and unread pane counts.
 - Judge when OpenCode, MiMo Code, Grok and Antigravity sessions have an empty idle composer, including MiMo's grey suggestion, before nudging them about waiting messages.
