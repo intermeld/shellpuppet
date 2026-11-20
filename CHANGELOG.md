@@ -19,8 +19,9 @@ version may change behaviour, and every such change is listed here.
 - Queue message nudges in a busy OpenCode session when its empty composer and interrupt footer have settled.
 - Recover active launcher claims and MCP registrations across orderly restarts. Restart reports snapshot failures and continues.
 - Recover active launcher claims across orderly restarts. Restart reports snapshot failures and continues.
+- Recover active launcher claims across orderly restarts. The home owner saves claim activity even if discovery disappears. Restart reports snapshot failures and continues.
 - Protect Windows daemon records with owner-only ACLs and strip claim proofs from daemon and child environments.
-- Save live profile sessions and known conversation ids before a daemon restart for a granted supervisor to relaunch.
+- Save live profile sessions and known conversation ids before a daemon restart for a granted supervisor to relaunch. Verified snapshots survive interrupted takeover and ordinary stops.
 - Allow named sessions and outside claims to launch owner-configured profiles, including conversation resume.
 
 - Designate one dashboard window for agent and CLI starts, start profile

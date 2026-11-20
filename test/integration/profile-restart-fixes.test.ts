@@ -188,9 +188,10 @@ it('preserves the incumbent discovery record and durable claim when a contender 
     // Simulate the incumbent leaving without another orderly save.
     await td.daemon.stop({ removeState: false });
     td = await startTestDaemon(options);
+    // Restored proof passes the grant check. This home has never recorded a restart.
     expect((await api(td.port, td.token, '/launcher/previous', { headers: {
       'x-shellpuppet-claim': String(claim['claimId']), 'x-shellpuppet-claim-secret': String(claim['secret']),
-    } })).status).toBe(200);
+    } })).status).toBe(409);
   } finally { await td.stop(); }
 });
 
