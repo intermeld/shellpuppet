@@ -42,7 +42,7 @@ export const MAX_MAILBOX_MESSAGES = 2_000;
 export const MAX_MAILBOX_BYTES = 8 * 1024 * 1024;
 export const MAX_OUTBOX_TOMBSTONES = 200;
 const CLAIM_ID_PATTERN = /^claim_[a-f0-9]{32}$/;
-const DUMMY_CLAIM_SECRET = 'an absent claim has no secret';
+const DUMMY_CLAIM_DIGEST = '0'.repeat(64);
 
 // ---------------------------------------------------------------------- types
 
@@ -144,7 +144,7 @@ interface ParticipantRecord {
   lastActivity?: number;
   generation: number;
   /** Claims only: the secret handed out with the claim id. */
-  secret?: string;
+  digest?: string;
 }
 
 interface StoredMessage {
@@ -171,11 +171,8 @@ interface Waiter {
   settle: (message: StoredMessage | undefined) => void;
 }
 
-/** Constant-time comparison over sha256 digests, so length never leaks. */
-function secretsEqual(a: string, b: string): boolean {
-  const da = createHash('sha256').update(a).digest();
-  const db = createHash('sha256').update(b).digest();
-  return timingSafeEqual(da, db);
+function claimDigest(secret: string): string {
+  return createHash('sha256').update(secret).digest('hex');
 }
 
 // ------------------------------------------------------------------- the mailbox
@@ -319,20 +316,44 @@ export class Mailbox extends EventEmitter {
       claimId = this.newClaimId();
     } while (this.participants.has(claimId));
     const secret = randomBytes(32).toString('base64url');
-    this.participants.set(claimId, { kind: 'claim', id: claimId, name, generation: ++this.generation, secret, lastActivity: this.now() });
+    this.participants.set(claimId, { kind: 'claim', id: claimId, name, generation: ++this.generation, digest: claimDigest(secret), lastActivity: this.now() });
     this.byName.set(name, claimId);
     return { claimId, secret };
   }
 
-  private compareSecrets(presented: string, expected: string): boolean {
-    return secretsEqual(presented, expected);
+  savedClaims(granted: readonly string[]) {
+    return [...this.participants.values()]
+      .filter(p => p.kind === 'claim' && granted.includes(p.name))
+      .map(({ id, name, digest, lastActivity }) => ({ id, name, digest, lastActivity }));
+  }
+
+  restoreClaims(rows: unknown, granted: readonly string[]): number {
+    if (!Array.isArray(rows)) return 0;
+    let count = 0;
+    for (const value of rows.slice(0, 64) as unknown[]) {
+      if (typeof value !== 'object' || value === null) continue;
+      const row = value as Record<string, unknown>;
+      if (typeof row['name'] !== 'string' || !granted.includes(row['name']) || !NAME_PATTERN.test(row['name']) ||
+        typeof row['id'] !== 'string' || !CLAIM_ID_PATTERN.test(row['id']) ||
+        typeof row['digest'] !== 'string' || !/^[a-f0-9]{64}$/.test(row['digest']) ||
+        typeof row['lastActivity'] !== 'number' || !Number.isFinite(row['lastActivity']) || this.now() - row['lastActivity'] >= this.claimIdleMs ||
+        this.participants.has(row['id']) || this.byName.has(row['name'])) continue;
+      this.participants.set(row['id'], { kind: 'claim', id: row['id'], name: row['name'],
+        digest: row['digest'], lastActivity: row['lastActivity'], generation: ++this.generation });
+      this.byName.set(row['name'], row['id']);
+      count++;
+    }
+    return count;
+  }
+
+  private compareSecrets(secret: string, digest: string): boolean {
+    return timingSafeEqual(Buffer.from(claimDigest(secret)), Buffer.from(digest));
   }
 
   /** Timing-safe claim verification. Unknown claims and wrong secrets are alike. */
   verifyClaim(claimId: string, secret: string): boolean {
     const record = this.participants.get(claimId);
-    const matched = this.compareSecrets(typeof secret === 'string' ? secret : '',
-      record?.kind === 'claim' ? (record.secret ?? DUMMY_CLAIM_SECRET) : DUMMY_CLAIM_SECRET);
+    const matched = this.compareSecrets(typeof secret === 'string' ? secret : '', record?.digest ?? DUMMY_CLAIM_DIGEST);
     if (record?.kind === 'claim' && typeof secret === 'string' && matched) {
       record.lastActivity = this.now();
       return true;

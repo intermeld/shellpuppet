@@ -569,8 +569,7 @@ holds the name the daemon gave it; an outside client holds a name while its
 claim remains active. Group member names are reserved for outside claims, so
 a session name cannot acquire group rights. A member equal to a launch profile
 name is reported as a configuration problem. A session's role is `delegate`
-unless its launch profile sets `"role": "chair"`; a session started by another
-session is always a delegate. An `allow` entry that is neither `"parent-child"` nor
+unless its launch profile sets `"role": "chair"`. Free-form starts create delegates. An `allow` entry that is neither `"parent-child"` nor
 a group with `group` and `members` is ignored and reported in `daemon.log`;
 a section that cannot be read as written leaves messaging off, reported the
 same way. An enabled section without `allow` allows nobody and reports a
@@ -580,7 +579,7 @@ labels follow the same pattern as participant names.
 Messaging rules decide which participants the daemon carries messages between.
 They are not a security boundary against a local process with the daemon token,
 which can already drive every session. A session's role comes only from a
-launch profile a person started; its name never grants messaging rights.
+launch profile started by the dashboard or a granted caller. Its name never grants messaging rights.
 Clients that know they run in a session refuse to claim, and the daemon refuses
 claims presenting session identity or the inside-session mark. A request
 presenting neither is treated as an outside claim. Claims of configured member
@@ -639,9 +638,10 @@ Each entry has these keys. Unknown keys refuse that entry.
 | Key | Required | Meaning |
 |---|---|---|
 | `name` | yes | Unique, `^[a-z][a-z0-9-]{0,31}$`. The page names this. |
-| `role` | no | `"chair"` is the only accepted value. Other values are reported and ignored, leaving a delegate. A session started by another session is a delegate even through this profile. |
+| `role` | no | `"chair"` is the only accepted value. Other values are reported and ignored, leaving a delegate. Starts through the dashboard or a granted session use the profile role. |
 | `command` | yes | The real program, not a shell wrapper. A bare name is found on `PATH` only; a relative path with a separator is taken from the profile's working directory. A launch whose command cannot be resolved is refused. |
 | `args` | no | Array of strings, stored literally. |
+| `resume` | no | Array of additional arguments containing `{id}`, for example `["--resume", "{id}"]`. The launcher offers a Resume session id field for this profile. |
 | `shell` | no | Boolean. Omitted means the platform default. |
 | `cwd` | no | A fixed directory, or `"ask"`. A relative path is from your home directory. |
 | `folders` | no | Named `{ "name", "path" }` choices, or `"any"` to allow a typed or picked local folder path, when `cwd` is `"ask"`. |
@@ -691,7 +691,7 @@ resolved refuses the launch and starts nothing. The launch route accepts at
 most eight starts in any sixty seconds, and refuses at thirty-two live
 sessions when `policy.maxSessions` is unset. If you set `policy.maxSessions`,
 that number is the live cap instead, and the rate still applies. A refusal
-starts nothing. These caps are on the dashboard route only: a client token's
+starts nothing. These caps apply to both profile launch routes: a client token's
 `POST /sessions` keeps its existing behaviour.
 
 Under the Windows default shell, ShellPuppet joins `command` and `args` with
@@ -744,8 +744,25 @@ the response and audit carry copied names; with `"all"`, they record only the
 setting `"all"`. They never carry values. `agents.passEnv` and `envNames` are
 not read on this path: there is no client environment to copy from, so a name you want a
 dashboard-started agent to see belongs in that profile's `envFromDaemon`.
-Client-token starts, including `terminal_start` and `shellpuppet start`, do
-not use profiles and keep their configured `sessionEnv` mode.
+Free-form starts keep their configured `sessionEnv` mode.
+
+Set `"sessionLaunch": ["shellpuppet-chair"]` beside `profiles` inside
+`launcher` to grant that participant name permission to launch **every**
+configured profile. Omit it or use an empty array to grant nobody access.
+The live registry name controls the grant. A dashboard rename transfers the
+permission with the name. An ordinary child start cannot assign itself a
+grant through its label. An outside client can claim a free name when
+messaging is enabled. Any same-user process holding the daemon token can do
+this. Grant holders can start profiles that inherit daemon credentials.
+
+A granted outside claim keeps its id and secret through a restart. The
+daemon keeps its name, id, last activity time and SHA-256 secret digest in
+`launcher-claims.json` under the private daemon home. Release, idle expiry
+or removing the grant invalidates that authority. Message bodies remain in memory.
+
+Resume ids are 1 to 128 ASCII letters, digits or hyphens and start with a
+letter or digit. The daemon appends the configured resume arguments after
+replacing each `{id}`. The expanded arguments go through both policy checks.
 
 To supply secrets at run time, start the daemon itself under a secrets tool,
 for example `op run -- shellpuppet daemon start`. An environment file is

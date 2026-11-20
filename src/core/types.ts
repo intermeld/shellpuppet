@@ -110,6 +110,7 @@ export interface SessionOptions {
   /** The verified caller session, when a session starts another session. */
   parent?: string;
   /** Set internally from a launch profile, never from a client request. */
+  profileLaunch?: boolean;
   role?: 'chair' | 'delegate';
 }
 

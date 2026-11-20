@@ -853,7 +853,7 @@ export class Session implements WaitTarget {
     this.command = options.command;
     this.args = options.args ?? [];
     this.label = options.label ?? options.command;
-    this.role = options.parent === undefined && options.role === 'chair' ? 'chair' : 'delegate';
+    this.role = (options.parent === undefined || options.profileLaunch === true) && options.role === 'chair' ? 'chair' : 'delegate';
     this.purpose = options.purpose ?? '';
     this.startedBy = options.startedBy ?? 'unknown';
     this.parent = options.parent;
