@@ -8,14 +8,15 @@ import type { StyledLine } from '../../core/renderer.js';
 export const MUSE_MENU_SETTLE_MS = 1_500;
 
 function museQuestion(text: string): boolean {
-  return /^Would .+ like to run the following command\?$/.test(text) || text === 'Do you trust this workspace?';
+  return /^Would .+ like to run the following command\?$/.test(text) ||
+    /^Would .+ like to allow this tool action\?$/.test(text) || text === 'Do you trust this workspace?';
 }
 
 /** Muse's approval and trust menus use ⟩ with numbered rows and no composer. */
 export function musePrompt(raw: string[], tail: Line[]): DetectedPrompt | null {
-  const selected = [...tail].reverse().find((line) => /^⟩ [1-3](?:\. | {2})/.test(line.text));
+  const selected = [...tail].reverse().find((line) => /^⟩ [1-4](?:\. | {2})/.test(line.text));
   if (selected === undefined) return null;
-  const marker = /^⟩ ([1-3])(\. | {2})/.exec(selected.text);
+  const marker = /^⟩ ([1-4])(\. | {2})/.exec(selected.text);
   if (marker === null) return null;
   const selectedOption = Number(marker[1]) - 1;
   const approval = marker[2] === '. ';
@@ -28,7 +29,11 @@ export function musePrompt(raw: string[], tail: Line[]): DetectedPrompt | null {
   const plainDecline = !staged && /^(?:⟩ | {2})2\. \S.*\(esc\)\s*$/.test(second) &&
     !/^(?:⟩ | {2})3\. \S/.test(raw[first + 2] ?? '');
   const twoOptionApproval = approval && (staged || plainDecline);
-  const count = approval && !twoOptionApproval ? 3 : 2;
+  // A tool-action approval adds a fourth choice, so count the visible numbered
+  // rows. A command approval still needs all three unless it is a two-choice form.
+  let numbered = 0;
+  while (numbered < 4 && new RegExp(`^(?:⟩ | {2})${String(numbered + 1)}\\. \\S`).test(raw[first + numbered] ?? '')) numbered++;
+  const count = !approval ? 2 : twoOptionApproval ? 2 : numbered === 4 ? 4 : 3;
   if (selectedOption >= count) return null;
   const options: string[] = [];
   const optionRows: number[] = [];
@@ -119,4 +124,5 @@ export class MusePromptSettler {
   }
 }
 
-export const prompts: PromptShape[] = [{ kind: 'rows', styledHeading: /^Would .+ like to run the following command\?$/ }, { kind: 'menu', order: 0, detect: (raw, _lines, tail) => musePrompt(raw, tail) }];
+export const prompts: PromptShape[] = [{ kind: 'rows', styledHeading: /^Would .+ like to run the following command\?$/ },
+  { kind: 'rows', styledHeading: /^Would .+ like to allow this tool action\?$/ }, { kind: 'menu', order: 0, detect: (raw, _lines, tail) => musePrompt(raw, tail) }];

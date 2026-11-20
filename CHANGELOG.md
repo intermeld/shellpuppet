@@ -57,6 +57,7 @@ version may change behaviour, and every such change is listed here.
 
 - Nudge Grok Build sessions whose full-width frame rows the terminal marks as wraps, and at the start screen whatever hint line it shows.
 - Nudge a session again when a new message arrives after an earlier nudge went unanswered.
+- Detect Muse Code's tool-action approval ("Would you like to allow this tool action?", four choices) as a waiting prompt.
 - Submit an untouched pending nudge line when its named messages were read but another message is waiting, and audit the stale ids.
 - Nudge idle Grok sessions with a square composer frame after a turn or on the welcome screen, while keeping typed drafts and incomplete footers unready.
 - Never type an unconfirmed message nudge twice: a line that could not be confirmed stays pending, is submitted with the submit key alone once the composer shows it exactly once, and is left for the person if they have typed since. The audit records why a nudge was not submitted.
