@@ -19,6 +19,9 @@ describe('typed Enter and a burst-sensitive composer', () => {
       shell: false, agent: 'codex', cols: 80, rows: 24,
     });
     await eventually(async () => (await session.snapshot()).screen.includes('BURST READY'), 20_000);
+    // A placeholder proves the typed text only after a settled screen, as when a
+    // person or a chair types into an idle agent.
+    await eventually(() => Date.now() - session.lastChangeAt() >= 1_500, 20_000);
     const body = 'reply with the word ok '.padEnd(length, 'x');
     const result = await session.writeWithResult(`${body}\r`);
     await eventually(async () => (await session.snapshot()).screen.includes('RESULT'), 20_000);
