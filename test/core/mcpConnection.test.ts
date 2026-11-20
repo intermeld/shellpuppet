@@ -12,7 +12,8 @@ it('publishes one broken-pipe stall only after the last connected adapter fails 
   const events: (string | undefined)[] = [];
   session.onStall(state => events.push(state?.reason));
   try {
-    session.mcpConnection('old', 'failed');
+    session.mcpConnection('never-registered', 'failed');
+    session.mcpConnection('never-registered', 'connected');
     session.mcpConnection('old', 'connected');
     session.mcpConnection('current', 'connected');
     session.mcpConnection('current', 'failed');
@@ -23,6 +24,8 @@ it('publishes one broken-pipe stall only after the last connected adapter fails 
     session.mcpConnection('old', 'failed');
     session.mcpConnection('current', 'failed');
     expect(session.summary().stalled?.reason).toBe('mcp-connection-lost');
+    session.mcpConnection('another', 'connected');
+    expect(session.getStalled()?.reason).toBe('mcp-connection-lost');
     session.mcpConnection('replacement', 'connected');
     expect(session.getStalled()).toBeUndefined();
     expect(events).toEqual(['mcp-connection-lost', undefined]);

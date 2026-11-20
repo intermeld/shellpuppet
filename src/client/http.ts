@@ -103,6 +103,8 @@ export class DaemonNotAnsweringError extends Error {
 }
 
 export interface ClientOptions {
+  /** Connection id of the managed stdio adapter making this tool call. */
+  mcpAdapter?: string;
   /** A claim held by this client process, as id:secret. */
   claim?: string;
   home?: string;
@@ -749,7 +751,7 @@ export async function request(
     const presentIdentity = session !== undefined && sessionToken !== undefined
       && sessionInstance !== undefined && sessionInstance === conn.instanceId;
     const agent = process.env['SHELLPUPPET_PROFILE_AGENT'];
-    const resumeId = presentIdentity && agent ? agentResumeIds(moduleFor(agent), process.env)[0] : undefined;
+    const resumeIds = presentIdentity && agent ? agentResumeIds(moduleFor(agent), process.env).filter(validResumeId) : [];
     const claim = options.claim ?? process.env['SHELLPUPPET_CLAIM'];
     const claimParts = claim?.match(/^(claim_[a-f0-9]{32}):(.+)$/);
     const response = await fetch(`http://127.0.0.1:${String(conn.port)}${path}`, {
@@ -761,7 +763,8 @@ export async function request(
           ? { 'x-shellpuppet-inside-session': '1' } : {}),
         ...(actor !== undefined ? { 'x-shellpuppet-actor': actor } : {}),
         ...(presentIdentity ? {
-          ...(validResumeId(resumeId) ? { 'x-shellpuppet-resume-id': resumeId } : {}),
+          ...(resumeIds[0] ? { 'x-shellpuppet-resume-id': resumeIds[0], 'x-shellpuppet-resume-ids': resumeIds.join(',') } : {}),
+          ...(options.mcpAdapter ? { 'x-shellpuppet-mcp-adapter': options.mcpAdapter } : {}),
           'x-shellpuppet-session': session,
           'x-shellpuppet-session-token': sessionToken,
         } : {}),

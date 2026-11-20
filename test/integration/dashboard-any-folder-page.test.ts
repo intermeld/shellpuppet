@@ -91,10 +91,11 @@ describe('any-folder dashboard controls', () => {
     expect(result.visible).toBe(true);
     expect(result.picked).toBe(chosen);
     expect(result.bodies[0]?.folderPath).toBe('C:\\typed\\folder');
+    expect(result.bodies[0]).not.toHaveProperty('name');
     expect(result.recent).toContain('C:\\typed\\folder');
     expect(result.rootPath).toBe(rootPath);
     expect(result.rootOffered).toBe(true);
-    expect(result.bodies[1]).toEqual({ window: result.windowPair, profile: 'open', name: 'open', folder: 'child', rootIndex: 0 });
+    expect(result.bodies[1]).toEqual({ window: result.windowPair, profile: 'open', folder: 'child', rootIndex: 0 });
     expect(result.recent).toContain(rootPath);
   });
 });
