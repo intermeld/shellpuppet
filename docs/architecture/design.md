@@ -1860,18 +1860,21 @@ window and moves the selected pane into it. Closing a window moves its panes
 to the designated remaining window. A profile may set `"open": "grid"` (default),
 `"focus"` or `"window"` for the session it starts. This permits a
 supervising session to open focused or popped out while sessions it starts
-appear in the grid. A Focus or Pop out launch action belongs to the window
-registration that requested it. If that registration ends before the reply
-arrives, the dashboard records the successful launch for Restart and discards
-the presentation action.
+appear in the grid. A Focus or Pop out launch action belongs to the requesting
+window registration and can run when the pane first arrives, even if the HTTP
+reply came first. An acknowledged move cancels the presentation, even if the
+pane returns to the launching window. Ending the registration also cancels it.
+The successful launch still supplies the profile for Restart.
 
 The authenticated `/dashboard/events` socket registers one window instance.
 Replacing the dashboard credential retires its feeds immediately. Issuing a ninth
 document proof retires feeds using the oldest proof. On feed loss a window closes
 its pane clients and clears its designation until registration succeeds.
-The daemon remembers a document's last reported focus across feed reconnects for
-the lifetime of its document proof. A background registration does not advance
-that order. If no survivor has reported focus, the daemon
+The document records when it gains focus, including while disconnected.
+It sends the event time in epoch milliseconds as `focusedAt` on
+`window-focus` and `window-register`. The daemon retains the latest time
+for the lifetime of the document proof, so a background reconnect preserves
+the order of actual focus changes. If no survivor has reported focus, the daemon
 selects the earliest surviving registration.
 The daemon publishes `window-state` with the open roster, designation and
 assignments. A move frame also identifies the insertion point, so a window
@@ -1883,9 +1886,12 @@ that the source owns the session. The launcher matches the requesting document's
 proof to its registered socket. Closing a socket removes its instance before
 reassigning panes. A Pop out during a wider read defers the receiving window's
 automatic fit until the daemon restores the grid.
-The recipient acknowledges an explicit grid release even when its fitted dimensions
-already match the source. A single-session viewer opened with `drive=0` carries
-that preference to its stream, including after a reload.
+An outstanding grid offer follows the assignment on a move or window closure.
+The recipient's Auto fit sends a resize with `take: true` and `acceptOffer: true`,
+even when the fitted dimensions already match. The daemon checks the offer again
+when applying the resize. A single-session viewer opened with `drive=0` carries
+that preference to its stream, including after a reload. Resizing its window
+fits the displayed text to the retained rows and columns.
 The launch route accepts the registered source window as an optional `window`
 field and rejects a closed source. `BroadcastChannel` only synchronises
 preferences; it never authorises a roster or assignment.

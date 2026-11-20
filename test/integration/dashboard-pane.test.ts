@@ -322,6 +322,15 @@ it('transfers a dashboard grid only after its controller releases it', async () 
     const taken = await second.waitForControl(frame => frame.type === 'geometry' && frame.cols === 103);
     expect(taken).toMatchObject({ control: 'yours', dashboardTransferable: false });
 
+    // A delayed automatic take must check the offer at the time of the resize.
+    await first.waitForControl(frame => frame.type === 'geometry' && frame.cols === 103 && frame.control === 'adopt');
+    const beforeLateTake = first.controls().length;
+    first.send(JSON.stringify({ type: 'resize', cols: 104, rows: 34, take: true, acceptOffer: true }));
+    await eventually(() => first.controls().slice(beforeLateTake).some(frame => frame.type === 'geometry'));
+    expect(first.controls().slice(beforeLateTake).find(frame => frame.type === 'geometry')).toMatchObject({
+      cols: 103, rows: 33, control: 'adopt', dashboardTransferable: false,
+    });
+
     expect((await api(daemon.port, daemon.token, `/sessions/${heldId}/resize`,
       { body: { cols: 120, rows: 34, hold: true } })).status).toBe(200);
     const held = await connectDash(daemon.port, heldId, cookie, proof);

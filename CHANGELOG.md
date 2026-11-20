@@ -63,6 +63,10 @@ version may change behaviour, and every such change is listed here.
 ### Fixed
 
 - Keep Grok Build permission choices visible in filtered snapshots, searches and screenshots when the box includes an edit pattern action, even when its command wraps. Prompt waits return the full wrapped question and every radio choice, including the one without a number.
+- Moving a dashboard pane cancels a delayed Focus or Pop out launch action.
+  A released grid follows the pane through successive moves.
+- Dashboard handover counts focus changes made while a window was disconnected.
+- Passive viewers refit their text when resized and keep the session grid.
 - Nudge Grok Build sessions whose full-width frame rows the terminal marks as wraps, and at the start screen whatever hint line it shows.
 - Nudge a session again when a new message arrives after an earlier nudge went unanswered.
 - Confirm a typed nudge in Grok Build when its key hints name both newline keys (Shift+Enter/Alt+Enter), so the line is submitted.

@@ -225,13 +225,15 @@
   try { recent = JSON.parse(window.localStorage.getItem(RECENT_PREF) || '{}') || {}; } catch { recent = {}; }
   const dismissed = new Set();
   const pendingOpen = new Map();
+  // The launch reply can follow both a move away and a move back on this feed.
+  const movedSessions = new Set();
   const windowToken = `w-${[...window.crypto.getRandomValues(new Uint8Array(12))]
     .map((byte) => byte.toString(16).padStart(2, '0')).join('')}`;
   const newInstance = () => `i-${[...window.crypto.getRandomValues(new Uint8Array(16))]
     .map((byte) => byte.toString(16).padStart(2, '0')).join('')}`;
   let windowInstance = newInstance();
   let registered = false;
-  let reportFocusOnOpen = true;
+  let lastFocusedAt = document.hasFocus() ? window.performance.timeOrigin + window.performance.now() : 0;
   const screenParams = new URLSearchParams(location.hash.slice(1));
   const hashWindowId = screenParams.get('screen');
   const windowId = hashWindowId && /^[a-z0-9]+-[a-z0-9]+(?:-[1-9][0-9]*)?$/.test(hashWindowId) &&
@@ -1152,6 +1154,15 @@
       document.getElementById('start').disabled = launcher.hidden;
       const ids = Array.isArray(frame.assignments[ownPair()]) ? frame.assignments[ownPair()] : [];
       receivedWindowState = true;
+      if (typeof frame.move?.session === 'string') {
+        const id = frame.move.session;
+        movedSessions.add(id);
+        pendingOpen.delete(id);
+        focusOpenFits.delete(id);
+        for (const [target, session] of pendingWindowMoves) {
+          if (session === id) pendingWindowMoves.delete(target);
+        }
+      }
       if (frame.move?.target === ownPair() && typeof frame.move.session === 'string') {
         order = order.filter((id) => id !== frame.move.session);
         const before = typeof frame.move.before === 'string' ? order.indexOf(frame.move.before) : -1;
@@ -1190,6 +1201,8 @@
         if (!messagesView.hidden && (frame.changed?.includes('label') || frame.changed?.includes('name'))) renderMessages();
       }
     } else if (frame.type === 'session-removed' && typeof frame.session === 'string') {
+      movedSessions.delete(frame.session);
+      pendingOpen.delete(frame.session);
       dismissed.delete(frame.session);
       dropLaunch(frame.session);
       reconcile(sorted().filter((p) => p.id !== frame.session).map((p) => p.summary));
@@ -1204,9 +1217,8 @@
         windowInstance = newInstance();
       }
       registered = true;
-      feed.send(JSON.stringify({ type: 'window-register', id: windowId, instance: windowInstance }));
-      if (reportFocusOnOpen && document.hasFocus()) feed.send(JSON.stringify({ type: 'window-focus' }));
-      reportFocusOnOpen = false;
+      feed.send(JSON.stringify({ type: 'window-register', id: windowId, instance: windowInstance,
+        focusedAt: lastFocusedAt }));
     };
     feed.onmessage = (event) => {
       try { receive(JSON.parse(event.data)); } catch { showError('The session feed sent an unreadable update.'); }
@@ -1217,6 +1229,8 @@
       daemonWindows = [];
       pendingWindowMoves.clear();
       pendingOpen.clear();
+      movedSessions.clear();
+      focusOpenFits.clear();
       endActiveDivider?.();
       applyAssignment([], {});
       root.replaceChildren();
@@ -1276,11 +1290,12 @@
     if (newId !== null) pendingWindowMoves.set(newId, id);
   }
 
-  function fitWhenReady(id, left = 30) {
+  function fitWhenReady(id, registration, left = 30) {
+    if (registration !== ownPair() || !assigned.has(id) || movedSessions.has(id)) return;
     const client = panes.get(id)?.client;
     if (client?.fitGrid(80, 24)) return;
     if (left <= 0) return;
-    window.requestAnimationFrame(() => fitWhenReady(id, left - 1));
+    window.requestAnimationFrame(() => fitWhenReady(id, registration, left - 1));
   }
 
   function enactOpen(id) {
@@ -1302,7 +1317,7 @@
       persist();
       arrange('focus open');
       if (autoFit) { focusOpenFits.add(id); scheduleAutoFit(); }
-      else fitWhenReady(id);
+      else fitWhenReady(id, ownPair());
     }
   }
 
@@ -1342,7 +1357,9 @@
     rememberLaunch(payload.id, body.profile, body.name, body.folder, body.rootIndex, body.folderPath, root?.path);
     const item = panes.get(payload.id);
     if (item) updateCard(item);
-    if (feed?.readyState === WebSocket.OPEN && ownPair() === launchingWindow) applyOpen(payload.id, payload.open);
+    if (feed?.readyState === WebSocket.OPEN && ownPair() === launchingWindow && !movedSessions.has(payload.id)) {
+      applyOpen(payload.id, payload.open);
+    }
   }
 
   function selectedProfile() {
@@ -1566,9 +1583,10 @@
     if (feed?.readyState === WebSocket.OPEN) feed.send(JSON.stringify({ type: 'window-designate' }));
   });
   document.getElementById('new-window').addEventListener('click', () => { openScreen(); });
-  window.addEventListener('focus', () => {
-    if (feed?.readyState === WebSocket.OPEN) feed.send(JSON.stringify({ type: 'window-focus' }));
-    else reportFocusOnOpen = true;
+  window.addEventListener('focus', (event) => {
+    if (!event.isTrusted) return;
+    lastFocusedAt = window.performance.timeOrigin + event.timeStamp;
+    if (feed?.readyState === WebSocket.OPEN) feed.send(JSON.stringify({ type: 'window-focus', focusedAt: lastFocusedAt }));
   });
   document.getElementById('text-smaller').addEventListener('click', () => setFontSize(Math.max(8, (fontSize ?? 13) - 1)));
   document.getElementById('text-auto').addEventListener('click', () => setFontSize(null));

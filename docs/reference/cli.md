@@ -65,8 +65,10 @@ for each rename. Neither the CLI nor MCP tools can rename a session.
 
 `shellpuppet dashboard` opens the dashboard. In a dashboard with several
 windows, **New sessions here** chooses which window receives `shellpuppet
-start` and agent-started sessions. A window's profile launcher always starts
-in that window. **New window** opens an empty window; drag panes between
+start` and agent-started sessions. When that window closes, the most recently
+focused survivor takes over, including focus reported after a reconnect.
+A window's profile launcher starts in that window. Moving the pane overrides
+the profile's requested layout. **New window** opens an empty window. Drag panes between
 windows or use **Pop out** to open a window for one pane.
 
 ```text
