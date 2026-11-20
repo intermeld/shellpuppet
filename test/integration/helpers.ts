@@ -56,6 +56,8 @@ export interface TestDaemon {
   stop: () => Promise<void>;
 }
 
+const inProcessHttpPorts = new Set<number>();
+
 /** Start an in-process daemon on an isolated home. */
 export async function startTestDaemon(
   overrides: Partial<DaemonOptions> = {},
@@ -67,6 +69,11 @@ export async function startTestDaemon(
     ...overrides,
   });
   const { port, token } = await daemon.start();
+  // A blocking ConPTY call can delay both ends' idle timers on this thread.
+  // Let the fetch pool expire its idle sockets, with no competing server timer.
+  daemon['server'].keepAliveTimeout = 0;
+  inProcessHttpPorts.add(port);
+  daemon['server'].once('close', () => inProcessHttpPorts.delete(port));
   return {
     daemon,
     home,
@@ -93,7 +100,7 @@ export async function startTestDaemon(
               fetch(`http://127.0.0.1:${String(port)}/sessions/${id}`, {
                 method: 'DELETE',
                 headers: { authorization: `Bearer ${token}` },
-              }),
+              }).then(response => response.arrayBuffer()),
             ),
           );
         }
@@ -128,10 +135,7 @@ export async function api(
   const response = await fetch(`http://127.0.0.1:${String(port)}${apiPath}`, {
     method: options.method ?? (options.body !== undefined ? 'POST' : 'GET'),
     headers: {
-      // The client shares a thread with the in-process daemon. A blocking
-      // ConPTY call can delay both idle timers until fetch reuses a socket
-      // the server is about to expire. Each test request owns its connection.
-      connection: 'close',
+      ...(inProcessHttpPorts.has(port) ? {} : { connection: 'close' }),
       ...(token !== null ? { authorization: `Bearer ${token}` } : {}),
       ...(options.body !== undefined ? { 'content-type': 'application/json' } : {}),
       ...(options.headers ?? {}),
