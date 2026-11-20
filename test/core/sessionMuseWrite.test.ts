@@ -101,6 +101,9 @@ describe('Muse input submission', () => {
   it('writes Enter after the delay and before a following write', async () => {
     const { session, pty } = recordingSession('muse');
     draftWait(session, true, MUSE_SUBMIT_DELAY_MS);
+    vi.spyOn(session, 'nudgeReadyWithLine').mockImplementation(() =>
+      !pty.writes.some((entry) => entry.data === '\r'));
+    vi.spyOn(session, 'pendingComposerVerdict').mockReturnValue({ ready: true });
     const submitting = session.write('hello\r');
     const following = session.write('after');
     await Promise.all([submitting, following]);
@@ -111,8 +114,10 @@ describe('Muse input submission', () => {
 
   it('separates typed Enter for Codex and leaves keys and unfinished writes alone', async () => {
     const codex = recordingSession('codex');
-    vi.spyOn(codex.session, 'nudgeReadyWithLine').mockReturnValue(false);
-    draftWait(codex.session, false);
+    vi.spyOn(codex.session, 'nudgeReadyWithLine').mockImplementation(() =>
+      !codex.pty.writes.some((entry) => entry.data === '\r'));
+    draftWait(codex.session, true);
+    vi.spyOn(codex.session, 'pendingComposerVerdict').mockReturnValue({ ready: true });
     await codex.session.write('hello\r');
     expect(codex.pty.writes.map((entry) => entry.data)).toEqual(['hello', '\r']);
     expect(codex.pty.writes[1]!.at - codex.pty.writes[0]!.at)
@@ -134,8 +139,9 @@ describe('Muse input submission', () => {
 
   it('does not retry when the composer shows something else', async () => {
     const { session, pty } = recordingSession('codex');
-    vi.spyOn(session, 'nudgeReadyWithLine').mockReturnValue(false);
-    draftWait(session, false);
+    vi.spyOn(session, 'nudgeReadyWithLine').mockImplementation(() =>
+      !pty.writes.some((entry) => entry.data === '\r'));
+    draftWait(session, true);
     const result = await session.writeWithResult('hello\r');
     expect(pty.writes.map((entry) => entry.data)).toEqual(['hello', '\r']);
     expect(result.submitRetried).toBe(false);
@@ -171,9 +177,77 @@ describe('Muse input submission', () => {
     vi.spyOn(session, 'nudgeReadyWithLine').mockReturnValue(false);
     vi.spyOn(session, 'pendingComposerVerdict').mockReturnValue({ ready: true });
     const result = await session.writeWithResult('hello\r');
+    expect(pty.writes.map((entry) => entry.data)).toEqual(['hello']);
+    expect(result.submitted).toBe(false);
+    expect(result.message).toContain('Enter was not sent');
+  });
+
+  it('leaves the submit key unsent when a prompt opens before Enter', async () => {
+    const { session, pty } = recordingSession('codex');
+    draftWait(session, true);
+    vi.spyOn(session, 'nudgeReadyWithLine').mockReturnValue(false);
+    vi.spyOn(session, 'pendingComposerVerdict').mockReturnValue({ ready: false, reason: 'prompt' });
+    const result = await session.writeWithResult('hello\r');
+    expect(pty.writes.map((entry) => entry.data)).toEqual(['hello']);
+    expect(result).toMatchObject({ submitted: false, submitRetried: false });
+    expect(result.message).toContain('Enter was not sent');
+  });
+
+  it('leaves the submit key unsent when another input arrives after the body', async () => {
+    const { session, pty } = recordingSession('codex');
+    draftWait(session, true);
+    vi.spyOn(session, 'nudgeReadyWithLine').mockReturnValue(true);
+    const pending = session.writeWithResult('hello\r');
+    while (pty.writes.length === 0) await new Promise((resolve) => setTimeout(resolve, 5));
+    // Model a write applied outside this queued operation after its body.
+    session['inputVersion']++;
+    const result = await pending;
+    expect(pty.writes.map((entry) => entry.data)).toEqual(['hello']);
+    expect(result).toMatchObject({ submitted: false, submitRetried: false });
+    expect(result.message).toContain('Other input arrived');
+  });
+
+  it('rejects a paste placeholder that was visible before this body', async () => {
+    const { session, pty } = recordingSession('codex');
+    const body = 'x'.repeat(1200);
+    vi.spyOn(session['renderer'], 'styledLines').mockReturnValue({
+      lines: [{ text: '› [Pasted Content 1200 chars]', spans: [] }], firstVisible: 0,
+    });
+    vi.spyOn(session, 'nudgeReadyWithLine').mockImplementation((line) => line === '[Pasted Content 1200 chars]');
+    draftWait(session, true);
+    const result = await session.writeWithResult(`${body}\r`);
+    expect(pty.writes.map((entry) => entry.data).join('')).toBe(body);
+    expect(pty.writes.some((entry) => entry.data === '\r')).toBe(false);
+    expect(result).toMatchObject({ submitted: false, submitRetried: false });
+  });
+
+  it('rejects a new paste placeholder with a different character count', async () => {
+    const { session, pty } = recordingSession('codex');
+    const body = 'hello';
+    let bodyWritten = false;
+    const originalWrite = pty.write.bind(pty);
+    vi.spyOn(pty, 'write').mockImplementation((data) => {
+      originalWrite(data);
+      if (data === body) bodyWritten = true;
+    });
+    vi.spyOn(session['renderer'], 'styledLines').mockImplementation(() => ({
+      lines: bodyWritten ? [{ text: '› [Pasted Content 1200 chars]', spans: [] }] : [], firstVisible: 0,
+    }));
+    vi.spyOn(session, 'nudgeReadyWithLine').mockImplementation((line) => line === '[Pasted Content 1200 chars]');
+    draftWait(session, true);
+    const result = await session.writeWithResult(`${body}\r`);
+    expect(pty.writes.map((entry) => entry.data)).toEqual([body]);
+    expect(result).toMatchObject({ submitted: false, submitRetried: false });
+  });
+
+  it('does not retry after the composer changes during the settle', async () => {
+    const { session, pty } = recordingSession('codex');
+    let readings = 0;
+    vi.spyOn(session, 'nudgeReadyWithLine').mockImplementation(() => ++readings < 3);
+    draftWait(session, true);
+    const result = await session.writeWithResult('hello\r');
     expect(pty.writes.map((entry) => entry.data)).toEqual(['hello', '\r']);
-    expect(result.submitted).toBeUndefined();
-    expect(result.message).toContain('did not confirm');
+    expect(result.submitRetried).toBe(false);
   });
 
   it('waits for a painted draft and a quiet period before Enter', async () => {
@@ -197,13 +271,18 @@ describe('Muse input submission', () => {
       firstVisible: 0,
     });
     vi.spyOn(session, 'nudgeReadyWithLine').mockImplementation((line) => line === '[Pasted Content 1200 chars]');
-    expect(session['typedDraftVisible']('a'.repeat(1200))).toBe(true);
+    expect(session['typedDraftVisible']('a'.repeat(1200), new Set())).toBe(true);
+    expect(session['typedDraftVisible']('a'.repeat(1199), new Set())).toBe(false);
+    expect(session['typedDraftVisible']('a'.repeat(1200), new Set(['[Pasted Content 1200 chars]']))).toBe(false);
+    expect(session['typedDraftVisible']('[Pasted Content 1200 chars]',
+      new Set(['[Pasted Content 1200 chars]']))).toBe(false);
   });
 
   it('accepts a busy indicator after Enter as positive confirmation', async () => {
-    const { session } = recordingSession('codex');
-    draftWait(session, false);
-    vi.spyOn(session, 'nudgeReadyWithLine').mockReturnValue(false);
+    const { session, pty } = recordingSession('codex');
+    draftWait(session, true);
+    vi.spyOn(session, 'nudgeReadyWithLine').mockImplementation(() =>
+      !pty.writes.some((entry) => entry.data === '\r'));
     vi.spyOn(session, 'pendingComposerVerdict')
       .mockReturnValueOnce({ ready: false, reason: 'unknown' })
       .mockReturnValue({ ready: false, reason: 'busy' });
@@ -213,9 +292,10 @@ describe('Muse input submission', () => {
   });
 
   it('accepts a newly echoed line in the transcript', async () => {
-    const { session } = recordingSession('codex');
-    draftWait(session, false);
-    vi.spyOn(session, 'nudgeReadyWithLine').mockReturnValue(false);
+    const { session, pty } = recordingSession('codex');
+    draftWait(session, true);
+    vi.spyOn(session, 'nudgeReadyWithLine').mockImplementation(() =>
+      !pty.writes.some((entry) => entry.data === '\r'));
     vi.spyOn(session, 'pendingComposerVerdict').mockReturnValue({ ready: false, reason: 'unknown' });
     vi.spyOn(session, 'typedLineInTranscript').mockReturnValue(true);
     const result = await session.writeWithResult('hello\r');

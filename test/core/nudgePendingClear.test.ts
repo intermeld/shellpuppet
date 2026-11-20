@@ -1,5 +1,5 @@
 import type { IPty } from 'node-pty';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { Session } from '../../src/core/session.js';
 import type { NudgeVerdict } from '../../src/core/nudge.js';
 import { terminalReportKind } from '../../src/daemon/terminalReports.js';
@@ -10,26 +10,30 @@ class InputPty implements IPty {
   readonly rows = 34;
   readonly process = 'stand-in';
   handleFlowControl = false;
+  readonly writes: string[] = [];
   onData(): { dispose(): void } { return { dispose(): void {} }; }
   onExit(): { dispose(): void } { return { dispose(): void {} }; }
   resize(): void {}
   clear(): void {}
-  write(): void {}
+  write(data: string): void { this.writes.push(data); }
   kill(): void {}
   pause(): void {}
   resume(): void {}
 }
 
-async function pending(settleMs: number): Promise<{ session: Session; read: (verdict: NudgeVerdict) => void }> {
+async function pending(settleMs: number): Promise<{
+  session: Session; pty: InputPty; read: (verdict: NudgeVerdict) => void;
+}> {
+  const pty = new InputPty();
   const session = new Session('pending-clear', { command: process.execPath, shell: false, agent: 'claude' }, {
-    platform: 'linux', spawn: () => new InputPty(), pendingNudgeSettleMs: settleMs,
+    platform: 'linux', spawn: () => pty, pendingNudgeSettleMs: settleMs,
   });
   const read = (verdict: NudgeVerdict): void => {
     (session as unknown as { pendingComposerVerdict: () => NudgeVerdict }).pendingComposerVerdict = () => verdict;
   };
   expect(await session.writeNudgeWithReason('fixed body\r', (_screen, phase) => phase === 'before')).toBe('aborted-line-not-seen');
   expect(session.nudgePendingLine()).toBe('fixed body');
-  return { session, read };
+  return { session, pty, read };
 }
 
 it('keeps a pending body through input and an empty reading until the quiet period ends', async () => {
@@ -43,7 +47,9 @@ it('keeps a pending body through input and an empty reading until the quiet peri
 }, 10_000);
 
 it('clears after submitted input was seen busy and then positively empty', async () => {
-  const { session, read } = await pending(30_000);
+  const { session, pty, read } = await pending(30_000);
+  vi.spyOn(session, 'waitForTypedDraft').mockResolvedValue(true);
+  vi.spyOn(session, 'nudgeReadyWithLine').mockImplementation(() => !pty.writes.includes('\r'));
   await session.write('person\r', { humanInput: true });
   read({ ready: false, reason: 'busy' });
   expect(await session.clearConsumedNudge()).toBe(false);

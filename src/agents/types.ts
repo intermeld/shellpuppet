@@ -127,9 +127,9 @@ export interface AgentModule {
       quietMs?: number;
       /** Time for the composer to settle after Enter. */
       settleMs?: number;
-      /** Maximum time to wait for a painted, quiet draft. */
+      /** Extra time after the minimum pause to wait for a painted, quiet draft. */
       maxWaitMs?: number;
-      /** A visible composer replacement for a pasted line. */
+      /** A composer replacement: group 1 is the placeholder; named group chars is its length, if shown. */
       pastePlaceholder?: RegExp;
     };
     resizeBehindSubmit?: boolean;

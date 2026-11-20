@@ -92,8 +92,8 @@ Usage:
       the agent is still working or when no answer is recognised.
   shellpuppet type <id> <text> [--enter] [--verify] Type text; --enter sends the text,
                                                     waits for its painted draft and a quiet
-                                                    screen, then sends Enter separately.
-                                                    An unconfirmed submit is reported.
+                                                    screen, then checks again before Enter.
+                                                    If the draft is absent, Enter is not sent.
                                                     --verify re-reads the screen.
   shellpuppet key <id> <name>                       Press a key (enter, escape, ctrl+c, f1…)
   shellpuppet wait <id> [--text <s>|--regex <r>|--quiet <ms>|--prompt|--stalled]

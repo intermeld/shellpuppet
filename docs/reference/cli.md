@@ -2,9 +2,14 @@
 
 `type <id> <text> --enter` writes a single line, waits for a readable composer
 to show it or a recognised paste placeholder and for the screen to settle,
-then sends Enter separately on the same input queue. The wait is capped at
-five seconds; Codex uses a longer minimum pause for longer lines. A composer
-still showing the draft gets one further Enter. An empty composer confirms
+then checks again immediately before sending Enter separately on the same
+input queue. Codex waits at least 3 ms per character, or 150 ms for short
+lines, with up to five more seconds for paint and quiet. A placeholder must
+be new since this write and match the body's character count. If the exact
+draft is absent, a prompt has opened or other input has arrived, Enter is not
+sent and the result reports `submitted: false`. A composer still showing the
+exact draft after Enter gets one further Enter only if these checks still
+hold. An empty composer confirms
 submission only if the draft was seen first; a busy indicator or an echo in
 the transcript also confirms it. Otherwise the result says submission was
 not confirmed. If the draft remains after the retry, JSON reports

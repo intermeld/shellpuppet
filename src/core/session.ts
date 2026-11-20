@@ -1433,30 +1433,48 @@ export class Session implements WaitTarget {
     }).ready;
   }
 
-  /** The exact draft or a module's recognised pasted-content replacement. */
-  private typedDraftVisible(body: string): boolean {
-    if (this.nudgeReadyWithLine(body)) return true;
+  /** Paste placeholders on the viewport before this body is written. */
+  private visiblePastePlaceholders(): Set<string> {
     const placeholder = this.agentModule?.input?.submit?.pastePlaceholder;
-    if (placeholder === undefined) return false;
-    const lines = this.renderer.styledLines().lines;
-    return lines.some((line) => {
+    const visible = new Set<string>();
+    if (placeholder === undefined) return visible;
+    for (const line of this.renderer.styledLines().lines) {
       const match = placeholder.exec(line.text);
-      return match?.[1] !== undefined && this.nudgeReadyWithLine(match[1]);
-    });
+      if (match?.[1] !== undefined) visible.add(match[1]);
+    }
+    return visible;
+  }
+
+  /** The exact draft or a new, length-matched paste placeholder. */
+  private typedDraftVisible(body: string, placeholdersBefore: ReadonlySet<string>): boolean {
+    const placeholder = this.agentModule?.input?.submit?.pastePlaceholder;
+    if (placeholder !== undefined) {
+      for (const line of this.renderer.styledLines().lines) {
+        const match = placeholder.exec(line.text);
+        if (match?.[1] === undefined || !this.nudgeReadyWithLine(match[1])) continue;
+        const shownChars = match.groups?.['chars'];
+        return !placeholdersBefore.has(match[1]) &&
+          (shownChars === undefined || Number(shownChars.replaceAll(',', '')) === Array.from(body).length);
+      }
+    }
+    return this.nudgeReadyWithLine(body);
   }
 
   /** A paste is ready only after its draft has appeared and output has settled. */
-  private async waitForTypedDraft(body: string, startedAt: number, minimumMs: number): Promise<boolean> {
+  private async waitForTypedDraft(body: string, placeholdersBefore: ReadonlySet<string>,
+    startedAt: number, minimumMs: number, bodyInputVersion: number): Promise<boolean> {
     const quietMs = this.agentModule?.input?.submit?.quietMs ?? 150;
-    const deadline = startedAt + (this.agentModule?.input?.submit?.maxWaitMs ?? TYPED_SUBMIT_WAIT_MS);
+    const deadline = startedAt + minimumMs +
+      (this.agentModule?.input?.submit?.maxWaitMs ?? TYPED_SUBMIT_WAIT_MS);
     for (;;) {
       await this.renderer.flush();
       this.refuseIfInputFailed();
       this.refuseIfEnded();
-      const visible = this.typedDraftVisible(body);
+      if (this.inputVersion !== bodyInputVersion) return false;
+      const visible = this.typedDraftVisible(body, placeholdersBefore);
       const now = Date.now();
       if (visible && now - startedAt >= minimumMs && now - this.lastChangeAt() >= quietMs) return true;
-      if (now >= deadline) return visible;
+      if (now >= deadline) return false;
       await new Promise((resolve) => setTimeout(resolve, NUDGE_SUBMIT_POLL_MS));
     }
   }
@@ -1508,10 +1526,13 @@ export class Session implements WaitTarget {
     if (nudge || this.delayedSubmission(data)) {
       const submit = this.agentModule?.input?.submit;
       const key = nudge ? this.nudgeSubmit() : submit!.key;
-      const delayMs = nudge ? Math.max(NUDGE_SUBMIT_DELAY_MS, submit?.delayMs ?? 0)
-        : Math.max(submit!.delayMs!, Math.ceil(data.length * (submit?.perCharacterMs ?? 0)));
       const body = data.slice(0, -key.length);
+      const delayMs = nudge ? Math.max(NUDGE_SUBMIT_DELAY_MS, submit?.delayMs ?? 0)
+        : Math.max(submit!.delayMs!, Math.ceil(Array.from(body).length * (submit?.perCharacterMs ?? 0)));
       const queuedInputVersion = this.inputQueueVersion;
+      if (!nudge && this.agentModule?.nudge !== undefined) await this.renderer.flush();
+      const placeholdersBefore = !nudge && this.agentModule?.nudge !== undefined
+        ? this.visiblePastePlaceholders() : new Set<string>();
       if (nudge) {
         this.pendingNudgeLine = body;
         this.pendingNudgeIds = [...messageIds];
@@ -1522,11 +1543,13 @@ export class Session implements WaitTarget {
         this.pendingQuietSince = Date.now();
       }
       await this.writeData(body);
+      const bodyInputVersion = this.inputVersion;
       const bodyWrittenAt = Date.now();
       try {
         let typedDraftSeen = false;
         if (!nudge && this.agentModule?.nudge !== undefined) {
-          typedDraftSeen = await this.waitForTypedDraft(body, bodyWrittenAt, delayMs);
+          typedDraftSeen = await this.waitForTypedDraft(body, placeholdersBefore, bodyWrittenAt,
+            delayMs, bodyInputVersion);
         } else {
           await new Promise((resolve) => setTimeout(resolve, delayMs));
         }
@@ -1553,13 +1576,30 @@ export class Session implements WaitTarget {
             this.refuseIfInputFailed();
           }
         }
+        if (!nudge && this.agentModule?.nudge !== undefined) {
+          await this.renderer.flush();
+          this.refuseIfInputFailed();
+          this.refuseIfEnded();
+        }
         const beforeSubmitScreen = !nudge ? this.renderer.snapshot().screen : '';
         const beforeSubmitVerdict = !nudge ? this.pendingComposerVerdict() : null;
         const wasBusy = beforeSubmitVerdict?.ready === false && beforeSubmitVerdict.reason === 'busy';
+        if (!nudge && this.agentModule?.nudge !== undefined) {
+          if (this.inputVersion !== bodyInputVersion) {
+            onTypedSubmit?.({ submitted: false, submitRetried: false,
+              message: 'Other input arrived after the typed text; Enter was not sent.' });
+            return screen;
+          }
+          if (!typedDraftSeen || !this.typedDraftVisible(body, placeholdersBefore)) {
+            onTypedSubmit?.({ submitted: false, submitRetried: false,
+              message: 'The typed text was not seen in the composer; Enter was not sent.' });
+            return screen;
+          }
+        }
         this.pty.write(key);
         if (!nudge) {
           onTypedSubmit?.(await this.checkTypedSubmission(body, key, queuedInputVersion,
-            typedDraftSeen, beforeSubmitScreen, wasBusy));
+            typedDraftSeen, beforeSubmitScreen, wasBusy, placeholdersBefore));
         }
         if (!nudge && this.pendingNudgeLine !== null) {
           this.pendingQuietSince = Date.now();
@@ -1601,7 +1641,8 @@ export class Session implements WaitTarget {
   }
 
   private async checkTypedSubmission(body: string, key: string, queuedInputVersion: number,
-    draftSeen: boolean, beforeSubmitScreen: string, wasBusy: boolean):
+    draftSeen: boolean, beforeSubmitScreen: string, wasBusy: boolean,
+    placeholdersBefore: ReadonlySet<string>):
     Promise<Omit<TypedWriteResult, 'before'>> {
     if (this.agentModule?.nudge === undefined) {
       return { submitRetried: false,
@@ -1614,7 +1655,7 @@ export class Session implements WaitTarget {
       return { submitRetried: false,
         message: 'Submit key sent; later input arrived before the composer check.' };
     }
-    if (!this.typedDraftVisible(body)) {
+    if (!this.typedDraftVisible(body, placeholdersBefore)) {
       const verdict = this.pendingComposerVerdict();
       if ((draftSeen && verdict.ready) || (!wasBusy && !verdict.ready && verdict.reason === 'busy') ||
         this.typedLineInTranscript(body, beforeSubmitScreen)) {
@@ -1625,6 +1666,12 @@ export class Session implements WaitTarget {
     }
     this.refuseIfInputFailed();
     this.refuseIfEnded();
+    // A prompt or changed composer can appear while the first Enter settles.
+    if (this.inputQueueVersion !== queuedInputVersion ||
+      !this.typedDraftVisible(body, placeholdersBefore)) {
+      return { submitRetried: false,
+        message: 'Submit key sent; the composer changed before a retry.' };
+    }
     this.pty.write(key);
     await new Promise((resolve) => setTimeout(resolve, settleMs));
     await this.renderer.flush();
@@ -1632,7 +1679,7 @@ export class Session implements WaitTarget {
       return { submitRetried: true,
         message: 'Submit key retried; later input arrived before confirmation.' };
     }
-    if (this.typedDraftVisible(body)) {
+    if (this.typedDraftVisible(body, placeholdersBefore)) {
       return { submitted: false, submitRetried: true,
         message: 'The typed text is still in the composer after one submit retry.' };
     }

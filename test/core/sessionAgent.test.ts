@@ -91,6 +91,9 @@ describe('agent resolved from the start program', () => {
 
   it('delays the submitting Enter without an explicit agent', async () => {
     const { session, events } = make();
+    vi.spyOn(session, 'nudgeReadyWithLine').mockImplementation(() =>
+      !events.some((event) => event.data === '\r'));
+    vi.spyOn(session, 'pendingComposerVerdict').mockReturnValue({ ready: true });
     await session.write('hello\r');
     expect(events.map((event) => event.data)).toEqual(['hello', '\r']);
     expect(events[1]!.at - events[0]!.at).toBeGreaterThanOrEqual(MUSE_SUBMIT_DELAY_MS - 5);
@@ -98,6 +101,9 @@ describe('agent resolved from the start program', () => {
 
   it('orders resize and later input behind submission without an explicit agent', async () => {
     const { session, events } = make();
+    vi.spyOn(session, 'nudgeReadyWithLine').mockImplementation(() =>
+      !events.some((event) => event.data === '\r'));
+    vi.spyOn(session, 'pendingComposerVerdict').mockReturnValue({ ready: true });
     const submit = session.write('hello\r');
     const resize = session.resize(90, 30);
     const later = session.write('next');

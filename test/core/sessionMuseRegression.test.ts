@@ -1,5 +1,5 @@
 import type { IPty } from 'node-pty';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { ScreenRenderer } from '../../src/core/renderer.js';
@@ -42,6 +42,8 @@ function make(agent = 'muse'): { session: Session; pty: RecordingPty } {
 describe('Muse delayed submission', () => {
   it('orders later type, key and resize after Enter', async () => {
     const { session, pty } = make();
+    vi.spyOn(session, 'nudgeReadyWithLine').mockImplementation(() => !pty.events.includes('\r'));
+    vi.spyOn(session, 'pendingComposerVerdict').mockReturnValue({ ready: true });
     const submit = session.write('hello\r');
     await new Promise((resolve) => setTimeout(resolve, MUSE_SUBMIT_DELAY_MS / 4));
     const resize = session.resize(90, 30);
