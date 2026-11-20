@@ -1309,7 +1309,8 @@
   }
 
   async function postLaunch(body) {
-    if (feed?.readyState !== WebSocket.OPEN || !daemonWindows.includes(ownPair())) {
+    const launchingWindow = ownPair();
+    if (feed?.readyState !== WebSocket.OPEN || !daemonWindows.includes(launchingWindow)) {
       showError('The dashboard window is reconnecting. Try again when it is connected.');
       return;
     }
@@ -1318,7 +1319,7 @@
       response = await fetch('/dashboard/launch', {
         method: 'POST',
         headers: { 'content-type': 'application/json', 'x-shellpuppet-csrf': proof },
-        body: JSON.stringify({ ...body, window: ownPair() }),
+        body: JSON.stringify({ ...body, window: launchingWindow }),
       });
     } catch {
       showError('The profile did not start.');
@@ -1337,7 +1338,7 @@
     rememberLaunch(payload.id, body.profile, body.name, body.folder, body.rootIndex, body.folderPath, root?.path);
     const item = panes.get(payload.id);
     if (item) updateCard(item);
-    applyOpen(payload.id, payload.open);
+    if (feed?.readyState === WebSocket.OPEN && ownPair() === launchingWindow) applyOpen(payload.id, payload.open);
   }
 
   function selectedProfile() {
