@@ -2,23 +2,52 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { inflateSync } from 'node:zlib';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { captureViewer } from '../../src/daemon/screenshot.js';
+import { captureViewer, checkCaptureTransport } from './browserCapture.js';
 import type { ScreenRenderer } from '../../src/core/renderer.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
 import { NULL_LOGGER } from '../../src/core/types.js';
 import { captureDashboard } from './dashboardCapture.js';
 import { api, connectWs, connectWsWithCookie, eventually, redeemViewerUrl, startTestDaemon } from './helpers.js';
-import type { TestDaemon } from './helpers.js';
+import type { ApiResult, TestDaemon } from './helpers.js';
 
 const SECRET = 'VELVET_ZEPPELIN_42';
 let td: TestDaemon;
 let browser: string | null;
+const referenceCaptures = new Map<string, typeof captureViewer>();
 
 beforeAll(async () => {
-  td = await startTestDaemon({ policy: { mode: 'allow-all' } });
+  td = await startTestDaemon({ policy: { mode: 'allow-all' }, capture: options => {
+    const id = new URL(options.viewerUrl).searchParams.get('s');
+    return (referenceCaptures.get(id ?? '') ?? captureViewer)(options);
+  } });
   browser = await findBrowser();
 }, 60_000);
 afterAll(async () => { await td.stop(); }, 120_000);
+
+function expectPhotograph(result: ApiResult): void {
+  if (result.status !== 200) checkCaptureTransport(result.body['error']);
+  expect(result.status, JSON.stringify(result.body['diagnostics'] ?? result.body['error'])).toBe(200);
+}
+
+// Photograph both states of the same frozen page in the same browser. The
+// reference is taken before the production capture applies its row covers.
+async function photographPair(id: string, probe: string) {
+  const reference: { plain?: { png: Buffer; probe: unknown } } = {};
+  referenceCaptures.set(id, options => captureViewer({ ...options, probe, interact: async ({ evaluate, send }) => {
+    const bounds = await evaluate(probe);
+    const image = await send('Page.captureScreenshot', { format: 'png' }) as { data: string };
+    reference.plain = { png: Buffer.from(image.data, 'base64'), probe: bounds };
+  } }));
+  try {
+    const hidden = await api(td.port, td.token, `/sessions/${id}/screenshot`, {
+      body: { width: 1000, height: 900, hideReasoning: true }, method: 'POST',
+    });
+    expectPhotograph(hidden);
+    const plain = reference.plain;
+    if (!plain) throw new Error('The filtered capture did not collect its reference image');
+    return { plain, hidden };
+  } finally { referenceCaptures.delete(id); }
+}
 
 /** Decode Chromium's eight-bit RGB or RGBA PNG for a direct pixel comparison. */
 function pixels(png: Buffer): { width: number; height: number; stride: number; data: Buffer } {
@@ -121,7 +150,7 @@ describe('filtered screenshot in Chromium', () => {
             `/sessions/${id}/snapshot`)).body['screen']).includes('Working ('), 5_000);
           const shot = await api(watched.port, watched.token, `/sessions/${id}/screenshot`,
             { body: { width: 1000, height: 800, hideReasoning: true } });
-          expect(shot.status, JSON.stringify(shot.body['diagnostics'] ?? shot.body['error'])).toBe(200);
+          expectPhotograph(shot);
           expect((shot.body['lines'] as string[]).some((line) =>
             line.includes('Working ('))).toBe(true);
           return true;
@@ -146,16 +175,10 @@ describe('filtered screenshot in Chromium', () => {
     expect(started.status).toBe(200);
     const id = String(started.body['id']);
     await eventually(async () => String((await api(td.port, td.token, `/sessions/${id}/snapshot`)).body['screen']).includes('MMMM'), 30_000);
-    const plain = await captureViewer({
-      browser, viewerUrl: String(started.body['viewerUrl']), width: 1000, height: 900,
-      probe: `(() => { const row = Array.from(document.querySelectorAll('.xterm-rows > div')).find(r => r.textContent.includes('MMMM')); const box = row?.getBoundingClientRect(); return box ? { top: box.top, bottom: box.bottom } : null; })()`,
-    });
+    const { plain, hidden } = await photographPair(id,
+      `(() => { const row = Array.from(document.querySelectorAll('.xterm-rows > div')).find(r => r.textContent.includes('MMMM')); const box = row?.getBoundingClientRect(); return box ? { top: box.top, bottom: box.bottom } : null; })()`);
     const box = plain.probe as { top: number; bottom: number };
     expect(box.bottom).toBeGreaterThan(box.top);
-    const hidden = await api(td.port, td.token, `/sessions/${id}/screenshot`, {
-      body: { width: 1000, height: 900, hideReasoning: true }, method: 'POST',
-    });
-    expect(hidden.status, String(hidden.body['error'])).toBe(200);
     expect((hidden.body['lines'] as string[]).join('\n')).toContain('MMMM');
     const hiddenPng = Buffer.from(String(hidden.body['png']), 'base64');
     expect(horizontalDetail(hiddenPng, box.top, box.bottom)).toBeGreaterThan(horizontalDetail(plain.png, box.top, box.bottom) * 0.75);
@@ -175,16 +198,10 @@ describe('filtered screenshot in Chromium', () => {
     expect(started.status).toBe(200);
     const id = String(started.body['id']);
     await eventually(async () => String((await api(td.port, td.token, `/sessions/${id}/snapshot`)).body['screen']).includes('SSSS'), 60_000);
-    const plain = await captureViewer({
-      browser, viewerUrl: String(started.body['viewerUrl']), width: 1000, height: 900,
-      probe: `(() => { const row = Array.from(document.querySelectorAll('.xterm-rows > div')).filter(r => r.textContent.includes('SSSS'))[1]; const box = row?.getBoundingClientRect(); return box ? { top: box.top, bottom: box.bottom } : null; })()`,
-    });
+    const { plain, hidden } = await photographPair(id,
+      `(() => { const row = Array.from(document.querySelectorAll('.xterm-rows > div')).filter(r => r.textContent.includes('SSSS'))[1]; const box = row?.getBoundingClientRect(); return box ? { top: box.top, bottom: box.bottom } : null; })()`);
     const box = plain.probe as { top: number; bottom: number };
     expect(box.bottom).toBeGreaterThan(box.top);
-    const hidden = await api(td.port, td.token, `/sessions/${id}/screenshot`, {
-      body: { width: 1000, height: 900, hideReasoning: true }, method: 'POST',
-    });
-    expect(hidden.status, String(hidden.body['error'])).toBe(200);
     expect((hidden.body['lines'] as string[]).join('\n')).not.toContain('SSSS');
     expect((hidden.body['lines'] as string[]).join('\n')).toContain('[reasoning hidden:');
     const hiddenPng = Buffer.from(String(hidden.body['png']), 'base64');
@@ -206,16 +223,10 @@ describe('filtered screenshot in Chromium', () => {
     expect(started.status).toBe(200);
     const id = String(started.body['id']);
     await eventually(async () => String((await api(td.port, td.token, `/sessions/${id}/snapshot`)).body['screen']).includes(SECRET), 30_000);
-    const plain = await captureViewer({
-      browser, viewerUrl: String(started.body['viewerUrl']), width: 1000, height: 900,
-      probe: `(() => Array.from(document.querySelectorAll('.xterm-rows > div')).filter(r => /VELVET|ZEPPELIN|_42/.test(r.textContent)).map(r => { const box = r.getBoundingClientRect(); return { top: box.top, bottom: box.bottom }; }))()`,
-    });
+    const { plain, hidden } = await photographPair(id,
+      `(() => Array.from(document.querySelectorAll('.xterm-rows > div')).filter(r => /VELVET|ZEPPELIN|_42/.test(r.textContent)).map(r => { const box = r.getBoundingClientRect(); return { top: box.top, bottom: box.bottom }; }))()`);
     const boxes = plain.probe as { top: number; bottom: number }[];
     expect(boxes.length).toBeGreaterThan(1);
-    const hidden = await api(td.port, td.token, `/sessions/${id}/screenshot`, {
-      body: { width: 1000, height: 900, hideReasoning: true }, method: 'POST',
-    });
-    expect(hidden.status, String(hidden.body['error'])).toBe(200);
     const lines = hidden.body['lines'] as string[];
     expect(lines.join('\n')).not.toMatch(/VELVET|ZEPPELIN|_42/);
     expect(lines.join('\n')).toContain('MANGO');
@@ -246,16 +257,10 @@ describe('filtered screenshot in Chromium', () => {
       const snap = await api(td.port, td.token, `/sessions/${id}/snapshot`);
       return String(snap.body['screen']).includes(SECRET) && /Tick \d{8}/.test(String(snap.body['screen']));
     }, 30_000);
-    const plain = await captureViewer({
-      browser, viewerUrl: String(started.body['viewerUrl']), width: 1000, height: 900,
-      probe: `(() => { const row = Array.from(document.querySelectorAll('.xterm-rows > div')).find(r => r.textContent.includes('${SECRET}')); const box = row?.getBoundingClientRect(); return box ? { top: box.top, bottom: box.bottom } : null; })()`,
-    });
+    const { plain, hidden } = await photographPair(id,
+      `(() => { const row = Array.from(document.querySelectorAll('.xterm-rows > div')).find(r => r.textContent.includes('${SECRET}')); const box = row?.getBoundingClientRect(); return box ? { top: box.top, bottom: box.bottom } : null; })()`);
     const box = plain.probe as { top: number; bottom: number };
     expect(box.bottom).toBeGreaterThan(box.top);
-    const hidden = await api(td.port, td.token, `/sessions/${id}/screenshot`, {
-      body: { width: 1000, height: 900, hideReasoning: true }, method: 'POST',
-    });
-    expect(hidden.status, String(hidden.body['error'])).toBe(200);
     const lines = hidden.body['lines'] as string[];
     expect(lines.join('\n')).not.toContain(SECRET);
     expect(lines.join('\n')).toMatch(/\[reasoning hidden: \d+ lines?\]/);
@@ -284,16 +289,10 @@ describe('filtered screenshot in Chromium', () => {
       const snap = await api(td.port, td.token, `/sessions/${id}/snapshot`);
       return String(snap.body['screen']).includes(SECRET);
     }, 30_000);
-    const plain = await captureViewer({
-      browser, viewerUrl: String(started.body['viewerUrl']), width: 1000, height: 900,
-      probe: `(() => { const row = Array.from(document.querySelectorAll('.xterm-rows > div')).find(r => r.textContent.includes('${SECRET}')); const box = row?.getBoundingClientRect(); return box ? { top: box.top, bottom: box.bottom } : null; })()`,
-    });
+    const { plain, hidden } = await photographPair(id,
+      `(() => { const row = Array.from(document.querySelectorAll('.xterm-rows > div')).find(r => r.textContent.includes('${SECRET}')); const box = row?.getBoundingClientRect(); return box ? { top: box.top, bottom: box.bottom } : null; })()`);
     const box = plain.probe as { top: number; bottom: number };
     expect(box.bottom).toBeGreaterThan(box.top);
-    const hidden = await api(td.port, td.token, `/sessions/${id}/screenshot`, {
-      body: { width: 1000, height: 900, hideReasoning: true }, method: 'POST',
-    });
-    expect(hidden.status).toBe(200);
     const lines = hidden.body['lines'] as string[];
     expect(lines.join('\n')).not.toContain(SECRET);
     expect(lines.join('\n')).toMatch(/\[reasoning hidden: \d+ lines?\]/);
@@ -377,7 +376,7 @@ describe('the screenshot capture credential', () => {
       const id = String(started.body['id']);
       await eventually(async () => /Tick \d{8}/.test(String((await api(port, shooter.token, `/sessions/${id}/snapshot`)).body['screen'])), 30_000);
       const shot = await api(port, shooter.token, `/sessions/${id}/screenshot`, { body: {} });
-      expect(shot.status, String(shot.body['error'])).toBe(200);
+      expectPhotograph(shot);
     } finally {
       await shooter.stop();
     }
