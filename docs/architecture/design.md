@@ -275,8 +275,12 @@ The composer is empty only
 when its text is blank, or when it shows that module's exact placeholder
 drawn in the placeholder's own ink. Claude Code may show a rotating suggestion
 in the same dim ink, which its module also treats as empty. OpenCode recognises
-its rotating `Ask anything… "<suggestion>"` in grey inside the gutter frame.
-It checks every input row in that frame before submitting a wrapped nudge.
+its rotating `Ask anything… "<suggestion>"` in the default grey inside the
+Build or Plan gutter frame. A theme with a different hint colour keeps welcome
+nudges waiting. A blank post-turn input needs the cursor at its origin and
+clear cells across the row. The frame width determines where a word or part
+of a word can wrap before Enter. At wide sizes the sidebar has its own folder
+footer beside the composer. Prompt detection still reads the full viewport.
 Before typing during a turn it requires a blank input and the complete progress and
 `esc interrupt` footer. Only the eight progress cells may animate within the
 composer block during the quiet period.

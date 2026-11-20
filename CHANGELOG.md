@@ -57,6 +57,7 @@ version may change behaviour, and every such change is listed here.
 ### Fixed
 
 - Recognise idle OpenCode composers with a rotating grey suggestion or a blank input after a turn, and submit message nudges that wrap across gutter rows.
+- Protect space-only OpenCode drafts and check wrap positions before Enter. Deliver nudges in Plan mode, with a wide sidebar or connected MCP servers, and after a transcript mentions `esc interrupt`.
 - Nudge Grok Build sessions whose full-width frame rows the terminal marks as wraps, and at the start screen whatever hint line it shows.
 - Nudge a session again when a new message arrives after an earlier nudge went unanswered.
 - Confirm a typed nudge in Grok Build when its key hints name both newline keys (Shift+Enter/Alt+Enter), so the line is submitted.

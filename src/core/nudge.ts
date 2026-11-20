@@ -3,7 +3,7 @@
  * The module's own reading, prompt detection and a stall the caller has
  * already settled each have to agree. This module types nothing.
  */
-import type { AgentModule } from '../agents/types.js';
+import type { AgentModule, NudgeView } from '../agents/types.js';
 import { detectPrompt } from './promptDetector.js';
 import type { StyledLine } from './renderer.js';
 import type { StallState } from './types.js';
@@ -15,13 +15,7 @@ export type NudgeBlock = 'busy' | 'draft' | 'unknown' | 'prompt' | 'stalled' | '
 
 export type NudgeVerdict = { ready: true; queued?: true } | { ready: false; reason: NudgeBlock };
 
-export interface NudgeObservation {
-  /**
-   * Visible viewport text. When `styled` is set, each row's text must be
-   * the same viewport. The two are not read as two screens.
-   */
-  rows: readonly string[];
-  styled?: readonly StyledLine[];
+export interface NudgeObservation extends NudgeView {
   /** Terminal height. Clipped prompt detection needs it, so a verdict always has it. */
   viewportRows: number;
   /** A stall the session has already settled. Detection is not repeated here. */
@@ -33,10 +27,6 @@ export interface NudgeObservation {
    * turn repaints elsewhere, so a queued nudge waits on this, not the whole screen.
    */
   composerUnchangedMs?: number;
-  /** The daemon line already typed into the composer, for a delayed Enter. */
-  expectedDraft?: string;
-  /** Require positive proof of an empty composer for pending-body clearance. */
-  exactEmpty?: boolean;
 }
 
 /**
@@ -67,6 +57,7 @@ export function nudgeVerdict(module: AgentModule | undefined, observation: Nudge
   if (prompt !== null) return { ready: false, reason: 'prompt' };
   if (observation.stall !== undefined) return { ready: false, reason: 'stalled' };
   const reading = module.nudge.readiness({ rows: screen.rows, styled: screen.styled,
+    cursor: observation.cursor, untrimmedRow: observation.untrimmedRow,
     expectedDraft: observation.expectedDraft, exactEmpty: observation.exactEmpty });
   if (reading === 'queue') {
     if (observation.expectedDraft !== undefined) return { ready: false, reason: 'busy' };

@@ -1361,36 +1361,34 @@ export class Session implements WaitTarget {
    * running turn. Each call also measures how long the composer block (the
    * last rows on screen) has stayed the same, which a queued nudge waits on.
    */
-  nudgeState(now: number): { ready: boolean; queued: boolean } {
-    const rendered = this.renderer.snapshot();
-    const styled = this.renderer.styledLines().lines;
-    const rows = styled.map((line) => line.text);
-    const key = this.nudgeComposerBlock(rows);
+  nudgeState(now: number): { ready: boolean; queued: boolean; paneQuiet: boolean; regionKey: string } {
+    const view = this.nudgeView();
+    const nudge = this.agentModule?.nudge;
+    const pane = nudge?.idlePane?.(view);
+    const key = pane ?? nudge?.composerBlock?.(view.rows, view.cursor) ?? composerBlockKey(view.rows);
     if (key !== this.nudgeComposerKey) {
       this.nudgeComposerKey = key;
       this.nudgeComposerSince = now;
     }
     const verdict = nudgeVerdict(this.agentModule, {
-      rows,
-      styled,
-      viewportRows: rendered.rows,
+      ...view,
       stall: this.getStalled(),
-      unchangedMs: now - this.lastChangeAt(),
+      unchangedMs: now - (pane === undefined ? this.lastChangeAt() : this.nudgeComposerSince),
       composerUnchangedMs: now - this.nudgeComposerSince,
     });
-    return { ready: verdict.ready, queued: verdict.ready && verdict.queued === true };
+    const queued = verdict.ready && verdict.queued === true;
+    return { ready: verdict.ready, queued, paneQuiet: pane !== undefined, regionKey: key };
   }
 
-  /** The composer block as last measured by nudgeState, compared again before typing. */
-  nudgeComposerBlock(rows = this.renderer.styledLines().lines.map(line => line.text)): string {
-    return this.agentModule?.nudge?.composerBlock?.(rows) ?? composerBlockKey(rows);
+  private nudgeView() {
+    const styled = this.renderer.styledLines().lines;
+    return { styled, rows: styled.map(line => line.text), cursor: this.renderer.cursor, viewportRows: this.renderer.rows,
+      untrimmedRow: (y: number) => this.renderer.untrimmedRow(y) };
   }
 
   private pendingComposerVerdict(): ReturnType<typeof nudgeVerdict> {
-    const rendered = this.renderer.snapshot();
-    const styled = this.renderer.styledLines().lines;
     return nudgeVerdict(this.agentModule, {
-      rows: styled.map((line) => line.text), styled, viewportRows: rendered.rows,
+      ...this.nudgeView(),
       stall: this.getStalled(), unchangedMs: NUDGE_QUIET_MS, exactEmpty: true,
     });
   }
@@ -1404,10 +1402,8 @@ export class Session implements WaitTarget {
   nudgeScreenRevision(): number { return this.screenRevision; }
 
   nudgeReadyWithLine(line: string): boolean {
-    const rendered = this.renderer.snapshot();
-    const styled = this.renderer.styledLines().lines;
     return nudgeVerdict(this.agentModule, {
-      rows: styled.map((row) => row.text), styled, viewportRows: rendered.rows,
+      ...this.nudgeView(),
       stall: this.getStalled(), unchangedMs: 0, expectedDraft: line,
     }).ready;
   }

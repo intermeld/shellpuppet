@@ -1,6 +1,7 @@
 import type { AgentSignature, CompiledSignature, LineTest } from '../core/reasoning.js';
 import type { DialogSignature } from '../core/dialogs.js';
 import type { DetectedPrompt } from '../core/promptDetector.js';
+import type { CursorPosition } from '../core/types.js';
 import type { CellStyle, StyledLine } from '../core/renderer.js';
 
 export type ProgramMatch = string;
@@ -102,6 +103,9 @@ export type NudgeReadiness = 'ready' | 'busy' | 'queue' | 'draft' | 'unknown';
  * the recorded placeholder from a draft. A difference is not judged.
  */
 export interface NudgeView {
+  /** Cursor and optional physical cells from the same viewport as the text. */
+  cursor?: CursorPosition;
+  untrimmedRow?: (y: number) => StyledLine | undefined;
   rows: readonly string[];
   styled?: readonly StyledLine[];
   /** Exact daemon line allowed in the composer during a delayed submission. */
@@ -136,7 +140,9 @@ export interface AgentModule {
   nudge?: {
     readiness(view: NudgeView): NudgeReadiness;
     /** The composer and footer text to compare across paints while a turn runs. */
-    composerBlock?: (rows: readonly string[]) => string;
+    composerBlock?: (rows: readonly string[], cursor?: CursorPosition) => string;
+    /** A separately framed idle pane whose neighbours can repaint without holding up input. */
+    idlePane?: (view: NudgeView) => string | undefined;
   };
   env?: { sessionMarkers: string[] };
   safety?: SafetyAdapter;

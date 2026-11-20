@@ -2646,10 +2646,9 @@ export class Daemon {
     const snapshot = await session.snapshot();
     const state = session.nudgeState(this.now());
     if (snapshot.exited || session.answerablePrompt(snapshot.screen) !== null || !state.ready) return 'wait';
-    // A running turn repaints above its composer, so a queued nudge holds only
-    // the composer block still; an idle one holds the whole screen still.
+    // Check the same region again before typing. A running turn can repaint
+    // its transcript, and a separate sidebar can repaint beside an idle pane.
     const queued = state.queued;
-    const composerBlock = session.nudgeComposerBlock();
     const outputAt = session.lastChangeAt();
     const inputVersion = session.nudgeInputVersion();
     const queuedInputVersion = session.nudgeQueuedInputVersion();
@@ -2663,8 +2662,9 @@ export class Daemon {
     const ready = (screen: string, phase: 'before' | 'submit'): boolean => {
       if (session.exited) { failedCheck = 'session-ended'; return false; }
       if (session.getStalled()) { failedCheck = 'stalled'; return false; }
+      const current = phase === 'before' ? session.nudgeState(this.now()) : undefined;
       if (session.nudgeScreenRevision() !== screenRevision ||
-        (phase === 'before' && (queued ? session.nudgeComposerBlock() !== composerBlock
+        (phase === 'before' && (queued || state.paneQuiet ? current?.regionKey !== state.regionKey
           : session.lastChangeAt() !== outputAt || screen !== snapshot.screen))) {
         failedCheck = 'screen-changed'; return false;
       }
@@ -2674,7 +2674,7 @@ export class Daemon {
       }
       if (session.answerablePrompt(screen) !== null) { failedCheck = 'prompt-showing'; return false; }
       if (!stillWaiting()) { failedCheck = 'messages-changed'; return false; }
-      if (phase === 'before' ? !session.nudgeReady(this.now()) : !session.nudgeReadyWithLine(line)) {
+      if (phase === 'before' ? !current?.ready : !session.nudgeReadyWithLine(line)) {
         failedCheck = 'line-not-seen'; return false;
       }
       return true;

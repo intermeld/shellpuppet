@@ -34,7 +34,8 @@ function load(name: string): NudgeObservation {
       { ...ink, from: start + placeholder.length, to: rows[index]!.length },
     ] };
   }
-  return { rows, styled, viewportRows: rows.length, unchangedMs: NUDGE_QUIET_MS };
+  const cursor = name === 'opencode-after-empty' ? { x: 5, y: rows.findIndex(row => row.startsWith('  ╹▀')) - 3 } : undefined;
+  return { rows, styled, cursor, viewportRows: rows.length, unchangedMs: NUDGE_QUIET_MS };
 }
 
 function livePlaceholder(name: 'opencode-empty' | 'mimo-empty'): NudgeObservation {
@@ -86,10 +87,10 @@ for (const [name, module] of Object.entries(modules)) {
 
     it('is busy when its running marker appears above the composer', () => {
       const screen = load(`${name}-after-empty`);
-      const marker = name === 'opencode' ? '    ⠇ Thinking' : name === 'mimo' ? '   esc interrupt'
+      const marker = name === 'opencode' ? '   ⠇ Working          +' : name === 'mimo' ? '   esc interrupt'
         : name === 'grok' ? '   | Thinking… 3.1s' : 'esc to cancel';
       const rows = [...screen.rows];
-      rows.splice(name === 'mimo' ? 0 : Math.max(0, rows.length - 6), 0, marker);
+      rows.splice(name === 'mimo' || name === 'opencode' ? 0 : Math.max(0, rows.length - 6), 0, marker);
       expect(judgement(module, { rows })).toBe('busy');
     });
 
@@ -224,7 +225,7 @@ describe('live composer position', () => {
       const screen = load(`${name}-after-empty`);
       const rows = [...screen.rows, '', '   '];
       const styled = [...screen.styled!, { text: '', spans: [] }, { text: '   ', spans: [] }];
-      expect(judgement(module, { rows, styled })).toBe('ready');
+      expect(judgement(module, { ...screen, rows, styled })).toBe('ready');
     });
   }
 
