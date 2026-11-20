@@ -86,3 +86,59 @@ it('blocks a running turn and a question panel while messages wait', async () =>
   expect(nudgeVerdict(opencode, { ...screen, rows: [...screen.rows, ...panel], styled: undefined }))
     .toEqual({ ready: false, reason: 'prompt' });
 });
+
+it.each(['busy-start', 'busy-entered'])('queues on the captured %s footer after the composer settles', async name => {
+  const screen = { ...await replay(name), unchangedMs: 0 };
+  expect(opencode.nudge!.readiness(screen)).toBe('queue');
+  for (const composerUnchangedMs of [undefined, NUDGE_QUIET_MS - 1]) {
+    expect(nudgeVerdict(opencode, { ...screen, composerUnchangedMs })).toEqual({ ready: false, reason: 'quiet' });
+  }
+  expect(nudgeVerdict(opencode, { ...screen, composerUnchangedMs: NUDGE_QUIET_MS })).toEqual({ ready: true, queued: true });
+});
+
+it('requires the whole busy footer and frame, with no panel below', async () => {
+  const screen = await replay('busy-start');
+  const foot = screen.rows.findIndex(row => row.includes('╹▀'));
+  const footer = screen.rows[foot + 1]!;
+  const idle = await replay('idle');
+  const altered = (index: number, text: string) => screen.rows.map((row, i) => index === i ? text : row);
+  const permission = readFileSync(join(fixtures, '..', 'dialogs', 'opencode-permission-dialog.txt'), 'utf8').split(/\r?\n/u);
+  for (const rows of [
+    altered(foot - 4, ''), altered(foot - 2, ' ┃'), altered(foot - 1, '  ┃  Plan · Example'),
+    altered(foot, '  ╹▀'), altered(foot + 1, footer.slice(1)), altered(foot + 1, footer.replace('⬝⬝', '')),
+    altered(foot + 1, footer.replace('esc interrupt', 'esc dismiss')), altered(foot + 1, footer.replace('ctrl+p commands', 'enter allow')),
+    altered(foot + 1, footer + '  Allow once'), [...screen.rows, '', 'Other panel'],
+    [...screen.rows, ...permission], [...screen.rows, '  ┃  Questions', '  ┃  1. Blue', '  ┃  2. Green'],
+    // The tab spinner alone can signal work but cannot authorise typing.
+    [screen.rows[0]!, ...idle.rows.slice(1)],
+  ]) {
+    const view = { rows, viewportRows: rows.length, unchangedMs: NUDGE_QUIET_MS, composerUnchangedMs: NUDGE_QUIET_MS };
+    expect(nudgeVerdict(opencode, view).ready).toBe(false);
+    expect(nudgeVerdict(opencode, { ...view, expectedDraft: draft }).ready).toBe(false);
+  }
+});
+
+it('protects a busy draft and confirms only the complete daemon line before Enter', async () => {
+  const busy = await replay('busy-entered');
+  const wrapped = await replay('wrapped');
+  const footer = busy.rows.find(row => row.includes('esc interrupt'))!;
+  const rows = wrapped.rows.map(row => row.includes('ctrl+p commands') ? footer : row);
+  const view = { rows, viewportRows: wrapped.viewportRows, composerUnchangedMs: NUDGE_QUIET_MS, unchangedMs: 0 };
+  expect(nudgeVerdict(opencode, view)).toEqual({ ready: false, reason: 'busy' });
+  expect(nudgeVerdict(opencode, { ...view, expectedDraft: draft })).toEqual({ ready: true });
+  expect(nudgeVerdict(opencode, { ...view, expectedDraft: 'can see how continuation rows are drawn' }).ready).toBe(false);
+  expect(nudgeVerdict(opencode, { ...view, expectedDraft: draft, rows: [...rows, 'Allow once'] }).ready).toBe(false);
+});
+
+it('measures quiet over the entire gutter block through the busy footer', async () => {
+  const { rows } = await replay('busy-start');
+  const key = opencode.nudge!.composerBlock!;
+  const foot = rows.findIndex(row => row.includes('╹▀'));
+  const changed = (index: number, text: string) => rows.map((row, i) => i === index ? text : row);
+  expect(key(changed(0, 'New tab spinner'))).toBe(key(rows));
+  expect(key(changed(foot + 1, rows[foot + 1]!.replace('⬝⬝⬝⬝', '■■■■')))).toBe(key(rows));
+  for (const index of [foot - 4, foot - 3, foot - 2, foot - 1, foot, foot + 1]) {
+    expect(key(changed(index, rows[index] + 'x'))).not.toBe(key(rows));
+  }
+  expect(key([...rows, 'Approve access'])).not.toBe(key(rows));
+});
