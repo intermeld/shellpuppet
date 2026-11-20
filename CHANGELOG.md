@@ -77,7 +77,7 @@ version may change behaviour, and every such change is listed here.
 - Keep the command rows of a live Grok permission box visible when its question has scrolled off the screen, while reasoning above the box stays hidden.
 - Show idle MiMo sessions whose model request failed as stalled, including in session lists, supervisor events and stalled waits.
 - Keep waiting alerts and other notices clear of the prompt they announce and steady while a terminal repaints, following the cursor when it settles elsewhere, through staged and nested repaints, resizes, text size changes, reconnects and reattached sessions.
-- Let a dashboard pane take its grid when the controlling window releases it during a roster move to another window, while keeping the human's grid through socket loss, reload, pane dismissal, window close, Pop out, controller reconnect and a viewer link or another client connecting meanwhile.
+- Let a dashboard pane take its grid when the controlling window releases it during a roster move to another window, while keeping the human's grid through socket loss, reload, pane dismissal, window close, controller reconnect and a viewer link or another client connecting meanwhile.
 - Retry a dashboard Auto fit after its pending grid request is lost when the connection closes.
 - Keep Qoder message suggestions and drafts, including numbered and lettered text, from appearing as choices waiting for an answer.
 - Stop text from a wider layout lingering past the right edge after a full-screen program's grid narrows, in snapshots, filtered reads and screenshots.

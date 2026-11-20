@@ -173,7 +173,7 @@
   function closeMessages() {
     messagesView.hidden = true;
     root.hidden = false;
-    empty.hidden = panes.size > 0;
+    empty.hidden = shown().length > 0;
     messagesToggle.setAttribute('aria-expanded', 'false');
     messagesToggle.classList.remove('active');
     messagesToggle.focus();
@@ -220,7 +220,7 @@
   let retry = null;
   let profiles = [];
   /** Sessions this page started: profile name and, where used, folder name. */
-  let launches = loadLaunches();
+  const launches = loadLaunches();
   let recent = {};
   try { recent = JSON.parse(window.localStorage.getItem(RECENT_PREF) || '{}') || {}; } catch { recent = {}; }
   const dismissed = new Set();
@@ -261,20 +261,41 @@
   let channel = null;
   try { channel = new BroadcastChannel('shellpuppet.dashboard'); } catch { /* Preferences remain local to this window. */ }
 
+  function storedLaunch(value) {
+    if (typeof value !== 'object' || value === null || typeof value.profile !== 'string' || !NAME.test(value.profile)) return null;
+    const entry = { profile: value.profile };
+    if (typeof value.name === 'string' && SESSION_NAME.test(value.name)) entry.name = value.name;
+    if (typeof value.folder === 'string' && value.folder.length > 0 && !/[\\/:]/.test(value.folder) && !Array.from(value.folder).some((char) => char.charCodeAt(0) < 32) && value.folder !== '..') entry.folder = value.folder;
+    if (Number.isInteger(value.rootIndex) && value.rootIndex >= 0) entry.rootIndex = value.rootIndex;
+    if (typeof value.folderPath === 'string' && value.folderPath !== '') entry.folderPath = value.folderPath;
+    return entry;
+  }
+
   function loadLaunches() {
-    let raw;
-    try { raw = JSON.parse(window.localStorage.getItem(LAUNCH_PREF) || '{}') || {}; } catch { return {}; }
-    if (typeof raw !== 'object' || raw === null) return {};
     const out = {};
-    for (const [id, value] of Object.entries(raw)) {
-      if (typeof value !== 'object' || value === null || typeof value.profile !== 'string' || !NAME.test(value.profile)) continue;
-      const entry = { profile: value.profile };
-      if (typeof value.folder === 'string' && value.folder.length > 0 && !/[\\/:]/.test(value.folder) && !Array.from(value.folder).some((char) => char.charCodeAt(0) < 32) && value.folder !== '..') entry.folder = value.folder;
-      if (Number.isInteger(value.rootIndex) && value.rootIndex >= 0) entry.rootIndex = value.rootIndex;
-      if (typeof value.folderPath === 'string' && value.folderPath !== '') entry.folderPath = value.folderPath;
-      out[id] = entry;
-    }
+    // Existing profiles may still have the single catalogue written by older versions.
+    try {
+      const legacy = JSON.parse(window.localStorage.getItem(LAUNCH_PREF) || '{}');
+      for (const [id, value] of Object.entries(legacy)) {
+        const entry = storedLaunch(value);
+        if (entry) out[id] = entry;
+      }
+    } catch { /* The legacy catalogue is optional. */ }
+    try {
+      for (const key of Object.keys(window.localStorage)) {
+        if (!key.startsWith(LAUNCH_PREF + '.')) continue;
+        const id = key.slice(LAUNCH_PREF.length + 1);
+        const entry = readLaunch(key);
+        if (entry) out[id] = entry;
+        else delete out[id];
+      }
+    } catch { /* Storage is optional. */ }
     return out;
+  }
+
+  function readLaunch(key) {
+    try { return storedLaunch(JSON.parse(window.localStorage.getItem(key))); }
+    catch { return null; }
   }
 
   const persist = () => {
@@ -333,9 +354,15 @@
       tracks[name] = sizes.map((size) => size / space);
     }
   }
-  const persistLaunches = () => {
-    try { window.localStorage.setItem(LAUNCH_PREF, JSON.stringify(launches)); } catch { /* Restart still works in this document. */ }
-  };
+  window.addEventListener('storage', (event) => {
+    if (!event.key?.startsWith(LAUNCH_PREF + '.')) return;
+    const id = event.key.slice(LAUNCH_PREF.length + 1);
+    const entry = readLaunch(event.key);
+    if (entry) launches[id] = entry;
+    else delete launches[id];
+    const item = panes.get(id);
+    if (item) updateCard(item);
+  });
   const showPrefix = () => {
     document.getElementById('shortcut').textContent = `Shortcut: Ctrl+Shift+${prefix.toUpperCase()}`;
     document.getElementById('shortcut-help').textContent = `Ctrl+Shift+${prefix.toUpperCase()}`;
@@ -377,7 +404,7 @@
       assignmentSettleStartedAt = 0;
       assignmentSettleUntil = 0;
       for (const item of shown()) {
-        if (!visible(item)) continue;
+        if (!visible(item) || item.client?.isTemporaryGeometry()) continue;
         item.client?.autoFitGrid(80, 24, focusOpenFits.has(item.id) || incomingFits.has(item.id));
       }
     }, assignmentSettleUntil ? Math.max(0, assignmentSettleUntil - window.performance.now()) : 250);
@@ -453,7 +480,7 @@
         window !== ownPair() && Array.isArray(sessions) && sessions.includes(id));
       if (item) deactivate(item, successor);
     }
-    arrange('assignment');
+    updateAttention();
   }
   function openDashboard(hash, name, features) {
     const child = window.open(`${location.origin}/dashboard${hash}`, name, features);
@@ -476,7 +503,7 @@
     if (Number.isInteger(rootIndex) && rootIndex >= 0) entry.rootIndex = rootIndex;
     if (typeof chosenPath === 'string' && chosenPath !== '') entry.folderPath = chosenPath;
     launches[id] = entry;
-    persistLaunches();
+    try { window.localStorage.setItem(LAUNCH_PREF + '.' + id, JSON.stringify(entry)); } catch { /* Restart remains available here. */ }
     if (entry.folder || entry.folderPath) {
       const key = recentPath || entry.folderPath || (entry.rootIndex === undefined ? entry.folder : `root:${entry.rootIndex}:${entry.folder}`);
       recent = ShellPuppetDashboardFolders.remember(recent, profile, key);
@@ -672,25 +699,35 @@
     const prompt = item.summary.waitingOnPrompt;
     return Boolean(item.summary.stalled || (prompt && prompt.waitingMs >= 20_000));
   }
+  function reconcileSelection() {
+    if (!assigned.has(selected) || !panes.has(selected)) selected = shown()[0]?.id ?? null;
+    if (!assigned.has(focusId) || !panes.has(focusId)) focusId = null;
+    if (!assigned.has(enlarged) || !panes.has(enlarged)) enlarged = null;
+  }
   function updateAttention() {
+    reconcileSelection();
     for (const item of panes.values()) updateCard(item);
-    const count = sorted().filter(attention).length;
-    const state = sorted().some(item => item.summary.stalled) ? 'need attention' : 'waiting';
+    const local = shown();
+    const count = local.filter(attention).length;
+    const state = local.some(item => item.summary.stalled) ? 'need attention' : 'waiting';
     attentionCount.textContent = count ? `${count} ${state}` : '';
     const focus = panes.get(selected);
     document.title = `${count ? `${count} ${state} · ` : ''}${focus?.label.textContent || 'Dashboard'} · ShellPuppet`;
   }
   function select(id, focusTerminal = false) {
-    if (!panes.has(id)) return;
+    if (!assigned.has(id) || !panes.has(id)) return;
     selected = id;
     updateAttention();
     if (focusTerminal) panes.get(id).client?.getTerminal().focus();
   }
   function move(id, delta) {
-    const index = order.indexOf(id);
+    const local = shown().map((item) => item.id);
+    const index = local.indexOf(id);
     const target = index + delta;
-    if (target < 0 || target >= order.length) return;
-    [order[index], order[target]] = [order[target], order[index]];
+    if (index < 0 || target < 0 || target >= local.length) return;
+    const from = order.indexOf(id);
+    const to = order.indexOf(local[target]);
+    [order[from], order[to]] = [order[to], order[from]];
     persist(); arrange('move');
     const current = shown();
     const position = current.findIndex((item) => item.id === id);
@@ -736,6 +773,7 @@
     item.term.textContent = '';
   }
   function visible(item) {
+    if (!assigned.has(item.id)) return false;
     if (enlarged && item.id !== enlarged) return false;
     const box = item.card.getBoundingClientRect();
     if (box.width < 1 || box.height < 1) return false;
@@ -987,6 +1025,8 @@
     positionDividers();
   }
   function arrange(trigger = 'unspecified') {
+    if (!receivedWindowState) return;
+    reconcileSelection();
     if (trigger === 'enlarge' || trigger === 'restore' || trigger === 'window resize') {
       assignmentSettleUntil = 0;
       assignmentSettleStartedAt = 0;
@@ -1040,7 +1080,7 @@
             for (const item of items) (item.id === primary ? main : strip).append(item.card);
             root.append(main, strip);
           } else {
-            const item = panes.get(enlarged);
+            const item = items.find((pane) => pane.id === enlarged);
             if (item) root.append(item.card);
           }
           lastStructure = structureKey;
@@ -1062,7 +1102,11 @@
   function dropLaunch(id) {
     if (launches[id] === undefined) return;
     delete launches[id];
-    persistLaunches();
+    try {
+      const legacy = JSON.parse(window.localStorage.getItem(LAUNCH_PREF) || '{}');
+      if (legacy?.[id]) window.localStorage.setItem(LAUNCH_PREF + '.' + id, 'null');
+      else window.localStorage.removeItem(LAUNCH_PREF + '.' + id);
+    } catch { /* Storage is optional. */ }
   }
 
   function reconcile(sessions, full = false) {
@@ -1091,15 +1135,12 @@
         if (!order.includes(id)) order.push(id);
       } else panes.get(id).summary = summary;
     }
-    if (!panes.has(selected)) selected = order.find((id) => panes.has(id)) || null;
-    if (!panes.has(focusId)) focusId = null;
-    if (!panes.has(enlarged)) enlarged = null;
     persist(); arrange('feed reconcile'); updateAttention();
     for (const id of [...pendingOpen.keys()]) enactOpen(id);
   }
   function receive(frame) {
     if (!frame || typeof frame.type !== 'string') return;
-    if (frame.type === 'window-state' && Array.isArray(frame.windows) &&
+    if (frame.type === 'window-state' && Array.isArray(frame.windows) && frame.windows.includes(ownPair()) &&
         typeof frame.designated === 'string' && frame.assignments && typeof frame.assignments === 'object') {
       daemonWindows = frame.windows;
       const designated = frame.designated === ownPair();
@@ -1109,8 +1150,6 @@
       toggle.disabled = false;
       document.getElementById('start').disabled = launcher.hidden;
       const ids = Array.isArray(frame.assignments[ownPair()]) ? frame.assignments[ownPair()] : [];
-      if (!receivedWindowState && order.length === 0)
-        order = [...ids, ...order.filter((id) => !ids.includes(id))];
       receivedWindowState = true;
       if (frame.move?.target === ownPair() && typeof frame.move.session === 'string') {
         order = order.filter((id) => id !== frame.move.session);
@@ -1165,13 +1204,27 @@
       }
       registered = true;
       feed.send(JSON.stringify({ type: 'window-register', id: windowId, instance: windowInstance }));
+      if (document.hasFocus()) feed.send(JSON.stringify({ type: 'window-focus' }));
     };
     feed.onmessage = (event) => {
       try { receive(JSON.parse(event.data)); } catch { showError('The session feed sent an unreadable update.'); }
     };
     feed.onclose = () => {
       connection.textContent = 'Reconnecting';
-      document.getElementById('designated-window').disabled = true;
+      receivedWindowState = false;
+      daemonWindows = [];
+      pendingWindowMoves.clear();
+      pendingOpen.clear();
+      endActiveDivider?.();
+      applyAssignment([], {});
+      root.replaceChildren();
+      lastLayout = lastStructure = lastVisibilityGeometry = null;
+      empty.hidden = !messagesView.hidden;
+      shareCount.textContent = '';
+      const toggle = document.getElementById('designated-window');
+      toggle.classList.remove('active');
+      toggle.setAttribute('aria-pressed', 'false');
+      toggle.disabled = true;
       document.getElementById('start').disabled = true;
       retry = setTimeout(connect, 2000);
     };
@@ -1238,7 +1291,7 @@
       return;
     }
     if (open === 'focus') {
-      if (!panes.has(id)) return;
+      if (!assigned.has(id) || !panes.has(id)) return;
       pendingOpen.delete(id);
       mode = 'focus';
       focusId = id;
@@ -1433,7 +1486,6 @@
     if (item) { deactivate(item); item.card.remove(); panes.delete(id); }
     order = order.filter((entry) => entry !== id);
     pins = pins.filter((entry) => entry !== id);
-    if (selected === id) selected = order.find((entry) => panes.has(entry)) || null;
     if (focusId === id) focusId = null;
     if (enlarged === id) enlarged = null;
     persist();
@@ -1472,18 +1524,19 @@
     });
   }
   strip.addEventListener('scroll', syncVisibility);
-  root.addEventListener('dragover', (event) => {
+  document.addEventListener('dragover', (event) => {
     if (!event.dataTransfer?.types.includes('application/x-shellpuppet-pane')) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
   });
-  root.addEventListener('drop', (event) => {
+  document.addEventListener('drop', (event) => {
+    if (!event.dataTransfer?.types.includes('application/x-shellpuppet-pane')) return;
     event.preventDefault();
     let drag;
     try { drag = JSON.parse(event.dataTransfer.getData('application/x-shellpuppet-pane')); }
     catch { return; }
     if (typeof drag?.id !== 'string' || typeof drag?.source !== 'string') return;
-    const pane = event.target.closest('.pane');
+    const pane = event.target.closest?.('.pane');
     let before = pane?.dataset.session;
     if (pane && before) {
       const box = pane.getBoundingClientRect();

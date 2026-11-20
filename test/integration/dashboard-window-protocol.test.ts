@@ -4,7 +4,7 @@ import * as http from 'node:http';
 import WebSocket from 'ws';
 import { api, eventually, startTestDaemon } from './helpers.js';
 
-type State = { type: 'window-state'; designated: string; windows: string[]; assignments: Record<string, string[]> };
+type State = { type: 'window-state'; designated: string; windows: string[]; assignments: Record<string, string[]>; move?: { before?: string } };
 const pair = (id: string, instance: string) => JSON.stringify([id, instance]);
 const navigation = (port: number, route: string, site: string, cookie = ''): Promise<{
   status: number; headers: http.IncomingHttpHeaders; body: string }> => new Promise((resolve, reject) => {
@@ -21,7 +21,15 @@ const navigation = (port: number, route: string, site: string, cookie = ''): Pro
   request.end();
 });
 
-it('accepts moves only from the recorded owner and reassigns a closed window', async () => {
+type Peer = { ws: WebSocket; states: State[]; pair: string };
+interface Fixture {
+  authorise: () => Promise<void>;
+  openDocument: () => Promise<void>;
+  connect: (id: string, instance: string) => Promise<Peer>;
+  closedLaunch: (source: string) => Promise<Response>;
+  sessionId: string;
+}
+async function withDashboard(check: (fixture: Fixture) => Promise<void>) {
   const urls: string[] = [];
   const daemon = await startTestDaemon({
     launcher: (url) => { urls.push(url); return Promise.resolve({ launched: true, mode: 'isolated-app' as const, browser: 'mock' }); },
@@ -34,15 +42,23 @@ it('accepts moves only from the recorded owner and reassigns a closed window', a
     } });
     expect(session.status).toBe(200);
     const sessionId = String(session.body['id']);
-    expect((await api(daemon.port, daemon.token, '/dashboard/open', { method: 'POST', body: {} })).status).toBe(200);
-    const grantUrl = new URL(urls.at(-1)!);
-    const grant = await navigation(daemon.port, grantUrl.pathname + grantUrl.search, 'none');
-    expect(grant.status).toBe(303);
-    const cookie = grant.headers['set-cookie']?.[0]?.split(';')[0] ?? '';
-    expect(cookie).toContain('sp_dash=');
-    const page = await navigation(daemon.port, '/dashboard', 'same-origin', cookie);
-    const proof = /<meta name="sp-csrf" content="([^"]*)">/.exec(page.body)?.[1];
-    expect(proof).toBeTruthy();
+    let cookie = '';
+    let proof: string | undefined;
+    const openDocument = async () => {
+      const page = await navigation(daemon.port, '/dashboard', 'same-origin', cookie);
+      proof = /<meta name="sp-csrf" content="([^"]*)">/.exec(page.body)?.[1];
+      expect(proof).toBeTruthy();
+    };
+    const authorise = async () => {
+      expect((await api(daemon.port, daemon.token, '/dashboard/open', { method: 'POST', body: {} })).status).toBe(200);
+      const grantUrl = new URL(urls.at(-1)!);
+      const grant = await navigation(daemon.port, grantUrl.pathname + grantUrl.search, 'none');
+      expect(grant.status).toBe(303);
+      cookie = grant.headers['set-cookie']?.[0]?.split(';')[0] ?? '';
+      expect(cookie).toContain('sp_dash=');
+      await openDocument();
+    };
+    await authorise();
     const connect = async (id: string, instance: string) => {
       const ws = new WebSocket(`ws://127.0.0.1:${String(daemon.port)}/dashboard/events`, [`sp-csrf.${proof}`], {
         headers: { cookie, origin: `http://127.0.0.1:${String(daemon.port)}`,
@@ -60,6 +76,22 @@ it('accepts moves only from the recorded owner and reassigns a closed window', a
       await eventually(() => states.length > 0, 10_000);
       return { ws, states, pair: pair(id, instance) };
     };
+    const closedLaunch = (source: string) => fetch(`http://127.0.0.1:${String(daemon.port)}/dashboard/launch`, {
+      method: 'POST',
+      headers: { cookie, origin: `http://127.0.0.1:${String(daemon.port)}`,
+        'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors',
+        'x-shellpuppet-csrf': proof!, 'content-type': 'application/json' },
+      body: JSON.stringify({ profile: 'lead', window: source }),
+    });
+    await check({ sessionId, connect, authorise, openDocument, closedLaunch });
+  } finally {
+    for (const ws of sockets) ws.terminate();
+    await daemon.stop();
+  }
+}
+
+it('accepts moves only from the recorded owner and reassigns a closed window', () =>
+  withDashboard(async ({ connect, sessionId, closedLaunch }) => {
     const first = await connect('first-window', 'i-first');
     expect(first.states.at(-1)).toMatchObject({ designated: first.pair,
       assignments: { [first.pair]: [sessionId] } });
@@ -98,16 +130,50 @@ it('accepts moves only from the recorded owner and reassigns a closed window', a
       assignments: { [first.pair]: [sessionId] } });
     expect(first.states.at(-1)?.assignments[second.pair]).toBeUndefined();
     expect(first.states.at(-1)?.assignments[third.pair] ?? []).toEqual([]);
-    const closedLaunch = await fetch(`http://127.0.0.1:${String(daemon.port)}/dashboard/launch`, {
-      method: 'POST',
-      headers: { cookie, origin: `http://127.0.0.1:${String(daemon.port)}`,
-        'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'cors',
-        'x-shellpuppet-csrf': proof!, 'content-type': 'application/json' },
-      body: JSON.stringify({ profile: 'lead', window: second.pair }),
-    });
-    expect(closedLaunch.status).toBe(409);
-  } finally {
-    for (const ws of sockets) ws.terminate();
-    await daemon.stop();
-  }
-}, 120_000);
+    expect((await closedLaunch(second.pair)).status).toBe(409);
+  }), 120_000);
+
+it('removes the previous credential before assigning the replacement window', () =>
+  withDashboard(async ({ authorise, connect, sessionId }) => {
+    const old = await connect('old-window', 'i-old');
+    await authorise();
+    const next = await connect('next-window', 'i-next');
+    expect(next.states.at(-1)).toMatchObject({ windows: [next.pair], designated: next.pair,
+      assignments: { [next.pair]: [sessionId] } });
+    await eventually(() => old.ws.readyState === WebSocket.CLOSED);
+  }), 120_000);
+
+it('hands over when a document proof leaves the eight-proof ring', () =>
+  withDashboard(async ({ openDocument, connect, sessionId }) => {
+    const oldest = await connect('first-window', 'i-first');
+    await openDocument();
+    const next = await connect('second-window', 'i-second');
+    for (let index = 0; index < 7; index++) await openDocument();
+    await eventually(() => next.states.at(-1)?.windows.length === 1);
+    expect(next.states.at(-1)).toMatchObject({ windows: [next.pair], designated: next.pair,
+      assignments: { [next.pair]: [sessionId] } });
+    await eventually(() => oldest.ws.readyState === WebSocket.CLOSED);
+  }), 120_000);
+
+it('prefers the focused survivor to a later background registration', () =>
+  withDashboard(async ({ connect }) => {
+    const designated = await connect('first-window', 'i-first');
+    const focused = await connect('focused-window', 'i-focused');
+    const count = focused.states.length;
+    focused.ws.send(JSON.stringify({ type: 'window-focus' }));
+    await eventually(() => focused.states.length > count);
+    await connect('background-window', 'i-background');
+    designated.ws.close();
+    await eventually(() => focused.states.at(-1)?.windows.includes(designated.pair) === false);
+    expect(focused.states.at(-1)?.designated).toBe(focused.pair);
+  }), 120_000);
+
+it('acknowledges an append when the requested anchor is absent', () =>
+  withDashboard(async ({ connect, sessionId }) => {
+    const source = await connect('first-window', 'i-first');
+    const target = await connect('second-window', 'i-second');
+    target.ws.send(JSON.stringify({ type: 'window-move', source: source.pair, target: target.pair,
+      session: sessionId, before: 'departed-pane' }));
+    await eventually(() => target.states.at(-1)?.assignments[target.pair]?.includes(sessionId) === true);
+    expect(target.states.at(-1)?.move).toEqual({ target: target.pair, session: sessionId });
+  }), 120_000);
