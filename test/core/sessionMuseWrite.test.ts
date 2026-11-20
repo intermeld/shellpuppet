@@ -221,6 +221,50 @@ describe('Muse input submission', () => {
     expect(result).toMatchObject({ submitted: false, submitRetried: false });
   });
 
+  it('never takes a placeholder painted late by an earlier paste as this body', async () => {
+    const { session, pty } = recordingSession('codex');
+    const body = 'hello';
+    let bodyWritten = false;
+    const originalWrite = pty.write.bind(pty);
+    vi.spyOn(pty, 'write').mockImplementation((data) => {
+      originalWrite(data);
+      if (data === body) bodyWritten = true;
+    });
+    // An earlier paste was still painting when this body was written.
+    session['lastChange'] = Date.now();
+    vi.spyOn(session['renderer'], 'styledLines').mockImplementation(() => ({
+      lines: bodyWritten ? [{ text: '› [Pasted Content 5 chars]', spans: [] }] : [], firstVisible: 0,
+    }));
+    vi.spyOn(session, 'nudgeReadyWithLine').mockImplementation((line) => line === '[Pasted Content 5 chars]');
+    // The wait reports the draft seen; the guard before Enter must still refuse it.
+    draftWait(session, true);
+    const result = await session.writeWithResult(`${body}\r`);
+    expect(pty.writes.map((entry) => entry.data)).toEqual([body]);
+    expect(result).toMatchObject({ submitted: false, submitRetried: false });
+  });
+
+  it('takes a matching placeholder painted after a settled screen as this body', async () => {
+    const { session, pty } = recordingSession('codex');
+    const body = 'hello';
+    let bodyWritten = false;
+    let entered = false;
+    const originalWrite = pty.write.bind(pty);
+    vi.spyOn(pty, 'write').mockImplementation((data) => {
+      originalWrite(data);
+      if (data === body) bodyWritten = true;
+      if (data === '\r') entered = true;
+    });
+    session['lastChange'] = Date.now() - 5_000;
+    session['lastInputAt'] = Date.now() - 5_000;
+    vi.spyOn(session['renderer'], 'styledLines').mockImplementation(() => ({
+      lines: bodyWritten && !entered ? [{ text: '› [Pasted Content 5 chars]', spans: [] }] : [], firstVisible: 0,
+    }));
+    vi.spyOn(session, 'nudgeReadyWithLine').mockImplementation((line) => !entered && line === '[Pasted Content 5 chars]');
+    const result = await session.writeWithResult(`${body}\r`);
+    expect(pty.writes.map((entry) => entry.data)).toEqual([body, '\r']);
+    expect(result.submitRetried).toBe(false);
+  });
+
   it('rejects a new paste placeholder with a different character count', async () => {
     const { session, pty } = recordingSession('codex');
     const body = 'hello';

@@ -202,6 +202,11 @@ function composerBlockKey(rows: readonly string[]): string {
 /** Let the program repaint its composer before deciding whether Enter landed. */
 const TYPED_SUBMIT_SETTLE_MS = 300;
 const TYPED_SUBMIT_WAIT_MS = 2_000;
+/**
+ * A paste placeholder proves this body only when no input was written and nothing
+ * was painted for this long before it: an earlier paste cannot still be pending.
+ */
+const TYPED_PLACEHOLDER_SETTLE_MS = 1_000;
 
 export interface TypedWriteResult {
   before: string;
@@ -809,6 +814,8 @@ export class Session implements WaitTarget {
   /** Why the input pipe failed (Windows), once it has: input is refused from then on. */
   private inputFailure: Error | null = null;
   private lastChange = Date.now();
+  /** When input was last written to the PTY. */
+  private lastInputAt = 0;
   /** Sticky: the rendered screen has shown something at least once. */
   private painted = false;
   /**
@@ -1446,9 +1453,9 @@ export class Session implements WaitTarget {
   }
 
   /** The exact draft or a new, length-matched paste placeholder. */
-  private typedDraftVisible(body: string, placeholdersBefore: ReadonlySet<string>): boolean {
+  private typedDraftVisible(body: string, placeholdersBefore: ReadonlySet<string> | null): boolean {
     const placeholder = this.agentModule?.input?.submit?.pastePlaceholder;
-    if (placeholder !== undefined) {
+    if (placeholder !== undefined && placeholdersBefore !== null) {
       for (const line of this.renderer.styledLines().lines) {
         const match = placeholder.exec(line.text);
         if (match?.[1] === undefined || !this.nudgeReadyWithLine(match[1])) continue;
@@ -1461,7 +1468,7 @@ export class Session implements WaitTarget {
   }
 
   /** A paste is ready only after its draft has appeared and output has settled. */
-  private async waitForTypedDraft(body: string, placeholdersBefore: ReadonlySet<string>,
+  private async waitForTypedDraft(body: string, placeholdersBefore: ReadonlySet<string> | null,
     startedAt: number, minimumMs: number, bodyInputVersion: number): Promise<boolean> {
     const quietMs = this.agentModule?.input?.submit?.quietMs ?? 150;
     const deadline = startedAt + minimumMs +
@@ -1520,6 +1527,11 @@ export class Session implements WaitTarget {
       }
     }
     const { screen } = this.renderer.snapshot();
+    // Nothing written and nothing painted for a while: no earlier paste can still be
+    // waiting to paint its placeholder, so a new placeholder can only be this body's.
+    const settledBefore = Date.now() - this.lastInputAt >= TYPED_PLACEHOLDER_SETTLE_MS &&
+      Date.now() - this.lastChange >= TYPED_PLACEHOLDER_SETTLE_MS;
+    this.lastInputAt = Date.now();
     this.inputVersion++;
     this.stalePrompts.noteInput(screen, this.agent);
 
@@ -1531,8 +1543,10 @@ export class Session implements WaitTarget {
         : Math.max(submit!.delayMs!, Math.ceil(Array.from(body).length * (submit?.perCharacterMs ?? 0)));
       const queuedInputVersion = this.inputQueueVersion;
       if (!nudge && this.agentModule?.nudge !== undefined) await this.renderer.flush();
-      const placeholdersBefore = !nudge && this.agentModule?.nudge !== undefined
-        ? this.visiblePastePlaceholders() : new Set<string>();
+      // Without a settled screen before the body, no placeholder can prove this write:
+      // only the exact typed line can.
+      const placeholdersBefore = !nudge && this.agentModule?.nudge !== undefined && settledBefore
+        ? this.visiblePastePlaceholders() : null;
       if (nudge) {
         this.pendingNudgeLine = body;
         this.pendingNudgeIds = [...messageIds];
@@ -1642,7 +1656,7 @@ export class Session implements WaitTarget {
 
   private async checkTypedSubmission(body: string, key: string, queuedInputVersion: number,
     draftSeen: boolean, beforeSubmitScreen: string, wasBusy: boolean,
-    placeholdersBefore: ReadonlySet<string>):
+    placeholdersBefore: ReadonlySet<string> | null):
     Promise<Omit<TypedWriteResult, 'before'>> {
     if (this.agentModule?.nudge === undefined) {
       return { submitRetried: false,
