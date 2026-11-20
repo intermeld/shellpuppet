@@ -296,8 +296,7 @@ describe('daemon state file', () => {
   });
 
   it('home directory permissions are hardened on first creation (§4.1)', async () => {
-    // The home must NOT pre-exist: hardening runs only on first creation, and
-    // a pre-made mkdtemp dir would make this test pass without it ever running.
+    // Exercise first creation separately from repairing an existing home.
     const parent = tempHome();
     const freshHome = path.join(parent, 'sp-home');
     expect(fs.existsSync(freshHome)).toBe(false);

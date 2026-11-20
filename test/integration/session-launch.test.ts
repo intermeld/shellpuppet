@@ -12,9 +12,11 @@ it('requires a live named grant, confines resume arguments and preserves a grant
   const profile = { name: 'chair', role: 'chair', purpose: 'Review {name}', command: process.execPath,
     args: ['-e', program, '--'], cwd: home, shell: false, envFromDaemon: ['EXAMPLE'] };
   const { config, problems } = parseDaemonConfig({ launcher: { sessionLaunch: ['supervisor', 'review'],
-    profiles: [profile, { ...profile, name: 'resumable', resume: ['--resume', '{id}'] }] } });
+    profiles: [profile, { ...profile, name: 'resumable', resume: ['--resume', '{id}'] },
+      { ...profile, name: 'denied', policy: { deny: ['node'] } }] } });
   expect(problems).toEqual([]);
-  const opts = { home, audit: createAuditor(home), launchProfiles: config.launcher, messaging: { enabled: true, allow: [] }, daemonEnv: { EXAMPLE: 'private-value' } };
+  let now = Date.now();
+  const opts = { home, now: () => now, audit: createAuditor(home), launchProfiles: config.launcher, messaging: { enabled: true, allow: [], claimIdleMinutes: 1 }, daemonEnv: { EXAMPLE: 'private-value' } };
   let td = await startTestDaemon(opts);
   const claim = async (name: string) => {
     const res = await api(td.port, td.token, '/messages/claims', { body: { name } });
@@ -27,13 +29,18 @@ it('requires a live named grant, confines resume arguments and preserves a grant
     expect((await launch({}, { profile: 'chair' })).status).toBe(403);
     expect((await launch(await claim('other'), { profile: 'chair' })).status).toBe(403);
     expect((await launch({ ...proof, 'x-shellpuppet-claim-secret': 'wrong' }, { profile: 'chair' })).status).toBe(403);
+    now += 45_000;
+    expect((await api(td.port, td.token, '/messages/inbox', { headers: proof })).status).toBe(200);
     await td.daemon.stop();
+    now += 30_000;
     td = await startTestDaemon(opts);
     for (const resumeId of ['', '-flag', 'a&b', 'x\n', 'a'.repeat(129)]) {
       expect((await launch(proof, { profile: 'resumable', resumeId })).status).toBe(400);
     }
     expect((await launch(proof, { profile: 'chair', resumeId: 'abc' })).status).toBe(400);
     expect((await launch(proof, { profile: 'resumable', args: [] })).status).toBe(400);
+    expect((await launch(proof, { profile: 'resumable', window: 'other-window' })).status).toBe(400);
+    expect((await launch(proof, { profile: 'denied' })).status).toBe(403);
     const launched = await launch(proof, { profile: 'resumable', name: 'review', resumeId: 'Thread-12' });
     expect(launched.status).toBe(200);
     const list = await api(td.port, td.token, '/sessions');
@@ -54,6 +61,8 @@ it('requires a live named grant, confines resume arguments and preserves a grant
       'x-shellpuppet-session-token': readChild().token };
     expect((await launch(ordinary, { profile: 'chair' })).status).toBe(403);
     const audit = readFileSync(join(home, 'audit.log'), 'utf8');
+    const entries = audit.trim().split('\n').map(line => JSON.parse(line) as { actor: string; action: string; meta?: { reason?: string } });
+    expect(entries.some(entry => entry.actor === 'supervisor' && entry.action === 'refuse' && entry.meta?.reason === 'policy')).toBe(true);
     expect(audit).toContain('"startedBy":"supervisor"');
     expect(audit).not.toContain('private-value');
     expect(audit).not.toContain(proof['x-shellpuppet-claim-secret']);

@@ -1,7 +1,7 @@
 import { expect, it } from 'vitest';
 import type { IPty } from 'node-pty';
 import { Session } from '../../src/core/session.js';
-import { moduleFor } from '../../src/agents/index.js';
+import { agentResumeIds, moduleFor } from '../../src/agents/index.js';
 
 it.each([
   ['claude', 'CLAUDE_CODE_SESSION_ID'],
@@ -15,18 +15,26 @@ it.each([
     onData: () => ({ dispose() {} }), onExit: () => ({ dispose() {} }),
     resize() {}, write() {}, clear() {}, kill() {}, pause() {}, resume() {},
   } satisfies IPty;
-  const session = new Session('s1', { command: process.execPath, agent, env: { [marker]: 'parent-id' },
+  const session = new Session('s1', { command: process.execPath, agent, env: {
+    ...(agent === 'codex' ? { CODEX_THREAD_ID: 'old-thread', CODEX_SESSION_ID: 'old-session' } : {}),
+    [marker]: 'parent-id',
+  },
     launchProfile: { profile: 'worker', folder: '.', folderChoice: {}, resumeId: 'supplied' } }, {
     platform: 'linux', spawn: () => pty, pidWaitMs: 0,
     identity: { token: 'test', instanceId: 'test', cliPath: 'test' },
   });
   try {
-    const read = moduleFor(agent)?.resumeId;
-    session.observeResumeId(read?.({ [marker]: 'parent-id' }));
+    const read = (env: NodeJS.ProcessEnv) => agentResumeIds(moduleFor(agent), env)[0];
+    session.observeResumeId(read({ [marker]: 'parent-id' }));
     expect(session.resumeId).toBe('supplied');
-    session.observeResumeId(read?.({ [marker]: 'bad id' }));
+    if (agent === 'codex') {
+      const other = marker === 'CODEX_THREAD_ID' ? 'CODEX_SESSION_ID' : 'CODEX_THREAD_ID';
+      session.observeResumeId(read({ [other]: other === 'CODEX_SESSION_ID' ? 'old-session' : 'old-thread' }));
+      expect(session.resumeId).toBe('supplied');
+    }
+    session.observeResumeId(read({ [marker]: 'bad id' }));
     expect(session.resumeId).toBe('supplied');
-    session.observeResumeId(read?.({ [marker]: 'child-id' }));
+    session.observeResumeId(read({ [marker]: 'child-id' }));
     expect(session.resumeId).toBe(agent === 'muse' ? 'supplied' : 'child-id');
   } finally { await session.kill(); }
 });

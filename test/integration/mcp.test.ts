@@ -198,7 +198,7 @@ describe('MCP adapter', () => {
     }
   }, 60_000);
 
-  it('exposes exactly the eleven terminal_* tools, with the §3.1/§4.4 warnings in descriptions', async () => {
+  it('exposes exactly the twelve terminal_* tools, with the §3.1/§4.4 warnings in descriptions', async () => {
     const { tools } = await client.listTools();
     const names = tools.map((t) => t.name).sort();
     expect(names).toEqual([
@@ -568,7 +568,7 @@ describe('MCP adapter', () => {
     })) as TextResult;
     expect(listed.isError).toBe(true);
     expect(resultText(listed)).toContain(
-      "Unknown parameters 'all', 'verbose'. This tool takes: hideReasoning, waitingOnly.",
+      "Unknown parameters 'all', 'verbose'. This tool takes: hideReasoning, previous, waitingOnly.",
     );
 
     await client.callTool({ name: 'terminal_kill', arguments: { session: id } });
