@@ -93,6 +93,33 @@ describe('Grok permission box with an edit pattern action', () => {
     expect(filtered.body['matches']).toEqual(plain.body['matches']);
   });
 
+  it('matches the listed prompt in a filtered single-session wait and returns every radio', async () => {
+    let listed: { question: string; options: string[] } | undefined;
+    await eventually(async () => {
+      const reply = await api(td.port, td.token, '/sessions?waitingOnly=1');
+      const sessions = reply.body['sessions'] as { id: string; question: string; options: string[] }[];
+      listed = sessions.find((session) => session.id === id);
+      return listed !== undefined;
+    }, 15_000);
+    const wait = await api(td.port, td.token, `/sessions/${id}/wait?prompt=1&hideReasoning=1&timeout=10000`);
+    expect(wait.status).toBe(200);
+    expect(wait.body).toMatchObject({ matched: true, reason: 'prompt', reasoning: { agent: 'grok' } });
+    const prompt = wait.body['prompt'] as { question: string; options: string[]; selectedOption: number };
+    expect(prompt.question).toBe(listed!.question);
+    expect(prompt.selectedOption).toBe(1);
+    expect(prompt.options).toEqual([
+      expect.stringMatching(/^1 \(○\) Always allow:/u),
+      '3 (•) Yes, proceed',
+      '4 (○) No, reject (type to add feedback)',
+      expect.stringMatching(/^5 \(○\) Never allow:/u),
+      "(○) Yes, and don't ask again for anything (always-approve mode)",
+    ]);
+    expect(prompt.options).toEqual(listed!.options);
+    const screen = String(wait.body['screen']);
+    expect(screen).toContain('  │  >  ' + prompt.question);
+    for (const option of prompt.options) expect(screen).toContain(option);
+  });
+
   it('leaves the radio choices uncovered in a filtered screenshot', async (context) => {
     if (await findBrowser() === null) { context.skip(); return; }
     const shot = await api(td.port, td.token, `/sessions/${id}/screenshot`, { body: { hideReasoning: true } });

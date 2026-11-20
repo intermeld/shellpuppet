@@ -216,6 +216,31 @@ describe('Grok box question row', () => {
     }
   });
 
+  it('returns the same filtered prompt if only the first radio loses its wrap flag on redraw', async () => {
+    const captured = await screen('grok-permission-edit-pattern');
+    const first = captured.findIndex((line) => line.text.includes('1 (○) Always allow:'));
+    expect(captured[first]!.wrapped).toBe(true);
+    const redrawn = captured.map((line, row) => row === first ? { ...line, wrapped: false } : line);
+    const prompt = detectPrompt(captured.map((line) => line.text).join('\n'), 'grok')!;
+    expect(prompt.options).toHaveLength(5);
+    expect(prompt.selectedOption).toBe(1);
+    for (const frame of [captured, redrawn]) {
+      const filtered = hideReasoning(frame, grok)!;
+      expect(detectPrompt(filtered.lines.join('\n'), 'grok')).toEqual(prompt);
+      expect(filtered.lines).toContain('  │  3 (•) Yes, proceed');
+    }
+  });
+
+  it('preserves the prompt identity when focus moves to the unnumbered radio', async () => {
+    const frame = (await screen('grok-permission-edit-pattern')).map((line) => line.text);
+    const before = detectPrompt(frame.join('\n'), 'grok')!;
+    const lastSelected = frame.map((line) => line.replace('3 (•)', '3 (○)').replace('    (○)', '    (•)'));
+    const after = detectPrompt(lastSelected.join('\n'), 'grok')!;
+    expect(after.signature).toBe(before.signature);
+    expect(after.selectedOption).toBe(4);
+    expect(after.options[4]).toMatch(/^\(•\) Yes, and don't ask again/u);
+  });
+
   it('recognises another single-key action drawn in the same inks', async () => {
     const lines = await screen('grok-permission-edit-pattern');
     for (const line of lines) {
@@ -232,6 +257,7 @@ describe('Grok box question row', () => {
     const filtered = hideReasoning(lines.slice(0, footer), grok)!;
     expect(filtered.hiddenLines).toBeGreaterThan(0);
     expect(filtered.lines.join('\n')).not.toContain('Yes, proceed');
+    expect(detectPrompt(filtered.lines.join('\n'), 'grok')).toBeNull();
   });
 
   it('hides a lone action and reasoning that mentions edit pattern above a live box', async () => {

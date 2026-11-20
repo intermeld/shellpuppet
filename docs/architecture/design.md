@@ -547,6 +547,9 @@ command and draw its radios on rows the terminal still marks as wrapped.
 The reader recognises the shortcut by its key and label inks inside the box,
 and checks the radio count and selection against the live footer. It keeps
 the marked command rows and the question immediately above them.
+Single-session prompt waits read the visible controls on that filtered screen.
+The footer counts radio rows, including a choice without a numeric shortcut.
+Its position in the returned options stays the same when the selection moves.
 Hiding wins over showing when reasoning
 and command text cannot be told apart, so plain command rows near `> ` command
 text, or a command whose footer a redraw has not yet painted, can stay hidden;

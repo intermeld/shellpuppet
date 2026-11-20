@@ -59,7 +59,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
-- Keep Grok Build permission choices visible in filtered snapshots, searches and screenshots when the box includes an edit pattern action.
+- Keep Grok Build permission choices visible in filtered snapshots, searches and screenshots when the box includes an edit pattern action. A filtered single-session prompt wait returns the question and every radio choice, including the one without a number.
 - Nudge Grok Build sessions whose full-width frame rows the terminal marks as wraps, and at the start screen whatever hint line it shows.
 - Nudge a session again when a new message arrives after an earlier nudge went unanswered.
 - Confirm a typed nudge in Grok Build when its key hints name both newline keys (Shift+Enter/Alt+Enter), so the line is submitted.
