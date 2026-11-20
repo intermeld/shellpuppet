@@ -3,8 +3,13 @@ import type { NudgeReadiness, NudgeView } from '../types.js';
 import { reading } from './reading.js';
 
 const STATUS = /^ {2}Grok .+ [█░]{4,} \d+%$/u;
-/** Key hints under an idle composer after a turn. */
-const IDLE_HINTS = /^ {2}(?:Enter:send {2}│ {2}Alt\+Enter:newline {2}│ {2})?Shift\+Tab:mode {2}│ {2}Ctrl\+x:shortcuts$/u;
+/**
+ * The newline hint. Grok names Alt+Enter alone or both keys
+ * (`Shift+Enter/Alt+Enter`), depending on the terminal it detects.
+ */
+const NEWLINE = String.raw`(?:Shift\+Enter\/)?Alt\+Enter:newline`;
+/** Key hints under an idle composer after a turn; a typed line adds Enter and newline hints. */
+const IDLE_HINTS = new RegExp(String.raw`^ {2}(?:Enter:send {2}│ {2}${NEWLINE} {2}│ {2})?Shift\+Tab:mode {2}│ {2}Ctrl\+x:shortcuts$`, 'u');
 /**
  * Key hints under an empty composer while a turn runs. With a line already
  * queued, Enter on the empty composer would send the queue at once, so the
@@ -12,7 +17,7 @@ const IDLE_HINTS = /^ {2}(?:Enter:send {2}│ {2}Alt\+Enter:newline {2}│ {2})?
  */
 const BUSY_HINTS = /^ {2}(?:Enter:send now {2}│ {2})?Shift\+Tab:mode {2}│ {2}Ctrl\+c:cancel(?: {2}│ {2}Ctrl\+b:send to bg)?(?: {2}│ {2}Ctrl\+;:queue)? {2}│ {2}Ctrl\+x:shortcuts$/u;
 /** Key hints with text in the composer while a turn runs: Enter queues the line. */
-const TYPED_BUSY_HINTS = /^ {2}Enter:queue {2}│ {2}Alt\+Enter:newline {2}│ {2}Shift\+Tab:mode {2}│ {2}Ctrl\+c:cancel {2}│ {2}Ctrl\+Enter:send now {2}│ {2}Ctrl\+x:shortcuts$/u;
+const TYPED_BUSY_HINTS = new RegExp(String.raw`^ {2}Enter:queue {2}│ {2}${NEWLINE} {2}│ {2}Shift\+Tab:mode {2}│ {2}Ctrl\+c:cancel {2}│ {2}Ctrl\+Enter:send now {2}│ {2}Ctrl\+x:shortcuts$`, 'u');
 
 export function readiness(view: NudgeView): NudgeReadiness {
   if (view.styled !== undefined && (view.styled.length !== view.rows.length ||
