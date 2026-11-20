@@ -94,6 +94,8 @@ async function rosterSteps(steps: string, beforeNavigate = ''): Promise<Record<s
 
 async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', dragCheck = false, held = false,
   sameScreen = false, reconnect = false, missedNotice = false, watchedChild?: { duplicateLeaves: boolean }): Promise<{
+  closeMs?: number;
+  failureMs?: number;
   before: { primary: string[]; other: string[]; childConnected: string };
   after: string[];
   paused: { primary: string[]; other: string[]; toolbar: string[] };
@@ -487,6 +489,7 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
       const survivor = lostSocket === 'primary' ? second : primary;
       const stale = await evaluate(victim.sessionId, 'window.__lastRoster') as { window: { id: string; instance: string } };
       if (reconnect) await observeShares(survivor.sessionId);
+      const failedAt = performance.now();
       await evaluate(victim.sessionId, `(() => {
         window.__pauseRoster = true;
         const socket = window.__dashboardDiagnostics.streams.find(entry => entry.url.endsWith('/dashboard/events'))?.socket;
@@ -509,11 +512,12 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
           share: document.getElementById('share-count')?.textContent,
         }))()`) as { noticeReceived: boolean; share: string };
         departure = { victimClosed, ...observed };
-        // Assert the close notice caused the return, rather than timing a
-        // browser/daemon/DevTools round trip on a loaded runner.
         return victimClosed && observed.noticeReceived && observed.share === '3 of 3 here, 1 window' &&
           JSON.stringify(await ids(survivor.sessionId)) === JSON.stringify(sessions);
       }, 'socket departure notice and returned panes');
+      // Time the surviving dashboard's recovery from feed loss. The victim's
+      // scheduled reconnect and its new roster entry are checked separately.
+      const failureMs = performance.now() - failedAt;
       if (reconnect) {
         const oldInstance = (stale as { window: { instance: string } }).window.instance;
         await waitFor(async () => {
@@ -541,14 +545,14 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
           peers: await Promise.all([primary.sessionId, extra!.sessionId].map((page) => evaluate(page,
             "document.getElementById('share-count')?.textContent"))) as string[] };
         return { before, movedFit, oversized, after: [], paused: { primary: [], other: [], toolbar: [] },
-          recovered };
+          failureMs, recovered };
       }
       await evaluate(victim.sessionId, `(() => { const channel = new BroadcastChannel('shellpuppet.dashboard');
         channel.postMessage(${JSON.stringify(stale)});
         channel.postMessage({ type: 'test-roster-barrier' }); channel.close(); })()`);
       await waitFor(async () => await evaluate(survivor.sessionId, 'window.__staleBarrier') === true);
       return { before, movedFit, oversized, after: [], paused: { primary: [], other: [], toolbar: [] },
-        departure, survivor: await ids(survivor.sessionId) as string[] };
+        failureMs, departure, survivor: await ids(survivor.sessionId) as string[] };
     }
     await evaluate(second.sessionId, 'window.__pauseRoster = true');
     await new Promise((resolve) => setTimeout(resolve, 5400));
@@ -558,12 +562,14 @@ async function multiWindowProbe(url: string, lostSocket?: 'primary' | 'other', d
     await evaluate(second.sessionId, 'window.__pauseRoster = false');
     await waitFor(async () => (await ids(primary.sessionId) as string[] | undefined)?.length === 1);
     const leaving = await evaluate(second.sessionId, 'window.__lastRoster.window') as { id: string; instance: string };
+    const closedAt = performance.now();
     await send('Target.closeTarget', { targetId: second.targetId });
     await waitFor(async () => await evaluate(primary.sessionId, `
       window.__dashboardDiagnostics.streams.some(entry => entry.gone.some(frame =>
         frame.id === ${JSON.stringify(leaving.id)} && frame.instance === ${JSON.stringify(leaving.instance)}))`) === true &&
       JSON.stringify(await ids(primary.sessionId)) === JSON.stringify(sessions), 'closed instance and returned panes');
-    return { before, after: await ids(primary.sessionId) as string[], paused, movedFit, oversized,
+    const closeMs = performance.now() - closedAt;
+    return { before, after: await ids(primary.sessionId) as string[], paused, closeMs, movedFit, oversized,
       ...(dragIsolation ? { dragIsolation } : {}) };
   } finally {
     if (socket?.readyState === WebSocket.OPEN) {
@@ -887,6 +893,7 @@ describe('dashboard screen controls in Chromium', () => {
     expect(result.movedFit.after, JSON.stringify(result.movedFit)).not.toBe(result.movedFit.before);
     expect(result.movedFit.resizes.some((frame) => frame.take === true), JSON.stringify(result.movedFit)).toBe(true);
     expect(result.movedFit.donorStreams).toEqual([]);
+    expect(result.closeMs).toBeLessThan(2000);
     expect(result.after).toEqual(sessions);
   }, 180_000);
 
@@ -904,6 +911,7 @@ describe('dashboard screen controls in Chromium', () => {
     if (!browser) { context.skip(); return; }
     await ensureSessions();
     const result = await multiWindowProbe(await freshUrl(), 'other', false, false, false, true);
+    expect(result.failureMs).toBeLessThan(2000);
     expect(result.recovered?.newInstance).not.toBe(result.recovered?.oldInstance);
     expect(result.recovered?.primary).toEqual([sessions[0]]);
     expect(result.recovered?.other).toEqual(sessions.slice(1));
