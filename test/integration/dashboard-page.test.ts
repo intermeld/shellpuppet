@@ -122,18 +122,18 @@ describe('passive dashboard page', () => {
       drive: true, timeoutMs: 120_000,
       probe: `(() => {
         const feed = window.__dashboardDiagnostics.streams.find(s => s.url.endsWith('/dashboard/events'))?.socket;
-        if (!feed || document.getElementById('connection').textContent !== 'Connected') return null;
+        if (!feed || document.getElementById('designated-window').disabled) return null;
         document.getElementById('focus').click();
         const first = { id: 'one', label: 'one', cols: 100, rows: 30 };
-        feed.onmessage({ data: JSON.stringify({ type: 'snapshot', sessions: [first] }) });
+        window.__dashboardDiagnostics.snapshot(feed, [first]);
         const root = document.getElementById('panes');
         const main = document.getElementById('main-pane');
         const strip = document.getElementById('strip');
         const lone = { paneWidth: main.querySelector('.pane').getBoundingClientRect().width,
           rootWidth: root.clientWidth - 12, stripWidth: strip.getBoundingClientRect().width,
           belowFloor: main.querySelector('.pane').classList.contains('below-floor') };
-        feed.onmessage({ data: JSON.stringify({ type: 'snapshot', sessions: [first,
-          { id: 'two', label: 'two', cols: 100, rows: 30 }] }) });
+        window.__dashboardDiagnostics.snapshot(feed, [first,
+          { id: 'two', label: 'two', cols: 100, rows: 30 }]);
         return JSON.stringify({ lone, pair: { stripWidth: strip.getBoundingClientRect().width,
           stripCount: strip.querySelectorAll('.pane').length,
           mainWidth: main.querySelector('.pane').getBoundingClientRect().width,
@@ -185,7 +185,7 @@ describe('passive dashboard page', () => {
     });
     await eventually(() => daemon.daemon.connectedSockets >= 3, 90_000);
     const third = await startSession('third');
-    await new Promise((resolve) => setTimeout(resolve, 1200));
+    await eventually(() => daemon.daemon.connectedSockets >= 4, 90_000);
     await api(daemon.port, daemon.token, `/sessions/${third}`, { method: 'DELETE' });
     const result = JSON.parse(String((await capture).probe)) as {
       seen: number[]; ids: string[]; labels: string[];
@@ -231,7 +231,7 @@ describe('passive dashboard page', () => {
       });
       await eventually(() => daemon.daemon.connectedSockets >= 3, 90_000);
       third = await startSession('loop-third');
-      await new Promise((resolve) => setTimeout(resolve, 1200));
+      await eventually(() => daemon.daemon.connectedSockets >= 4, 90_000);
       await api(daemon.port, daemon.token, `/sessions/${third}`, { method: 'DELETE' });
       const shot = await capture;
       const trace = JSON.parse(String(shot.probe)) as { arrangements: number; visibility: number;
@@ -311,12 +311,12 @@ describe('passive dashboard page', () => {
       probe: `(() => {
         if (!window.__dashSockets) return null;
         const feed = window.__dashSockets.find(s => s.url.endsWith('/dashboard/events'))?.socket;
-        if (!feed || document.getElementById('connection').textContent !== 'Connected') return null;
+        if (!feed || document.getElementById('designated-window').disabled) return null;
         const ids = ['one','two','three','four','five'];
         const summaries = ids.map(id => ({ id, label: id, purpose: '<b>purpose</b>', cols: 100, rows: 30 }));
         const layouts = [];
         for (let n = 1; n <= 5; n++) {
-          feed.onmessage({ data: JSON.stringify({ type: 'snapshot', sessions: summaries.slice(0, n) }) });
+          window.__dashboardDiagnostics.snapshot(feed, summaries.slice(0, n));
           const cards = [...document.querySelectorAll('.pane')];
           layouts.push({ mode: document.getElementById('panes').dataset.layout,
             ids: cards.map(c => c.dataset.session),
@@ -402,9 +402,9 @@ describe('passive dashboard page', () => {
       drive: true, timeoutMs: 120_000, beforeNavigateScript: instrument,
       probe: `(async () => {
         const feed = window.__dashSockets?.find(s => s.url.endsWith('/dashboard/events'))?.socket;
-        if (!feed || document.getElementById('connection').textContent !== 'Connected') return null;
+        if (!feed || document.getElementById('designated-window').disabled) return null;
         const sessions = ['one','two'].map(id => ({ id, label: id, cols: 100, rows: 30 }));
-        feed.onmessage({ data: JSON.stringify({ type: 'snapshot', sessions }) });
+        window.__dashboardDiagnostics.snapshot(feed, sessions);
         const auto = document.getElementById('panes').dataset.layout;
         document.getElementById('grid').click();
         const forced = document.getElementById('panes').dataset.layout;
@@ -431,7 +431,7 @@ describe('passive dashboard page', () => {
       probe: `(() => {
         const state = (window.__doubleClickProbe ||= { phase: 0 });
         const feed = window.__dashSockets?.find(s => s.url.endsWith('/dashboard/events'))?.socket;
-        if (!feed || document.getElementById('connection').textContent !== 'Connected') return null;
+        if (!feed || document.getElementById('designated-window').disabled) return null;
         if (state.phase === 0) {
           // Connected precedes the initial snapshot. Use the real session
           // list and an explicit Grid layout, including in a whole-file run.

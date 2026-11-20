@@ -76,7 +76,7 @@ window.ShellPuppetPane = (() => {
    * @param {number|null} [config.initialFontOverride=null] - Initial font size.
    * @param {function} [config.onTitleChange] - Called when the window title should change.
    * @param {function} [config.onFontOverrideChange] - Called when the font override changes.
-   * @param {function} [config.onGeometryReady] - Called after the first geometry frame.
+   * @param {function} [config.onGeometryReady] - Called after the first geometry frame and after temporary geometry ends.
    * @param {function} [config.onGeometryChange] - Called after each geometry frame.
    * @param {function} [config.onMetricsChange] - Called after font or device-scale metrics change.
    * @param {function} [config.onOutsideGeometry] - Called when another client changes an unheld grid.
@@ -1146,6 +1146,7 @@ window.ShellPuppetPane = (() => {
             const firstGeometry = !geometryDecided;
             geometryDecided = true;
             controlMode = captureMode ? 'adopt' : control.control || 'adopt';
+            const wasTemporary = temporaryGeometry;
             temporaryGeometry = control.temporary === true;
             if (pendingTakeSocket !== null && pendingTakeSocket !== socket) {
               pendingTakeGrid = false;
@@ -1184,7 +1185,7 @@ window.ShellPuppetPane = (() => {
               }
             }
             applyGeometry(control.cols, control.rows, control.max);
-            if (firstGeometry) onGeometryReady();
+            if (firstGeometry || (wasTemporary && !temporaryGeometry)) onGeometryReady();
             if (controlMode === 'yours' && !temporaryGeometry && !captureMode && dashboardProof === null) requestFit();
           } else if (control && control.type === 'identity') {
             showIdentity(control);

@@ -11,7 +11,7 @@ beforeAll(async () => { browser = await findBrowser(); }, 60_000);
 type Page = { evaluate: (expression: string) => Promise<unknown>;
   send: (method: string, params?: Record<string, unknown>, browserWideOrSession?: boolean | string) => Promise<unknown> };
 type Target = { targetId: string; url: string; type: string };
-type Child = { id: string; evaluate: Page['evaluate'] };
+type Child = Page & { id: string };
 
 async function until<T>(read: () => Promise<T | null>, limitMs = 30_000): Promise<T> {
   const deadline = Date.now() + limitMs;
@@ -67,7 +67,9 @@ async function exercise(count: number, action: (primary: Page, openChild: (useBu
               throw error;
             }
           });
-          return { id: target.targetId, evaluate };
+          await until(async () => await primary.evaluate(`document.getElementById('share-count').textContent
+            .includes('${windowCount} windows')`) ? true : null);
+          return { id: target.targetId, evaluate, send: (method, params) => primary.send(method, params, sessionId) };
         };
         const openChild = async (useButton = false): Promise<Child> => {
           const current = String(await primary.evaluate(`document.getElementById('share-count').textContent`));
@@ -137,32 +139,176 @@ it('places a profile launch in its own window regardless of designation', async 
   expect(result).toMatchObject({ primary: [], child: [expect.any(String)], primaryDesignated: 'true' });
 }, 240_000);
 
-it('drags the last pane into an empty window and inserts before a target pane', async (context) => {
+async function dragPane(source: Page, target: Page, id: string, selector: string, fraction = 0.5) {
+  await source.send('Page.bringToFront');
+  await source.send('Input.setInterceptDrags', { enabled: true });
+  const start = await source.evaluate(`(() => {
+    delete window.__nativePaneDrag;
+    document.addEventListener('dragstart', e => {
+      if (e.isTrusted) window.__nativePaneDrag = e.dataTransfer.getData('application/x-shellpuppet-pane');
+    }, { once: true });
+    const box = document.querySelector('.pane[data-session=${JSON.stringify(id)}] .pane-head').getBoundingClientRect();
+    return { x: box.left + 3, y: box.top + 3 };
+  })()`) as { x: number; y: number };
+  try {
+    await source.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...start });
+    await source.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...start, button: 'left', buttons: 1, clickCount: 1 });
+    await source.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: start.x + 24, y: start.y + 2, buttons: 1, button: 'left' });
+    const payload = await source.evaluate('window.__nativePaneDrag');
+    expect(typeof payload, 'Chromium started a trusted drag from the title bar').toBe('string');
+    const data = { items: [{ mimeType: 'application/x-shellpuppet-pane', data: payload }], dragOperationsMask: 16 };
+    await target.send('Page.bringToFront');
+    const point = await target.evaluate(`(() => {
+      delete window.__acceptedDrop;
+      window.addEventListener('dragover', e => { window.__acceptedDrop = e.isTrusted && e.defaultPrevented; }, { once: true });
+      const box = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
+      return { x: box.left + box.width * ${fraction}, y: box.top + box.height * ${fraction} };
+    })()`) as { x: number; y: number };
+    for (const type of ['dragEnter', 'dragOver']) await target.send('Input.dispatchDragEvent', { type, ...point, data });
+    expect(await target.evaluate('window.__acceptedDrop'), 'the destination accepted dragover').toBe(true);
+    await target.send('Input.dispatchDragEvent', { type: 'drop', ...point, data });
+  } finally {
+    await source.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...start, button: 'left', clickCount: 1 });
+    await source.send('Input.setInterceptDrags', { enabled: false });
+  }
+}
+
+it.for(['toolbar', 'before', 'after'])('drags the last pane from its title to %s', { timeout: 240_000 }, async (placement, context) => {
   if (!browser) { context.skip(); return; }
-  const result = await exercise(2, async (primary, openChild) => {
+  await exercise(3, async (primary, openChild) => {
     const child = await openChild();
-    const source = await ids(primary.evaluate) as string[];
-    const drag = async (id: string, before?: string) => {
-      const data = await primary.evaluate(`(() => { const transfer = new DataTransfer();
-        document.querySelector('.pane[data-session=${JSON.stringify(id)}] .pane-head')
-          .dispatchEvent(new DragEvent('dragstart', { bubbles: true, dataTransfer: transfer }));
-        return transfer.getData('application/x-shellpuppet-pane'); })()`);
-      await child.evaluate(`(() => { const transfer = new DataTransfer();
-        transfer.setData('application/x-shellpuppet-pane', ${JSON.stringify(data)});
-        const target = ${before ? `document.querySelector('.pane[data-session=${JSON.stringify(before)}]')` : `document.getElementById('panes')`};
-        target.dispatchEvent(new DragEvent('drop', { bubbles: true, dataTransfer: transfer })); })()`);
-    };
-    await drag(source[0]!);
-    await until(async () => (await ids(child.evaluate) as string[]).includes(source[0]!) ? true : null);
-    await drag(source[1]!, source[0]);
-    await until(async () => JSON.stringify(await ids(child.evaluate)) === JSON.stringify([source[1], source[0]]) ? true : null);
+    const [a, b, c] = await ids(primary.evaluate) as [string, string, string];
+    await sendMove(primary, a);
+    await sendMove(primary, b);
+    await until(async () => JSON.stringify(await ids(child.evaluate)) === JSON.stringify([a,b]) ? true : null);
+    await until(async () => JSON.stringify(await ids(primary.evaluate)) === JSON.stringify([c]) ? true : null);
+    const target = placement === 'toolbar' ? 'h1' : '.pane[data-session="' + a + '"]';
+    await dragPane(primary, child, c, target, placement === 'before' ? 0.25 : 0.75);
+    const expected = placement === 'toolbar' ? [a,b,c] : placement === 'before' ? [c,a,b] : [a,c,b];
+    await until(async () => JSON.stringify(await ids(child.evaluate)) === JSON.stringify(expected) ? true : null);
     await until(async () => (await ids(primary.evaluate) as string[]).length === 0 ? true : null);
-    await until(async () => await primary.evaluate(`document.getElementById('start').disabled === false`) ? true : null);
-    return { source: await ids(primary.evaluate), target: await ids(child.evaluate), expected: [source[1], source[0]],
-      sourceControls: await primary.evaluate(`!!document.getElementById('new-window') &&
-        !document.getElementById('launcher').hidden && !document.getElementById('start').disabled`) };
+    expect(await primary.evaluate("!document.getElementById('start').disabled")).toBe(true);
+    return true;
   });
-  expect(result).toMatchObject({ source: [], target: (result as { expected: string[] }).expected, sourceControls: true });
+});
+
+const feedEntry = "window.__dashboardDiagnostics.streams.filter(s => s.url.endsWith('/dashboard/events')).at(-1)";
+async function sendMove(primary: Page, session: string) {
+  await primary.evaluate(`(() => {
+    const feed = ${feedEntry};
+    const [source, target] = feed.windowState.windows;
+    feed.socket.send(JSON.stringify({ type: 'window-move', session: ${JSON.stringify(session)}, source, target }));
+  })()`);
+}
+
+it('removes an enlarged pane from its source and scopes keyboard enlargement to the assignment', async (context) => {
+  if (!browser) { context.skip(); return; }
+  await exercise(2, async (primary, openChild) => {
+    const child = await openChild();
+    const [a, b] = await ids(primary.evaluate) as [string, string];
+    await primary.evaluate(`document.querySelector('[data-session="${b}"] button[aria-label="Enlarge"]').click()`);
+    await sendMove(primary, b);
+    await until(async () => (await ids(child.evaluate) as string[]).includes(b) ? true : null);
+    expect(await ids(primary.evaluate)).toEqual([a]);
+    await child.evaluate(`document.dispatchEvent(new KeyboardEvent('keydown',{key:'A',ctrlKey:true,shiftKey:true,bubbles:true}));
+      document.dispatchEvent(new KeyboardEvent('keydown',{key:'m',bubbles:true}));`);
+    expect(await ids(child.evaluate)).toEqual([b]);
+    return true;
+  });
+}, 240_000);
+
+it('clears local clients and designation before reconnecting the event feed', async (context) => {
+  if (!browser) { context.skip(); return; }
+  await exercise(1, async (primary, openChild) => {
+    const child = await openChild();
+    const [session] = await ids(primary.evaluate) as string[];
+    const atClose = await primary.evaluate(`new Promise(resolve => {
+      const socket = ${feedEntry}.socket;
+      socket.addEventListener('close', () => resolve({
+        cards: document.querySelectorAll('.pane').length,
+        pressed: document.getElementById('designated-window').getAttribute('aria-pressed'),
+        streams: window.__dashboardDiagnostics.streams.filter(s => s.url.includes('/stream') && s.socket.readyState === 1).length
+      }), {once:true});
+      socket.close();
+    })`);
+    expect(atClose).toEqual({ cards: 0, pressed: 'false', streams: 0 });
+    await until(async () => (await ids(child.evaluate) as string[]).includes(session!) ? true : null);
+    await until(async () => await primary.evaluate(`document.getElementById('share-count').textContent.includes('2 windows') &&
+      !document.getElementById('designated-window').disabled`) ? true : null);
+    expect(await ids(primary.evaluate)).toEqual([]);
+    return true;
+  });
+}, 240_000);
+
+it('moves left and right across a gap in the global catalogue', async (context) => {
+  if (!browser) { context.skip(); return; }
+  await exercise(3, async (primary, openChild) => {
+    const child = await openChild();
+    const [a, b, c] = await ids(primary.evaluate) as [string, string, string];
+    await sendMove(primary, b);
+    await until(async () => (await ids(child.evaluate) as string[]).includes(b) ? true : null);
+    for (const [label, expected] of [['Move left', [c, a]], ['Move right', [a, c]]] as const) {
+      await primary.evaluate(`document.querySelector('[data-session="${c}"] button[aria-label="${label}"]').click()`);
+      await until(async () => JSON.stringify(await primary.evaluate(`${feedEntry}.windowState.assignments[${feedEntry}.windowState.designated]`))
+        === JSON.stringify(expected) ? true : null);
+      expect(await ids(primary.evaluate)).toEqual(expected);
+    }
+    return true;
+  });
+}, 240_000);
+
+it('shows local attention and keeps the empty notice after closing Messages', async (context) => {
+  if (!browser) { context.skip(); return; }
+  await exercise(1, async (primary, openChild) => {
+    const child = await openChild();
+    const [id] = await ids(primary.evaluate) as string[];
+    const readAttention = () => primary.evaluate(`(() => {
+      ${feedEntry}.socket.onmessage({ data: JSON.stringify({type:'session-updated',
+        session:{id:${JSON.stringify(id)},label:'Waiting elsewhere',waitingOnPrompt:{waitingMs:21000}}}) });
+      return document.getElementById('attention-count').textContent;
+    })()`);
+    expect(await readAttention()).toBe('1 waiting');
+    await child.evaluate(`document.getElementById('messages-toggle').click(); document.getElementById('messages-toggle').click()`);
+    const empty = await child.evaluate("!document.getElementById('empty').hidden");
+    await sendMove(primary, id!);
+    await until(async () => (await ids(primary.evaluate) as string[]).length === 0 ? true : null);
+    expect({ empty, attention: await readAttention() }).toEqual({ empty: true, attention: '' });
+    return true;
+  });
+}, 240_000);
+
+it('preserves both launcher records and offers Restart to the receiving window', async (context) => {
+  if (!browser) { context.skip(); return; }
+  await exercise(0, async (primary, openChild) => {
+    const child = await openChild();
+    const launch = async (page: Page) => {
+      await until(async () => await page.evaluate("!document.getElementById('start').disabled") ? true : null);
+      await page.evaluate("document.getElementById('start').click()");
+      return until(async () => await page.evaluate("document.querySelector('.pane:has([data-action=restart]:not([hidden]))')?.dataset.session") as string ?? null);
+    };
+    const [a, b] = await Promise.all([launch(primary), launch(child)]);
+    await sendMove(primary, a);
+    await until(async () => (await ids(child.evaluate) as string[]).includes(a) ? true : null);
+    const restartable = () => child.evaluate("[...document.querySelectorAll('.pane:has([data-action=restart]:not([hidden]))')].map(p=>p.dataset.session).sort()");
+    expect(await restartable()).toEqual([a,b].sort());
+    // When the other window closes, this surviving document receives every pane.
+    await primary.send('Target.closeTarget', {targetId: child.id}, true);
+    await until(async () => (await ids(primary.evaluate) as string[]).length === 2 ? true : null);
+    const previous = Number(await primary.evaluate('performance.timeOrigin'));
+    await primary.send('Page.reload');
+    await until(async () => {
+      try {
+        return await primary.evaluate(`performance.timeOrigin !== ${previous} &&
+          document.querySelectorAll('#panes .pane').length === 2`) ? true : null;
+      } catch (error) {
+        if (/Execution context was destroyed|Cannot find context/i.test(String(error))) return null;
+        throw error;
+      }
+    });
+    expect(await primary.evaluate("[...document.querySelectorAll('.pane:has([data-action=restart]:not([hidden]))')].map(p=>p.dataset.session).sort()"))
+      .toEqual([a,b].sort());
+    return true;
+  });
 }, 240_000);
 
 it('pops out into an ordinary window and returns its pane on close', async (context) => {

@@ -64,32 +64,37 @@ describe('any-folder dashboard controls', () => {
         const browse = document.getElementById('browse-folder');
         const visible = !document.getElementById('any-folder').hidden &&
           document.getElementById('bounded-folder').hidden && !browse.hidden;
+        const remembered = async (path) => {
+          while (JSON.parse(localStorage.getItem('shellpuppet.dashboard.recentFolders') || '{}').open?.[0] !== path)
+            await new Promise(resolve => requestAnimationFrame(resolve));
+        };
         browse.click();
         for (let index = 0; index < 40 && !box.value; index++)
           await new Promise(resolve => setTimeout(resolve, 50));
         const picked = box.value;
         box.value = 'C:\\\\typed\\\\folder';
         document.getElementById('start').click();
-        await new Promise(resolve => setTimeout(resolve, 100));
+        await remembered(box.value);
         const rootPath = ${JSON.stringify(rootPath)};
         const rootOffered = [...document.querySelectorAll('#folder-path-options option')]
           .some(option => option.value === rootPath);
         box.value = rootPath;
         document.getElementById('start').click();
-        await new Promise(resolve => setTimeout(resolve, 100));
-        return { visible, picked, bodies: window.__launchBodies,
+        await remembered(box.value);
+        const windowPair = window.__dashboardDiagnostics.streams.find(s => s.url.endsWith('/dashboard/events')).windowState.designated;
+        return { visible, picked, windowPair, bodies: window.__launchBodies,
           recent: JSON.parse(localStorage.getItem('shellpuppet.dashboard.recentFolders') || '{}').open,
           rootPath, rootOffered };
       })()`),
     });
-    const result = shot.probe as { visible: boolean; picked: string; bodies: { name?: string; folderPath?: string; folder?: string; rootIndex?: number }[]; recent: string[]; rootPath: string; rootOffered: boolean };
+    const result = shot.probe as { visible: boolean; picked: string; windowPair: string; bodies: { name?: string; folderPath?: string; folder?: string; rootIndex?: number }[]; recent: string[]; rootPath: string; rootOffered: boolean };
     expect(result.visible).toBe(true);
     expect(result.picked).toBe(chosen);
     expect(result.bodies[0]?.folderPath).toBe('C:\\typed\\folder');
     expect(result.recent).toContain('C:\\typed\\folder');
     expect(result.rootPath).toBe(rootPath);
     expect(result.rootOffered).toBe(true);
-    expect(result.bodies[1]).toEqual({ profile: 'open', name: 'open', folder: 'child', rootIndex: 0 });
+    expect(result.bodies[1]).toEqual({ window: result.windowPair, profile: 'open', name: 'open', folder: 'child', rootIndex: 0 });
     expect(result.recent).toContain(rootPath);
   });
 });

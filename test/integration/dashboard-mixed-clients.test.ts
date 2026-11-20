@@ -1,34 +1,13 @@
 import { afterEach, beforeAll, expect, it } from 'vitest';
-import { captureViewer } from '../../src/daemon/screenshot.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
-import { captureDashboard } from './dashboardCapture.js';
-import { api, startTestDaemon } from './helpers.js';
+import { captureDashboard, dashboardDiagnosticsScript } from './dashboardCapture.js';
+import { api, eventually, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 
 let browser: string | null = null;
 let running: TestDaemon | null = null;
 beforeAll(async () => { browser = await findBrowser(); }, 60_000);
 afterEach(async () => { await running?.stop(); running = null; }, 120_000);
-
-const recordFrames = `(() => {
-  window.__resizes = [];
-  window.__geometry = [];
-  const Native = window.WebSocket;
-  const send = Native.prototype.send;
-  Native.prototype.send = function(data) {
-    if (typeof data === 'string' && data.includes('"type":"resize"'))
-      window.__resizes.push(JSON.parse(data));
-    return send.call(this, data);
-  };
-  window.WebSocket = new Proxy(Native, { construct(Target, args) {
-    const socket = new Target(...args);
-    if (String(args[0]).includes('/stream')) socket.addEventListener('message', event => {
-      if (typeof event.data === 'string' && event.data.includes('"type":"geometry"'))
-        window.__geometry.push(JSON.parse(event.data));
-    });
-    return socket;
-  } });
-})()`;
 
 it('bounds resize frames across two dashboards and a passive single-session viewer', async (context) => {
   if (!browser) { context.skip(); return; }
@@ -43,75 +22,57 @@ it('bounds resize frames across two dashboards and a passive single-session view
   } });
   expect(started.status).toBe(200);
   const id = String(started.body['id']);
-  for (let index = 0; index < 2; index++) {
-    expect((await api(daemon.port, daemon.token, '/dashboard/open', { method: 'POST', body: {} })).status).toBe(200);
-  }
+  expect((await api(daemon.port, daemon.token, '/dashboard/open', { method: 'POST', body: {} })).status).toBe(200);
   const minted = await api(daemon.port, daemon.token, `/sessions/${id}/viewer`, { body: {} });
   expect(minted.status).toBe(200);
   const viewerUrl = `${String(minted.body['viewerUrl'])}&drive=0`;
+  await captureDashboard({ browser, viewerUrl: urls[0]!, width: 1400, height: 900, drive: true, probeOnly: true,
+    probe: `document.querySelector('.pane-size')?.textContent.includes('×')`, timeoutMs: 150_000,
+    interact: async ({ evaluate, send }) => {
+      // All three documents share one browser. The new dashboard inherits the cookie
+      // and has its own empty assignment. Only the passive viewer also sees the grid.
+      const openPage = async (url: string, width: number, height: number) => {
+        const { targetId } = await send('Target.createTarget', { url: 'about:blank' }, true) as { targetId: string };
+        const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true }, true) as { sessionId: string };
+        await send('Page.enable', {}, sessionId);
+        await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false }, sessionId);
+        await send('Page.addScriptToEvaluateOnNewDocument', { source: dashboardDiagnosticsScript }, sessionId);
+        await send('Page.navigate', { url }, sessionId);
+        return async (expression: string) => {
+          const response = await send('Runtime.evaluate', { expression, returnByValue: true }, sessionId) as {
+            result: { value?: unknown }; exceptionDetails?: unknown };
+          if (response.exceptionDetails) throw new Error(JSON.stringify(response.exceptionDetails));
+          return response.result.value;
+        };
+      };
+      const other = await openPage(`http://127.0.0.1:${String(daemon.port)}/dashboard`, 1200, 800);
+      await eventually(async () => await other(`document.getElementById('share-count')?.textContent.includes('0 of 1 here, 2 windows')`) === true);
+      const viewer = await openPage(viewerUrl, 900, 700);
+      const stream = `window.__dashboardDiagnostics?.streams.find(s => s.url.includes('/stream'))`;
+      const geometry = `${stream}?.geometry.at(-1)`;
+      await eventually(async () => await viewer(`${geometry}?.control === 'adopt'`) === true);
+      await evaluate(`document.querySelector('.pane button[aria-label="Fit"]').click()`);
+      await eventually(async () => await evaluate(`${geometry}?.control === 'yours'`) === true);
+      const frameCount = `${stream}?.resizes.length ?? 0`;
+      const before = Number(await evaluate(frameCount));
+      const oldCols = Number(await evaluate(`${geometry}.cols`));
+      await evaluate(`document.getElementById('panes').style.width = '1100px'; window.dispatchEvent(new Event('resize'))`);
+      await eventually(async () => await evaluate(`${geometry}.cols !== ${oldCols} && ${geometry}.control === 'yours'`) === true);
+      const fittedCols = Number(await evaluate(`${geometry}.cols`));
+      await eventually(async () => await viewer(`${geometry}?.cols === ${fittedCols}`) === true);
+      const fittedFrames = Number(await evaluate(frameCount));
+      expect(fittedFrames - before).toBeGreaterThanOrEqual(1);
+      expect(fittedFrames - before).toBeLessThanOrEqual(2);
 
-  type Evaluate = (expression: string) => Promise<unknown>;
-  const pages: Evaluate[] = [];
-  const readyResolve: (() => void)[] = [];
-  const ready = [0, 1, 2].map((index) => new Promise<void>((resolve) => { readyResolve[index] = resolve; }));
-  let release = () => {};
-  const held = new Promise<void>((resolve) => { release = resolve; });
-  const interact = (index: number) => async ({ evaluate }: { evaluate: Evaluate }) => {
-    pages[index] = evaluate;
-    readyResolve[index]!();
-    await held;
-    return true;
-  };
-  const dashboardProbe = `(() => document.getElementById('connection')?.textContent === 'Connected' &&
-    document.querySelector('.pane-size')?.textContent.includes('×') ? true : null)()`;
-  const captures: Promise<unknown>[] = [];
-  try {
-    captures.push(captureDashboard({ browser, viewerUrl: urls[0]!, width: 1400, height: 900, drive: true,
-      beforeNavigateScript: recordFrames, probe: dashboardProbe, interact: interact(0), timeoutMs: 150_000 }));
-    await Promise.race([ready[0], captures[0]]);
-    captures.push(captureDashboard({ browser, viewerUrl: urls[1]!, width: 1200, height: 800, drive: true,
-      beforeNavigateScript: recordFrames, probe: dashboardProbe, interact: interact(1), timeoutMs: 150_000 }));
-    await Promise.race([ready[1], captures[1]]);
-    captures.push(captureViewer({ browser, viewerUrl, width: 900, height: 700, drive: true,
-      beforeNavigateScript: recordFrames, probe: `(() => document.getElementById('size')?.textContent.includes('×') ? true : null)()`,
-      interact: interact(2), timeoutMs: 150_000 }));
-    await Promise.race([ready[2], captures[2]]);
-    await new Promise((resolve) => setTimeout(resolve, 900));
-    await pages[0]!(`document.querySelector('.pane button[aria-label="Fit"]').click()`);
-    await new Promise((resolve) => setTimeout(resolve, 900));
-    await Promise.all(pages.map((evaluate) => evaluate(`window.__resizes.length = 0`)));
-    await pages[0]!(`(() => {
-      document.getElementById('panes').style.width = '1100px';
-      window.dispatchEvent(new Event('resize'));
-    })()`);
-    await new Promise((resolve) => setTimeout(resolve, 900));
-    const layoutFrames = await Promise.all(pages.map((evaluate) => evaluate(`window.__resizes.length`))) as number[];
-    expect(layoutFrames[0]! + layoutFrames[1]!).toBeGreaterThanOrEqual(1);
-    expect(layoutFrames[0]! + layoutFrames[1]!).toBeLessThanOrEqual(2);
-    expect(layoutFrames[2]).toBe(0);
-    await pages[0]!(`document.querySelector('.pane button[aria-label="Fit"]').click()`);
-    await new Promise((resolve) => setTimeout(resolve, 900));
-    await Promise.all(pages.map((evaluate) => evaluate(`window.__resizes.length = 0`)));
-
-    expect((await api(daemon.port, daemon.token, `/sessions/${id}/resize`,
-      { body: { cols: 194, rows: 100 } })).status).toBe(200);
-    await new Promise((resolve) => setTimeout(resolve, 1300));
-    const first = await Promise.all(pages.map((evaluate) => evaluate(`({
-      frames: window.__resizes.length, owner: window.__geometry.at(-1)?.control,
-      cols: window.__geometry.at(-1)?.cols, rows: window.__geometry.at(-1)?.rows
-    })`))) as { frames: number; owner: string; cols: number; rows: number }[];
-    expect(first.map(page => page.frames)).toEqual([0, 0, 0]);
-    expect(first.map(page => [page.cols, page.rows])).toEqual([[194, 100], [194, 100], [194, 100]]);
-    expect(first.filter((page) => page.owner === 'yours')).toHaveLength(0);
-    await Promise.all(pages.map((evaluate) => evaluate(`window.__resizes.length = 0`)));
-
-    expect((await api(daemon.port, daemon.token, `/sessions/${id}/resize`,
-      { body: { cols: 210, rows: 110 } })).status).toBe(200);
-    await new Promise((resolve) => setTimeout(resolve, 1300));
-    const second = await Promise.all(pages.map((evaluate) => evaluate(`window.__resizes.length`))) as number[];
-    expect(second).toEqual([0, 0, 0]);
-  } finally {
-    release();
-    await Promise.allSettled(captures);
-  }
+      for (const [cols, rows] of [[194, 100], [210, 110]]) {
+        expect((await api(daemon.port, daemon.token, `/sessions/${id}/resize`, { body: { cols, rows } })).status).toBe(200);
+        const received = `${geometry}?.cols === ${cols} && ${geometry}.rows === ${rows} && ${geometry}.control === 'adopt'`;
+        await eventually(async () => await evaluate(received) === true && await viewer(received) === true);
+        expect(await evaluate(frameCount)).toBe(fittedFrames);
+        expect(await viewer(frameCount)).toBe(0);
+        expect(await other(`window.__dashboardDiagnostics.streams.filter(s => s.url.includes('/stream')).length`)).toBe(0);
+      }
+      return true;
+    },
+  });
 }, 240_000);

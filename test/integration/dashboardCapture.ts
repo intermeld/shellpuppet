@@ -32,6 +32,16 @@ export const dashboardDiagnosticsScript = `(() => {
     outstanding.delete(id); state.pendingAnimationFrames = outstanding.size;
     return nativeCancel(id);
   };
+  // A synthetic catalogue and its assignment are separate daemon frames.
+  state.snapshot = (socket, sessions) => {
+    const entry = state.streams.find(s => s.socket === socket);
+    const roster = entry.windowState;
+    if (!roster || roster.windows.length !== 1) throw new Error('Expected an acknowledged single window');
+    socket.onmessage({ data: JSON.stringify({ type: 'snapshot', sessions }) });
+    socket.onmessage({ data: JSON.stringify({ ...roster, assignments: {
+      [roster.designated]: sessions.map(session => session.id)
+    } }) });
+  };
   const NativeSocket = window.WebSocket;
   const nativeSend = NativeSocket.prototype.send;
   NativeSocket.prototype.send = function(data) {

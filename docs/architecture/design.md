@@ -1706,7 +1706,7 @@ setting, never their values. Client-token starts do not use profiles.
   the viewer. `POST /dashboard/open` mints the one-use grant and opens that page through
   the existing launcher. `/dashboard/events` is the session feed already kept by the
   daemon: hello, a snapshot, then `session-added`, `session-updated` and `session-removed`.
-  It is outbound only. The daemon pings dashboard event sockets every 15 seconds
+  Registered windows send focus, designation and move requests on this feed. The daemon pings dashboard event sockets every 15 seconds
   and terminates one that gives no pong within 10 seconds, so a stale connection
   cannot suppress a later desktop open. `prompt-stall` stays on `/events`, which
   remains client-token only.
@@ -1863,14 +1863,21 @@ supervising session to open focused or popped out while sessions it starts
 appear in the grid.
 
 The authenticated `/dashboard/events` socket registers one window instance.
+Replacing the dashboard credential retires its feeds immediately. Issuing a ninth
+document proof retires feeds using the oldest proof. On feed loss a window closes
+its pane clients and clears its designation until registration succeeds.
+Only focused documents report focus. If no survivor has reported focus, the daemon
+selects the earliest surviving registration.
 The daemon publishes `window-state` with the open roster, designation and
 assignments. A move frame also identifies the insertion point, so a window
 can keep its remembered order when a new session arrives. `window-focus`,
 `window-designate` and `window-move` are accepted only from a registered
 socket with the dashboard credential.
-Moving checks that the caller is the source or target, the source currently
-owns the session, and the target is open. Closing a socket removes its
-instance before reassigning panes.
+Moving checks that both endpoints are open, that the caller is one of them, and
+that the source owns the session. The launcher matches the requesting document's
+proof to its registered socket. Closing a socket removes its instance before
+reassigning panes. A Pop out during a wider read defers the receiving window's
+automatic fit until the daemon restores the grid.
 The launch route accepts the registered source window as an optional `window`
 field and rejects a closed source. `BroadcastChannel` only synchronises
 preferences; it never authorises a roster or assignment.
