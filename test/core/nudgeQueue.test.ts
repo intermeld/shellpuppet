@@ -117,3 +117,33 @@ describe('queueing behind a running turn', () => {
     expect(nudgeVerdict(grok, { ...observation, composerUnchangedMs: NUDGE_QUIET_MS })).toEqual({ ready: true, queued: true });
   });
 });
+
+describe('what lies below a busy composer', () => {
+  const claudeRule = '─'.repeat(60);
+  const museTop = `── Voice input (Alt+V to start) ${'─'.repeat(35)}`;
+  const inked = (rows: string[], rules: string[], fg: string, dim: boolean): NudgeView => ({
+    rows,
+    styled: rows.map((text) => ({ text, spans: rules.includes(text)
+      ? [{ from: 0, to: text.length, fg, bg: null, bold: false, dim, italic: false, inverse: false }] : [] })),
+  });
+  const claudeBusy = (below: string[]) => inked(['❯ earlier request', '✻ Thinking… (12s · ↓ 300 tokens)', claudeRule, '❯',
+    claudeRule, ...below], [claudeRule], '#888888', false);
+  const museBusy = (below: string[]) => inked(['❯ earlier request', '◇ Calling tools (12s · esc to interrupt)', museTop, '❯',
+    claudeRule, ...below], [museTop, claudeRule], '#676c74', true);
+  const panel = ['Application requests access to files', '  > Permit this action', '    Cancel'];
+
+  it('queues under Claude Code and Muse Code footers', () => {
+    expect(claude.nudge!.readiness(claudeBusy(['  Opus 5.5 medium █░░░░░░░░░ 6%', '  ⏵⏵ auto mode on · 1 shell · esc to interrupt']))).toBe('queue');
+    expect(muse.nudge!.readiness(museBusy(['main · ↓ to select', '└ ◇ Run the build  running',
+      '  muse-wonder-1.0 · high · C:/work/project · Launch overrides']))).toBe('queue');
+  });
+
+  it('never queues when a panel is painted below the composer', () => {
+    expect(claude.nudge!.readiness(claudeBusy(panel))).toBe('busy');
+    expect(muse.nudge!.readiness(museBusy(panel))).toBe('busy');
+    expect(nudgeVerdict(claude, { ...claudeBusy(panel), viewportRows: 24, unchangedMs: 0,
+      composerUnchangedMs: NUDGE_QUIET_MS })).toEqual({ ready: false, reason: 'busy' });
+    // A numbered choice indented like a footer row is still not a footer.
+    expect(claude.nudge!.readiness(claudeBusy(['  1. Allow', '  2. Deny']))).toBe('busy');
+  });
+});
