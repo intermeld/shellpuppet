@@ -103,8 +103,6 @@ export class DaemonNotAnsweringError extends Error {
 }
 
 export interface ClientOptions {
-  /** Connection id of the managed stdio adapter making this tool call. */
-  mcpAdapter?: string;
   /** A claim held by this client process, as id:secret. */
   claim?: string;
   home?: string;
@@ -764,7 +762,6 @@ export async function request(
         ...(actor !== undefined ? { 'x-shellpuppet-actor': actor } : {}),
         ...(presentIdentity ? {
           ...(resumeIds[0] ? { 'x-shellpuppet-resume-id': resumeIds[0], 'x-shellpuppet-resume-ids': resumeIds.join(',') } : {}),
-          ...(options.mcpAdapter ? { 'x-shellpuppet-mcp-adapter': options.mcpAdapter } : {}),
           'x-shellpuppet-session': session,
           'x-shellpuppet-session-token': sessionToken,
         } : {}),

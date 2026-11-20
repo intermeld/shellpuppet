@@ -2632,8 +2632,6 @@ export class Daemon {
       const session = this.manager.get(caller.session);
       const candidates = headerOne(req, 'x-shellpuppet-resume-ids') ?? headerOne(req, 'x-shellpuppet-resume-id');
       if (candidates) session?.observeResumeId(...candidates.split(','));
-      const adapter = headerOne(req, 'x-shellpuppet-mcp-adapter');
-      if (adapter && /^[a-f0-9-]{36}$/.test(adapter)) session?.mcpConnection(adapter, 'connected');
     }
     return this.callerContext.run(caller.session, () =>
       this.handleClientRequest(req, res, url, segments, actor));
@@ -3064,21 +3062,6 @@ export class Daemon {
           json(res, 415, { error: 'The launch body must be JSON.' }); return;
         }
         await this.launchProfile(req, res, { launcher: caller });
-        return;
-      }
-
-      if (req.method === 'POST' && url.pathname === '/session/mcp-connection') {
-        const id = this.callerContext.getStore();
-        const session = id === undefined ? undefined : this.manager.get(id);
-        if (!session || session.exited) { json(res, 403, { error: 'A live session identity is required.' }); return; }
-        const body = await readBody(req);
-        const adapter = body['adapter'], status = body['status'];
-        if (typeof adapter !== 'string' || !/^[a-f0-9-]{36}$/.test(adapter) ||
-          (status !== 'connected' && status !== 'failed' && status !== 'closed')) {
-          json(res, 400, { error: 'Invalid MCP connection report.' }); return;
-        }
-        session.mcpConnection(adapter, status);
-        json(res, 200, { ok: true });
         return;
       }
 
