@@ -10,7 +10,7 @@ afterEach(async () => {
 });
 
 describe('typed Enter and a burst-sensitive composer', () => {
-  it.each([30, 340, 1200])('submits a %i character line after its late paint and length dependent pause', async (length) => {
+  it.each([30, 340, 1200, 2400])('submits a %i character line after its late paint and length dependent pause', async (length) => {
     const manager = new SessionManager(compilePolicy(undefined));
     managers.push(manager);
     const session = manager.create({
@@ -24,5 +24,5 @@ describe('typed Enter and a burst-sensitive composer', () => {
     await eventually(async () => (await session.snapshot()).screen.includes('RESULT'), 20_000);
     expect((await session.snapshot()).screen).toContain('RESULT submitted');
     expect(result.submitted).toBe(true);
-  }, 40_000);
+  }, 60_000);
 });

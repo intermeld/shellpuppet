@@ -2,9 +2,14 @@
 
 `terminal_type` with `submit: true` sends a single line, waits for a readable
 composer to show it or a recognised paste placeholder and for the screen to
-settle, then sends Enter separately on the same input queue. The wait is
-capped at five seconds; Codex uses a length-based minimum pause. If the draft
-remains, it sends Enter once more and reports `submitRetried: true`. An empty
+settle, then checks again immediately before sending Enter separately on the
+same input queue. Codex waits at least 3 ms per character, or 150 ms for
+short lines, with up to five more seconds for paint and quiet. A placeholder
+must be new since this write and match the body's character count. If the
+exact draft is absent, a prompt has opened or other input has arrived, Enter
+is not sent and the result reports `submitted: false`. If the draft remains
+after Enter, it sends Enter once more only while those checks still hold and
+reports `submitRetried: true`. An empty
 composer confirms submission only after the draft was seen; a busy indicator
 or a transcript echo also confirms it. Otherwise the result says submission
 was not confirmed. If the draft remains after the retry, it reports

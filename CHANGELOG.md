@@ -9,7 +9,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
-- Wait for a typed line or paste placeholder to appear and settle before Enter; confirm submission only from observed evidence, with one retry if the draft remains.
+- Wait for a typed line or a new, matching paste placeholder to settle before Enter; do not send Enter without final composer proof, and honour the full length-based minimum before a single safe retry.
 
 ### Added
 

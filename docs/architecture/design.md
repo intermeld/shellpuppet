@@ -445,17 +445,23 @@ ambiguous in clients that do not, so the prefix stays.
 For a single typed line with Enter, the resolved agent module supplies a
 submit key and timing. The session writes the body first, then waits for a
 readable composer to paint the exact line or a recognised paste placeholder
-and for the screen to settle. The wait has a five second cap. Codex also needs
-a minimum pause proportional to the line length. The key goes separately
-inside the same ordered input operation, so later queued input cannot
-interleave. Muse keeps its own delay. After Enter, a readable composer that
-still holds the line or placeholder gets one further Enter, without retyping.
-A changed composer or later human input never triggers a retry. An empty
-composer confirms submission only after the draft was seen painted; a busy
-indicator or the line appearing in the transcript also confirms it. Otherwise
-the result says submission was not confirmed. The result reports a retry and
-reports `submitted: false` when the draft remains after it. A module without
-a readable composer reports only that the key was sent.
+and for the screen to settle. The minimum pause always elapses before the
+extra wait for paint and quiet expires. For Codex, the effective upper bound
+before Enter is the greater of 150 ms and 3 ms per body character, plus
+5 seconds of extra wait, polling every 50 ms. Immediately before Enter, the
+same queued operation checks that the composer still shows exactly the typed
+line or a paste placeholder created by this write, no answerable prompt is
+showing and no other input has arrived since the body. A placeholder that
+was visible before the body, or whose displayed character count differs from
+the body, is not proof. If this check fails, no Enter is sent and the result
+reports `submitted: false`. The submit key is otherwise written separately
+on the ordered input chain. Muse keeps its own delay. After Enter, the exact
+remaining draft can receive one further Enter, subject to the same checks.
+A changed composer, prompt or later input prevents a retry. An empty composer
+confirms submission only after the draft was seen painted; a new busy
+indicator or the line appearing in the transcript also confirms it. A module
+without a readable composer sends Enter after its delay and reports that
+submission cannot be confirmed.
 | `terminal_key` | Press a semantic key | `session`, `key` |
 | `terminal_wait` | Wait for a screen condition, prompt or supported provider stall | `session` (id, list of ids or omitted for supervision), `text`\|`regex`\|`quiet` or `prompt` and/or `stalled`, `timeout`, `debounce`, `matchAfterInput`, `now`, `hideReasoning` |
 | `terminal_find` | Regex search the current screen, with line numbers | `session`, `pattern`, `hideReasoning` |
