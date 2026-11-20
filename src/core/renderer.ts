@@ -15,7 +15,7 @@
 // breakage in tests. Verified on Node 22.22.2. The default import is the
 // module object.
 import xterm from '@xterm/headless';
-import type { Terminal as XtermTerminal } from '@xterm/headless';
+import type { Terminal as XtermTerminal, IBufferLine, IBufferCell } from '@xterm/headless';
 // Same CJS-bundle caveat as `@xterm/headless` above: default import, then destructure.
 import serializeAddon from '@xterm/addon-serialize';
 import type { SerializeAddon as XtermSerializeAddon } from '@xterm/addon-serialize';
@@ -120,6 +120,12 @@ export class ScreenRenderer {
 
   get rows(): number {
     return this.height;
+  }
+
+  get cursor(): CursorPosition {
+    if (this.closed) return { x: 0, y: 0 };
+    const buffer = this.term.buffer.active;
+    return { x: buffer.cursorX, y: buffer.cursorY };
   }
 
   /**
@@ -475,7 +481,7 @@ export class ScreenRenderer {
     return {
       cols: this.term.cols,
       rows: this.term.rows,
-      cursor: { x: buffer.cursorX, y: buffer.cursorY },
+      cursor: this.cursor,
       lines: marked,
       screen: marked.join('\n'),
     };
@@ -554,36 +560,48 @@ export class ScreenRenderer {
         lines.push({ text: '', spans: [] });
         continue;
       }
-      // Text readers discard right padding. Find that boundary before
-      // extracting attributes, so a bounded context full of short rows does
-      // not allocate styles for thousands of cells it immediately discards.
-      // Keep the untrimmed length for soft-wrap padding, including wide and
-      // combined characters whose string offsets differ from cell columns.
-      const text = line.translateToString(false);
-      const trimmed = text.replace(/\s+$/, '');
-      let offset = 0;
-      const spans: StyleSpan[] = [];
-      for (let x = 0; x < line.length && offset < trimmed.length; x++) {
-        line.getCell(x, cell);
-        // The second half of a wide character holds nothing of its own.
-        if (cell.getWidth() === 0) continue;
-        const chars = cell.getChars() || ' ';
-        const style = styleOf(cell);
-        const last = spans[spans.length - 1];
-        const to = Math.min(offset + chars.length, trimmed.length);
-        if (last !== undefined && sameStyle(last, style)) last.to = to;
-        else spans.push({ ...style, from: offset, to });
-        offset += chars.length;
-      }
-      lines.push({ text: trimmed, spans,
-        ...(line.isWrapped ? { wrapped: true } : {}),
-        ...(buffer.getLine(y + 1)?.isWrapped && text.length > trimmed.length
-          ? { wrapPadding: text.length - trimmed.length } : {}) });
+      lines.push(this.styledRow(line, cell, true, buffer.getLine(y + 1)?.isWrapped === true));
     }
     if (options.last === undefined) {
       while (lines.length > firstVisible && lines[lines.length - 1]?.text.trim() === '') lines.pop();
     }
     return { lines, firstVisible };
+  }
+
+  /** Read one physical input row, including the ink of spaces beyond its last visible glyph. */
+  untrimmedRow(y: number): StyledLine | undefined {
+    if (this.closed || y < 0 || y >= this.rows) return undefined;
+    const buffer = this.term.buffer.active;
+    const line = buffer.getLine(buffer.baseY + y);
+    return line && this.styledRow(line, buffer.getNullCell(), false, false);
+  }
+
+  private styledRow(line: IBufferLine, cell: IBufferCell, trim: boolean, nextWrapped: boolean): StyledLine {
+    // Text readers discard right padding. Find that boundary before
+    // extracting attributes, so a bounded context full of short rows does
+    // not allocate styles for thousands of cells it immediately discards.
+    // Keep the untrimmed length for soft-wrap padding, including wide and
+    // combined characters whose string offsets differ from cell columns.
+    const text = line.translateToString(false);
+    const trimmed = trim ? text.replace(/\s+$/, '') : text;
+    let offset = 0;
+    const spans: StyleSpan[] = [];
+    for (let x = 0; x < line.length && offset < trimmed.length; x++) {
+      line.getCell(x, cell);
+      // The second half of a wide character holds nothing of its own.
+      if (cell.getWidth() === 0) continue;
+      const chars = cell.getChars() || ' ';
+      const style = styleOf(cell);
+      const last = spans[spans.length - 1];
+      const to = Math.min(offset + chars.length, trimmed.length);
+      if (last !== undefined && sameStyle(last, style)) last.to = to;
+      else spans.push({ ...style, from: offset, to });
+      offset += chars.length;
+    }
+    return { text: trimmed, spans,
+      ...(line.isWrapped ? { wrapped: true } : {}),
+      ...(nextWrapped && text.length > trimmed.length
+        ? { wrapPadding: text.length - trimmed.length } : {}) };
   }
 
   /**
