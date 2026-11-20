@@ -9,6 +9,8 @@
  */
 
 import process from 'node:process';
+import { randomUUID } from 'node:crypto';
+import { discoverDaemon, request } from '../client/http.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { readMcpConfig } from './config.js';
@@ -81,6 +83,35 @@ async function main(): Promise<void> {
     },
   });
   const transport = new StdioServerTransport();
+  if (process.env['SHELLPUPPET_SESSION_TOKEN'] && process.env['SHELLPUPPET_DAEMON_INSTANCE']) {
+    const adapter = randomUUID();
+    let initialised = false;
+    let pending = Promise.resolve();
+    const report = (status: 'connected' | 'failed' | 'closed'): void => {
+      pending = pending.then(async () => {
+        const connection = await discoverDaemon({ home }, Date.now() + 3000);
+        if (connection?.instanceId !== process.env['SHELLPUPPET_DAEMON_INSTANCE'] || !connection) return;
+        await request(connection, 'POST', '/session/mcp-connection', { adapter, status },
+          { home, autoStart: false, signal: AbortSignal.timeout(3000) });
+      }).catch(() => undefined);
+    };
+    server.server.oninitialized = () => { initialised = true; report('connected'); };
+    const failed = (error: NodeJS.ErrnoException): void => {
+      if (initialised && (error.code === 'EPIPE' || error.code === 'ECONNRESET')) {
+        initialised = false;
+        report('failed');
+      }
+    };
+    const closed = (): void => {
+      if (!initialised) return;
+      initialised = false;
+      report('closed');
+    };
+    process.stdin.once('end', closed);
+    process.once('beforeExit', closed);
+    process.stdin.on('error', failed);
+    process.stdout.on('error', failed);
+  }
   await server.connect(transport);
   const previousClose = transport.onclose;
   transport.onclose = () => {

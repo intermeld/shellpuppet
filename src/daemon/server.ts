@@ -2898,6 +2898,21 @@ export class Daemon {
         return;
       }
 
+      if (req.method === 'POST' && url.pathname === '/session/mcp-connection') {
+        const id = this.callerContext.getStore();
+        const session = id === undefined ? undefined : this.manager.get(id);
+        if (!session || session.exited) { json(res, 403, { error: 'A live session identity is required.' }); return; }
+        const body = await readBody(req);
+        const adapter = body['adapter'], status = body['status'];
+        if (typeof adapter !== 'string' || !/^[a-f0-9-]{36}$/.test(adapter) ||
+          (status !== 'connected' && status !== 'failed' && status !== 'closed')) {
+          json(res, 400, { error: 'Invalid MCP connection report.' }); return;
+        }
+        session.mcpConnection(adapter, status);
+        json(res, 200, { ok: true });
+        return;
+      }
+
       if (segments[0] === 'messages') {
         await this.handleMessages(req, res, url, segments, actor);
         return;
