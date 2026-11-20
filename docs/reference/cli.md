@@ -178,3 +178,10 @@ paints the same shape is reported the same way, including forged MiMo bars,
 headers, footers or `Build ·` status rows. The state is a notice and nothing
 acts on it. ShellPuppet sends no nudge.
 Stall metadata contains no terminal text, with or without `--hide-reasoning`.
+
+## Launch a configured profile
+
+`shellpuppet launch PROFILE [--name NAME] [--folder FOLDER] [--root-index N] [--folder-path PATH] [--resume-id ID] [--json]`
+uses the current session identity or `SHELLPUPPET_CLAIM`. The owner grants the
+name in `launcher.sessionLaunch`. Use the folder choice configured for the profile.
+For example, `shellpuppet launch review --folder repo --resume-id abc-123`.

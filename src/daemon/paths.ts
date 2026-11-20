@@ -6,6 +6,7 @@
  * isolate themselves completely from the real per-user directory.
  */
 
+import { randomUUID } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -33,6 +34,17 @@ export function shellpuppetHome(env: NodeJS.ProcessEnv = process.env): string {
 
 export function daemonStatePath(home: string): string {
   return path.join(home, 'daemon.json');
+}
+
+/** Publish a complete owner-only record in the hardened daemon home. */
+export function writePrivateRecord(target: string, value: unknown): void {
+  const temp = target + '.' + randomUUID() + '.tmp';
+  const fd = fs.openSync(temp, 'wx', 0o600);
+  try {
+    try { fs.writeFileSync(fd, JSON.stringify(value)); }
+    finally { fs.closeSync(fd); }
+    fs.renameSync(temp, target);
+  } finally { fs.rmSync(temp, { force: true }); }
 }
 
 export function daemonLogPath(home: string): string {

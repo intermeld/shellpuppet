@@ -392,7 +392,7 @@ message whom, and a clock.
 Who may message whom is configuration (`messaging` in config.json): off by
 default, then a session and the sessions it started, or groups. Sessions join
 groups only by their immutable role, `chair` or `delegate`; a role of `chair`
-comes only from a launch profile on a start without a session caller. Group
+comes from the owner-selected role of the launch profile. Group
 `members` name outside claims only. A session name never grants messaging
 rights. A send to a live but disallowed recipient returns 403 and names both
 participants; an absent name returns 404. The dashboard shows owner-wide
@@ -401,7 +401,7 @@ message history and delivery states.
 Messaging rules decide which participants the daemon will carry messages
 between. They are not a security boundary against a local process holding
 the daemon token: that process can already drive every session. A session's
-role comes only from a launch profile a person started. The daemon enforces
+role comes from the profile selected by the dashboard or a granted session. The daemon enforces
 role-based admission independently of session names.
 
 The daemon registers each started session in one mailbox and ends it on
@@ -1284,6 +1284,14 @@ wrapper is applied after the policy decision.
 **`maxSessions` is an opt-in cap** on how many sessions may be live at once. There is no
 cap unless it is set.
 
+**Session launch permission (ADR-011).** A verified participant whose current
+name occurs in `launcher.sessionLaunch` may use `POST /launcher/launch`.
+The daemon resolves the participant itself. Both launch routes use the same
+policies, limits, folders, environment and role. Resume arguments come from
+the profile template and receive one validated conversation id. The audit
+records the participant name and instance. Granted claims survive a restart
+under their existing proof and idle deadline.
+
 **Dashboard launch profiles.** `launcher.profiles` is a known top-level
 configuration key and an array of named entries. A bad entry is omitted and
 named in `daemon.log`; other entries still load. An empty launcher is the
@@ -1485,7 +1493,7 @@ a Gemini module exists. Marker names match without regard to case on Windows
 only. Explicit lists can still copy agent markers deliberately.
 It has no client environment, so `agents.passEnv` is not consulted. The
 response and audit name copied variables for a list, or record `"all"` as a
-setting, never their values. Client-token starts do not use profiles.
+setting, never their values. Free-form client starts retain their usual environment.
 
 ---
 

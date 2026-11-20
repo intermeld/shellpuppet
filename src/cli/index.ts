@@ -35,6 +35,7 @@ import type { Logger, SessionSummary } from '../core/types.js';
 const USAGE = `ShellPuppet: drive a real terminal session; humans watch and type via the viewer.
 
 Usage:
+  shellpuppet launch <profile> [--name NAME] [--folder NAME] [--root-index N] [--folder-path PATH] [--resume-id ID]
   shellpuppet start [options] <command> [args...]   Launch a program in a new session
       --label <s> --purpose <s> --cols <n> --rows <n> --cwd <dir>
       --ready-text <s> --ready-quiet <ms> --no-shell --hold --agent <name>
@@ -200,6 +201,7 @@ const VALUE_FLAGS = new Set([
   'from',
   'limit',
   'participant',
+  'folder', 'folder-path', 'root-index', 'resume-id', 'name',
   'mark-read',
 ]);
 
@@ -395,6 +397,18 @@ async function main(): Promise<void> {
   }
 
   switch (verb) {
+    case 'launch': {
+      if (parsed.positionals.length !== 1 || parsed.lists.size || [...parsed.flags.keys()].some(key =>
+        !['json', 'name', 'folder', 'folder-path', 'root-index', 'resume-id'].includes(key))) {
+        fail(2, 'launch requires one profile and accepts only profile launch options.');
+      }
+      const payload = await call(connection, 'POST', '/launcher/launch', { profile: parsed.positionals[0],
+        name: parsed.flags.get('name'), folder: parsed.flags.get('folder'), folderPath: parsed.flags.get('folder-path'),
+        rootIndex: intFlag(parsed, 'root-index'), resumeId: parsed.flags.get('resume-id') });
+      if (wantJson) printJson(payload);
+      else console.log(`Started session ${String(payload['id'])} from profile ${String(payload['profile'])}.`);
+      return;
+    }
     case 'start': {
       const command = parsed.positionals[0];
       if (command === undefined) fail(2, 'start needs a command. See --help.');

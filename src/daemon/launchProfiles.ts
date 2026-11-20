@@ -21,6 +21,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { NAME_PATTERN } from '../core/mailbox.js';
 import { SESSION_MARKERS } from '../agents/index.js';
 import { ENV_NAME_PATTERN, RESERVED_FEATURE_CREDENTIALS, SESSION_IDENTITY_ENV_NAMES, SESSION_IDENTITY_ENV_RULE } from '../core/types.js';
 import { compilePolicy } from '../core/policy.js';
@@ -130,7 +131,14 @@ export interface LaunchProfilePolicy {
   deny?: string[];
 }
 
+/** Keep a caller value a single literal shell word and disallow option prefixes. */
+export function validResumeId(id: unknown): id is string {
+  return typeof id === 'string' && id.length >= 1 && id.length <= 128 &&
+    /^[A-Za-z0-9]/.test(id) && !/[^A-Za-z0-9-]/.test(id);
+}
+
 export interface LaunchProfile {
+  resume?: string[];
   name: string;
   role?: 'chair';
   command: string;
@@ -155,6 +163,7 @@ export interface LaunchProfile {
 }
 
 export interface LauncherConfig {
+  sessionLaunch?: string[];
   profiles: LaunchProfile[];
   /** Sentences naming each entry that did not load. Logged at daemon start. */
   problems: string[];
@@ -177,6 +186,7 @@ const PROFILE_KEYS = new Set([
   'policy',
   'open',
   'role',
+  'resume',
 ]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -297,6 +307,10 @@ export function parseLaunchProfile(
   if (typeof name !== 'string' || !PROFILE_NAME_PATTERN.test(name)) {
     return { problem: `name must match ${PROFILE_NAME_PATTERN.source}` };
   }
+  const resume = raw['resume'];
+  if (resume !== undefined && (!isStringArray(resume) || !resume.some(arg => arg.includes('{id}')))) {
+    return { problem: 'resume must be an array of arguments containing {id}' };
+  }
   const invalidRole = raw['role'] !== undefined && raw['role'] !== 'chair';
 
   const command = raw['command'];
@@ -405,6 +419,7 @@ export function parseLaunchProfile(
       ...(raw['role'] === 'chair' ? { role: 'chair' as const } : {}),
       command,
       args: args ?? [],
+      ...(resume === undefined ? {} : { resume }),
       ...(typeof shell === 'boolean' ? { shell } : {}),
       ...(askCwd ? { askCwd: true } : { askCwd: false }),
       ...(askCwd || cwd === undefined ? {} : { cwd }),
@@ -442,7 +457,7 @@ export function parseLauncher(
     return { launcher: { profiles, problems }, problems };
   }
   for (const key of Object.keys(raw)) {
-    if (key !== 'profiles') {
+    if (key !== 'profiles' && key !== 'sessionLaunch') {
       problems.push(`launcher has an unknown key "${key}": ignored (typo?)`);
     }
   }
@@ -499,7 +514,14 @@ export function parseLauncher(
     profiles.push(profile);
   }
 
-  return { launcher: { profiles, problems }, problems };
+  const grants = raw['sessionLaunch'];
+  let sessionLaunch: string[] | undefined;
+  if (grants !== undefined) {
+    if (isStringArray(grants) && grants.every(name => NAME_PATTERN.test(name) && !/^s[0-9]+$/.test(name))) {
+      sessionLaunch = [...new Set(grants)];
+    } else problems.push('launcher.sessionLaunch must be an array of participant names. No launch permission granted.');
+  }
+  return { launcher: { profiles, problems, ...(sessionLaunch === undefined ? {} : { sessionLaunch }) }, problems };
 }
 
 /**

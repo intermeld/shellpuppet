@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { captureDashboard } from './dashboardCapture.js';
 import { createAuditor } from '../../src/daemon/audit.js';
@@ -14,7 +16,9 @@ beforeAll(async () => {
   browser = await findBrowser();
   const home = makeTempHome('dashboard-name-page-');
   const profiles = parseDaemonConfig({ launcher: { profiles: [{ name: 'lead', command: process.execPath,
-    args: ['-e', 'setInterval(() => {}, 1000)'], shell: false }] } }).config.launcher;
+    args: ['-e', 'setInterval(() => {}, 1000)'], shell: false },
+    { name: 'resume', command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)', '--'],
+      resume: ['--resume', '{id}'], shell: false }] } }).config.launcher;
   daemon = await startTestDaemon({
     home, audit: createAuditor(home), launchProfiles: profiles,
     viewer: { launchMode: 'no-window' },
@@ -34,6 +38,13 @@ describe('dashboard naming controls', () => {
         document.getElementById('session-name')?.value === 'lead')()`,
       interact: async (page) => page.evaluate(`new Promise((resolve) => {
         const name = document.getElementById('session-name');
+        const field = document.getElementById('resume-field');
+        const profile = document.querySelector('#launcher select');
+        if (!field.hidden) { resolve('unexpected resume field'); return; }
+        profile.value = 'resume';
+        profile.dispatchEvent(new Event('change'));
+        if (field.hidden) { resolve('missing resume field'); return; }
+        document.getElementById('resume-id').value = 'from-browser-42';
         name.value = 'from-page';
         document.getElementById('start').click();
         const deadline = Date.now() + 30000;
@@ -56,6 +67,7 @@ describe('dashboard naming controls', () => {
         poll();
       })`),
     });
+    expect(readFileSync(join(daemon.home, 'audit.log'), 'utf8')).toContain('from-browser-42');
     expect(JSON.parse(String(result.probe))).toMatchObject({ nameBox: 'from-page', label: 'renamed-page', role: 'delegate' });
   }, 120_000);
 });

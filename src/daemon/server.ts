@@ -83,6 +83,7 @@ import {
   claimDaemonState,
   daemonStatePath,
   ensureHome,
+  writePrivateRecord,
   inspectDaemonState,
   readDaemonState,
   removeDaemonState,
@@ -103,6 +104,7 @@ import {
   expandProfileText,
   resolveLaunchCommand,
   resolveAnyFolder,
+  validResumeId,
 } from './launchProfiles.js';
 import type { LaunchFolder, LaunchProfile, LauncherConfig } from './launchProfiles.js';
 import { listRootFolders, resolveRootFolder } from './launchProfiles.js';
@@ -937,6 +939,15 @@ export class Daemon {
       }
     }
 
+    const claimsFile = path.join(home, 'launcher-claims.json');
+    if (fs.existsSync(claimsFile)) {
+      try {
+        const rows: unknown = JSON.parse(fs.readFileSync(claimsFile, 'utf8'));
+        this.claimCount = this.mailbox.restoreClaims(rows, this.options.messaging?.enabled ? this.launchProfiles.sessionLaunch ?? [] : []);
+        this.saveLauncherClaims();
+      } catch { this.logger.warn('Could not restore saved launcher claims.'); }
+    }
+
     // Belt and braces for the unlink/claim TOCTOU sliver: shortly after
     // start-up, if the published record names someone else and nobody is
     // attached to us, bow out quietly. Clients only ever discover the daemon
@@ -1646,6 +1657,7 @@ export class Daemon {
       purpose: describeProfileText(profile.purpose ?? '', profile.name),
       command: profile.command,
       args: [...profile.args],
+      ...(profile.resume ? { canResume: true } : {}),
       folderRequired: profile.askCwd,
       anyFolder: profile.anyFolder,
       folders: profile.folders.map((folder) => ({ name: folder.name, path: folder.path })),
@@ -1828,6 +1840,11 @@ export class Daemon {
       return;
     }
 
+    await this.launchProfile(req, res);
+  }
+
+  private async launchProfile(req: http.IncomingMessage, res: http.ServerResponse,
+    launcher?: { id: string; name: string }): Promise<void> {
     let body: JsonBody;
     try {
       body = await readBody(req);
@@ -1850,11 +1867,11 @@ export class Daemon {
       return;
     }
     for (const key of Object.keys(body)) {
-      if (key !== 'profile' && key !== 'folder' && key !== 'rootIndex' && key !== 'folderPath' && key !== 'name') {
+      if (key !== 'profile' && key !== 'folder' && key !== 'rootIndex' && key !== 'folderPath' && key !== 'name' && key !== 'resumeId') {
         this.auditDashboardRefusal(req, 'body');
         json(res, 400, {
           error:
-            `The launch body may name only profile, name, folder, rootIndex and folderPath: "${key}" is not accepted. ` +
+            `The launch body may name only profile, name, folder, rootIndex, folderPath and resumeId: "${key}" is not accepted. ` +
             'A command, arguments and environment value come from the profile.',
         });
         return;
@@ -1865,6 +1882,13 @@ export class Daemon {
       json(res, 400, { error: `No such launch profile: ${profileName}` });
       return;
     }
+    const resumeId = body['resumeId'];
+    if (resumeId !== undefined && (!profile.resume || !validResumeId(resumeId))) {
+      json(res, 400, { error: 'Resume requires a profile with resume arguments and a valid resume id.' });
+      return;
+    }
+    const args = [...profile.args];
+    if (typeof resumeId === 'string') args.push(...profile.resume!.map(arg => arg.replaceAll('{id}', resumeId)));
     const caller = this.resolveCallerIdentity(req);
     if (caller.presented && caller.session === undefined) {
       json(res, 403, { error: 'Session identity was not recognised.' });
@@ -1940,7 +1964,7 @@ export class Daemon {
 
     // Global policy runs first, then the profile's own deny and allow lists.
     // Both see the real command line, before any Windows shell wrap.
-    const globalDecision = evaluateCommand(this.compiledPolicy, profile.command, profile.args);
+    const globalDecision = evaluateCommand(this.compiledPolicy, profile.command, args);
     if (!globalDecision.allowed) {
       this.auditDashboardRefusal(req, 'policy');
       json(res, 403, { error: globalDecision.reason ?? 'Command refused by policy.' });
@@ -1950,7 +1974,7 @@ export class Daemon {
       const ownDecision = evaluateCommand(
         compileProfilePolicy(profile.policy),
         profile.command,
-        profile.args,
+        args,
       );
       if (!ownDecision.allowed) {
         this.auditDashboardRefusal(req, 'policy');
@@ -1971,6 +1995,57 @@ export class Daemon {
       return;
     }
 
+    const { env, copied } = copyDaemonEnv(profile.envFromDaemon, this.daemonEnv);
+    const envNames = Object.keys(env);
+    const folderLabel = freeCwd !== undefined ? freeCwd : folder?.name ?? (rootCwd !== undefined ? folderName : undefined);
+    const options = {
+      command: resolvedCommand.file,
+      args,
+      cwd: resolved.cwd,
+      ...(profile.shell !== undefined ? { shell: profile.shell } : {}),
+      ...(profile.agent !== undefined ? { agent: profile.agent } : {}),
+      ...(profile.readyText !== undefined ? { readyText: profile.readyText } : {}),
+      ...(profile.readyQuiet !== undefined ? { readyQuiet: profile.readyQuiet } : {}),
+      // An explicit launcher name becomes the label. A configured profile
+      // label remains the default when the launch request omits a name.
+      label: body['name'] === undefined
+        ? (profile.label !== undefined ? expandProfileText(profile.label, profile.name, folderLabel) : profile.name)
+        : requestedName,
+      profileLaunch: launcher !== undefined,
+      role: launcher !== undefined || caller.session === undefined ? (profile.role ?? ('delegate' as const)) : ('delegate' as const),
+      ...((launcher?.id ?? caller.session) === undefined ? {} : { parent: launcher?.id ?? caller.session }),
+      ...(profile.purpose !== undefined
+        ? { purpose: expandProfileText(profile.purpose, profile.name, folderLabel) }
+        : {}),
+      ...(envNames.length > 0 ? { env } : {}),
+      // The audit actor, not a caller-declared identity: the dashboard page
+      // has no client environment and no other way to name itself.
+      startedBy: launcher?.name ?? 'dashboard',
+    };
+
+    // Keep the path check adjacent to spawn. A local writer can still replace
+    // a directory after this check, as the security model records.
+    if (rootCwd !== undefined) {
+      const latest = await resolveRootFolder(profile.folderRoots.map((root) => path.resolve(os.homedir(), root)), rootIndex, folderName);
+      if ('error' in latest || latest.cwd !== rootCwd) {
+        this.auditDashboardRefusal(req, 'body');
+        json(res, 400, { error: 'Folder is no longer available from this root.' });
+        return;
+      }
+    }
+    if (freeCwd !== undefined) {
+      const latest = resolveAnyFolder(freePath);
+      if ('error' in latest || latest.cwd !== freeCwd) {
+        this.auditDashboardRefusal(req, 'body');
+        json(res, 400, { error: 'The chosen folder is no longer available.' });
+        return;
+      }
+    }
+
+    if (launcher && this.grantedLauncher(req)?.id !== launcher.id) {
+      json(res, 403, { error: 'Session launch permission required.' });
+      return;
+    }
     const now = this.now();
     this.pruneLaunchTimes(now);
     if (this.launchTimes.length >= 8) {
@@ -1997,52 +2072,6 @@ export class Daemon {
       if (!capacity.allowed) {
         this.auditDashboardRefusal(req, 'limit');
         json(res, 403, { error: capacity.reason ?? 'Session limit reached.' });
-        return;
-      }
-    }
-
-    const { env, copied } = copyDaemonEnv(profile.envFromDaemon, this.daemonEnv);
-    const envNames = Object.keys(env);
-    const folderLabel = freeCwd !== undefined ? freeCwd : folder?.name ?? (rootCwd !== undefined ? folderName : undefined);
-    const options = {
-      command: resolvedCommand.file,
-      args: [...profile.args],
-      cwd: resolved.cwd,
-      ...(profile.shell !== undefined ? { shell: profile.shell } : {}),
-      ...(profile.agent !== undefined ? { agent: profile.agent } : {}),
-      ...(profile.readyText !== undefined ? { readyText: profile.readyText } : {}),
-      ...(profile.readyQuiet !== undefined ? { readyQuiet: profile.readyQuiet } : {}),
-      // An explicit launcher name becomes the label. A configured profile
-      // label remains the default when the launch request omits a name.
-      label: body['name'] === undefined
-        ? (profile.label !== undefined ? expandProfileText(profile.label, profile.name, folderLabel) : profile.name)
-        : requestedName,
-      role: caller.session === undefined ? (profile.role ?? ('delegate' as const)) : ('delegate' as const),
-      ...(caller.session === undefined ? {} : { parent: caller.session }),
-      ...(profile.purpose !== undefined
-        ? { purpose: expandProfileText(profile.purpose, profile.name, folderLabel) }
-        : {}),
-      ...(envNames.length > 0 ? { env } : {}),
-      // The audit actor, not a caller-declared identity: the dashboard page
-      // has no client environment and no other way to name itself.
-      startedBy: 'dashboard',
-    };
-
-    // Keep the path check adjacent to spawn. A local writer can still replace
-    // a directory after this check, as the security model records.
-    if (rootCwd !== undefined) {
-      const latest = await resolveRootFolder(profile.folderRoots.map((root) => path.resolve(os.homedir(), root)), rootIndex, folderName);
-      if ('error' in latest || latest.cwd !== rootCwd) {
-        this.auditDashboardRefusal(req, 'body');
-        json(res, 400, { error: 'Folder is no longer available from this root.' });
-        return;
-      }
-    }
-    if (freeCwd !== undefined) {
-      const latest = resolveAnyFolder(freePath);
-      if ('error' in latest || latest.cwd !== freeCwd) {
-        this.auditDashboardRefusal(req, 'body');
-        json(res, 400, { error: 'The chosen folder is no longer available.' });
         return;
       }
     }
@@ -2106,10 +2135,11 @@ export class Daemon {
     // The profile name and the written command line, the file that was
     // actually resolved and started, and copied variable names or "all".
     // Never a value.
-    this.audit.record('dashboard', 'start', session.id, {
+    this.audit.record(options.startedBy, 'start', session.id, {
+      startedBy: options.startedBy, ...(launcher ? { launcherId: launcher.id } : {}),
       profile: profile.name,
       command: profile.command,
-      args: profile.args,
+      args,
       resolvedCommand: resolvedCommand.file,
       agent: session.agent,
       ...(profile.envFromDaemon === 'all'
@@ -2554,6 +2584,26 @@ export class Daemon {
     };
   }
 
+  private saveLauncherClaims(excludeId?: string): void {
+    const grants = this.launchProfiles.sessionLaunch ?? [];
+    const file = path.join(this.options.home, 'launcher-claims.json');
+    if (grants.length || fs.existsSync(file)) writePrivateRecord(file, this.mailbox.savedClaims(grants).filter(claim => claim.id !== excludeId));
+  }
+
+  private grantedLauncher(req: http.IncomingMessage) {
+    this.lapseIdleClaims();
+    let id = this.callerContext.getStore();
+    if (id === undefined) {
+      const claim = headerOne(req, 'x-shellpuppet-claim');
+      const secret = headerOne(req, 'x-shellpuppet-claim-secret');
+      if (req.headers['x-shellpuppet-inside-session'] === '1' || !claim || !secret ||
+        !this.mailbox.verifyClaim(claim, secret)) return undefined;
+      id = claim;
+    }
+    const caller = this.mailbox.participant(id);
+    return caller && this.launchProfiles.sessionLaunch?.includes(caller.name) ? caller : undefined;
+  }
+
   private messageAudit(action: string, entry: MailboxEntry, actor = 'daemon'): void {
     this.audit.record(actor, action, entry.from.id, {
       fromId: entry.from.id, fromName: entry.from.name,
@@ -2770,6 +2820,10 @@ export class Daemon {
       const claim = this.mailbox.claim(body['name']);
       this.claimTimes.push(now);
       this.claimCount++;
+      if (this.launchProfiles.sessionLaunch?.includes(body['name'])) {
+        try { this.saveLauncherClaims(); }
+        catch (error) { this.mailbox.release(claim.claimId); this.claimCount--; throw error; }
+      }
       this.audit.record(actor, 'msg-claim', claim.claimId, {
         fromId: claim.claimId, fromName: body['name'], toId: null, toName: null,
         messageId: null, length: 0, member: this.isReservedClaimName(body['name']),
@@ -2784,6 +2838,7 @@ export class Daemon {
         json(res, 403, { error: 'The matching claim is required.' }); return;
       }
       const name = this.mailbox.participant(claimId)?.name;
+      if (name && this.launchProfiles.sessionLaunch?.includes(name)) this.saveLauncherClaims(claimId);
       this.endMailboxParticipant(claimId);
       this.claimCount--;
       this.audit.record(actor, 'msg-release', claimId, {
@@ -2873,6 +2928,7 @@ export class Daemon {
           });
           return;
         }
+        this.saveLauncherClaims();
         this.audit.record(actor, 'shutdown', undefined, { force, liveSessions: live });
         json(res, 200, { ok: true, stopping: true });
         void this.stop().then(() => {
@@ -2895,6 +2951,16 @@ export class Daemon {
 
       if (req.method === 'POST' && segments[0] === 'desktop' && segments[1] === 'open' && segments.length === 2) {
         await this.handleDesktopOpen(req, res, actor);
+        return;
+      }
+
+      if (url.pathname === '/launcher/launch' && req.method === 'POST') {
+        const caller = this.grantedLauncher(req);
+        if (!caller) { json(res, 403, { error: 'Session launch permission required.' }); return; }
+        if ((headerOne(req, 'content-type') ?? '').split(';')[0]?.trim().toLowerCase() !== 'application/json') {
+          json(res, 415, { error: 'The launch body must be JSON.' }); return;
+        }
+        await this.launchProfile(req, res, caller);
         return;
       }
 
@@ -3739,7 +3805,8 @@ export class Daemon {
 
     // Registration is synchronous with creation, before any asynchronous
     // viewer launch or readiness work can publish a change for this id.
-    this.registerMailboxSession(session);
+    const childGrant = session.parent !== undefined && this.launchProfiles.sessionLaunch?.includes(session.label);
+    this.registerMailboxSession(session, childGrant ? session.id : undefined);
     this.sessionFeed.add(this.summaryWithPrompt(session.summary()));
     session.onExit(() => {
       this.clearPromptGraceCheck(session.id);

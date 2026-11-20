@@ -489,8 +489,9 @@ attributes calls and parent sessions; any process running as the same user can
 already read the daemon client token, so it is not a boundary against local code.
 `TERM` and `COLORTERM` take ShellPuppet's terminal values. Anyone able to use
 the dashboard credential can start an `"all"` profile and reach every other
-secret the daemon holds through its session. Client-token starts do not use
-profiles and retain their configured `sessionEnv` mode. Reserved credentials
+secret the daemon holds through its session. A verified name in `launcher.sessionLaunch` can also start every such profile.
+Any same-user process with the daemon token can claim a free outside name.
+Free-form starts retain their configured `sessionEnv` mode. Reserved credentials
 stay excluded whatever `sessionEnv` says
 ([ADR-007](../decisions/ADR-007-connected-features.md)).
 
