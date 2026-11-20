@@ -238,8 +238,8 @@ A granted caller can request `terminal_list({"previous":true})` or
 `GET /launcher/previous` after a restart. The response has `version: 1`
 and a `sessions` array. A verified snapshot includes the outgoing daemon's
 `outgoingInstanceId`. An empty array means no profile session was saved.
-An older snapshot or a missing snapshot from a requested restart produces
-HTTP 409 and an MCP tool error.
+A missing record or a record with a missing or mismatched restart stamp produces
+HTTP 409 and an MCP tool error. This includes a fresh home before its first restart.
 Pass the saved `profile`, `name`, fields of `folderChoice` and a known
 `resumeId` to `terminal_start`. Omit a null name or resume id. An empty folder choice uses the current
 fixed directory. `folder` in the record is the resolved directory for

@@ -519,8 +519,12 @@ export async function discoverDaemon(options: ClientOptions = {}, deadline?: num
   const clearedAsGone = async (): Promise<boolean> => {
     const left = remaining();
     if (left <= 0 || await daemonRunning(state, Math.min(5_000, left))) return false;
-    (options.logger ?? NULL_LOGGER).info('clearing stale daemon.json', { pid: state.pid });
-    removeDaemonStateIf(home, state);
+    // The next owner transfers the predecessor along with discovery. Even a
+    // dead daemon's record can be the only durable evidence for a snapshot.
+    if (state.restartFrom === undefined) {
+      (options.logger ?? NULL_LOGGER).info('clearing stale daemon.json', { pid: state.pid });
+      removeDaemonStateIf(home, state);
+    }
     return true;
   };
   const firstHealthTimeout = remaining();

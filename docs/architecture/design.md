@@ -115,10 +115,14 @@ The other waits for a healthy daemon rather than starting another wrapper. The r
 > success regardless of what happened to the process you spawned.** Only report failure
 > when the poll times out.
 
-The daemon itself must make its startup crash-safe for the same reason: claim
-`daemon.json` atomically (write a temp file in the same directory, then link it into
-place, which fails if the file exists, so exactly one racer claims it), and exit cleanly
-if the state file names another daemon that is running, even one too busy to answer.
+After binding its HTTP listener, the daemon claims the private home by renaming
+a non-empty directory to `daemon-owner`. Its single empty file identifies the
+pid, port and random instance. A rename cannot replace another non-empty
+directory. A contender can retire the observed marker if its process has gone
+or it can bind the recorded port itself. The owner holds this directory until
+it finishes publishing records. An absent discovery file cannot transfer
+those rights. Discovery itself is published by exclusive link into an empty
+slot or by atomic replacement of the observed stale record or restart handoff.
 
 ### 2.3 Daemon lifecycle and discovery
 
@@ -129,7 +133,8 @@ if the state file names another daemon that is running, even one too busy to ans
   own home directory, and so their own daemon).
 - **Staleness detection.** A `daemon.json` whose daemon has gone (crash, reboot) is
   stale: its process no longer exists, or nothing accepts a connection on its port. The
-  client deletes it and auto-starts fresh. A file that holds no daemon record at all,
+  client auto-starts a replacement. It leaves records carrying `restartFrom` for the
+  new daemon to read. A file that holds no daemon record at all,
   such as an emptied one, is cleared by the daemon that starts. A daemon that is running
   but slow to answer `/health` is busy, not stale, because the operating system accepts a
   connection from a listening socket even while the daemon's event loop is occupied, as
@@ -142,8 +147,7 @@ if the state file names another daemon that is running, even one too busy to ans
   taken for gone.
 - **The running daemon keeps its record.** Every 10 s it checks that `daemon.json` still
   names it, and publishes the file again if it is missing, holds no daemon record or
-  names a daemon that has gone. A client that arrives before then finds no daemon and
-  starts a second one. If the file names another daemon that is running, the first
+  names a daemon that has gone. A starter that arrives before then defers to the live home owner. If the file names another daemon that is running, the first
   leaves the file and says so in `daemon.log`; its sessions stay reachable through the
   clients already connected to it.
 - **Idle self-shutdown.** The daemon exits after **30 minutes** (configurable) with *no
@@ -171,12 +175,17 @@ continues the restart. Each live profile session
 contributes its profile, current participant name, resolved folder, original
 folder selection, agent, conversation id if known, and shutdown timestamp.
 A system-assigned name is saved as null. Omit it when relaunching.
-The version 1 file includes the outgoing daemon's `outgoingInstanceId`. Even if
-the snapshot write fails, the owner replaces its discovery record with a credential-free
-`{"restartFrom":"<instance id>"}` handoff. The next owner consumes this
-handoff when claiming the home. A retained snapshot from another owner or
-an unstamped legacy file receives HTTP 409. CLI and MCP readers see the same
-error. A granted caller reads
+The version 1 file includes the outgoing daemon's `outgoingInstanceId`.
+The owner independently publishes a credential-free `{"restartFrom":"<instance id>"}`
+handoff in `daemon.json`. The successor saves this id in `restart-source.json`
+and atomically replaces the handoff with its live discovery record carrying the
+same id. Failed publication leaves the original handoff available for a retry.
+An ordinary stop puts the inherited id back in the handoff. After a crash, a
+successor can verify the inherited id against the independent source. A new
+restart retires that source before attempting either new record. The reader
+returns HTTP 409 for missing evidence, including before the first restart, or
+for a snapshot with a different or absent stamp. A successfully recorded empty
+snapshot returns HTTP 200 with an empty array. A granted caller reads
 `GET /launcher/previous` and chooses entries to launch through the normal
 profile checks. A normal stop or process crash does not produce this record.
 
