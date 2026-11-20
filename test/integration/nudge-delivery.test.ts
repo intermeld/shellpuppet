@@ -1,6 +1,6 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { buildNudge } from '../../src/core/mailbox.js';
 import { NUDGE_SUBMIT_DELAY_MS } from '../../src/core/session.js';
 import { createAuditor, auditLogPath } from '../../src/daemon/audit.js';
@@ -185,6 +185,13 @@ describe('fixed message nudges through a real terminal', () => {
       const outside = await api(td.port, td.token, '/messages/claims', { body: { name: 'outside' } });
       expect(outside.status).toBe(201);
       const sent = new Map<string, string>();
+      const readyPty = td.daemon['manager'].get(started.get('ready')!)!['pty'];
+      const write = readyPty.write.bind(readyPty);
+      const writes: { data: string | Buffer; at: number }[] = [];
+      vi.spyOn(readyPty, 'write').mockImplementation(data => {
+        writes.push({ data, at: performance.now() });
+        write(data);
+      });
       const marker = 'private-message-body-91b4';
       for (const name of started.keys()) {
         const response = await api(td.port, td.token, '/messages', { body: { to: name, text: marker }, headers });
@@ -202,14 +209,9 @@ describe('fixed message nudges through a real terminal', () => {
       await eventually(() => fs.existsSync(files('ready').input) &&
         fs.readFileSync(files('ready').input, 'utf8') === `${expected}\r`);
       expect(fs.readFileSync(files('ready').input, 'utf8')).toBe(`${expected}\r`);
-      const readEvents = () => fs.existsSync(`${files('ready').input}.events`)
-        ? fs.readFileSync(`${files('ready').input}.events`, 'utf8').trim().split('\n')
-          .map((row) => JSON.parse(row) as { data: string; at: number }) : [];
-      await eventually(() => readEvents().length === 2, 5_000);
-      const events = readEvents();
-      expect(events.map((event) => event.data)).toEqual([expected, '\r']);
-      // PTY delivery can lag behind the write clock, unlike the recording PTY.
-      expect(events[1]!.at - events[0]!.at).toBeGreaterThanOrEqual(NUDGE_SUBMIT_DELAY_MS - 50);
+      expect(writes.map(event => event.data)).toEqual([expected, '\r']);
+      // Measure the daemon's submissions. The terminal can receive buffered bytes together.
+      expect(writes[1]!.at - writes[0]!.at).toBeGreaterThanOrEqual(NUDGE_SUBMIT_DELAY_MS - 5);
       expect((await outbox()).filter((entry) => entry.state === 'nudged')).toHaveLength(1);
       expect((await outbox()).find((entry) => entry.id === outsideMessage.body['id'])?.state).toBe('waiting');
       const second = await api(td.port, td.token, '/messages', {
