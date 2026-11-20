@@ -218,7 +218,7 @@ src/
     viewer.css
     pane.js           # shared terminal client: frames, typing, reconnect, badges
     dashboard.html    # one document, a pane per session
-    dashboard.js      # layout, attention, launch, screen assignment
+    dashboard.js      # layout, attention, launch, window assignment
     dashboard.css
 test/
 docs/                 # architecture/, reference/, decisions/
@@ -1682,12 +1682,12 @@ gets a fresh proof, without replacing the cookie. The routes are:
 | `POST /dashboard/open` | Client token only; opens the isolated window and returns `{ "opened": true }`, never its URL or grant |
 | `GET /dashboard/profiles` | Cookie read; profile descriptions and problems, never environment values |
 | `GET /dashboard/messages` | Cookie and document proof; owner-wide message history, or unread counts per session for `summary=1` |
-| `POST /dashboard/launch` | Cookie, document proof and JSON profile name; limits in §4.3 |
+| `POST /dashboard/launch` | Cookie, document proof and JSON profile name; optional registered source window; limits in §4.3 |
 | `POST /dashboard/sessions/:id/rename` | Cookie, document proof and JSON name; live sessions only. Changes the label and mailbox address, then sends a feed update |
 | `POST /dashboard/folder-picker` | Cookie, same-origin mutation proof and JSON name of an `any` profile; opens one desktop picker at a time for at most ten minutes |
 | `GET /sessions` | Cookie may read the existing list, including prompt and stall state |
 | `DELETE /sessions/<id>` | Cookie plus document proof may kill |
-| `/dashboard/events` | Cookie plus subprotocol; outbound WebSocket; inbound ignored |
+| `/dashboard/events` | Cookie plus subprotocol; outbound feed and window state; registered window control frames accepted |
 | `/sessions/<id>/stream` | Cookie plus subprotocol. The dashboard credential is always passive; `drive=0` is not required and cannot make it drive |
 
 The Messages view lists owner-wide history newest first and reads full text only when opened.
@@ -1766,10 +1766,9 @@ follow that grid until Fit, Enlarge or a drag on that pane with Auto fit on
 takes it back. The initial geometry frame distinguishes an unowned session,
 which still receives its initial fit, from one already owned elsewhere. A
 dashboard follower fits automatically only after the controlling window hands
-the pane over because it was moved to another window; a reload, reconnect,
-closed pane, closed window or Pop out does not give another window or viewer
-the grid. A
-drag changes only the page during pointer movement. On release, panes that
+the pane over because it was moved to another window, including Pop out;
+a reload, reconnect, closed pane or closed window does not give another window or viewer
+the grid. A drag changes only the page during pointer movement. On release, panes that
 grew fit their real terminal under the same Auto fit and geometry ownership
 rules; panes that shrank below the floor also fit to exactly 80 by 24. Panes
 that shrank but remain above it keep their grid and scale their text. With Auto
@@ -1802,38 +1801,35 @@ choice. An optional `dashboard.fontSize` in `config.json`, from 8 to 32 px,
 sets the initial size only when the profile has none; the page never writes
 configuration. With Auto fit on, a text size change refits the real terminals.
 
-**Windows.** On load, query `window-management` permission without a prompt.
-When permission is `prompt`, Allow screens invokes `getScreenDetails()` on
-one click and opens no window during that click or its continuation. Once
-granted, offer one button for each other screen without a window. One click
-opens one window on that screen, using `availLeft`, `availTop`, `availWidth`
-and `availHeight` as `window.open` features. Without the API or permission,
-Open another window opens one unplaced window for the person to move. A
-blocked popup leaves the button and says to press it again. No path retries
-`window.open` during the same click. Panes fill the primary screen to its
-readable capacity, then other screens in stable order; fallback windows use
-creation order and their own viewports. `BroadcastChannel` coordinates the
-window roster and pane assignment, while the daemon remains the source of
-session truth. Each session appears in one window. Closing a window
-returns its panes to the others. Windows share the cookie and never mint a
-new grant.
-When every window is at its readable capacity, additional panes are spread
-in proportion to capacity. A page's own CSS viewport size determines its
-capacity, including on screens with different scaling. A page leaving sends
-a roster departure; a delayed heartbeat alone does not imply that it closed.
-Confirmed departures from a page, its watched child window or the daemon
-remember the exact closed instance for ten minutes, bounded to 64 entries,
-so a late roster cannot reclaim its panes. A duplicate with the same screen
-id and a reloaded page with a new instance remain eligible for assignment.
-The child watcher removes only the instance matched to its child's document;
-ordinary roster expiry does not mark a silent window as closed.
-
-Pop out uses this window support to put one pane in its own movable window,
-which may be made full screen. It leaves the grid until the window closes,
-then returns in stable order. A profile may set `"open": "grid"` (default),
+**Windows.** New window opens one ordinary, empty dashboard window for the
+person to move to any screen. A blocked popup leaves the button available and
+asks the person to press it again. All windows have the same controls and
+layout. Exactly one connected window is designated for sessions started by
+agents or the CLI. The New sessions here toggle changes the designation.
+When that window closes, the most recently focused connected window takes
+over. A window's own launcher always assigns its session to that window.
+Each session has exactly one assignment. New windows leave existing
+assignments in place. A pane title can be dragged into another window; a
+drop on a pane inserts before or after it by position, and a drop elsewhere
+appends. The source can become an ordinary empty window. Pop out creates the same ordinary
+window and moves the selected pane into it. Closing a window moves its panes
+to the designated remaining window. A profile may set `"open": "grid"` (default),
 `"focus"` or `"window"` for the session it starts. This permits a
 supervising session to open focused or popped out while sessions it starts
 appear in the grid.
+
+The authenticated `/dashboard/events` socket registers one window instance.
+The daemon publishes `window-state` with the open roster, designation and
+assignments. A move frame also identifies the insertion point, so a window
+can keep its remembered order when a new session arrives. `window-focus`,
+`window-designate` and `window-move` are accepted only from a registered
+socket with the dashboard credential.
+Moving checks that the caller is the source or target, the source currently
+owns the session, and the target is open. Closing a socket removes its
+instance before reassigning panes.
+The launch route accepts the registered source window as an optional `window`
+field and rejects a closed source. `BroadcastChannel` only synchronises
+preferences; it never authorises a roster or assignment.
 
 **Controls and content.** Terminal mode sends keys to the focused pane.
 The configurable `Ctrl+Shift+A` prefix enters navigation and is consumed
@@ -1853,10 +1849,9 @@ Restart is available only for a session the page started from a profile,
 and posts its profile and selected folder again. The page remembers that
 profile name and folder name in `localStorage` in the same browser profile,
 separate from the layout record, so a reload can still restart. It does not
-write them to the daemon home or to `config.json`. Pop out opens
-`/dashboard#pop=<session id>` in one new window. The URL has no grant and
-no cookie value. That window can be made full screen. The pane leaves the
-grid and returns, in its previous order, when the window closes.
+write them to the daemon home or to `config.json`. Pop out opens an
+ordinary dashboard window with no grant or cookie in its URL, and moves
+the pane after the daemon acknowledges that window's registration.
 Question text, terminal content, labels, errors and URLs are inserted
 as text, never HTML or navigation targets. The focused pane is marked; a
 polite live region and a static mark under reduced motion convey attention.

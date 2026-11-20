@@ -702,8 +702,6 @@ describe('passive dashboard page', () => {
           state.first = cards[0].dataset.session; state.second = cards[1].dataset.session;
           if (!ready(sockets().at(-1))) return null;
           state.original = sockets().length;
-          const assign = ShellPuppetDashboardLayout.assign;
-          ShellPuppetDashboardLayout.assign = () => ({});
           const frame = window.requestAnimationFrame;
           const cancel = window.cancelAnimationFrame;
           const held = new Map();
@@ -719,7 +717,6 @@ describe('passive dashboard page', () => {
             state.heldFrames = held.size;
           };
           window.__releaseVisibilityFrames = () => {
-            ShellPuppetDashboardLayout.assign = assign;
             window.requestAnimationFrame = frame; window.cancelAnimationFrame = cancel;
             state.framesHeld = false;
             for (const callback of held.values()) frame.call(window, callback);

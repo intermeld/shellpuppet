@@ -17,17 +17,17 @@
   <button id="messages-toggle" type="button" aria-controls="messages-view" aria-expanded="false">Messages</button>
   <button id="auto" type="button">Auto</button><button id="grid" type="button">Grid</button><button id="focus" type="button">Focus</button>
   <button id="auto-fit" type="button" aria-pressed="true">Auto fit</button>
+  <button id="designated-window" type="button" aria-pressed="false" disabled>New sessions here</button>
+  <button id="new-window" type="button">New window</button>
   <span id="text-size" aria-label="Text size"><button id="text-smaller" type="button" aria-label="Smaller text">Smaller</button><button id="text-auto" type="button" aria-label="Auto text">Auto text</button><button id="text-larger" type="button" aria-label="Larger text">Larger</button></span>
   <button id="shortcut" type="button" title="Choose the navigation shortcut">Shortcut: Ctrl+Shift+A</button>
   <span id="launcher" hidden>
     <label>Profile <select id="profile"></select></label>
     <label>Name <input id="session-name" type="text" maxlength="40" autocomplete="off"></label>
     <span id="folder-field" hidden><span id="bounded-folder"><label>Filter folders <input id="folder-filter" type="search" autocomplete="off"></label><label>Folder <select id="folder"></select></label><span id="recent-folders"></span></span><span id="any-folder" hidden><label>Folder <input id="folder-path" list="folder-path-options" autocomplete="off" placeholder="Type or choose a folder path"></label><datalist id="folder-path-options"></datalist><button id="browse-folder" type="button">Browse</button></span></span>
-    <button id="start" type="button">Start</button>
+    <button id="start" type="button" disabled>Start</button>
   </span>
   <span id="watch-only" class="hint" hidden>No profile is loaded.</span>
-  <button id="fullscreen" type="button" hidden>Full screen</button>
-  <span id="screens"></span>
   <span id="share-count" class="hint" aria-live="polite"></span>
   <button id="attention-count" class="hint" type="button" aria-live="polite" aria-label="Select a waiting pane"></button>
 </header>

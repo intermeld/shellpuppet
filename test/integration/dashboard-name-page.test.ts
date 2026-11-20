@@ -31,7 +31,8 @@ describe('dashboard naming controls', () => {
     const result = await captureDashboard({ browser, viewerUrl: dashboardUrl, width: 1280, height: 720,
       drive: true, timeoutMs: 90_000, probeOnly: true,
       probe: `(() => document.getElementById('connection')?.textContent === 'Connected' &&
-        document.getElementById('session-name')?.value === 'lead')()`,
+        document.getElementById('session-name')?.value === 'lead' &&
+        document.getElementById('start')?.disabled === false)()`,
       interact: async (page) => page.evaluate(`new Promise((resolve) => {
         const name = document.getElementById('session-name');
         name.value = 'from-page';

@@ -46,6 +46,12 @@ name. Rename in a live pane's menu changes its label and messaging address.
 The dashboard checks its credential, document proof and same-origin request
 for each rename. Neither the CLI nor MCP tools can rename a session.
 
+`shellpuppet dashboard` opens the dashboard. In a dashboard with several
+windows, **New sessions here** chooses which window receives `shellpuppet
+start` and agent-started sessions. A window's profile launcher always starts
+in that window. **New window** opens an empty window; drag panes between
+windows or use **Pop out** to open a window for one pane.
+
 ```text
 shellpuppet start [options] <command> [args...]
   --wait-ready

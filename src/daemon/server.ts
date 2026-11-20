@@ -333,8 +333,6 @@ export interface DaemonOptions {
 }
 
 /** Thrown by `start()` when a healthy daemon already owns this home. */
-/** The largest dashboard window registration frame the daemon will parse. */
-const MAX_WINDOW_REGISTRATION_BYTES = 256;
 
 export class AlreadyRunningError extends Error {
   constructor(readonly state: DaemonState) {
@@ -665,8 +663,11 @@ export class Daemon {
    * not launch a per-session viewer window and does not hand back a viewer URL.
    */
   private readonly dashboardEventSockets = new Set<WebSocket>();
-  /** Opaque roster ids carried by dashboard feed sockets, never used for authorisation. */
-  private readonly dashboardWindowIds = new Map<WebSocket, { id: string; instance: string }>();
+  /** Dashboard windows and assignments are owned by the authenticated feed. */
+  private readonly dashboardWindowIds = new Map<WebSocket, { id: string; instance: string; focused: number }>();
+  private readonly dashboardAssignments = new Map<string, string[]>();
+  private dashboardDesignated: string | null = null;
+  private dashboardFocusSerial = 0;
 
   private readonly liveDashboardEventSockets = new Set<WebSocket>();
   /** A launched dashboard has 30 seconds to connect before a start may retry. */
@@ -1844,17 +1845,23 @@ export class Daemon {
       }
       throw error;
     }
+    const requestedWindow = body['window'];
+    if (requestedWindow !== undefined && (typeof requestedWindow !== 'string' ||
+        !this.dashboardWindows().some((window) => window.pair === requestedWindow))) {
+      json(res, 409, { error: 'The launching dashboard window has closed.' });
+      return;
+    }
     const profileName = asString(body['profile']);
     if (profileName === undefined || profileName === '') {
       json(res, 400, { error: 'profile (string) is required.' });
       return;
     }
     for (const key of Object.keys(body)) {
-      if (key !== 'profile' && key !== 'folder' && key !== 'rootIndex' && key !== 'folderPath' && key !== 'name') {
+      if (key !== 'profile' && key !== 'folder' && key !== 'rootIndex' && key !== 'folderPath' && key !== 'name' && key !== 'window') {
         this.auditDashboardRefusal(req, 'body');
         json(res, 400, {
           error:
-            `The launch body may name only profile, name, folder, rootIndex and folderPath: "${key}" is not accepted. ` +
+            `The launch body may name only profile, name, folder, rootIndex, folderPath and window: "${key}" is not accepted. ` +
             'A command, arguments and environment value come from the profile.',
         });
         return;
@@ -2092,6 +2099,9 @@ export class Daemon {
 
     this.registerMailboxSession(session,
       body['name'] === undefined && NAME_PATTERN.test(session.label) ? undefined : requestedName, true);
+    if (typeof requestedWindow === 'string' && this.dashboardWindows().some((window) => window.pair === requestedWindow)) {
+      this.dashboardAssignments.set(requestedWindow, [...(this.dashboardAssignments.get(requestedWindow) ?? []), session.id]);
+    }
     this.sessionFeed.add(this.summaryWithPrompt(session.summary()));
     session.onExit(() => {
       this.geometryController.delete(session.id);
@@ -4443,12 +4453,49 @@ export class Daemon {
   }
 
   /**
-   * Attach a subscriber to the dashboard session feed. Frames are the feed's
-   * own: hello, a snapshot, then session deltas. The only inbound frame read is
-   * one small window registration; every other inbound frame is ignored.
+   * Attach a subscriber to the dashboard session feed. After hello and a
+   * snapshot, registered windows receive roster and assignment state. A
+   * registered socket may focus, designate or move a pane through the daemon.
    * The socket counts as connected so idle shutdown waits while the dashboard
    * is open.
    */
+  private dashboardPair(window: { id: string; instance: string }): string {
+    return JSON.stringify([window.id, window.instance]);
+  }
+
+  private dashboardWindows(): { socket: WebSocket; pair: string; focused: number }[] {
+    return [...this.dashboardWindowIds.entries()]
+      .filter(([socket]) => socket.readyState === socket.OPEN)
+      .map(([socket, window]) => ({ socket, pair: this.dashboardPair(window), focused: window.focused }));
+  }
+
+  private publishDashboardWindows(move?: { session: string; target: string; before?: string }): void {
+    const windows = this.dashboardWindows();
+    const roster = [...new Set(windows.map((window) => window.pair))];
+    if (windows.length === 0) { this.dashboardDesignated = null; this.dashboardAssignments.clear(); return; }
+    if (!windows.some((window) => window.pair === this.dashboardDesignated)) {
+      this.dashboardDesignated = [...windows].sort((a, b) => b.focused - a.focused)[0]!.pair;
+    }
+    const live = new Set(this.manager.list().filter((session) => !this.startingIds.has(session.id)).map((session) => session.id));
+    for (const [pair, ids] of this.dashboardAssignments) {
+      if (!roster.includes(pair)) {
+        this.dashboardAssignments.delete(pair);
+        this.dashboardAssignments.set(this.dashboardDesignated!, [
+          ...(this.dashboardAssignments.get(this.dashboardDesignated!) ?? []), ...ids.filter((id) => live.has(id)),
+        ]);
+      } else this.dashboardAssignments.set(pair, ids.filter((id) => live.has(id)));
+    }
+    const placed = new Set([...this.dashboardAssignments.values()].flat());
+    for (const id of live) {
+      if (placed.has(id)) continue;
+      this.dashboardAssignments.set(this.dashboardDesignated!, [...(this.dashboardAssignments.get(this.dashboardDesignated!) ?? []), id]);
+    }
+    const frame = JSON.stringify({ type: 'window-state', designated: this.dashboardDesignated,
+      windows: roster, assignments: Object.fromEntries(this.dashboardAssignments),
+      ...(move === undefined ? {} : { move }) });
+    for (const window of windows) window.socket.send(frame);
+  }
+
   private attachDashboardSocket(ws: WebSocket): void {
     this.sockets.add(ws);
     this.dashboardEventSockets.add(ws);
@@ -4474,29 +4521,58 @@ export class Daemon {
     });
     const unsubscribe = this.subscribeDashboardFeed((frame) => {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(frame));
+      if ((frame.type === 'session-added' || frame.type === 'session-removed') &&
+          this.dashboardWindows()[0]?.socket === ws) this.publishDashboardWindows();
     });
     ws.on('message', (raw) => {
-      // This id only speeds roster departure. It grants no daemon action.
-      if (this.dashboardWindowIds.has(ws)) return;
       let frame: unknown;
       try {
         const bytes = Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw as ArrayBuffer);
-        // A registration is a few dozen bytes: never parse anything larger.
-        if (bytes.length > MAX_WINDOW_REGISTRATION_BYTES) return;
+        // Window control frames are small: never parse anything larger.
+        if (bytes.length > 1024) return;
         frame = JSON.parse(bytes.toString('utf8'));
       } catch { return; }
       if (typeof frame !== 'object' || frame === null) return;
-      const claim = frame as { type?: unknown; id?: unknown; instance?: unknown };
+      const claim = frame as { type?: unknown; id?: unknown; instance?: unknown;
+        target?: unknown; source?: unknown; session?: unknown; before?: unknown };
+      const current = this.dashboardWindowIds.get(ws);
+      if (current !== undefined) {
+        const pair = this.dashboardPair(current);
+        if (claim.type === 'window-focus') {
+          current.focused = ++this.dashboardFocusSerial;
+          this.publishDashboardWindows();
+        } else if (claim.type === 'window-designate') {
+          this.dashboardDesignated = pair;
+          this.publishDashboardWindows();
+        } else if (claim.type === 'window-move' && typeof claim.session === 'string' &&
+            typeof claim.source === 'string' && typeof claim.target === 'string' &&
+            (claim.source === pair || claim.target === pair) &&
+            claim.session.length <= 100 && this.dashboardWindows().some((window) => window.pair === claim.target) &&
+            this.dashboardAssignments.get(claim.source)?.includes(claim.session)) {
+          if (claim.source === claim.target && claim.before === claim.session) return;
+          this.dashboardAssignments.set(claim.source, this.dashboardAssignments.get(claim.source)!.filter((id) => id !== claim.session));
+          const target = this.dashboardAssignments.get(claim.target) ?? [];
+          const before = typeof claim.before === 'string' ? target.indexOf(claim.before) : -1;
+          target.splice(before < 0 ? target.length : before, 0, claim.session);
+          this.dashboardAssignments.set(claim.target, target);
+          this.publishDashboardWindows({ session: claim.session, target: claim.target,
+            ...(typeof claim.before === 'string' ? { before: claim.before } : {}) });
+        }
+        return;
+      }
       if (claim.type !== 'window-register' || typeof claim.id !== 'string' ||
           !/^[a-z0-9]+-[a-z0-9]+(?:-[1-9][0-9]*)?$/.test(claim.id) || claim.id.length > 100 ||
           typeof claim.instance !== 'string' ||
           !/^[a-z0-9]+-[a-z0-9]+(?:-[1-9][0-9]*)?$/.test(claim.instance) ||
           claim.instance.length > 100) return;
-      this.dashboardWindowIds.set(ws, { id: claim.id, instance: claim.instance });
+      this.dashboardWindowIds.set(ws, { id: claim.id, instance: claim.instance,
+        focused: ++this.dashboardFocusSerial });
+      this.publishDashboardWindows();
     });
     ws.on('close', () => {
       const windowClaim = this.dashboardWindowIds.get(ws);
       this.dashboardWindowIds.delete(ws);
+      if (windowClaim !== undefined) this.publishDashboardWindows();
       unsubscribe();
       this.sockets.delete(ws);
       this.dashboardEventSockets.delete(ws);
