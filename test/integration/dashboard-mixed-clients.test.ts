@@ -26,7 +26,14 @@ it('bounds resize frames across two dashboards and a passive single-session view
   const minted = await api(daemon.port, daemon.token, `/sessions/${id}/viewer`, { body: {} });
   expect(minted.status).toBe(200);
   const viewerUrl = `${String(minted.body['viewerUrl'])}&drive=0`;
+  const viewerDrives: (string | null)[] = [];
+  daemon.daemon['server'].on('upgrade', (req) => {
+    const url = new URL(req.url!, 'http://localhost');
+    if (url.pathname === `/sessions/${id}/stream` && !req.headers['sec-websocket-protocol'])
+      viewerDrives.push(url.searchParams.get('drive'));
+  });
   await captureDashboard({ browser, viewerUrl: urls[0]!, width: 1400, height: 900, drive: true, probeOnly: true,
+    beforeNavigateScript: `localStorage.setItem('shellpuppet.dashboard', JSON.stringify({ autoFit: false }))`,
     probe: `document.querySelector('.pane-size')?.textContent.includes('×')`, timeoutMs: 150_000,
     interact: async ({ evaluate, send }) => {
       // All three documents share one browser. The new dashboard inherits the cookie
@@ -50,9 +57,12 @@ it('bounds resize frames across two dashboards and a passive single-session view
       const viewer = await openPage(viewerUrl, 900, 700);
       const stream = `window.__dashboardDiagnostics?.streams.find(s => s.url.includes('/stream'))`;
       const geometry = `${stream}?.geometry.at(-1)`;
-      await eventually(async () => await viewer(`${geometry}?.control === 'adopt'`) === true);
+      await eventually(async () => await viewer(`!!${stream}?.geometry.length`) === true);
+      expect(viewerDrives, 'passive session-stream upgrade received by the daemon').toEqual(['0']);
+      expect(await viewer(`${stream}.geometry[0]`)).toMatchObject({ control: 'adopt', owned: false });
       await evaluate(`document.querySelector('.pane button[aria-label="Fit"]').click()`);
       await eventually(async () => await evaluate(`${geometry}?.control === 'yours'`) === true);
+      await evaluate(`document.getElementById('auto-fit').click()`);
       const frameCount = `${stream}?.resizes.length ?? 0`;
       const before = Number(await evaluate(frameCount));
       const oldCols = Number(await evaluate(`${geometry}.cols`));
