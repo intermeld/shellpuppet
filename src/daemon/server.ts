@@ -659,11 +659,12 @@ export class Daemon {
   private readonly dashboardGeometryOwner = new Map<string, string>();
   /** The credential shared by that dashboard's windows, for transfers between documents. */
   private readonly dashboardCredentialOwner = new Map<string, string>();
-  private readonly dashboardTransferable = new Set<string>();
+  /** A release from a roster window is offered only to the destination document. */
+  private readonly dashboardTransferable = new Map<string, string | null>();
   private readonly dashboardSocketCredential = new WeakMap<WebSocket, string>();
   /** External geometry acts invalidate a temporary wider read's restoration. */
   private readonly geometryEpoch = new Map<string, number>();
-  private readonly widerReads = new Map<string, { abort: AbortController; done: Promise<void>; finish: () => void }>();
+  private readonly widerReads = new Map<string, { abort: AbortController; done: Promise<void>; isTemporary: () => boolean }>();
   /** Subscribers to the daemon-wide event stream (`/events`). */
   private readonly eventSockets = new Map<WebSocket, string | undefined>();
   /**
@@ -1380,6 +1381,7 @@ export class Daemon {
       if (grantPresented) {
         const redeemed = this.tokens.redeemDashboardGrant(grant, this.now());
         if (redeemed !== null) {
+          this.retireDashboardFeeds();
           this.audit.record('dashboard', 'grant-redeem');
           res.writeHead(303, {
             location: '/dashboard',
@@ -1393,6 +1395,7 @@ export class Daemon {
         return;
       }
       const proof = cookie === null ? null : this.tokens.issueDashboardProof();
+      if (proof !== null) this.retireDashboardFeeds();
       this.sendDashboardPage(res, proof, req.method === 'HEAD');
       return;
     }
@@ -1427,6 +1430,7 @@ export class Daemon {
     this.pendingDashboardGrants.delete(grant);
     if (this.stopping || !opened.launched || opened.mode === 'default-browser') {
       this.tokens.revokeDashboardGrant(grant);
+      this.retireDashboardFeeds();
       this.auditDashboardRefusal(req, 'launch-failed');
       return false;
     }
@@ -1831,7 +1835,8 @@ export class Daemon {
       json(res, 415, { error: 'The launch body must be JSON (application/json).' });
       return;
     }
-    if (!this.tokens.acceptsDashboardProof(headerOne(req, 'x-shellpuppet-csrf'))) {
+    const documentProof = headerOne(req, 'x-shellpuppet-csrf');
+    if (!this.tokens.acceptsDashboardProof(documentProof)) {
       this.auditDashboardRefusal(req, 'proof');
       json(res, 403, { error: 'Forbidden.' });
       return;
@@ -1854,8 +1859,9 @@ export class Daemon {
       throw error;
     }
     const requestedWindow = body['window'];
-    if (requestedWindow !== undefined && (typeof requestedWindow !== 'string' ||
-        !this.dashboardWindows().some((window) => window.pair === requestedWindow))) {
+    const launchingWindow = requestedWindow === undefined ? undefined : this.dashboardWindows().find(
+      (window) => window.pair === requestedWindow && dashboardProofFromProtocol(window.socket.protocol) === documentProof);
+    if (requestedWindow !== undefined && launchingWindow === undefined) {
       json(res, 409, { error: 'The launching dashboard window has closed.' });
       return;
     }
@@ -2107,8 +2113,10 @@ export class Daemon {
 
     this.registerMailboxSession(session,
       body['name'] === undefined && NAME_PATTERN.test(session.label) ? undefined : requestedName, true);
-    if (typeof requestedWindow === 'string' && this.dashboardWindows().some((window) => window.pair === requestedWindow)) {
-      this.dashboardAssignments.set(requestedWindow, [...(this.dashboardAssignments.get(requestedWindow) ?? []), session.id]);
+    if (launchingWindow && launchingWindow.socket.readyState === launchingWindow.socket.OPEN &&
+        this.dashboardWindowIds.has(launchingWindow.socket)) {
+      const { pair } = launchingWindow;
+      this.dashboardAssignments.set(pair, [...(this.dashboardAssignments.get(pair) ?? []), session.id]);
     }
     this.sessionFeed.add(this.summaryWithPrompt(session.summary()));
     session.onExit(() => {
@@ -2265,14 +2273,15 @@ export class Daemon {
   }
 
   /**
-   * Why a `/dashboard/events` upgrade is refused, or null when it may attach.
+   * Authenticate the dashboard event feed and retain its issuing credential.
    * The client token on the query is not a way in. The proof is the
    * subprotocol, not `X-ShellPuppet-CSRF`.
    */
-  private dashboardUpgradeRefusal(
+  private dashboardUpgradeCredential(
     req: http.IncomingMessage,
-  ): { code: number; reason: string; audit: string } | null {
-    if (this.dashboardCookieToken(req.headers.cookie) === null) {
+  ): { code: number; reason: string; audit: string } | string {
+    const token = this.dashboardCookieToken(req.headers.cookie);
+    if (token === null) {
       return { code: 401, reason: 'Unauthorized', audit: 'unauthenticated' };
     }
     if (!this.originMatchesRequest(req)) {
@@ -2292,7 +2301,7 @@ export class Daemon {
       return proof !== null && this.tokens.acceptsDashboardProof(proof);
     });
     if (!accepted) return { code: 403, reason: 'Forbidden', audit: 'proof' };
-    return null;
+    return token;
   }
 
   /**
@@ -2355,10 +2364,10 @@ export class Daemon {
       return { ok: true, credential: { kind: 'client', readOnly: false } };
     }
 
-    const dashboard = this.dashboardUpgradeRefusal(req);
-    if (dashboard === null) {
+    const dashboard = this.dashboardUpgradeCredential(req);
+    if (typeof dashboard === 'string') {
       return { ok: true, credential: { kind: 'dashboard', readOnly: false,
-        dashboardToken: this.dashboardCookieToken(req.headers.cookie)! } };
+        dashboardToken: dashboard } };
     }
 
     const viewer = cookieValues(req.headers.cookie, VIEWER_COOKIE)
@@ -3204,13 +3213,15 @@ export class Daemon {
         const abort = new AbortController();
         let finish = (): void => undefined;
         const done = new Promise<void>((resolve) => { finish = resolve; });
-        this.widerReads.set(id, { abort, done, finish });
         const onClose = (): void => { if (!res.writableEnded) abort.abort(); };
         res.on('close', onClose);
         const original = { cols: session.cols, rows: session.rows };
         const requested = { cols, rows };
         const target = { cols: Math.max(cols, original.cols), rows: Math.max(rows, original.rows) };
         const epoch = this.geometryEpoch.get(id) ?? 0;
+        const isTemporary = () => (target.cols !== original.cols || target.rows !== original.rows) &&
+          session.cols === target.cols && session.rows === target.rows && (this.geometryEpoch.get(id) ?? 0) === epoch;
+        this.widerReads.set(id, { abort, done, isTemporary });
         let payload: Record<string, unknown> | null = null;
         let restored = true;
         let readError: unknown;
@@ -3218,7 +3229,7 @@ export class Daemon {
         try {
           if (target.cols !== original.cols || target.rows !== original.rows) {
             await session.resize(target.cols, target.rows);
-            this.announceGeometry(id, session, { temporary: true });
+            this.announceGeometry(id, session);
           }
           const settled = await session.waitFor({ quiet: 250 }, {
             timeout,
@@ -4353,14 +4364,14 @@ export class Daemon {
     // The dashboard feed is cookie-only. Its Origin rule is stricter than the
     // client-token sockets below, which still allow a missing Origin.
     if (segments[0] === 'dashboard' && segments[1] === 'events' && segments.length === 2) {
-      const refusal = this.dashboardUpgradeRefusal(req);
-      if (refusal !== null) {
-        this.auditDashboardRefusal(req, refusal.audit);
-        reject(refusal.code, refusal.reason);
+      const credential = this.dashboardUpgradeCredential(req);
+      if (typeof credential !== 'string') {
+        this.auditDashboardRefusal(req, credential.audit);
+        reject(credential.code, credential.reason);
         return;
       }
       this.wss.handleUpgrade(req, socket, head, (ws) => {
-        this.attachDashboardSocket(ws);
+        this.attachDashboardSocket(ws, credential);
       });
       return;
     }
@@ -4511,7 +4522,25 @@ export class Daemon {
     for (const window of windows) window.socket.send(frame);
   }
 
-  private attachDashboardSocket(ws: WebSocket): void {
+  private dashboardFeedCurrent(ws: WebSocket): boolean {
+    return this.tokens.verifyDashboardToken(this.dashboardSocketCredential.get(ws)) &&
+      this.tokens.acceptsDashboardProof(dashboardProofFromProtocol(ws.protocol));
+  }
+
+  private retireDashboardFeeds(): void {
+    let changed = false;
+    for (const ws of this.dashboardEventSockets) {
+      if (ws.readyState === ws.OPEN && !this.dashboardFeedCurrent(ws)) {
+        if (this.dashboardWindowIds.delete(ws)) changed = true;
+        this.liveDashboardEventSockets.delete(ws);
+        ws.close(1008, 'Dashboard access expired');
+      }
+    }
+    if (changed) this.publishDashboardWindows();
+  }
+
+  private attachDashboardSocket(ws: WebSocket, credential: string): void {
+    this.dashboardSocketCredential.set(ws, credential);
     this.sockets.add(ws);
     this.dashboardEventSockets.add(ws);
     this.liveDashboardEventSockets.add(ws);
@@ -4540,6 +4569,7 @@ export class Daemon {
           this.dashboardWindows()[0]?.socket === ws) this.publishDashboardWindows();
     });
     ws.on('message', (raw) => {
+      if (!this.dashboardFeedCurrent(ws)) return;
       let frame: unknown;
       try {
         const bytes = Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw as ArrayBuffer);
@@ -4562,16 +4592,19 @@ export class Daemon {
         } else if (claim.type === 'window-move' && typeof claim.session === 'string' &&
             typeof claim.source === 'string' && typeof claim.target === 'string' &&
             (claim.source === pair || claim.target === pair) &&
-            claim.session.length <= 100 && this.dashboardWindows().some((window) => window.pair === claim.target) &&
+            claim.session.length <= 100 &&
             this.dashboardAssignments.get(claim.source)?.includes(claim.session)) {
+          const open = this.dashboardWindows().map((window) => window.pair);
+          if (!open.includes(claim.source) || !open.includes(claim.target)) return;
           if (claim.source === claim.target && claim.before === claim.session) return;
           this.dashboardAssignments.set(claim.source, this.dashboardAssignments.get(claim.source)!.filter((id) => id !== claim.session));
           const target = this.dashboardAssignments.get(claim.target) ?? [];
           const before = typeof claim.before === 'string' ? target.indexOf(claim.before) : -1;
+          const anchor = target[before];
           target.splice(before < 0 ? target.length : before, 0, claim.session);
           this.dashboardAssignments.set(claim.target, target);
           this.publishDashboardWindows({ session: claim.session, target: claim.target,
-            ...(typeof claim.before === 'string' ? { before: claim.before } : {}) });
+            ...(anchor === undefined ? {} : { before: anchor }) });
         }
         return;
       }
@@ -4581,7 +4614,7 @@ export class Daemon {
           !/^[a-z0-9]+-[a-z0-9]+(?:-[1-9][0-9]*)?$/.test(claim.instance) ||
           claim.instance.length > 100) return;
       this.dashboardWindowIds.set(ws, { id: claim.id, instance: claim.instance,
-        focused: ++this.dashboardFocusSerial });
+        focused: 0 });
       this.publishDashboardWindows();
     });
     ws.on('close', () => {
@@ -4635,11 +4668,11 @@ export class Daemon {
   private announceGeometry(
     sessionId: string,
     session: Session,
-    options: { resync?: boolean; temporary?: boolean } = {},
+    options: { resync?: boolean } = {},
   ): void {
     for (const [ws, sync] of this.sessionSockets.get(sessionId) ?? []) {
       if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify({ ...this.geometryFrame(session, ws), ...(options.temporary ? { temporary: true } : {}) }));
+        ws.send(JSON.stringify(this.geometryFrame(session, ws)));
       }
       if (options.resync !== false) sync.resync();
     }
@@ -4650,6 +4683,7 @@ export class Daemon {
   private geometryFrame(session: Session, ws: WebSocket): Record<string, unknown> {
     return {
       type: 'geometry',
+      ...(this.widerReads.get(session.id)?.isTemporary() ? { temporary: true } : {}),
       cols: session.cols,
       rows: session.rows,
       // The most a viewport may ask for (§5), with every frame: a page whose
@@ -4663,6 +4697,7 @@ export class Daemon {
       // Only a controller's explicit assignment handover offers its grid to
       // another dashboard pane while the old socket is closing.
       dashboardTransferable: this.dashboardTransferable.has(session.id) &&
+        (this.dashboardTransferable.get(session.id) === null || this.dashboardTransferable.get(session.id) === ws.protocol) &&
         this.dashboardCredentialOwner.has(session.id) &&
         this.dashboardSocketCredential.has(ws) &&
         tokensEqual(this.dashboardCredentialOwner.get(session.id)!, this.dashboardSocketCredential.get(ws)!),
@@ -4896,7 +4931,10 @@ export class Daemon {
           // document with the same cookie cannot make a live controller yield.
           if (credential.kind === 'dashboard' && !session.exited && !session.geometryHeld &&
               this.geometryController.get(session.id) === ws) {
-            this.dashboardTransferable.add(session.id);
+            const windows = this.dashboardWindows();
+            const target = windows.find(({ pair }) => this.dashboardAssignments.get(pair)?.includes(session.id));
+            if (target) this.dashboardTransferable.set(session.id, target.socket.protocol);
+            else if (windows.length === 0) this.dashboardTransferable.set(session.id, null);
             this.announceGeometry(session.id, session, { resync: false });
           }
           return;
