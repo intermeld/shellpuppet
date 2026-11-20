@@ -18,6 +18,7 @@
  */
 
 import { spawn } from 'node:child_process';
+import { EventEmitter } from 'node:events';
 import type { ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
@@ -63,6 +64,7 @@ export interface CaptureOptions {
   interact?: (page: {
     evaluate: (expression: string) => Promise<unknown>;
     send: (method: string, params?: Record<string, unknown>, browserWideOrSession?: boolean | string) => Promise<unknown>;
+    onEvent: (method: string, listener: (params: Record<string, unknown>) => void) => () => void;
   }) => Promise<unknown>;
   /**
    * The folder the capture's own browser profile is made in, created when
@@ -202,6 +204,7 @@ const POLL_MS = 100;
  * Exported for its unit test only.
  */
 export class DevTools {
+  private readonly events = new EventEmitter();
   private nextId = 1;
   private readonly pending = new Map<
     number,
@@ -213,13 +216,17 @@ export class DevTools {
     private deadline: number,
   ) {
     ws.on('message', (data: Buffer | string) => {
-      let message: { id?: number; result?: unknown; error?: { code?: number; message?: string; data?: unknown } };
+      let message: { id?: number; result?: unknown; error?: { code?: number; message?: string; data?: unknown };
+        method?: string; sessionId?: string; params?: Record<string, unknown> };
       try {
         message = JSON.parse(String(data)) as typeof message;
       } catch {
         return;
       }
-      if (typeof message.id !== 'number') return; // an event; none are needed
+      if (typeof message.id !== 'number') {
+        if (message.method && message.sessionId) this.events.emit(message.sessionId + ':' + message.method, message.params);
+        return;
+      }
       const waiter = this.pending.get(message.id);
       if (waiter === undefined) return;
       this.pending.delete(message.id);
@@ -242,6 +249,12 @@ export class DevTools {
 
   extendDeadline(ms: number): void {
     this.deadline = Date.now() + ms;
+  }
+
+  onEvent(sessionId: string, method: string, listener: (params: Record<string, unknown>) => void): () => void {
+    const key = sessionId + ':' + method;
+    this.events.on(key, listener);
+    return () => { this.events.off(key, listener); };
   }
 
   send<T>(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<T> {
@@ -475,6 +488,7 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
       stage = 'interaction';
       probed = await options.interact({
         evaluate,
+        onEvent: (method, listener) => activeCdp.onEvent(activeSessionId, method, listener),
         send: (method, params = {}, browserWideOrSession = false) =>
           activeCdp.send(method, params, typeof browserWideOrSession === 'string'
             ? browserWideOrSession : browserWideOrSession ? undefined : activeSessionId),

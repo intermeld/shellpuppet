@@ -1866,7 +1866,9 @@ The authenticated `/dashboard/events` socket registers one window instance.
 Replacing the dashboard credential retires its feeds immediately. Issuing a ninth
 document proof retires feeds using the oldest proof. On feed loss a window closes
 its pane clients and clears its designation until registration succeeds.
-Only focused documents report focus. If no survivor has reported focus, the daemon
+The daemon remembers a document's last reported focus across feed reconnects for
+the lifetime of its document proof. A background registration does not advance
+that order. If no survivor has reported focus, the daemon
 selects the earliest surviving registration.
 The daemon publishes `window-state` with the open roster, designation and
 assignments. A move frame also identifies the insertion point, so a window
@@ -1878,6 +1880,9 @@ that the source owns the session. The launcher matches the requesting document's
 proof to its registered socket. Closing a socket removes its instance before
 reassigning panes. A Pop out during a wider read defers the receiving window's
 automatic fit until the daemon restores the grid.
+The recipient acknowledges an explicit grid release even when its fitted dimensions
+already match the source. A single-session viewer opened with `drive=0` carries
+that preference to its stream, including after a reload.
 The launch route accepts the registered source window as an optional `window`
 field and rejects a closed source. `BroadcastChannel` only synchronises
 preferences; it never authorises a roster or assignment.
