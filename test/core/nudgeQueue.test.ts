@@ -134,8 +134,11 @@ describe('what lies below a busy composer', () => {
 
   it('queues under Claude Code and Muse Code footers', () => {
     expect(claude.nudge!.readiness(claudeBusy(['  Opus 5.5 medium █░░░░░░░░░ 6%', '  ⏵⏵ auto mode on · 1 shell · esc to interrupt']))).toBe('queue');
+    expect(claude.nudge!.readiness(claudeBusy(['  Opus 5.5 █░░░░░░░░░ 5%', '  ⏵⏵ auto mode on (shift+tab to cycle)']))).toBe('queue');
+    expect(muse.nudge!.readiness(museBusy(['  muse-wonder-1.0 · high · C:/work/project · Launch overrides']))).toBe('queue');
+    // A background-task list is free text: the nudge waits for the turn to end.
     expect(muse.nudge!.readiness(museBusy(['main · ↓ to select', '└ ◇ Run the build  running',
-      '  muse-wonder-1.0 · high · C:/work/project · Launch overrides']))).toBe('queue');
+      '  muse-wonder-1.0 · high · C:/work/project · Launch overrides']))).toBe('busy');
   });
 
   it('never queues when a panel is painted below the composer', () => {
