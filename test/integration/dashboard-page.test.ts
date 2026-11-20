@@ -539,8 +539,12 @@ describe('passive dashboard page', () => {
           await page.evaluate(`(() => {
             const card = document.querySelector('[data-session=${JSON.stringify(id)}]');
             card.querySelector('button[aria-label="Enlarge"]').click();
-            card.querySelector('textarea').focus();
           })()`);
+          await eventually(async () => await page.evaluate(`__dashboardDiagnostics.streams.some(stream =>
+            new URL(stream.url).pathname === '/sessions/' + ${JSON.stringify(id)} + '/stream' &&
+            stream.socket.readyState === 1 && stream.geometry.at(-1)?.control === 'yours')`) === true,
+            10_000, 50, 'the enlarged terminal stream to receive grid ownership');
+          await page.evaluate(`document.querySelector('[data-session=${JSON.stringify(id)}] textarea').focus()`);
           const focusedBeforeEscape = await page.evaluate("document.activeElement?.closest('.pane-term') !== null");
           const press = async (key: string, code: string, keyCode: number, modifiers = 0): Promise<void> => {
             const details = { key, code, windowsVirtualKeyCode: keyCode, nativeVirtualKeyCode: keyCode, modifiers };
@@ -548,34 +552,30 @@ describe('passive dashboard page', () => {
             await page.send('Input.dispatchKeyEvent', { type: 'keyUp', ...details });
           };
           await press('Escape', 'Escape', 27);
+          // A Windows console can buffer a lone escape as the start of a key sequence.
+          await page.send('Input.insertText', { text: '.' });
           const terminalEscape = await page.evaluate(`(() => ({
             enlarged: document.getElementById('panes').dataset.layout === 'enlarged'
           }))()`);
-          const echoedInPane = await page.evaluate(`new Promise(resolve => {
-            const deadline = Date.now() + 5000;
-            const check = () => {
-              const rows = document.querySelector('[data-session=${JSON.stringify(id)}] .xterm-rows');
-              if (rows?.textContent.includes('ESC-RECEIVED')) resolve(true);
-              else if (Date.now() > deadline) resolve(false);
-              else setTimeout(check, 50);
-            };
-            check();
-          })`);
+          const echo = await api(daemon.port, daemon.token, `/sessions/${id}/wait?text=ESC-RECEIVED&timeout=10000`);
+          expect(echo.body['matched']).toBe(true);
+          await eventually(async () => await page.evaluate(`document.querySelector(
+            '[data-session=${JSON.stringify(id)}] .xterm-rows')?.textContent.includes('ESC-RECEIVED')`) === true,
+            10_000, 50, 'Escape echoed from the programme to the enlarged pane');
           await press('A', 'KeyA', 65, 10);
           await press('Escape', 'Escape', 27);
           const navigationEscape = await page.evaluate(`(() => ({
             restored: document.getElementById('panes').dataset.layout !== 'enlarged'
           }))()`);
-          return { focusedBeforeEscape, terminalEscape, echoedInPane, navigationEscape };
+          return { focusedBeforeEscape, terminalEscape, navigationEscape };
         },
       });
       const result = shot.probe as {
-        focusedBeforeEscape: boolean; terminalEscape: { enlarged: boolean }; echoedInPane: boolean;
+        focusedBeforeEscape: boolean; terminalEscape: { enlarged: boolean };
         navigationEscape: { restored: boolean };
       };
       expect(result.focusedBeforeEscape).toBe(true);
       expect(result.terminalEscape.enlarged).toBe(true);
-      expect(result.echoedInPane).toBe(true);
       expect(result.navigationEscape.restored).toBe(true);
     } finally {
       await api(daemon.port, daemon.token, `/sessions/${id}`, { method: 'DELETE' });
