@@ -224,3 +224,12 @@ messages use the same types and metadata, and the dashboard feed tracks
 `stalled`. None of this metadata contains screen text; `hideReasoning`
 readers receive the same fixed description without a screen-content side
 channel.
+
+## Launch a configured profile
+
+Call `terminal_start` with `{"profile":"review","name":"chair","resumeId":"abc-123"}`.
+The daemon authenticates the current session or held outside claim. Supply
+only `profile` and applicable `name`, `folder`, `rootIndex`, `folderPath` and
+`resumeId`. A resume id requires a profile resume template. The HTTP
+equivalent is `POST /launcher/launch` with the same JSON. Free-form starts
+continue to take `command` and the existing arguments.

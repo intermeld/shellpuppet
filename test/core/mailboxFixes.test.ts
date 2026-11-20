@@ -114,11 +114,11 @@ describe('identity and shutdown', () => {
     expect(mailbox.send('sender', 'second', 'hello').to.id).toBe(second.claimId);
   });
 
-  it('compares a missing claim against a fixed dummy secret', () => {
+  it('compares a missing claim against a fixed dummy digest', () => {
     const mailbox = box();
     const compare = vi.spyOn(mailbox as unknown as { compareSecrets: (a: string, b: string) => boolean }, 'compareSecrets');
     expect(mailbox.verifyClaim('claim_00000000000000000000000000000000', 'guess')).toBe(false);
-    expect(compare).toHaveBeenCalledWith('guess', 'an absent claim has no secret');
+    expect(compare).toHaveBeenCalledWith('guess', '0'.repeat(64));
   });
 
   it('finishes every transition before events and survives a throwing listener', () => {

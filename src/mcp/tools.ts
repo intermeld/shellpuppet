@@ -367,7 +367,13 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
         'not wait. Commands are shell-wrapped ' +
         'on Windows automatically; pass the real command (e.g. "goose"), never "cmd.exe /c goose".',
       inputSchema: params({
-        command: z.string().describe('The program to run: the real command, not a shell wrapper.'),
+        profile: z.string().optional().describe('Start an owner-configured launch profile with this session’s launch permission.'),
+        name: z.string().optional().describe('Session name for a profile launch.'),
+        folder: z.string().optional().describe('Configured folder name for a profile launch.'),
+        rootIndex: z.number().int().nonnegative().optional().describe('Folder root index for a profile launch.'),
+        folderPath: z.string().optional().describe('Absolute path for a profile that allows any folder.'),
+        resumeId: z.string().optional().describe('Conversation id for a profile with resume arguments.'),
+        command: z.string().optional().describe('The program to run: the real command, not a shell wrapper.'),
         args: z.array(z.string()).optional().describe('Arguments. On Windows the default joins these as cmd.exe shell text. Include double quotes inside a value with spaces, for example mcp_servers.x.command="C:/Program Files/nodejs/node.exe"; cmd.exe also expands %NAME% and interprets ^ & | < >. Set shell false for literal argv.'),
         cwd: z.string().optional().describe('Working directory. Defaults to this MCP server\'s working directory, normally the folder the agent was started in; a relative path is taken from there.'),
         cols: z.number().int().min(2).max(1000).optional().describe('Screen columns to START at (default 120). Not a freeze: a human watching in a browser reshapes the grid to their window. Pass hold to keep it.'),
@@ -384,11 +390,19 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
         envNames: z.array(z.string()).optional().describe('Names of variables to copy from THIS MCP server\'s environment into the session\'s, for a program that is not one of the agent CLIs and needs a key the session would not otherwise see. Only names on the human\'s envNames list in config.json are allowed; any other name refuses the start. A session that runs as an agent CLI needs no envNames: it receives the variables the human listed for that agent in agents.passEnv, and any name off that list refuses the start. A listed name that is not set here is reported and not passed. Values are never shown, logged or audited; names are.'),
       }),
     },
-    async ({ envNames, ...given }, { signal }) =>
+    async ({ envNames, profile, folder, rootIndex, folderPath, name, resumeId, ...given }, { signal }) =>
       run(async () => {
+        if (profile !== undefined) {
+          if (envNames !== undefined || Object.keys(given).length) return text('Only profile launch options are accepted with profile.', true);
+          const { payload, warnings } = await call('POST', '/launcher/launch', { profile, folder, rootIndex, folderPath, name, resumeId }, signal);
+          return text(withWarnings(warnings, `Session ${String(payload['id'])} started from profile ${profile}.`));
+        }
+        if (!given.command || [name, folder, rootIndex, folderPath, resumeId].some(v => v !== undefined)) {
+          return text('Supply a command or a named profile. Folder choices, name and resumeId require a profile.', true);
+        }
         // This server's working directory, or `cwd` taken from it: the daemon
         // runs elsewhere, so a folder is always sent, and always absolute.
-        const args = { ...given, cwd: resolvePath(given.cwd ?? '.') };
+        const args = { ...given, command: given.command, cwd: resolvePath(given.cwd ?? '.') };
         let body: Body = args;
         const lists = options.readPassLists?.() ?? {
           envNames: options.envNames ?? [],

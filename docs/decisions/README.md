@@ -17,6 +17,7 @@ The commitments they add up to are collected in [VISION.md](../../VISION.md).
 | [ADR-008](ADR-008-clean-session-environment-by-default.md) | Sessions start with a clean environment by default |
 | [ADR-009](ADR-009-dashboard-and-sessions-you-start-yourself.md) | The dashboard and sessions you start yourself |
 | [ADR-010](ADR-010-messages-between-sessions.md) | Messages between sessions, read from a mailbox (proposed) |
+| [ADR-011](ADR-011-session-launch-permission.md) | Session permission to launch profiles |
 
 ## Conventions
 

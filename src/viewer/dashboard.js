@@ -18,6 +18,8 @@
   const messagesEmpty = document.getElementById('messages-empty');
   const shareCount = document.getElementById('share-count');
   const profileSelect = document.getElementById('profile');
+  const resumeField = document.getElementById('resume-field');
+  const resumeId = document.getElementById('resume-id');
   const sessionName = document.getElementById('session-name');
   const folderField = document.getElementById('folder-field');
   const folderSelect = document.getElementById('folder');
@@ -674,7 +676,7 @@
   function updateCard(item) {
     const summary = item.summary;
     item.label.textContent = summary.label || summary.id;
-    item.purpose.textContent = summary.purpose || '';
+    item.purpose.textContent = [summary.purpose, summary.parent && summary.startedBy && `Started by ${summary.startedBy}`].filter(Boolean).join(' · ');
     // Only a chair is marked in the header: a label on every pane would wrap a narrow header onto a second row.
     item.role.textContent = summary.role === 'chair' ? 'Chair' : '';
     item.role.hidden = summary.role !== 'chair';
@@ -1368,6 +1370,7 @@
 
   function renderFolders() {
     const profile = selectedProfile();
+    resumeField.hidden = !profile?.canResume;
     const free = !!profile?.anyFolder;
     boundedFolder.hidden = free;
     anyFolder.hidden = !free;
@@ -1457,6 +1460,7 @@
     const profile = selectedProfile();
     if (profile === null) return;
     const body = { profile: profile.name, name: sessionName.value };
+    if (profile.canResume && resumeId.value) body.resumeId = resumeId.value;
     if (profile.folderRequired) {
       if (profile.anyFolder) {
         if (folderPath.value === '') { showError('Choose a folder.'); return; }
@@ -1608,7 +1612,7 @@
     const waiting = shown().find((item) => attention(item) && item.id !== selected) || shown().find(attention);
     if (waiting) select(waiting.id);
   });
-  profileSelect.addEventListener('change', () => { sessionName.value = selectedProfile()?.name || ''; renderFolders(); });
+  profileSelect.addEventListener('change', () => { resumeId.value = ''; sessionName.value = selectedProfile()?.name || ''; renderFolders(); });
   folderFilter.addEventListener('input', renderFolders);
   folderFilter.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); startSelected(); } });
   folderPath.addEventListener('keydown', (event) => { if (event.key === 'Enter') { event.preventDefault(); startSelected(); } });
