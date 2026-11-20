@@ -51,6 +51,13 @@ export interface ReadingNudgeRule {
    * `queue`, and a typed line is judged in the composer as usual.
    */
   queueWhileBusy?: boolean;
+  /**
+   * The module has already proven that the composer row is its live frame
+   * (Grok matches its own frame and footer). Otherwise a queued nudge needs the
+   * declared rule rows, in their own ink, directly above and below the composer:
+   * a dialog that replaces the composer must never be read as an empty one.
+   */
+  composerFramed?: boolean;
 }
 
 const GLYPH = /^\s*[❯›>]/u;
@@ -261,6 +268,15 @@ function unwrapBelowRules(lines: readonly StyledLine[], rule: ReadingNudgeRule):
   return lines.map((item, i) => (fresh.has(i) && item.wrapped === true ? { ...item, wrapped: false } : item));
 }
 
+/** A declared rule row, in the rule ink when the module names one, directly above the composer and directly below its region. */
+function framedByRules(lines: readonly StyledLine[], at: number, below: number, rule: ReadingNudgeRule): boolean {
+  const rules = rule.ruleRows ?? [];
+  if (rules.length === 0) return false;
+  const isRule = (line: StyledLine | undefined): boolean => line !== undefined &&
+    rules.some((test) => test.test(line.text)) && (rule.ruleInk === undefined || rule.ruleInk(line));
+  return isRule(lines[at - 1]) && isRule(lines[below]);
+}
+
 export function readingReadiness(view: NudgeView, reading: AgentSignature, rule: ReadingNudgeRule): NudgeReadiness {
   const composer = pattern(reading.composer.text);
   if (composer === null) return 'unknown';
@@ -273,6 +289,7 @@ export function readingReadiness(view: NudgeView, reading: AgentSignature, rule:
   if (busy && rule.queueWhileBusy !== true) return 'busy';
   const region = composerRegion(lines, reading, at, rule, view.expectedDraft !== undefined);
   if (region === null || region.unproven) return busy ? 'busy' : 'unknown';
+  if (busy && rule.composerFramed !== true && !framedByRules(lines, at, at + region.rows.length, rule)) return 'busy';
   if (view.expectedDraft !== undefined) {
     // A later copy may look like a fresh composer row. Do not select its
     // prompt glyph and forget the earlier copy still waiting above it.

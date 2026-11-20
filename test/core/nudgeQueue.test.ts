@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { claude } from '../../src/agents/claude/index.js';
 import { grok } from '../../src/agents/grok/index.js';
+import { muse } from '../../src/agents/muse/index.js';
 import type { NudgeView } from '../../src/agents/types.js';
 import { NUDGE_QUIET_MS, nudgeVerdict } from '../../src/core/nudge.js';
 import { ScreenRenderer } from '../../src/core/renderer.js';
@@ -84,9 +85,16 @@ describe('queueing behind a running turn', () => {
     const busy = ['✻ Thinking… (12s · ↓ 300 tokens)', rule, '❯ a reply the person is typing', rule,
       '  Opus 5.5 medium █░░░░░░░░░ 6%', '  ⏵⏵ auto mode on · esc to interrupt'];
     expect(claude.nudge!.readiness({ rows: busy })).toBe('busy');
-    const empty = [...busy];
-    empty[2] = '❯ ';
-    expect(claude.nudge!.readiness({ rows: empty })).toBe('queue');
+  });
+
+  it('never queues into a dialog that replaced the composer under a running turn', () => {
+    // An approval panel below an echoed turn: the echoed prompt row is not a framed composer.
+    const rows = ['❯ send a message to the other chair', '◇ Calling tools (2m 09s · esc to interrupt)',
+      'Would you like to allow this tool action?', '', '  tool action: send a message', 'Reviewer: a reason',
+      '⟩ 1. Yes, proceed (y)', '  2. Yes, and do not ask again this session (p)', '  4. No, and say what to do differently (esc)',
+      'Change approval defaults in /permissions'];
+    expect(muse.nudge!.readiness({ rows })).not.toBe('queue');
+    expect(claude.nudge!.readiness({ rows: rows.map((row) => row.replace('◇', '✻')) })).not.toBe('queue');
   });
 
   it('never queues a nudge while the composer block is still changing', async () => {

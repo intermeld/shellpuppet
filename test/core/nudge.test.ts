@@ -849,7 +849,8 @@ describe('a busy Muse turn painted after a full-width row', () => {
     await renderer.dispose();
     expect(styled.find((line) => line.text.startsWith('◈ Thinking'))?.wrapped).toBe(true);
     const view = { rows: styled.map((line) => line.text), styled, viewportRows: 12, unchangedMs: NUDGE_QUIET_MS };
-    // Busy is detected, so the empty composer can only take a queued line.
-    expect(muse.nudge?.readiness(view)).toBe('queue');
+    // Busy is detected. The rules here carry no rule ink, so the composer frame is
+    // not proven and the turn stays busy rather than taking a queued line.
+    expect(muse.nudge?.readiness(view)).toBe('busy');
   });
 });

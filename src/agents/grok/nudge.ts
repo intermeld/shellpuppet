@@ -56,6 +56,7 @@ export function readiness(view: NudgeView): NudgeReadiness {
     exactEmpty: view.exactEmpty }, { ...reading, composer: { text: '^> ' } }, {
     placeholder: '', continuations: false, placeholderInk: () => false,
     queueWhileBusy: busyEmpty || busyTyped,
+    composerFramed: true,
   });
   // The turn's own hints prove it is running even when no busy line is drawn.
   if (busyEmpty && result === 'ready' && view.expectedDraft === undefined) return 'queue';

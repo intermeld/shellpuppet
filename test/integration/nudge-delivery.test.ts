@@ -215,9 +215,16 @@ describe('fixed message nudges through a real terminal', () => {
       const second = await api(td.port, td.token, '/messages', {
         body: { to: 'ready', text: marker }, headers });
       expect(second.status).toBe(201);
+      // A later message brings one new nudge that lists every unread message,
+      // even though the first went unanswered; the first line is never retyped.
+      const both = buildNudge([
+        { id: sent.get('ready')!, from: { id: String(claim.body['claimId']), name: 'sender' } },
+        { id: String(second.body['id']), from: { id: String(claim.body['claimId']), name: 'sender' } },
+      ]);
+      await eventually(() => fs.readFileSync(files('ready').input, 'utf8') === `${expected}\r${both}\r`, 10_000);
       await new Promise((resolve) => setTimeout(resolve, 2_000));
-      expect(fs.readFileSync(files('ready').input, 'utf8')).toBe(`${expected}\r`);
-      expect((await outbox()).find((entry) => entry.id === second.body['id'])?.state).toBe('waiting');
+      expect(fs.readFileSync(files('ready').input, 'utf8')).toBe(`${expected}\r${both}\r`);
+      expect((await outbox()).find((entry) => entry.id === second.body['id'])?.state).toBe('nudged');
       expect(fs.existsSync(files('draft').input)).toBe(false);
       expect(fs.existsSync(files('shell').input)).toBe(false);
       fs.writeFileSync(files('ready').signal, 'read');
@@ -233,18 +240,20 @@ describe('fixed message nudges through a real terminal', () => {
       const next = buildNudge([{ id: String(third.body['id']), from: {
         id: String(claim.body['claimId']), name: 'sender' } }]);
       await eventually(() => fs.existsSync(files('ready').input) &&
-        fs.readFileSync(files('ready').input, 'utf8') === `${expected}\r${next}\r`);
-      expect(fs.readFileSync(files('ready').input, 'utf8')).toBe(`${expected}\r${next}\r`);
+        fs.readFileSync(files('ready').input, 'utf8') === `${expected}\r${both}\r${next}\r`);
+      expect(fs.readFileSync(files('ready').input, 'utf8')).toBe(`${expected}\r${both}\r${next}\r`);
       expect((await api(td.port, td.token, `/sessions/${started.get('draft')!}`, { method: 'DELETE' })).status).toBe(200);
       await eventually(async () => (await outbox()).find((entry) => entry.id === sent.get('draft'))?.state === 'not-delivered');
       const audit = fs.readFileSync(auditLogPath(home), 'utf8');
       const nudges = audit.split('\n').filter(Boolean).map((line) => JSON.parse(line) as {
         actor: string; action: string; session?: string; meta?: { messageIds?: string[]; count?: number };
       }).filter((entry) => entry.action === 'nudge');
-      expect(nudges).toHaveLength(2);
+      expect(nudges).toHaveLength(3);
       expect(nudges[0]).toMatchObject({ actor: 'daemon', session: started.get('ready'),
         meta: { messageIds: [sent.get('ready')], count: 1 } });
       expect(nudges[1]).toMatchObject({ actor: 'daemon', session: started.get('ready'),
+        meta: { messageIds: [second.body['id']], count: 1 } });
+      expect(nudges[2]).toMatchObject({ actor: 'daemon', session: started.get('ready'),
         meta: { messageIds: [third.body['id']], count: 1 } });
       expect(audit).not.toContain(marker);
       expect(logFile && fs.readFileSync(logFile, 'utf8')).not.toContain(marker);
