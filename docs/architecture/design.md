@@ -264,7 +264,11 @@ takes a submitted line while it works (Claude Code and Grok Build queue it,
 Muse Code hands it to the turn). The core accepts `queue` once the composer
 block, from the rule or frame edge above the composer to the foot of the
 screen, has stayed unchanged for the quiet period; the spinner and timer above
-it may keep repainting. A draft during a turn stays busy. Grok Build paints its
+it may keep repainting. A draft during a turn stays busy. Claude Code and Muse Code also need
+the rows under the composer to be exactly their own footer (Claude: its model line and
+mode line in its own wording; Muse: its model line alone, so a background-task list makes the
+nudge wait); a dialog painted there is never typed into. A panel that copies an agent's own
+footer wording exactly would not be told apart. Grok Build paints its
 frame and footer rows to the full width, so xterm marks each following row as a
 wrap; once the frame and footer are matched, the Grok module ignores those marks.
 The composer is empty only
