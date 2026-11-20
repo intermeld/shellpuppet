@@ -89,6 +89,7 @@ import {
   removeDaemonStateIf,
   removeDaemonStateIfNotARecord,
 } from './paths.js';
+import { acquireHomeOwner, AlreadyRunningError, type HomeOwner } from './homeOwner.js';
 import { daemonRunning } from './liveness.js';
 import type { DaemonState } from './paths.js';
 import { packageVersion } from './meta.js';
@@ -332,19 +333,12 @@ export interface DaemonOptions {
   dashboardSessionFactory?: (options: SessionOptions) => Session;
 }
 
-/** Thrown by `start()` when a healthy daemon already owns this home. */
 /** The largest dashboard window registration frame the daemon will parse. */
 const MAX_WINDOW_REGISTRATION_BYTES = 256;
 
-export class AlreadyRunningError extends Error {
-  constructor(readonly state: DaemonState) {
-    super(
-      `A healthy daemon is already running (pid ${String(state.pid)}, ` +
-        `port ${String(state.port)}).`,
-    );
-    this.name = 'AlreadyRunningError';
-  }
-}
+export { AlreadyRunningError };
+
+class HomeOwnershipError extends Error {}
 
 type JsonBody = Record<string, unknown>;
 
@@ -700,9 +694,9 @@ export class Daemon {
   private raceCheckTimer: NodeJS.Timeout | null = null;
   private statePublishTimer: NodeJS.Timeout | null = null;
   private statePublishRunning = false;
-  /** What this daemon published in daemon.json, once it has claimed it. */
-  private previousInstanceId?: string;
+  private homeOwner?: HomeOwner;
   private claimsRestored = false;
+  /** What this daemon published in daemon.json, once it has claimed it. */
   private publishedState: DaemonState | null = null;
   private readonly instanceId = randomUUID();
   /** The pid of another running daemon already reported as owning daemon.json. */
@@ -871,8 +865,6 @@ export class Daemon {
     if (existing !== null) {
       if (await this.incumbentRunning(existing)) throw new AlreadyRunningError(existing);
       if (this.stopping) throw new Error('Daemon stopped during startup.');
-      this.logger.info('clearing stale daemon state', { stalePid: existing.pid });
-      removeDaemonStateIf(home, existing);
     }
 
     await new Promise<void>((resolve, reject) => {
@@ -917,32 +909,42 @@ export class Daemon {
       startedWrapped: this.options.startedWrapped ?? false,
     };
 
-    // Atomic claim; on losing the race, defer to the winner (design §2.2:
-    // the race is normal, not exceptional). A file that holds no record at all,
-    // such as an emptied one, is cleared like a stale record.
+    const source = path.join(home, 'restart-source.json');
+    // Hold the home independently of discovery, including while restoring
+    // claims and publishing shutdown records. This also serialises takeovers.
     try {
-      if (!claimDaemonState(home, state)) {
-        const winner = inspectDaemonState(home);
-        if (winner.kind === 'record' && (await this.incumbentRunning(winner.state))) {
-          throw new AlreadyRunningError(winner.state);
-        }
-        if (this.stopping) throw new Error('Daemon stopped during startup.');
-        if (winner.kind === 'record') removeDaemonStateIf(home, winner.state);
-        if (winner.kind === 'restart-handoff') {
-          this.previousInstanceId = winner.instanceId;
-          removeDaemonStateIfNotARecord(home, winner.raw);
-        } else if (winner.kind === 'not-a-record') {
-          this.logger.warn('clearing a daemon.json that holds no daemon record', { length: winner.raw.length });
-          removeDaemonStateIfNotARecord(home, winner.raw);
-        }
-        if (!claimDaemonState(home, state)) {
-          throw new Error(
-            `Could not claim ${daemonStatePath(home)}: it could not be read, or another ` +
-              `daemon claimed it first.`,
-          );
+      this.homeOwner = await acquireHomeOwner(home, state.port, this.instanceId);
+      if (this.stopping) throw new Error('Daemon stopped during startup.');
+      const file = inspectDaemonState(home);
+      if (file.kind === 'record' && await this.incumbentRunning(file.state)) {
+        throw new AlreadyRunningError(file.state);
+      }
+      if (this.stopping) throw new Error('Daemon stopped during startup.');
+      if (file.kind === 'unreadable') throw new Error('Could not read daemon.json to claim the home.');
+      state.restartFrom = null;
+      if (file.kind === 'restart-handoff') {
+        // Keep the credential-free handoff independently of discovery. If
+        // either publication fails, the next starter can repeat the transfer.
+        writePrivateRecord(source, { restartFrom: file.instanceId });
+        state.restartFrom = file.instanceId;
+      } else if (file.kind === 'record' && file.state.restartFrom) {
+        // A crash leaves the live record in place. A failed requested restart
+        // can also leave it locked in place, but retires its old source first.
+        try {
+          const saved: unknown = JSON.parse(fs.readFileSync(source, 'utf8'));
+          if (isRecord(saved) && saved['restartFrom'] === file.state.restartFrom) state.restartFrom = file.state.restartFrom;
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
         }
       }
+      if (file.kind === 'missing') {
+        if (!claimDaemonState(home, state)) throw new Error('Another daemon claimed daemon.json first.');
+      } else {
+        // A failed rename leaves the entire predecessor record in place.
+        writePrivateRecord(daemonStatePath(home), state);
+      }
     } catch (error) {
+      this.releaseOwnership();
       await this.closeServerOnly();
       throw error;
     }
@@ -1059,7 +1061,7 @@ export class Daemon {
    * process that had the same pid.
    */
   private async incumbentRunning(record: DaemonState): Promise<boolean> {
-    if (record.pid === process.pid && record.port === this.portValue) return false;
+    if (record.port === this.portValue) return false;
     if (await this.isHealthy(record.port)) return true;
     if (record.pid === process.pid) return false;
     if (await daemonRunning(record)) {
@@ -1083,7 +1085,7 @@ export class Daemon {
    */
   private async keepStatePublished(): Promise<void> {
     const published = this.publishedState;
-    if (published === null || this.stopPromise !== null || this.statePublishRunning) return;
+    if (published === null || this.stopping || this.statePublishRunning || !this.homeOwner?.held()) return;
     this.statePublishRunning = true;
     try {
       const { home } = this.options;
@@ -1091,7 +1093,7 @@ export class Daemon {
       if (file.kind === 'unreadable') return;
       if (file.kind === 'record') {
         const current = file.state;
-        if (current.pid === published.pid && current.port === published.port) {
+        if (current.instanceId === this.instanceId && current.pid === published.pid && current.port === published.port) {
           this.foreignOwnerReported = null;
           return;
         }
@@ -1106,6 +1108,7 @@ export class Daemon {
           }
           return;
         }
+        if (this.stopping || !this.homeOwner?.held()) return;
         removeDaemonStateIf(home, current);
       } else if (file.kind === 'not-a-record') {
         removeDaemonStateIfNotARecord(home, file.raw);
@@ -1155,30 +1158,75 @@ export class Daemon {
     // awaits the one real shutdown.
     if (this.stopPromise === null) {
       this.stopping = true;
-      if (opts.removeState !== false && this.publishedState &&
-          readDaemonState(this.options.home)?.instanceId === this.instanceId) {
-        if (this.claimsRestored) this.writeShutdownRecord('launcher-claims.json', () => this.saveLauncherClaims());
+      if (opts.removeState !== false && this.publishedState && this.homeOwner) {
+        const state = this.publishedState;
+        this.writeShutdownRecord('launcher-claims.json', () => this.saveLauncherClaims());
         if (opts.restart) {
-          this.writeShutdownRecord('previous-sessions.json', () => this.savePreviousSessions());
-          this.writeShutdownRecord('daemon.json', () =>
-            writePrivateRecord(daemonStatePath(this.options.home), { restartFrom: this.instanceId }));
+          if (state.restartFrom) this.writeShutdownRecord('restart-source.json', () => {
+            this.requireHomeOwner();
+            fs.rmSync(path.join(this.options.home, 'restart-source.json'), { force: true });
+          }, 'retire');
+          this.writeShutdownRecord('previous-sessions.json', () => {
+            this.requireHomeOwner();
+            this.savePreviousSessions();
+          });
         }
+        this.writeShutdownRecord('daemon.json', () => this.finishDiscovery(state, opts.restart === true));
       }
-      this.stopPromise = this.doStop(opts);
+      this.releaseOwnership();
+      this.stopPromise = this.doStop();
     }
     return this.stopPromise;
   }
 
-  private writeShutdownRecord(file: string, save: () => void): void {
-    try { save(); }
+  private finishDiscovery(state: DaemonState, restart: boolean): void {
+    const file = inspectDaemonState(this.options.home);
+    if (!restart && file.kind === 'not-a-record' && this.homeOwner?.held()) {
+      removeDaemonStateIfNotARecord(this.options.home, file.raw);
+      return;
+    }
+    this.requireHomeOwner();
+    const predecessor = restart ? this.instanceId : state.restartFrom;
+    if (predecessor) {
+      try { writePrivateRecord(daemonStatePath(this.options.home), { restartFrom: predecessor }); }
+      catch (error) {
+        // Do not let a failed restart revive an earlier verified snapshot.
+        if (restart) removeDaemonStateIf(this.options.home, state);
+        throw error;
+      }
+    } else {
+      removeDaemonStateIf(this.options.home, state);
+    }
+  }
+
+  private writeShutdownRecord(file: string, write: () => void, verb = 'save'): void {
+    try { write(); }
     catch (error) {
-      const message = `Could not save ${file} during shutdown.`;
+      const message = `Could not ${verb} ${file} during shutdown.`;
       this.shutdownWarnings.push(message);
       this.logger.warn(message, { code: (error as NodeJS.ErrnoException).code });
     }
   }
 
-  private async doStop(opts: { removeState?: boolean }): Promise<void> {
+  private releaseOwnership(): void {
+    const owner = this.homeOwner;
+    this.homeOwner = undefined;
+    if (owner) this.writeShutdownRecord('daemon-owner', owner.release, 'release');
+  }
+
+  private requireHomeOwner(): void {
+    const state = this.publishedState;
+    if (this.homeOwner?.held() && state) {
+      const home = this.options.home;
+      const file = inspectDaemonState(home);
+      if (file.kind === 'record' && file.state.instanceId === this.instanceId &&
+          file.state.pid === state.pid && file.state.port === state.port) return;
+      if (file.kind === 'missing' && claimDaemonState(home, state)) return;
+    }
+    throw new HomeOwnershipError('This daemon no longer owns the discovery record.');
+  }
+
+  private async doStop(): Promise<void> {
     if (this.idleTimer !== null) clearInterval(this.idleTimer);
     if (this.raceCheckTimer !== null) clearTimeout(this.raceCheckTimer);
     if (this.statePublishTimer !== null) clearInterval(this.statePublishTimer);
@@ -1233,11 +1281,6 @@ export class Daemon {
         new Promise<void>((resolve) => { timer = setTimeout(resolve, DASHBOARD_LAUNCH_SHUTDOWN_WAIT_MS); }),
       ]);
       if (timer !== undefined) clearTimeout(timer);
-    }
-    if (opts.removeState !== false && this.publishedState) {
-      const file = inspectDaemonState(this.options.home);
-      if (file.kind === 'not-a-record') removeDaemonStateIfNotARecord(this.options.home, file.raw);
-      else removeDaemonStateIf(this.options.home, this.publishedState);
     }
     // Only now terminate lingering keep-alive connections, so close() cannot hang.
     this.server.closeAllConnections();
@@ -2633,7 +2676,11 @@ export class Daemon {
     const grants = this.launchProfiles.sessionLaunch ?? [];
     const file = path.join(this.options.home, 'launcher-claims.json');
     if (!this.claimsRestored) throw new Error('Saved launcher claims could not be restored.');
-    if (grants.length || fs.existsSync(file)) writePrivateRecord(file, this.mailbox.savedClaims(grants).filter(claim => claim.id !== excludeId));
+    if (grants.length || fs.existsSync(file)) {
+      this.requireHomeOwner();
+      const claims = this.mailbox.savedClaims(grants).filter(claim => claim.id !== excludeId);
+      writePrivateRecord(file, claims, () => this.requireHomeOwner());
+    }
   }
 
   private grantedLauncher(req: http.IncomingMessage) {
@@ -3009,16 +3056,17 @@ export class Daemon {
           // Older version 1 records used the generated session id as an explicit name.
           const record: unknown = JSON.parse(fs.readFileSync(file, 'utf8'), (key, value: unknown) =>
             key === 'name' && typeof value === 'string' && /^s[0-9]+$/.test(value) ? null : value);
-          if (!this.previousInstanceId || typeof record !== 'object' || record === null ||
-              !('outgoingInstanceId' in record) || record.outgoingInstanceId !== this.previousInstanceId) {
+          const predecessor = this.homeOwner?.held() && this.publishedState?.restartFrom;
+          if (!predecessor || typeof record !== 'object' || record === null ||
+              !('outgoingInstanceId' in record) || record.outgoingInstanceId !== predecessor ||
+              !('version' in record) || record.version !== 1 || !('sessions' in record) || !Array.isArray(record.sessions)) {
             json(res, 409, { error: 'No verified session snapshot is available for the previous restart.' });
             return;
           }
           json(res, 200, record);
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-            if (this.previousInstanceId) json(res, 409, { error: 'The previous restart did not leave a session snapshot.' });
-            else json(res, 200, { version: 1, sessions: [] });
+            json(res, 409, { error: 'No verified session snapshot is available for the previous restart.' });
           } else json(res, 500, { error: 'The previous sessions record could not be read.' });
         }
         return;
@@ -3706,6 +3754,7 @@ export class Daemon {
 
       json(res, 404, { error: 'Not found.', path: url.pathname });
     } catch (error) {
+      if (error instanceof HomeOwnershipError) { json(res, 409, { error: error.message }); return; }
       if (error instanceof MailboxError) {
         const status = error.code === 'unknown-name' ? 404 :
           error.code === 'not-allowed' || error.code === 'unknown-sender' ? 403 :

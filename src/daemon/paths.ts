@@ -23,6 +23,8 @@ export interface DaemonState {
   instanceId?: string;
   /** Set by the daemon entry from the client's internal start marker. */
   startedWrapped?: boolean;
+  /** Last restart snapshot accepted when this owner acquired the home. */
+  restartFrom?: string | null;
 }
 
 export function shellpuppetHome(env: NodeJS.ProcessEnv = process.env): string {
@@ -91,7 +93,7 @@ function systemTool(...parts: string[]): string {
 
 function secureWindowsHome(home: string): WindowsHome {
   const powershell = systemTool('WindowsPowerShell', 'v1.0', 'powershell.exe');
-  const files = ['daemon.json', 'launcher-claims.json', 'previous-sessions.json', 'config.json', 'daemon.log', 'audit.log'];
+  const files = ['daemon.json', 'launcher-claims.json', 'previous-sessions.json', 'restart-source.json', 'config.json', 'daemon.log', 'audit.log'];
   try {
     const identity = execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand',
       Buffer.from(windowsAclScript, 'utf16le').toString('base64')], {
@@ -133,8 +135,11 @@ function withPrivateTemp(target: string, contents: string, publish: (temporary: 
   } finally { fs.rmSync(temporary, { force: true }); }
 }
 
-export function writePrivateRecord(target: string, value: unknown): void {
-  withPrivateTemp(target, JSON.stringify(value), temporary => fs.renameSync(temporary, target));
+export function writePrivateRecord(target: string, value: unknown, beforePublish?: () => void): void {
+  withPrivateTemp(target, JSON.stringify(value), temporary => {
+    beforePublish?.();
+    fs.renameSync(temporary, target);
+  });
 }
 
 export function daemonLogPath(home: string): string {
@@ -235,7 +240,7 @@ export function removeDaemonStateIf(home: string, record: { pid: number; port: n
  */
 export function removeDaemonStateIfNotARecord(home: string, raw: string): void {
   const current = inspectDaemonState(home);
-  if ((current.kind === 'not-a-record' || current.kind === 'restart-handoff') && current.raw === raw) {
+  if (current.kind === 'not-a-record' && current.raw === raw) {
     removeDaemonState(home);
   }
 }
