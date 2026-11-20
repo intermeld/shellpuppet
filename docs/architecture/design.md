@@ -260,8 +260,8 @@ A module may also offer a nudge judgement. It reuses that module's composer,
 busy and turn lines, and it repeats that module's placeholder wording and ink
 rule. It reports ready, busy, queue, draft or unknown. `queue` is a running
 turn with a visible, empty composer, reported only by a module whose program
-takes a submitted line while it works (Claude Code and Grok Build queue it,
-Muse Code hands it to the turn). The core accepts `queue` once the composer
+takes a submitted line while it works (Claude Code, Grok Build and OpenCode queue it,
+and Muse Code hands it to the turn). The core accepts `queue` once the composer
 block, from the rule or frame edge above the composer to the foot of the
 screen, has stayed unchanged for the quiet period; the spinner and timer above
 it may keep repainting. A draft during a turn stays busy. Claude Code and Muse Code also need
@@ -277,6 +277,9 @@ drawn in the placeholder's own ink. Claude Code may show a rotating suggestion
 in the same dim ink, which its module also treats as empty. OpenCode recognises
 its rotating `Ask anything… "<suggestion>"` in grey inside the gutter frame.
 It checks every input row in that frame before submitting a wrapped nudge.
+Before typing during a turn it requires a blank input and the complete progress and
+`esc interrupt` footer. Only the eight progress cells may animate within the
+composer block during the quiet period.
 Other text is a draft. This screen judgement never overrides a pending nudge body. Plain rows
 and styled rows are the same visible viewport, and the
 terminal height is required so clipped prompt detection can use it. The core
