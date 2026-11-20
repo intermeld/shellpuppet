@@ -6,7 +6,7 @@ import { detectPrompt } from '../../src/core/promptDetector.js';
 import { moduleFor } from '../../src/agents/index.js';
 
 /** Test-only tracing: retain comparisons and lengths, never screen text. */
-export function stallDiagnostics(session: Session) {
+export function stallDiagnostics(session: Session, onOutput?: (composerPresent: boolean, deliveredAt: number) => void) {
   const internal = session as unknown as { renderer: ScreenRenderer; refreshStall(): void;
     stallInk?: { possible: boolean }; stallTracker: { tracking: boolean }; stallTimer: unknown;
     stallScheduled: unknown; stallNextCheck: number; stallValidationPending: boolean; stallResizeUntil?: number;
@@ -22,7 +22,7 @@ export function stallDiagnostics(session: Session) {
   let outputCount = 0;
   let lastOutputMs: number | null = null;
   let previous: { refusal: string; footer: string; userTurnTextLength: number | null; composer: string } | undefined;
-  const sample = (source: string) => {
+  const sample = (source: string, deliveredAt?: number) => {
     const full = internal.renderer.styledLines({ above: 128 });
     const bounded = internal.renderer.styledLines({ above: 128, extendWrapped: false });
     const candidate = validateStall(full.lines, signature, false, full.firstVisible);
@@ -42,6 +42,7 @@ export function stallDiagnostics(session: Session) {
     for (let row = full.lines.length - 1; row >= 0; row--) {
       if (/^ {2}╹▀/u.test(full.lines[row]!.text)) { edge = row; break; }
     }
+    if (deliveredAt !== undefined) onOutput?.(edge >= 0, deliveredAt);
     const current = { refusal: hash(block), footer: hash(footer < 0 ? null : semantic(full.lines[footer]!.text)),
       userTurnTextLength: user, composer: hash(edge < 0 ? null : full.lines.slice(Math.max(0, edge - 3), edge + 2)) };
     samples.push({ ...time(), source, bounded: limited === null ? 'absent' : 'inconclusive' in limited ? 'inconclusive' : 'complete',
@@ -66,9 +67,10 @@ export function stallDiagnostics(session: Session) {
   const refresh = internal.refreshStall.bind(internal);
   internal.refreshStall = () => { sample('validation'); refresh(); };
   const offData = session.onData(data => {
-    outputCount++; lastOutputMs = performance.now() - start;
+    const deliveredAt = performance.now();
+    outputCount++; lastOutputMs = deliveredAt - start;
     chunks.push({ ...time(), sequence: outputCount, bytes: Buffer.byteLength(data), characters: data.length });
-    void session.viewportLines().then(() => sample('output'));
+    void session.viewportLines().then(() => sample('output', deliveredAt));
   });
   const offStall = session.onStall(state => transitions.push({ ...time(), state: state ?? null }));
   sample('start');

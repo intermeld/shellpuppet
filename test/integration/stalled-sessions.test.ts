@@ -227,20 +227,36 @@ describe('provider stall supervision', () => {
     const endedId = String(started.body['id']);
     fs.writeFileSync(path.join(td.home, 'ended-fixture-pid.json'), JSON.stringify({ pid: started.body['pid'], id: endedId }));
     const session = (td.daemon as unknown as { manager: SessionManager }).manager.get(endedId)!;
-    const diagnostics = stallDiagnostics(session);
+    let requestedAt: number | undefined;
+    let lossAt: number | undefined;
+    let clearedAt: number | undefined;
+    const diagnostics = stallDiagnostics(session, (composerPresent, deliveredAt) => {
+      if (requestedAt !== undefined && deliveredAt >= requestedAt && !composerPresent) lossAt ??= deliveredAt;
+    });
+    const onEvent = (data: Buffer) => {
+      const frame = JSON.parse(data.toString()) as Record<string, unknown>;
+      if (frame['type'] === 'session-stall-clear' && frame['session'] === endedId) clearedAt ??= performance.now();
+    };
+    events.on('message', onEvent);
     try {
       await eventually(() => session.getStalled() !== undefined);
       await session.resize(80, 24);
       await new Promise(resolve => setTimeout(resolve, 1500));
       expect(session.getStalled()).toBeDefined();
       diagnostics.resize(120, 30, 'requested');
+      requestedAt = performance.now();
       await session.resize(120, 30);
-      // The PTY may deliver the redraw late. The injected clock in
-      // stallResize.test.ts checks the allowance and confirmation deadline.
-      await eventually(() => session.getStalled() === undefined, 15_000, 50,
-        'native composer loss to clear the established notice');
+      await eventually(() => lossAt !== undefined && clearedAt !== undefined, 15_000, 50,
+        'the delivered composer loss and its session-stall-clear event');
+      // Start at the first native output showing the missing composer. Later
+      // output cannot renew the 1000 ms allowance or the 250 ms confirmation.
+      const clearMs = clearedAt! - lossAt!;
+      const timing = JSON.stringify({ deliveryMs: lossAt! - requestedAt, clearMs });
+      expect(clearMs, timing).toBeGreaterThanOrEqual(0);
+      expect(clearMs, timing).toBeLessThan(1500);
+      expect(session.getStalled()).toBeUndefined();
     } catch (error) { diagnostics.print(); throw error; }
-    finally { diagnostics.stop(); }
+    finally { events.off('message', onEvent); diagnostics.stop(); }
   });
   it('announces a responsive native composer once across resize and grey suggestions', async () => {
     const started = await api(td.port, td.token, '/sessions', {
