@@ -18,7 +18,8 @@ import { isEnvNamesProblem, readDaemonConfig } from '../daemon/config.js';
 import { registerTools } from './tools.js';
 import type { PassLists } from './tools.js';
 import { assertNodeVersion, packageVersion } from '../daemon/meta.js';
-import { shellpuppetHome } from '../daemon/paths.js';
+import { processExists } from '../daemon/liveness.js';
+import { readDaemonState, shellpuppetHome } from '../daemon/paths.js';
 import type { Logger } from '../core/types.js';
 
 const stderrLogger: Logger = {
@@ -69,11 +70,11 @@ async function main(): Promise<void> {
   // Messaging tools are offered only when messaging is switched on when this
   // server starts; a change to config.json applies at the next MCP start.
   const messaging = readDaemonConfig(home).config.messaging?.enabled === true;
-  let reconcileRegistration: (() => void) | undefined;
+  const adapter = randomUUID();
   const releaseClaim = registerTools(server, {
     logger: stderrLogger,
     messaging,
-    onDaemonSuccess: () => reconcileRegistration?.(),
+    mcpAdapter: adapter,
     untrustedFraming: config.untrustedFraming,
     readPassLists,
     // Audit actor (design §4.5): identify the calling MCP client (Claude
@@ -86,7 +87,8 @@ async function main(): Promise<void> {
   });
   const transport = new StdioServerTransport();
   if (process.env['SHELLPUPPET_SESSION_TOKEN'] && process.env['SHELLPUPPET_DAEMON_INSTANCE']) {
-    const adapter = randomUUID();
+    let obsolete = false;
+    let daemonPid: number | undefined;
     let initialised = false;
     let registered = false;
     let inFlight: Promise<void> | undefined;
@@ -96,13 +98,14 @@ async function main(): Promise<void> {
       const connection = await discoverDaemon({ home }, Date.now() + 3000);
       if (!connection) return false;
       if (connection.instanceId !== process.env['SHELLPUPPET_DAEMON_INSTANCE']) {
-        initialised = false;
+        obsolete = true;
         return false;
       }
+      daemonPid = connection.pid;
       const { status: code } = await request(connection, 'POST', '/session/mcp-connection', { adapter, status },
         { home, autoStart: false, signal: AbortSignal.timeout(3000) });
       // These credentials belong to the lifetime of this session and daemon.
-      if (code === 401 || code === 403 || code === 404) initialised = false;
+      if (code === 401 || code === 403 || code === 404) obsolete = true;
       return code >= 200 && code < 300;
     };
     const register = (): void => {
@@ -110,21 +113,32 @@ async function main(): Promise<void> {
       clearTimeout(retry);
       inFlight = report('connected').then(ok => { registered = ok; }).catch(() => {}).finally(() => {
         inFlight = undefined;
-        if (initialised && !registered) {
+        if (initialised && !obsolete && !registered) {
           retry = setTimeout(register, delay);
           retry.unref();
           delay = Math.min(30_000, delay * 2);
         }
       });
     };
-    reconcileRegistration = register;
     server.server.oninitialized = () => { initialised = true; register(); };
     const finish = (status: 'failed' | 'closed'): void => {
       if (!initialised) return;
       initialised = false;
       clearTimeout(retry);
       // A registration already on the wire must reach the daemon before the close.
-      void Promise.resolve(inFlight).then(() => report(status)).catch(() => {});
+      void (async () => {
+        await inFlight;
+        let waitMs = 250;
+        while (!obsolete) {
+          if (await report(status).catch(() => false)) return;
+          const current = readDaemonState(home);
+          if (obsolete || (current && current.instanceId !== process.env['SHELLPUPPET_DAEMON_INSTANCE'])) return;
+          if (!current && (daemonPid === undefined || !processExists(daemonPid))) return;
+          // A clean EOF would otherwise let Node exit with a live registration.
+          await new Promise(resolve => setTimeout(resolve, waitMs));
+          waitMs = Math.min(5000, waitMs * 2);
+        }
+      })();
     };
     const failed = (error: NodeJS.ErrnoException): void => {
       if (error.code === 'EPIPE' || error.code === 'ECONNRESET') finish('failed');

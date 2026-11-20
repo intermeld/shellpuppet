@@ -433,7 +433,8 @@ A profile launch keeps the id supplied at launch. When a verified child
 ShellPuppet client contacts its daemon, the built-in agent module can read
 the conversation marker that the agent exported to that client. A later
 observed id takes precedence. The daemon excludes every conversation id inherited
-at launch, including both Codex markers when both were present.
+at launch. When Codex keeps its inherited thread id and exports a new session
+id, the daemon uses the new session id.
 
 | Agent | Marker read when the agent provides it |
 |---|---|
