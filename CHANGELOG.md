@@ -57,6 +57,7 @@ version may change behaviour, and every such change is listed here.
 
 - Nudge Grok Build sessions whose full-width frame rows the terminal marks as wraps, and at the start screen whatever hint line it shows.
 - Nudge a session again when a new message arrives after an earlier nudge went unanswered.
+- Confirm a typed nudge in Grok Build when its key hints name both newline keys (Shift+Enter/Alt+Enter), so the line is submitted.
 - Detect Muse Code's tool-action approval ("Would you like to allow this tool action?", four choices) as a waiting prompt.
 - Submit an untouched pending nudge line when its named messages were read but another message is waiting, and audit the stale ids.
 - Nudge idle Grok sessions with a square composer frame after a turn or on the welcome screen, while keeping typed drafts and incomplete footers unready.

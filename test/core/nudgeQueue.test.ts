@@ -15,12 +15,12 @@ const BUSY_QUEUED_HINTS = '  Enter:send now  │  Shift+Tab:mode  │  Ctrl+c:ca
 const TYPED_BUSY_HINTS = '  Enter:queue  │  Alt+Enter:newline  │  Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+Enter:send now  │  Ctrl+x:shortcuts';
 
 /** A Grok Build 1.0.89 square composer frame, each row painted out to the full width. */
-function grokFrame(draft: string): string[] {
+function grokFrame(draft: string, cols = COLS): string[] {
   const label = ' Grok 4.7 (xhigh) · auto-review ─┘';
   return [
-    `  ┌${'─'.repeat(COLS - 4)}┐`,
-    `  │ > ${draft}`.padEnd(COLS - 1) + '│',
-    `  └${'─'.repeat(COLS - 3 - label.length)}${label}`,
+    `  ┌${'─'.repeat(cols - 4)}┐`,
+    `  │ > ${draft}`.padEnd(cols - 1) + '│',
+    `  └${'─'.repeat(cols - 3 - label.length)}${label}`,
   ];
 }
 
@@ -28,13 +28,13 @@ function grokFrame(draft: string): string[] {
  * Paint rows the way Grok does: a full-width row is followed directly by the
  * next row with no line break, so xterm marks the next row as a wrap.
  */
-async function painted(rows: string[]): Promise<NudgeView> {
-  const renderer = new ScreenRenderer({ cols: COLS, rows: ROWS });
+async function painted(rows: string[], cols = COLS): Promise<NudgeView> {
+  const renderer = new ScreenRenderer({ cols, rows: ROWS });
   let stream = '';
   // A blank row after a full-width row needs its own line break: the first
   // break only ends the full-width row the cursor is still parked on.
   rows.forEach((row, index) => {
-    stream += row.length >= COLS && rows[index + 1] !== '' ? row : `${row}\r\n`;
+    stream += row.length >= cols && rows[index + 1] !== '' ? row : `${row}\r\n`;
   });
   await renderer.write(stream);
   const styled = renderer.styledLines({ last: ROWS }).lines;
@@ -55,6 +55,18 @@ describe('Grok composer frame painted to the full width', () => {
     for (const hint of ['   Tip: Press ctrl+x for shortcuts', '   Coming from another tool? Press ctrl+u to resume your session from moments ago']) {
       const view = await painted(['', hint, '', ...grokFrame(''), '', `${' '.repeat(COLS - 20)}[stable]`]);
       expect(grok.nudge!.readiness(view)).toBe('ready');
+    }
+  });
+
+  it('confirms the typed daemon line under either newline hint', async () => {
+    const line = '[ShellPuppet] Message m3 from shellpuppet-chair is waiting. Read it with the session_inbox tool.';
+    for (const newline of ['Alt+Enter:newline', 'Shift+Enter/Alt+Enter:newline']) {
+      const idle = await painted([...transcript, ...grokFrame(line), '  Grok 4.7 xhigh █░░░░░░░░░ 12%',
+        `  Enter:send  │  ${newline}  │  Shift+Tab:mode  │  Ctrl+x:shortcuts`]);
+      expect(grok.nudge!.readiness({ ...idle, expectedDraft: line })).toBe('ready');
+      const busy = await painted(['   / Thinking… 3s', ...grokFrame(line, 187), '  Grok 4.7 xhigh █░░░░░░░░░ 12%',
+        `  Enter:queue  │  ${newline}  │  Shift+Tab:mode  │  Ctrl+c:cancel  │  Ctrl+Enter:send now  │  Ctrl+x:shortcuts`], 187);
+      expect(grok.nudge!.readiness({ ...busy, expectedDraft: line })).toBe('ready');
     }
   });
 
