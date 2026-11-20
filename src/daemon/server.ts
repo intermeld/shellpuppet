@@ -651,8 +651,9 @@ export class Daemon {
   private readonly dashboardGeometryOwner = new Map<string, string>();
   /** The credential shared by that dashboard's windows, for transfers between documents. */
   private readonly dashboardCredentialOwner = new Map<string, string>();
-  /** A release from a roster window is offered only to the destination document. */
-  private readonly dashboardTransferable = new Map<string, string | null>();
+  /** Destination document for a released grid. A rosterless release allows a
+   * same-credential stream (null). A release awaiting a new assignment has no recipient. */
+  private readonly dashboardTransferable = new Map<string, string | null | undefined>();
   private readonly dashboardSocketCredential = new WeakMap<WebSocket, string>();
   /** External geometry acts invalidate a temporary wider read's restoration. */
   private readonly geometryEpoch = new Map<string, number>();
@@ -668,7 +669,6 @@ export class Daemon {
   private readonly dashboardWindowIds = new Map<WebSocket, { id: string; instance: string; focused: number }>();
   private readonly dashboardAssignments = new Map<string, string[]>();
   private dashboardDesignated: string | null = null;
-  private dashboardFocusSerial = 0;
   /** The document proof survives a feed reconnect and expires with the proof ring. */
   private readonly dashboardDocumentFocus = new Map<string, { id: string; focused: number }>();
 
@@ -4482,10 +4482,33 @@ export class Daemon {
       .map(([socket, window]) => ({ socket, pair: this.dashboardPair(window), focused: window.focused }));
   }
 
+  private dashboardFocusTime(value: unknown): number {
+    // Documents on this host report the focus event in epoch milliseconds.
+    // A late registration can report the past, but cannot reserve a future turn.
+    const now = performance.timeOrigin + performance.now();
+    return typeof value === 'number' && Number.isFinite(value) ? Math.max(0, Math.min(now, value)) : 0;
+  }
+
+  private updateDashboardOffers(windows: { socket: WebSocket; pair: string }[]): void {
+    for (const [id, previous] of this.dashboardTransferable) {
+      const owner = windows.find(w => this.dashboardAssignments.get(w.pair)?.includes(id));
+      const recipient = owner?.socket.protocol;
+      if (recipient === previous || (previous === null && windows.length === 0)) continue;
+      this.dashboardTransferable.set(id, recipient);
+      const session = this.manager.get(id);
+      if (session) this.announceGeometry(id, session, { resync: false });
+    }
+  }
+
   private publishDashboardWindows(move?: { session: string; target: string; before?: string }): void {
     const windows = this.dashboardWindows();
     const roster = [...new Set(windows.map((window) => window.pair))];
-    if (windows.length === 0) { this.dashboardDesignated = null; this.dashboardAssignments.clear(); return; }
+    if (windows.length === 0) {
+      this.dashboardDesignated = null;
+      this.dashboardAssignments.clear();
+      this.updateDashboardOffers(windows);
+      return;
+    }
     if (!windows.some((window) => window.pair === this.dashboardDesignated)) {
       this.dashboardDesignated = [...windows].sort((a, b) => b.focused - a.focused)[0]!.pair;
     }
@@ -4507,6 +4530,7 @@ export class Daemon {
       windows: roster, assignments: Object.fromEntries(this.dashboardAssignments),
       ...(move === undefined ? {} : { move }) });
     for (const window of windows) window.socket.send(frame);
+    this.updateDashboardOffers(windows);
   }
 
   private dashboardFeedCurrent(ws: WebSocket): boolean {
@@ -4568,13 +4592,14 @@ export class Daemon {
         frame = JSON.parse(bytes.toString('utf8'));
       } catch { return; }
       if (typeof frame !== 'object' || frame === null) return;
-      const claim = frame as { type?: unknown; id?: unknown; instance?: unknown;
+      const claim = frame as { type?: unknown; id?: unknown; instance?: unknown; focusedAt?: unknown;
         target?: unknown; source?: unknown; session?: unknown; before?: unknown };
       const current = this.dashboardWindowIds.get(ws);
       if (current !== undefined) {
         const pair = this.dashboardPair(current);
         if (claim.type === 'window-focus') {
-          current.focused = ++this.dashboardFocusSerial;
+          const at = claim.focusedAt === undefined ? performance.timeOrigin + performance.now() : claim.focusedAt;
+          current.focused = Math.max(current.focused, this.dashboardFocusTime(at));
           this.dashboardDocumentFocus.set(ws.protocol, { id: current.id, focused: current.focused });
           this.publishDashboardWindows();
         } else if (claim.type === 'window-designate') {
@@ -4605,8 +4630,9 @@ export class Daemon {
           !/^[a-z0-9]+-[a-z0-9]+(?:-[1-9][0-9]*)?$/.test(claim.instance) ||
           claim.instance.length > 100) return;
       const previous = this.dashboardDocumentFocus.get(ws.protocol);
-      this.dashboardWindowIds.set(ws, { id: claim.id, instance: claim.instance,
-        focused: previous?.id === claim.id ? previous.focused : 0 });
+      const focused = Math.max(previous?.id === claim.id ? previous.focused : 0, this.dashboardFocusTime(claim.focusedAt));
+      this.dashboardWindowIds.set(ws, { id: claim.id, instance: claim.instance, focused });
+      this.dashboardDocumentFocus.set(ws.protocol, { id: claim.id, focused });
       this.publishDashboardWindows();
     });
     ws.on('close', () => {
@@ -4671,6 +4697,13 @@ export class Daemon {
     this.updateFeedSession(sessionId);
   }
 
+  private gridOfferedTo(id: string, ws: WebSocket): boolean {
+    const recipient = this.dashboardTransferable.get(id);
+    return (recipient === null || recipient === ws.protocol) &&
+      this.dashboardCredentialOwner.has(id) && this.dashboardSocketCredential.has(ws) &&
+      tokensEqual(this.dashboardCredentialOwner.get(id)!, this.dashboardSocketCredential.get(ws)!);
+  }
+
   /** What one watcher is told about the grid, from its own point of view. */
   private geometryFrame(session: Session, ws: WebSocket): Record<string, unknown> {
     return {
@@ -4688,11 +4721,7 @@ export class Daemon {
         (this.dashboardSocketCredential.has(ws) && this.dashboardGeometryOwner.has(session.id)),
       // Only a controller's explicit assignment handover offers its grid to
       // another dashboard pane while the old socket is closing.
-      dashboardTransferable: this.dashboardTransferable.has(session.id) &&
-        (this.dashboardTransferable.get(session.id) === null || this.dashboardTransferable.get(session.id) === ws.protocol) &&
-        this.dashboardCredentialOwner.has(session.id) &&
-        this.dashboardSocketCredential.has(ws) &&
-        tokensEqual(this.dashboardCredentialOwner.get(session.id)!, this.dashboardSocketCredential.get(ws)!),
+      dashboardTransferable: this.gridOfferedTo(session.id, ws),
       control: session.geometryHeld
         ? 'held'
         : this.geometryController.get(session.id) === ws
@@ -4813,9 +4842,10 @@ export class Daemon {
     // a viewer or client socket follows it too, until a deliberate resize.
     if (
       credential.kind === 'dashboard' &&
-      // The remembered proof identifies the dashboard credential, not a browser window;
-      // any holder may already take this grid deliberately, so restoring it is enough.
+      // The returning document can restore its grid while a release to a
+      // different assignment belongs to that recipient alone.
       this.dashboardGeometryOwner.has(session.id) &&
+      (!this.dashboardTransferable.has(session.id) || this.gridOfferedTo(session.id, ws)) &&
       tokensEqual(this.dashboardGeometryOwner.get(session.id)!, ws.protocol) &&
       !session.exited &&
       !this.hasGeometryController(session.id)
@@ -4936,7 +4966,8 @@ export class Daemon {
           parsed !== null &&
           (parsed as { type?: string }).type === 'resize'
         ) {
-          const { cols, rows, take } = parsed as { cols?: number; rows?: number; take?: unknown };
+          const { cols, rows, take, acceptOffer } = parsed as {
+            cols?: number; rows?: number; take?: unknown; acceptOffer?: unknown };
           // Fit, Enlarge, Focus and Restore are a resize that says `take`.
           // A passive socket's other resizes, including one a dashboard pane
           // sends because the window moved, are not that act: the grid stays,
@@ -4965,9 +4996,9 @@ export class Daemon {
               cols: Math.min(cols, MAX_VIEWPORT_COLS),
               rows: Math.min(rows, MAX_VIEWPORT_ROWS),
             };
-            if (!this.widerReads.has(session.id)) {
-              // Keep the ordinary viewport path unchanged. Only a viewport
-              // competing with a wider restore needs a queued geometry act.
+            if (!this.widerReads.has(session.id) && acceptOffer !== true) {
+              // Wider restores and conditional offer takes check ownership
+              // in the session's resize queue below.
               const handedOver = this.geometryController.get(session.id) !== ws;
               const changed = wanted.cols !== session.cols || wanted.rows !== session.rows;
               let applied = false;
@@ -5003,6 +5034,7 @@ export class Daemon {
                 // A viewport that left while its take waited in the queue made
                 // no lasting choice: skip it so the pending wider restore runs.
                 () => !session.geometryHeld && !session.exited && ws.readyState === ws.OPEN &&
+                  (acceptOffer !== true || this.gridOfferedTo(session.id, ws)) &&
                   (this.sessionSockets.get(session.id)?.has(ws) ?? false),
                 (changed) => {
                   const handedOver = this.geometryController.get(session.id) !== ws;

@@ -45,21 +45,37 @@ it('bounds resize frames across two dashboards and a passive single-session view
         await send('Emulation.setDeviceMetricsOverride', { width, height, deviceScaleFactor: 1, mobile: false }, sessionId);
         await send('Page.addScriptToEvaluateOnNewDocument', { source: dashboardDiagnosticsScript }, sessionId);
         await send('Page.navigate', { url }, sessionId);
-        return async (expression: string) => {
+        const evaluatePage = async (expression: string) => {
           const response = await send('Runtime.evaluate', { expression, returnByValue: true }, sessionId) as {
             result: { value?: unknown }; exceptionDetails?: unknown };
           if (response.exceptionDetails) throw new Error(JSON.stringify(response.exceptionDetails));
           return response.result.value;
         };
+        return { evaluatePage, resize: (w: number, h: number) => send('Emulation.setDeviceMetricsOverride',
+          { width: w, height: h, deviceScaleFactor: 1, mobile: false }, sessionId) };
       };
-      const other = await openPage(`http://127.0.0.1:${String(daemon.port)}/dashboard`, 1200, 800);
+      const { evaluatePage: other } = await openPage(`http://127.0.0.1:${String(daemon.port)}/dashboard`, 1200, 800);
       await eventually(async () => await other(`document.getElementById('share-count')?.textContent.includes('0 of 1 here, 2 windows')`) === true);
-      const viewer = await openPage(viewerUrl, 900, 700);
+      const { evaluatePage: viewer, resize } = await openPage(viewerUrl, 1400, 900);
       const stream = `window.__dashboardDiagnostics?.streams.find(s => s.url.includes('/stream'))`;
       const geometry = `${stream}?.geometry.at(-1)`;
       await eventually(async () => await viewer(`!!${stream}?.geometry.length`) === true);
       expect(viewerDrives, 'passive session-stream upgrade received by the daemon').toEqual(['0']);
       expect(await viewer(`${stream}.geometry[0]`)).toMatchObject({ control: 'adopt', owned: false });
+      const display = `(() => {
+        const box = document.getElementById('term').getBoundingClientRect();
+        const screen = document.querySelector('.xterm-screen').getBoundingClientRect();
+        return { width: screen.width, height: screen.height, availableWidth: box.width, availableHeight: box.height };
+      })()`;
+      const initial = await viewer(display) as { width: number };
+      await resize(600, 430);
+      await eventually(async () => {
+        const size = await viewer(display) as { width: number; height: number; availableWidth: number; availableHeight: number };
+        return size.width > 0 && size.width < initial.width && size.width <= size.availableWidth &&
+          size.height > 0 && size.height <= size.availableHeight;
+      }, 5000, 50, 'passive terminal fits inside its resized viewer', () => viewer(display));
+      expect(await viewer(`${stream}.resizes`)).toEqual([]);
+      expect(await viewer(`${geometry}`)).toMatchObject({ cols: 100, rows: 30, control: 'adopt', owned: false });
       await evaluate(`document.querySelector('.pane button[aria-label="Fit"]').click()`);
       await eventually(async () => await evaluate(`${geometry}?.control === 'yours'`) === true);
       await evaluate(`document.getElementById('auto-fit').click()`);

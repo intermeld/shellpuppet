@@ -214,7 +214,35 @@ it('refuses a native drag whose source allows only copy', async (context) => {
 
 const feedEntry = "window.__dashboardDiagnostics.streams.filter(s => s.url.endsWith('/dashboard/events')).at(-1)";
 
-it('keeps Grid when a Focus launch reply arrives after feed re-registration', async (context) => {
+it('applies a Focus reply that arrives before the first assignment', async (context) => {
+  if (!browser) { context.skip(); return; }
+  await exercise(0, async (primary) => {
+    await eventually(async () => await primary.evaluate("document.getElementById('profile').value === 'lead' && !document.getElementById('start').disabled") === true);
+    await primary.evaluate(`(() => {
+      const feed = ${feedEntry}.socket;
+      const receive = feed.onmessage, held = [];
+      feed.onmessage = event => held.push(event);
+      window.deliverAssignment = () => {
+        feed.onmessage = receive;
+        for (const event of held) receive.call(feed, event);
+      };
+      document.getElementById('grid').click();
+      document.getElementById('start').click();
+    })()`);
+    const id = await until(async () => await primary.evaluate(`Object.values(${feedEntry}.windowState.assignments).flat()[0]`) as string ?? null);
+    // The daemon has placed the pane and the HTTP reply has recorded Restart.
+    // The product's feed handler has yet to see the catalogue or assignment.
+    const restartKey = JSON.stringify(`shellpuppet.dashboard.launches.${id}`);
+    await eventually(async () => await primary.evaluate(`JSON.parse(localStorage.getItem(${restartKey}))?.profile`) === 'lead');
+    expect(await ids(primary.evaluate)).toEqual([]);
+    await primary.evaluate('window.deliverAssignment()');
+    await eventually(async () => (await ids(primary.evaluate) as string[]).includes(id));
+    expect(await primary.evaluate("document.getElementById('panes').dataset.layout")).toBe('focus');
+  }, 'focus');
+}, 240_000);
+
+it.for(['feed re-registration', 'a live move', 'a live round trip'])(
+  'keeps Grid when a Focus launch reply arrives after %s', { timeout: 240_000 }, async (ordering, context) => {
   if (!browser) { context.skip(); return; }
   await exercise(0, async (primary, openChild) => {
     const child = await openChild();
@@ -228,25 +256,39 @@ it('keeps Grid when a Focus launch reply arrives after feed re-registration', as
       const paused = await until(() => reply ?? null);
       expect(paused.responseStatusCode).toBe(200);
       const id = await until(async () => (await ids(primary.evaluate) as string[])[0] ?? null);
-      await primary.evaluate(`${feedEntry}.socket.close()`);
+      if (ordering === 'feed re-registration') await primary.evaluate(`${feedEntry}.socket.close()`);
+      else await dragPane(primary, child, id, 'h1');
       await eventually(async () => (await ids(child.evaluate) as string[]).includes(id));
-      await eventually(async () => await primary.evaluate(`(() => {
-        const state = ${feedEntry}.windowState;
-        return state?.windows.length === 2 && !state.windows.includes(${JSON.stringify(originalWindow)}) &&
-          !document.getElementById('start').disabled;
-      })()`) === true);
+      await eventually(async () => (await ids(primary.evaluate) as string[]).length === 0);
+      if (ordering === 'feed re-registration') {
+        await eventually(async () => await primary.evaluate(`(() => {
+          const state = ${feedEntry}.windowState;
+          return state?.windows.length === 2 && !state.windows.includes(${JSON.stringify(originalWindow)}) &&
+            !document.getElementById('start').disabled;
+        })()`) === true);
+      } else {
+        expect(await primary.evaluate(`${feedEntry}.windowState.designated`)).toBe(originalWindow);
+      }
+      const roundTrip = ordering === 'a live round trip';
+      if (roundTrip) {
+        await sendMove(primary, id, 1, 0);
+        await eventually(async () => (await ids(primary.evaluate) as string[]).includes(id));
+      }
       await primary.send('Fetch.continueResponse', { requestId: paused.requestId });
-      // Restart in the receiving window acknowledges that the launch reply was processed.
-      await eventually(async () => await child.evaluate(`document.querySelector('.pane:has([data-action=restart]:not([hidden]))')?.dataset.session`) === id);
-      await sendMove(primary, id);
-      await eventually(async () => (await ids(primary.evaluate) as string[]).includes(id));
+      const owner = roundTrip ? primary : child;
+      await eventually(async () => await owner.evaluate(`document.querySelector('.pane:has([data-action=restart]:not([hidden]))')?.dataset.session`) === id);
+      if (!roundTrip) {
+        if (ordering === 'feed re-registration') await sendMove(primary, id);
+        else await sendMove(primary, id, 1, 0);
+        await eventually(async () => (await ids(primary.evaluate) as string[]).includes(id));
+      }
       expect(await primary.evaluate("document.getElementById('panes').dataset.layout")).toBe('grid');
     } finally {
       unsubscribe();
       await primary.send('Fetch.disable');
     }
   }, 'focus');
-}, 240_000);
+});
 
 it('retains the last real focus of a survivor across its background reconnect', async (context) => {
   if (!browser) { context.skip(); return; }
@@ -278,13 +320,98 @@ it('retains the last real focus of a survivor across its background reconnect', 
   });
 }, 240_000);
 
-async function sendMove(primary: Page, session: string) {
+it.for(['offline', 'online'])('elects the survivor whose focus came last, %s', { timeout: 240_000 }, async (last, context) => {
+  if (!browser) { context.skip(); return; }
+  await exercise(0, async (primary, openChild, start, { daemon }) => {
+    const b = await openChild(), c = await openChild();
+    const [aReg, oldB, cReg] = daemon['dashboardWindows']();
+    const focus = async (page: Page, pair: string) => {
+      const current = () => daemon['dashboardWindows']().find(w => w.pair === pair)!.focused;
+      const before = current();
+      await page.send('Page.bringToFront');
+      await eventually(() => current() > before);
+    };
+    await primary.send('Page.bringToFront');
+    await focus(b, oldB!.pair);
+    await focus(c, cReg!.pair);
+    await focus(primary, aReg!.pair);
+    // Hold the retry until the foreground transitions are complete.
+    await b.evaluate(`(() => {
+      const schedule = window.setTimeout;
+      window.setTimeout = (callback, delay, ...args) => {
+        if (delay !== 2000) return schedule(callback, delay, ...args);
+        window.setTimeout = schedule;
+        window.resumeFeed = callback;
+      };
+    })()`);
+    oldB!.socket.close();
+    await eventually(async () => await b.evaluate("typeof window.resumeFeed === 'function'") === true);
+    await b.send('Page.bringToFront');
+    expect(await b.evaluate('document.hasFocus()')).toBe(true);
+    if (last === 'online') await focus(c, cReg!.pair);
+    await focus(primary, aReg!.pair);
+    expect(await b.evaluate('document.hasFocus()')).toBe(false);
+    await b.evaluate('window.resumeFeed()');
+    await eventually(async () => await b.evaluate("document.getElementById('share-count').textContent.includes('3 windows')") === true);
+    aReg!.socket.close();
+    await eventually(() => daemon['dashboardDesignated'] !== aReg!.pair);
+    const winner = last === 'offline' ? b : c;
+    await eventually(async () => await winner.evaluate("document.getElementById('designated-window').getAttribute('aria-pressed')") === 'true',
+      5000, 50, 'last focused survivor received designation');
+    const id = await start();
+    await eventually(async () => (await ids(winner.evaluate) as string[]).includes(id));
+  });
+});
+
+async function sendMove(primary: Page, session: string, from = 0, to = 1) {
   await primary.evaluate(`(() => {
     const feed = ${feedEntry};
-    const [source, target] = feed.windowState.windows;
+    const source = feed.windowState.windows[${from}], target = feed.windowState.windows[${to}];
     feed.socket.send(JSON.stringify({ type: 'window-move', session: ${JSON.stringify(session)}, source, target }));
   })()`);
 }
+
+it('transfers the grid to the final window on an onward move before Auto fit', async (context) => {
+  if (!browser) { context.skip(); return; }
+  await exercise(1, async (primary, openChild, _start, { daemon }) => {
+    const b = await openChild(), c = await openChild();
+    const [id] = await ids(primary.evaluate) as [string];
+    const [aReg, bReg, cReg] = daemon['dashboardWindows']();
+    await primary.evaluate(`document.querySelector('.pane button[aria-label="Fit"]').click()`);
+    await eventually(() => daemon['geometryController'].get(id)?.protocol === aReg!.socket.protocol);
+    // Forward from B on the first offered geometry, while its Auto fit is still settling.
+    await b.evaluate(`(() => {
+      const send = WebSocket.prototype.send;
+      WebSocket.prototype.send = function(data) {
+        if (this.url.endsWith('/dashboard/events')) window.eventFeed = this;
+        return send.call(this, data);
+      };
+      window.WebSocket = new Proxy(WebSocket, { construct(Target, args) {
+        const socket = new Target(...args);
+        if (socket.url.includes('/stream')) socket.addEventListener('message', e => {
+          if (typeof e.data !== 'string') return;
+          const frame = JSON.parse(e.data);
+          if (frame.type === 'geometry' && frame.dashboardTransferable && !window.forwarded) {
+            window.forwarded = frame.control;
+            window.eventFeed.send(${JSON.stringify(JSON.stringify({
+              type: 'window-move', session: id, source: bReg!.pair, target: cReg!.pair,
+            }))});
+          }
+        });
+        return socket;
+      } });
+    })()`);
+    await primary.send('Page.bringToFront');
+    await b.send('Page.bringToFront');
+    await eventually(async () => await b.evaluate("window.eventFeed?.readyState === WebSocket.OPEN") === true);
+    await sendMove(primary, id);
+    await eventually(async () => (await ids(c.evaluate) as string[]).includes(id));
+    expect(await b.evaluate('window.forwarded')).toBe('adopt');
+    await eventually(() => daemon['geometryController'].get(id)?.protocol === cReg!.socket.protocol,
+      10_000, 50, 'final window took the offered grid', () => c.evaluate("document.querySelector('.pane-size')?.textContent"));
+    await eventually(async () => await c.evaluate("/^\\d+×\\d+$/.test(document.querySelector('.pane-size')?.textContent)") === true);
+  });
+}, 240_000);
 
 it.for(['release first', 'recipient first'])('takes an equal-sized grid with %s', { timeout: 240_000 }, async (order, context) => {
   if (!browser) { context.skip(); return; }
