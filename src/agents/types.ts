@@ -135,6 +135,8 @@ export interface AgentModule {
    */
   nudge?: {
     readiness(view: NudgeView): NudgeReadiness;
+    /** The composer and footer text to compare across paints while a turn runs. */
+    composerBlock?: (rows: readonly string[]) => string;
   };
   env?: { sessionMarkers: string[] };
   safety?: SafetyAdapter;

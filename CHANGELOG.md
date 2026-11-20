@@ -9,6 +9,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Added
 
+- Queue message nudges in a busy OpenCode session when its empty composer and interrupt footer have settled.
 - Nudge Claude Code, Grok Build and Muse Code sessions while they work, as soon as the composer is free: the line is queued (or handed to the running turn) instead of waiting for the turn to end.
 - Show a chair or delegate role for sessions, with chair set only by a launch profile.
 - Match session messaging groups by role and reserve named members for outside claims.
