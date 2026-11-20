@@ -29,7 +29,6 @@ import { ScreenRenderer } from './renderer.js';
 import type { SerializeOptions, StyledLine } from './renderer.js';
 import { commandLine } from './policy.js';
 import { detectPrompt, createPromptReader, StalePromptGuard } from './promptDetector.js';
-import { hasClippedQuestionShape } from '../agents/opencode/prompts.js';
 import { waitFor } from './waiter.js';
 import { readinessFor, trackReadiness, waitUntilReady } from './readiness.js';
 import type { Readiness } from './readiness.js';
@@ -1526,14 +1525,14 @@ export class Session implements WaitTarget {
         this.publishStall(undefined);
       }
     }
-    const { screen } = this.renderer.snapshot();
+    const { screen, lines } = this.renderer.snapshot();
     // Nothing written and nothing painted for a while: no earlier paste can still be
     // waiting to paint its placeholder, so a new placeholder can only be this body's.
     const settledBefore = Date.now() - this.lastInputAt >= TYPED_PLACEHOLDER_SETTLE_MS &&
       Date.now() - this.lastChange >= TYPED_PLACEHOLDER_SETTLE_MS;
     this.lastInputAt = Date.now();
     this.inputVersion++;
-    this.stalePrompts.noteInput(screen, this.agent);
+    this.stalePrompts.noteInput(screen, this.agent, this.renderer.promptStyles(lines));
 
     if (nudge || this.delayedSubmission(data)) {
       const submit = this.agentModule?.input?.submit;
@@ -1831,10 +1830,10 @@ export class Session implements WaitTarget {
     if (options.hold !== undefined) this.geometryHeldFlag = options.hold;
   }
 
-  answerablePrompt(screen: string, now = Date.now()): ReturnType<typeof detectPrompt> {
+  answerablePrompt(screen: string, now = Date.now(), visibleStyles?: readonly StyledLine[]): ReturnType<typeof detectPrompt> {
     if (this.stallState?.reason === 'server-lost') return null;
-    const styled = this.agentModule?.createPromptSettler !== undefined ||
-      hasClippedQuestionShape(screen.split('\n'), this.renderer.rows) ? this.renderer.styledLines().lines : undefined;
+    const styled = visibleStyles ?? (this.agentModule?.createPromptSettler !== undefined
+      ? this.renderer.styledLines().lines : this.renderer.promptStyles(screen.split('\n')));
     return this.promptReader(screen, now, styled, this.renderer.rows);
   }
 
@@ -2117,7 +2116,7 @@ export class Session implements WaitTarget {
     // prompt with identical text count as new rather than as the one just
     // answered, and that includes the ones the daemon's stall scan and verify
     // take.
-    const styled = hasClippedQuestionShape(rendered.lines, rendered.rows) ? this.renderer.styledLines().lines : undefined;
+    const styled = this.renderer.promptStyles(rendered.lines);
     this.stalePrompts.observe(this.stallState?.reason === 'server-lost' ? null :
       detectPrompt(rendered.screen, this.agent, rendered.rows, styled)?.signature ?? null);
     return {

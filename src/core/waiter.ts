@@ -17,6 +17,7 @@ import {
 import type { WaitCondition, WaitOptions, WaitResult } from './types.js';
 import { createPromptReader } from './promptDetector.js';
 import type { DetectedPrompt } from './promptDetector.js';
+import type { StyledLine } from './renderer.js';
 import { echoEnd } from './echo.js';
 import { RegexBudgetError, withRegexBudget } from './regexBudget.js';
 
@@ -60,7 +61,7 @@ export interface WaitTarget {
   /** True while `signature` is the prompt the last input answered, not yet seen to go. */
   isStalePrompt(signature: string): boolean;
   /** Session-wide menu settle clock, when available. */
-  answerablePrompt?(screen: string, now?: number): DetectedPrompt | null;
+  answerablePrompt?(screen: string, now?: number, styled?: readonly StyledLine[]): DetectedPrompt | null;
 }
 
 export interface WaiterInternals {
@@ -68,6 +69,8 @@ export interface WaiterInternals {
   pollIntervalMs?: number;
   /** Screen used for text, regex and prompt evaluation and returned with their result. */
   screenForMatch?: () => string;
+  /** Styles from the same filtered frame, aligned with its visible rows. */
+  stylesForMatch?: () => readonly StyledLine[] | undefined;
   /** The agent signature has found unsent text in its composer. */
   composerPending?: () => boolean;
   /** Count quiet from at least this instant, for a resize that asks for redraw. */
@@ -322,9 +325,10 @@ export function waitFor(
       } else if (condition.prompt === true) {
         // Detect the current prompt on each poll so the reply carries the
         // question actually showing when the wait settles.
+        const styles = options.stylesForMatch?.();
         const detected = target.answerablePrompt !== undefined
-          ? target.answerablePrompt(screen, now)
-          : promptSettler(screen, now);
+          ? target.answerablePrompt(screen, now, styles)
+          : promptSettler(screen, now, styles);
         target.observePrompt(detected?.signature ?? null);
         staleOnly = detected !== null && afterInput && target.isStalePrompt(detected.signature);
         if (detected !== null && !staleOnly) {

@@ -40,6 +40,7 @@ import { screenShows } from '../core/echo.js';
 import { RegexBudgetError } from '../core/regexBudget.js';
 import { detectPrompt } from '../core/promptDetector.js';
 import { markFilteredSelectedOption } from '../core/selection.js';
+import type { StyledLine } from '../core/renderer.js';
 import type { DetectedPrompt } from '../core/promptDetector.js';
 import { WaitConditionError } from '../core/waiter.js';
 import { agentNames, hideReasoning, latestResult, programName, signatureForSession } from '../core/reasoning.js';
@@ -512,13 +513,20 @@ function overBudgetMessage(signature: CompiledSignature): string {
 }
 
 /** Read one rendered frame for both a filtered wait predicate and its reply. */
-function filteredWaitScreen(session: Session, signature: CompiledSignature): {
-  screen: string; filtered: FilteredLines;
+function filteredWaitScreen(session: Session, signature: CompiledSignature, prompt: boolean): {
+  screen: string; filtered: FilteredLines; styled?: StyledLine[];
 } {
   const view = session.styledScreenNow(REASONING_CONTEXT_LINES);
   const filtered = hideReasoning(view.lines, signature, view.firstVisible);
   if (filtered === null) throw new WaitConditionError(overBudgetMessage(signature));
-  return { screen: markFilteredSelectedOption(filtered.lines, view.lines, session.agent).join('\n'), filtered };
+  const styled = prompt ? filteredPromptStyles(filtered, view) : undefined;
+  return { screen: markFilteredSelectedOption(filtered.lines, view.lines, session.agent).join('\n'), filtered, styled };
+}
+
+/** Wrap flags and padding must describe exactly the rows the wait can read. */
+function filteredPromptStyles(filtered: FilteredLines, view: { lines: StyledLine[]; firstVisible: number }): StyledLine[] {
+  return filtered.rows.map((row, i) => filtered.markers[i]
+    ? { text: filtered.lines[i]!, spans: [] } : view.lines[view.firstVisible + row]!);
 }
 
 /**
@@ -3416,9 +3424,9 @@ export class Daemon {
               ? { matchAfterInput: afterInputParam !== 'false' && afterInputParam !== '0' }
               : {}),
             ...(filteredMatch ? { screenForMatch: () => {
-              matchView = filteredWaitScreen(session, reader);
+              matchView = filteredWaitScreen(session, reader, condition.prompt === true);
               return matchView.screen;
-            } } : {}),
+            }, stylesForMatch: () => matchView?.styled } : {}),
             ...(pendingReader !== null && moduleFor(session.agent)?.readingRules?.pendingComposer === true ? {
               composerPending: () => {
                 const result = latestResult(session.styledScreenNow(REASONING_CONTEXT_LINES).lines, pendingReader);
@@ -3460,7 +3468,7 @@ export class Daemon {
           const visiblePrompt = result.prompt === undefined
             ? null
             : detectPrompt(marked.join('\n'), session.agent, undefined,
-                view.lines.length === marked.length ? view.lines : undefined);
+                filteredPromptStyles(filtered, view));
           const prompt = visiblePrompt !== null && visiblePrompt.signature === result.prompt?.signature
             ? {
                 question: visiblePrompt.question,

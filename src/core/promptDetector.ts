@@ -604,8 +604,8 @@ export class StalePromptGuard {
   private cleared = false;
 
   /** Input is being written; `screen` is what the program showed at that moment. */
-  noteInput(screen: string, agent = 'generic'): void {
-    this.signatureAtInput = detectPrompt(screen, agent)?.signature ?? null;
+  noteInput(screen: string, agent = 'generic', styled?: readonly StyledLine[]): void {
+    this.signatureAtInput = detectPrompt(screen, agent, undefined, styled)?.signature ?? null;
     this.cleared = false;
   }
 
