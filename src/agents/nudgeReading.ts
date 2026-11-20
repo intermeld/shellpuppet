@@ -58,6 +58,12 @@ export interface ReadingNudgeRule {
    * a dialog that replaces the composer must never be read as an empty one.
    */
   composerFramed?: boolean;
+  /**
+   * The program's own footer rows below the composer's lower rule. A queued
+   * nudge needs every non-blank row there to pass: a panel or dialog painted
+   * below the composer could hold the input focus.
+   */
+  queueFooterRow?: (line: StyledLine) => boolean;
 }
 
 const GLYPH = /^\s*[❯›>]/u;
@@ -289,7 +295,11 @@ export function readingReadiness(view: NudgeView, reading: AgentSignature, rule:
   if (busy && rule.queueWhileBusy !== true) return 'busy';
   const region = composerRegion(lines, reading, at, rule, view.expectedDraft !== undefined);
   if (region === null || region.unproven) return busy ? 'busy' : 'unknown';
-  if (busy && rule.composerFramed !== true && !framedByRules(lines, at, at + region.rows.length, rule)) return 'busy';
+  if (busy && rule.composerFramed !== true) {
+    const below = at + region.rows.length;
+    if (!framedByRules(lines, at, below, rule) || rule.queueFooterRow === undefined ||
+      !lines.slice(below + 1).every((line) => line.text.trim() === '' || rule.queueFooterRow!(line))) return 'busy';
+  }
   if (view.expectedDraft !== undefined) {
     // A later copy may look like a fresh composer row. Do not select its
     // prompt glyph and forget the earlier copy still waiting above it.

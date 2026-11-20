@@ -48,4 +48,31 @@ describe('nudge delivery scheduler', () => {
     await scheduler.tick();
     expect(sent).toEqual([]);
   });
+  it('keeps a session pending when a message arrives during its delivery', async () => {
+    let now = 10_000;
+    let calls = 0;
+    let release!: () => void;
+    let entered!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    const firstCall = new Promise<void>((resolve) => { entered = resolve; });
+    const scheduler = new NudgeScheduler({ now: () => now, intervalMs: 30_000, perMinute: 60,
+      deliver: async () => {
+        calls++;
+        if (calls === 1) { entered(); await held; }
+        return 'sent';
+      },
+    });
+    scheduler.queue('recipient');
+    const firstTick = scheduler.tick();
+    await firstCall;
+    scheduler.queue('recipient');
+    release();
+    await firstTick;
+    now += 30_000;
+    await scheduler.tick();
+    expect(calls).toBe(2);
+    now += 30_000;
+    await scheduler.tick();
+    expect(calls).toBe(2);
+  });
 });
