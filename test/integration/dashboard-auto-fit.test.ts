@@ -185,11 +185,11 @@ it.for(['keep', 'drop', 'dismiss', 'reload', 'pop'])(
         document.body.append(box);
         window.__secondPane = ShellPuppetPane.create({ container: box, sessionId: '${id}',
           dashboardProof: document.querySelector('meta[name="sp-csrf"]').content,
-          onGeometryReady: () => setTimeout(() => {
+          onGeometryReady: () => {
             window.__secondPaneAuto = window.__secondPane.autoFitGrid();
-          }, 300) });
+          } });
       })()`);
-      await new Promise(resolve => setTimeout(resolve, 2_000));
+      await eventually(async () => await second('window.__secondPaneAuto === false') === true, 20_000);
       if (action !== 'keep') {
         const controller = (daemon.daemon as unknown as {
           geometryController: Map<string, { close: () => void; readyState: number }>;
@@ -211,8 +211,26 @@ it.for(['keep', 'drop', 'dismiss', 'reload', 'pop'])(
           returnByValue: true, userGesture: true,
         });
         await eventually(() => controller!.readyState === 3, 10_000);
-        await new Promise(resolve => setTimeout(resolve, 3_000));
-        if (action === 'pop') expect(await evaluate('window.__releaseFrames')).toBe(0);
+        if (action === 'pop') {
+          expect(await evaluate('window.__releaseFrames')).toBe(1);
+          const { targetInfos } = await send('Target.getTargets', {}, true) as {
+            targetInfos: { targetId: string; url: string }[] };
+          const popped = targetInfos.find(info => info.url.includes('/dashboard#screen='))!;
+          const { sessionId } = await send('Target.attachToTarget', { targetId: popped.targetId, flatten: true }, true) as { sessionId: string };
+          await send('Page.bringToFront', {}, sessionId);
+          const proof = await send('Runtime.evaluate', {
+            expression: "document.querySelector('meta[name=sp-csrf]').content", returnByValue: true,
+          }, sessionId) as { result: { value: string } };
+          const owners = (daemon.daemon as unknown as {
+            geometryController: Map<string, { protocol: string }>;
+          }).geometryController;
+          await eventually(async () => {
+            const frame = await send('Runtime.evaluate', { expression:
+              "document.querySelector('.pane-size')?.textContent", returnByValue: true }, sessionId) as { result: { value?: string } };
+            return !!frame.result.value?.includes('×') && !frame.result.value.includes('following') &&
+              owners.get(id)?.protocol === 'sp-csrf.' + proof.result.value;
+          }, 30_000);
+        }
       }
       return await second(`({ auto: window.__secondPaneAuto, takes: window.__secondPaneTakes,
         geometry: window.__dashboardDiagnostics?.streams?.filter(x => x.url.includes('/sessions/${id}/stream'))
@@ -231,6 +249,7 @@ it.for(['keep', 'drop', 'dismiss', 'reload', 'pop'])(
   expect(result.auto, JSON.stringify(result)).toBe(false);
   expect(result.takes).toBe(0);
   expect(result.latest?.dashboardTransferable, JSON.stringify(result)).toBe(false);
+  expect(result.latest?.control).toBe('adopt');
 });
 
 let browser: string | null = null;
@@ -371,7 +390,12 @@ it('takes a newly arrived pane within three seconds during ten seconds of sessio
           const frame = index % 2 === 1
             ? { type: 'session-added', session: { id: churnId, label: churnId } }
             : { type: 'session-removed', session: churnId };
+          const roster = window.__dashboardDiagnostics.streams.find(s => s.socket === window.__feed).windowState;
+          const local = roster.assignments[roster.designated];
           window.__feed.onmessage({ data: JSON.stringify(frame) });
+          window.__feed.onmessage({ data: JSON.stringify({ ...roster, assignments: {
+            [roster.designated]: index % 2 === 1 ? [...local, churnId] : local
+          } }) });
         };
         change();
         window.__churnTimer = setInterval(change, 800);
@@ -453,6 +477,8 @@ it.each([true, false])('focus profile keeps one floor-sized fit with Auto fit %s
         connection: document.getElementById('connection')?.textContent,
         error: document.getElementById('error-message')?.textContent,
         paneSize: document.querySelector('.pane-size')?.textContent,
+        terminalHeight: document.querySelector('.pane-term')?.clientHeight,
+        headerHeight: document.querySelector('header')?.clientHeight,
         layout: document.getElementById('panes')?.dataset.layout,
         frames: window.__resizes });
       if (state.phase === 0) {

@@ -150,7 +150,11 @@ describe('dashboard message access', () => {
       await eventually(() => alpha.frames.some((frame) => frame.type === 'message' &&
         (frame.from as { id: string } | undefined)?.id === alphaId));
       await eventually(() => beta.frames.some((frame) => frame.type === 'message-state'));
-      await new Promise((resolve) => setTimeout(resolve, 100));
+      // Each pong follows every earlier outbound frame on its own socket.
+      await Promise.all([alpha, beta, anonymous].map(({ ws }) => new Promise<void>((resolve) => {
+        ws.once('pong', () => resolve());
+        ws.ping();
+      })));
       expect(alpha.frames.filter((frame) => frame.type === 'message')
         .map((frame) => (frame.from as { id: string } | undefined)?.id))
         .toEqual([alphaId]);
@@ -267,7 +271,7 @@ describe('dashboard message presentation', () => {
       })()`,
       probe: `(() => {
         const feed = window.__dashboardDiagnostics.streams.find(s => s.url.endsWith('/dashboard/events'));
-        if (!feed || feed.snapshotIds === null || !window.__messageFetches) return null;
+        if (!feed || !feed.windowState || !window.__messageFetches) return null;
         if (!window.__burstAt) {
           window.__burstAt = Date.now();
           window.__burstBase = window.__messageFetches;
@@ -293,12 +297,12 @@ describe('dashboard message presentation', () => {
       probe: `(() => {
         const feeds = window.__dashboardDiagnostics.streams.filter(s => s.url.endsWith('/dashboard/events'));
         const feed = feeds.at(-1);
-        if (!feed || feed.snapshotIds === null) return null;
+        if (!feed || !feed.windowState) return null;
         if (!feed.__injectedPeer) {
           feed.__injectedPeer = true;
-          feed.socket.onmessage({ data: JSON.stringify({ type: 'snapshot', sessions: [
+          window.__dashboardDiagnostics.snapshot(feed.socket, [
             { id: ${JSON.stringify(receiver.claimId)}, label: 'beta', cols: 80, rows: 24 }
-          ] }) });
+          ]);
         }
         const badge = document.querySelector('[data-session=${JSON.stringify(receiver.claimId)}] .pane-message-count');
         if (!badge) return null;
@@ -308,7 +312,7 @@ describe('dashboard message presentation', () => {
           feed.socket.close();
           return null;
         }
-        if (feeds.length < 2 || feeds.at(-1).snapshotIds === null) return null;
+        if (feeds.length < 2 || !feeds.at(-1).windowState) return null;
         if (!window.__released) {
           if (badge.hidden) return null;
           window.__released = true;
@@ -337,12 +341,12 @@ describe('dashboard message presentation', () => {
     const receiver = daemon.mailbox.claim('beta');
     const probe = `(() => {
       const entry = window.__dashboardDiagnostics.streams.find(s => s.url.endsWith('/dashboard/events'));
-      if (!entry || entry.snapshotIds === null) return null;
+      if (!entry || !entry.windowState) return null;
       if (!window.__injectedPeer) {
         window.__injectedPeer = true;
-        entry.socket.onmessage({ data: JSON.stringify({ type: 'snapshot', sessions: [
+        window.__dashboardDiagnostics.snapshot(entry.socket, [
           { id: ${JSON.stringify(receiver.claimId)}, label: 'beta', cols: 80, rows: 24 }
-        ] }) });
+        ]);
       }
       const badge = document.querySelector('[data-session=${JSON.stringify(receiver.claimId)}] .pane-message-count');
       if (!badge) return null;
@@ -387,13 +391,13 @@ describe('dashboard message presentation', () => {
       probe: `(() => {
         const entry = window.__dashboardDiagnostics.streams.find(s => s.url.endsWith('/dashboard/events'));
         const feed = entry?.socket;
-        if (!feed || entry.snapshotIds === null || !document.querySelector('#messages-toggle')) return null;
+        if (!feed || !entry.windowState || !document.querySelector('#messages-toggle')) return null;
         if (!window.__injectedPeers) {
           window.__injectedPeers = true;
-          feed.onmessage({ data: JSON.stringify({ type: 'snapshot', sessions: [
+          window.__dashboardDiagnostics.snapshot(feed, [
             { id: 's1', label: 'alpha', cols: 80, rows: 24 },
             { id: 's2', label: 'beta', cols: 80, rows: 24 }
-          ] }) });
+          ]);
         }
         const badge = document.querySelector('[data-session="s2"] .pane-message-count');
         if (!badge || badge.hidden || badge.textContent !== '1 message') return null;
@@ -429,13 +433,13 @@ describe('dashboard message presentation', () => {
       drive: true, timeoutMs: 60_000,
       probe: `(() => {
         const entry = window.__dashboardDiagnostics.streams.find(s => s.url.endsWith('/dashboard/events'));
-        if (!entry || entry.snapshotIds === null) return null;
+        if (!entry || !entry.windowState) return null;
         if (!window.__injectedPeers) {
           window.__injectedPeers = true;
-          entry.socket.onmessage({ data: JSON.stringify({ type: 'snapshot', sessions: [
+          window.__dashboardDiagnostics.snapshot(entry.socket, [
             { id: 's1', label: 'alpha', cols: 80, rows: 24 },
             { id: 's2', label: 'beta', cols: 80, rows: 24 }
-          ] }) });
+          ]);
         }
         const badge = document.querySelector('[data-session="s2"] .pane-message-count');
         return badge && badge.hidden || null;
