@@ -890,14 +890,6 @@ configurable 300 s. A wrongly low timeout is indistinguishable from a hard failu
 
 ### 3.2 Sessions that stall, noticed
 
-A managed MCP adapter reports its completed handshake to its own authenticated
-session. Each authenticated tool call identifies its adapter before the daemon
-handles the request, including while handshake registration is being retried.
-The adapter retries a refused terminal report while its original daemon and
-session are available. A broken or reset stdio pipe on the last known connected adapter raises
-`mcp-connection-lost` through the existing stall events until a replacement registers or makes
-an authenticated tool call, or the session exits. Normal EOF, idle time and an absent adapter are inconclusive.
-
 A supported error block at the end of an idle turn or a persistent local server
 connection banner is `stalled`, distinct
 from a session waiting for an answer. `AgentModule.stalls` is an optional list

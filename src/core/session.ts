@@ -760,10 +760,6 @@ export class Session implements WaitTarget {
   private readonly readyListeners = new Set<() => void>();
   private readonly stallListeners = new Set<(state: StallState | undefined) => void>();
   private readonly stallTracker = new StallTracker();
-  // Ignore late tool requests from an adapter whose final report already arrived.
-  private readonly retiredAdapters = new Set<string>();
-  private readonly connectedAdapters = new Set<string>();
-  private mcpStall?: StallState;
   private stallState: StallState | undefined;
   private stallTimer: NodeJS.Timeout | null = null;
   private stallScheduled: Promise<void> | null = null;
@@ -1693,25 +1689,6 @@ export class Session implements WaitTarget {
     return () => this.stallListeners.delete(listener);
   }
 
-  /** Only a proven failure of the last connected adapter can stall this session. */
-  mcpConnection(adapter: string, status: 'connected' | 'failed' | 'closed'): void {
-    if (this.exitedFlag || this.isKilled) return;
-    const previous = this.getStalled();
-    if (status === 'connected') {
-      if (this.retiredAdapters.has(adapter)) return;
-      this.connectedAdapters.add(adapter);
-      this.mcpStall = undefined;
-    } else {
-      this.retiredAdapters.add(adapter);
-      const wasConnected = this.connectedAdapters.delete(adapter);
-      if (wasConnected && status === 'failed' && this.connectedAdapters.size === 0 && this.mcpStall === undefined) {
-        this.mcpStall = { reason: 'mcp-connection-lost', description: 'The ShellPuppet MCP connection failed.',
-          since: new Date().toISOString() };
-      }
-    }
-    if (previous !== this.getStalled()) for (const listener of this.stallListeners) listener(this.getStalled());
-  }
-
   observeResumeId(...candidates: unknown[]): void {
     if (!this.launchProfile || !this.agentModule?.resumeIdMarkers) return;
     const own = candidates.find((id): id is string => validResumeId(id) && !this.inheritedResumeIds.includes(id));
@@ -1722,7 +1699,7 @@ export class Session implements WaitTarget {
     return this.observedResumeId ?? this.launchProfile?.resumeId ?? null;
   }
 
-  getStalled(): StallState | undefined { return this.mcpStall ?? this.stallState; }
+  getStalled(): StallState | undefined { return this.stallState; }
 
   private noteStallResize(changed: boolean): void {
     if (this.stallState === undefined || (this.stallResizeUntil !== 0 && !changed)) return;
@@ -1764,10 +1741,9 @@ export class Session implements WaitTarget {
 
   private publishStall(state: StallState | undefined): void {
     if (state === undefined) this.stallResizeUntil = 0;
-    const previous = this.getStalled();
-    if (this.exitedFlag || this.isKilled) this.mcpStall = undefined;
+    if (this.stallState === state) return;
     this.stallState = state;
-    if (previous !== this.getStalled()) for (const listener of this.stallListeners) listener(this.getStalled());
+    for (const listener of this.stallListeners) listener(state);
   }
 
   private readStallTranscript(): string {
@@ -2077,7 +2053,7 @@ export class Session implements WaitTarget {
       cols: this.cols,
       rows: this.rows,
       ready: this.readyFlag,
-      ...(this.getStalled() === undefined ? {} : { stalled: this.getStalled() }),
+      ...(this.stallState === undefined ? {} : { stalled: this.stallState }),
       readyReason: this.readyReasonValue,
       geometryHeld: this.geometryHeldFlag,
       exited: this.exitedFlag,
