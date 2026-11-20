@@ -212,6 +212,11 @@ its placeholder. The screen must also have no prompt waiting, no settled
 stall, and no change for 1,500 ms before that empty composer counts as ready
 to nudge.
 
+OpenCode reads the gutter rows above its Build line and folder footer. A blank
+input or a grey (`#808080`) `Ask anything… "<suggestion>"` on the welcome
+screen counts as empty. Before pressing Enter it checks the full nudge across
+all input rows. A recognised running turn keeps the message waiting.
+
 Two Qoder specifics worth knowing:
 
 - Its **folder-trust prompt** (`Do you trust the files in this folder?`)
