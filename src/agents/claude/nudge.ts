@@ -23,9 +23,11 @@ export function readiness(view: NudgeView): NudgeReadiness {
     anyHintInPlaceholderInk: true,
     // Enter during a running turn queues the line; the turn reads it at its next step.
     queueWhileBusy: true,
-    // Under the lower rule Claude Code paints only its status rows, indented by two
-    // spaces (model and context, mode and keys). A panel or a choice there blocks a queued nudge.
-    queueFooterRow: (line) => /^ {2}\S/u.test(line.text) && !/^\s*[>❯›⟩]|^\s*\d+[.)]\s/u.test(line.text),
+    // Under the lower rule Claude Code paints only its status rows: the model line
+    // ending in its context bar and percentage, and the mode line (⏵⏵ or ⏸, or the
+    // shortcuts hint). Any other row there, a panel or a choice, blocks a queued nudge.
+    queueFooterRow: (line) => /^ {2}\S.* [█░]{4,} \d+%$/u.test(line.text.trimEnd()) ||
+      /^ {2}(?:⏵⏵ |⏸ |\? for shortcuts)/u.test(line.text),
     // The rule above the composer may carry the session's title in the same grey.
     ruleRows: [/^─{10,}$/u, /^─{10,} \S(?:.*\S)? ─{1,}$/u],
     ruleInk: (line) => line.spans.length > 0 && line.spans.every((span) => span.fg === RULE_INK && !span.dim),

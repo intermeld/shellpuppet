@@ -143,7 +143,9 @@ describe('what lies below a busy composer', () => {
     expect(muse.nudge!.readiness(museBusy(panel))).toBe('busy');
     expect(nudgeVerdict(claude, { ...claudeBusy(panel), viewportRows: 24, unchangedMs: 0,
       composerUnchangedMs: NUDGE_QUIET_MS })).toEqual({ ready: false, reason: 'busy' });
-    // A numbered choice indented like a footer row is still not a footer.
+    // A numbered choice, or any panel indented like a footer row, is still not a footer.
     expect(claude.nudge!.readiness(claudeBusy(['  1. Allow', '  2. Deny']))).toBe('busy');
+    expect(claude.nudge!.readiness(claudeBusy(['  Application requests access to files', '  Allow access', '  Cancel']))).toBe('busy');
+    expect(claude.nudge!.readiness(claudeBusy(['  Opus 5.5 medium █░░░░░░░░░ 6%', '  Allow access']))).toBe('busy');
   });
 });
