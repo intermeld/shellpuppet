@@ -9,12 +9,13 @@
   // A session id in the path is accepted as well as the query form.
   const sessionId = params.get('s') || location.pathname.split('/')[2] || '';
   const captureMode = params.get('capture') === '1';
+  const passive = params.get('drive') === '0';
   const redactedCapture = captureMode && params.get('redact') === '1';
   if (captureMode) document.body.classList.add('capture');
 
   // The grant has already been redeemed for an HttpOnly cookie. Keep the
   // session id for reloads while removing the spent grant from the URL.
-  history.replaceState(null, '', `/view?s=${encodeURIComponent(sessionId)}`);
+  history.replaceState(null, '', `/view?s=${encodeURIComponent(sessionId)}${passive ? '&drive=0' : ''}`);
 
   const banner = document.getElementById('banner');
   document.getElementById('session-label').textContent = sessionId;
@@ -43,6 +44,7 @@
     container: document.getElementById('term'),
     sessionId,
     captureMode,
+    passive,
     redactedCapture,
     initialFontOverride: fontOverride,
     onTitleChange: (title) => { document.title = title; },

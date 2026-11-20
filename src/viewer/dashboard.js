@@ -231,6 +231,7 @@
     .map((byte) => byte.toString(16).padStart(2, '0')).join('')}`;
   let windowInstance = newInstance();
   let registered = false;
+  let reportFocusOnOpen = true;
   const screenParams = new URLSearchParams(location.hash.slice(1));
   const hashWindowId = screenParams.get('screen');
   const windowId = hashWindowId && /^[a-z0-9]+-[a-z0-9]+(?:-[1-9][0-9]*)?$/.test(hashWindowId) &&
@@ -1204,7 +1205,8 @@
       }
       registered = true;
       feed.send(JSON.stringify({ type: 'window-register', id: windowId, instance: windowInstance }));
-      if (document.hasFocus()) feed.send(JSON.stringify({ type: 'window-focus' }));
+      if (reportFocusOnOpen && document.hasFocus()) feed.send(JSON.stringify({ type: 'window-focus' }));
+      reportFocusOnOpen = false;
     };
     feed.onmessage = (event) => {
       try { receive(JSON.parse(event.data)); } catch { showError('The session feed sent an unreadable update.'); }
@@ -1524,13 +1526,17 @@
     });
   }
   strip.addEventListener('scroll', syncVisibility);
+  function acceptsPaneMove(transfer) {
+    return transfer?.types.includes('application/x-shellpuppet-pane') &&
+      ['move', 'copyMove', 'linkMove', 'all', 'uninitialized'].includes(transfer.effectAllowed);
+  }
   document.addEventListener('dragover', (event) => {
-    if (!event.dataTransfer?.types.includes('application/x-shellpuppet-pane')) return;
+    if (!acceptsPaneMove(event.dataTransfer)) return;
     event.preventDefault();
     event.dataTransfer.dropEffect = 'move';
   });
   document.addEventListener('drop', (event) => {
-    if (!event.dataTransfer?.types.includes('application/x-shellpuppet-pane')) return;
+    if (!acceptsPaneMove(event.dataTransfer)) return;
     event.preventDefault();
     let drag;
     try { drag = JSON.parse(event.dataTransfer.getData('application/x-shellpuppet-pane')); }
@@ -1561,6 +1567,7 @@
   document.getElementById('new-window').addEventListener('click', () => { openScreen(); });
   window.addEventListener('focus', () => {
     if (feed?.readyState === WebSocket.OPEN) feed.send(JSON.stringify({ type: 'window-focus' }));
+    else reportFocusOnOpen = true;
   });
   document.getElementById('text-smaller').addEventListener('click', () => setFontSize(Math.max(8, (fontSize ?? 13) - 1)));
   document.getElementById('text-auto').addEventListener('click', () => setFontSize(null));
