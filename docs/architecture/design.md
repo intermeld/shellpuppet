@@ -274,8 +274,10 @@ wrap; once the frame and footer are matched, the Grok module ignores those marks
 The composer is empty only
 when its text is blank, or when it shows that module's exact placeholder
 drawn in the placeholder's own ink. Claude Code may show a rotating suggestion
-in the same dim ink, which its module also treats as empty. Other text is a
-draft. This screen judgement never overrides a pending nudge body. Plain rows
+in the same dim ink, which its module also treats as empty. OpenCode recognises
+its rotating `Ask anything… "<suggestion>"` in grey inside the gutter frame.
+It checks every input row in that frame before submitting a wrapped nudge.
+Other text is a draft. This screen judgement never overrides a pending nudge body. Plain rows
 and styled rows are the same visible viewport, and the
 terminal height is required so clipped prompt detection can use it. The core
 then requires that ready judgement, no prompt waiting for a person, no settled
