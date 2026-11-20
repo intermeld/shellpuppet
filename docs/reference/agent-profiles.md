@@ -404,3 +404,22 @@ drive:
 
 Record: first-frame time, any new swallowed-input windows, any prompt changes
 (trust dialogs, update banners) that recipes should mention.
+
+## Conversation ids in restart records
+
+A profile launch keeps the id supplied at launch. When a verified child
+ShellPuppet client contacts its daemon, the built-in agent module can read
+the conversation marker that the agent exported to that client. A later
+observed id takes precedence. A marker inherited unchanged from the launch
+environment is excluded: it could identify a different conversation.
+
+| Agent | Marker read when the agent provides it |
+|---|---|
+| Claude Code | `CLAUDE_CODE_SESSION_ID` |
+| Codex | `CODEX_THREAD_ID`, falling back to `CODEX_SESSION_ID` |
+| Grok | `GROK_SESSION_ID` when present, including in a hook that calls ShellPuppet |
+| Muse | Explicit resume id only. No verified conversation marker is known. |
+
+A client that never receives a marker cannot report it. Without an observed
+or supplied id the record contains `null`. The daemon does not select a
+transcript by directory or modification time.

@@ -136,6 +136,8 @@ export interface AgentModule {
   nudge?: {
     readiness(view: NudgeView): NudgeReadiness;
   };
+  /** Conversation id exported to a child tool by this agent, when available. */
+  resumeId?: (env: NodeJS.ProcessEnv) => string | undefined;
   env?: { sessionMarkers: string[] };
   safety?: SafetyAdapter;
   stalls?: StallSignature[];

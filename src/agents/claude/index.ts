@@ -7,6 +7,7 @@ export const claude: AgentModule = {
   name: reading.name, programs: reading.programs, reading, prompts,
   readiness: { readyText: ['? for shortcuts', 'shift+tab'] },
   nudge: { readiness: nudgeReadiness },
+  resumeId: env => env['CLAUDE_CODE_SESSION_ID'],
   env: {
     // Claude Code child-session variables: https://code.claude.com/docs/en/env-vars.
     sessionMarkers: [

@@ -185,3 +185,19 @@ Stall metadata contains no terminal text, with or without `--hide-reasoning`.
 uses the current session identity or `SHELLPUPPET_CLAIM`. The owner grants the
 name in `launcher.sessionLaunch`. Use the folder choice configured for the profile.
 For example, `shellpuppet launch review --folder repo --resume-id abc-123`.
+
+## Relaunch after a daemon restart
+
+Run `shellpuppet daemon restart --force` to record live profile sessions and
+end them before restarting. A stop with `--hold` also requests a record.
+From a granted session, run `shellpuppet previous --json`. For each entry
+you want to restore, supply its profile, name, saved folder choice and known
+resume id to `shellpuppet launch`. For example:
+
+```sh
+shellpuppet launch review --name chair --folder repo --resume-id thread-42
+```
+
+An entry with a null resume id can be started fresh. Resume requires the
+current profile to declare a resume template. Changing the configured command
+or named folder changes the next launch.

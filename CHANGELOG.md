@@ -9,6 +9,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Added
 
+- Save live profile sessions and known conversation ids before a daemon restart for a granted supervisor to relaunch.
 - Report a broken ShellPuppet MCP pipe as a session stall.
 - Allow named sessions and outside claims to launch owner-configured profiles, including conversation resume.
 
