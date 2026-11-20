@@ -9,7 +9,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
-- Send typed Enter separately after the agent's submit pause, and retry once only when its readable composer still holds the exact typed line.
+- Wait for a typed line or paste placeholder to appear and settle before Enter; confirm submission only from observed evidence, with one retry if the draft remains.
 
 ### Added
 

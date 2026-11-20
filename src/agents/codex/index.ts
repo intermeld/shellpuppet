@@ -6,7 +6,10 @@ import { submittingText } from '../input.js';
 
 export const codex: AgentModule = {
   name: reading.name, programs: reading.programs, reading, prompts,
-  input: { submit: { key: '\r', delayMs: 150, matches: submittingText } },
+  input: { submit: { key: '\r', delayMs: 150, perCharacterMs: 2.5,
+    quietMs: 350, settleMs: 800, maxWaitMs: 5_000,
+    pastePlaceholder: /^› (\[Pasted Content[^\]]*\])/u,
+    matches: submittingText } },
   readiness: { readyText: ['Ask Codex'] },
   nudge: { readiness: nudgeReadiness },
   env: {

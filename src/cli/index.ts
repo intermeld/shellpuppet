@@ -91,7 +91,9 @@ Usage:
       always leaves reasoning out. Exits 3, with the reason on stderr, while
       the agent is still working or when no answer is recognised.
   shellpuppet type <id> <text> [--enter] [--verify] Type text; --enter sends the text,
-                                                    pauses, then sends Enter separately.
+                                                    waits for its painted draft and a quiet
+                                                    screen, then sends Enter separately.
+                                                    An unconfirmed submit is reported.
                                                     --verify re-reads the screen.
   shellpuppet key <id> <name>                       Press a key (enter, escape, ctrl+c, f1…)
   shellpuppet wait <id> [--text <s>|--regex <r>|--quiet <ms>|--prompt|--stalled]

@@ -1,9 +1,13 @@
 # CLI reference
 
-`type <id> <text> --enter` writes a single line of text, pauses for the agent's
-submit delay, then sends Enter separately on the same input queue. A readable
-composer still showing exactly that line receives one further Enter. The result
-says when this retry happened; if the line remains, JSON reports
+`type <id> <text> --enter` writes a single line, waits for a readable composer
+to show it or a recognised paste placeholder and for the screen to settle,
+then sends Enter separately on the same input queue. The wait is capped at
+five seconds; Codex uses a longer minimum pause for longer lines. A composer
+still showing the draft gets one further Enter. An empty composer confirms
+submission only if the draft was seen first; a busy indicator or an echo in
+the transcript also confirms it. Otherwise the result says submission was
+not confirmed. If the draft remains after the retry, JSON reports
 `submitted: false` and plain text mode exits with an error. The text is never
 typed twice. `--verify` checks for visible text, which may have cleared after
 submission.

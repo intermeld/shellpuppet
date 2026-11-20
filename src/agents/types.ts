@@ -117,7 +117,21 @@ export interface AgentModule {
   reading: AgentSignature;
   prompts: PromptShape[];
   input?: {
-    submit?: { key: string; delayMs?: number; matches?: (data: string) => boolean };
+    submit?: {
+      key: string;
+      delayMs?: number;
+      matches?: (data: string) => boolean;
+      /** Minimum pause for a pasted line, scaled by its length where measured. */
+      perCharacterMs?: number;
+      /** Quiet time after the draft is visible, before Enter. */
+      quietMs?: number;
+      /** Time for the composer to settle after Enter. */
+      settleMs?: number;
+      /** Maximum time to wait for a painted, quiet draft. */
+      maxWaitMs?: number;
+      /** A visible composer replacement for a pasted line. */
+      pastePlaceholder?: RegExp;
+    };
     resizeBehindSubmit?: boolean;
     verifyMs?: VerifyTiming;
   };

@@ -1,12 +1,16 @@
 # MCP reference
 
-`terminal_type` with `submit: true` sends a single line, waits for the agent's
-submit delay, then sends Enter separately on the same input queue. A readable
-composer still showing exactly that line gets one further Enter. The result
-reports `submitRetried: true` when this happens, or `submitted: false` with an
-error if the line remains. It never retypes the line. If the composer cannot
-be read, the result only says that the submit key was sent. `verify` checks
-for visible text, which may already have cleared on submission.
+`terminal_type` with `submit: true` sends a single line, waits for a readable
+composer to show it or a recognised paste placeholder and for the screen to
+settle, then sends Enter separately on the same input queue. The wait is
+capped at five seconds; Codex uses a length-based minimum pause. If the draft
+remains, it sends Enter once more and reports `submitRetried: true`. An empty
+composer confirms submission only after the draft was seen; a busy indicator
+or a transcript echo also confirms it. Otherwise the result says submission
+was not confirmed. If the draft remains after the retry, it reports
+`submitted: false` with an error. It never retypes the line. If the composer
+cannot be read, the result only says that the submit key was sent. `verify`
+checks for visible text, which may already have cleared on submission.
 
 ## Session messages
 

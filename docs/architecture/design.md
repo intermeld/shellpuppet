@@ -443,15 +443,19 @@ ambiguous in clients that do not, so the prefix stays.
 | `terminal_type` | Type text (optionally submit) | `session`, `text`, `submit`, `verify` |
 
 For a single typed line with Enter, the resolved agent module supplies a
-submit key and delay. The session writes the body first, waits, then writes
-the key separately inside one ordered input operation. No later queued input
-may interleave. Muse keeps its own delay. After a short settle, a module with
-a readable composer may find the exact typed line still there. In that case
-the session sends its submit key once more, without retyping the line, and
-checks again. A changed composer or later human input never triggers a retry.
-The input result reports a retry and reports `submitted: false` when the exact
-line remains after it. A module without a readable composer cannot confirm
-submission and reports that only the key was sent.
+submit key and timing. The session writes the body first, then waits for a
+readable composer to paint the exact line or a recognised paste placeholder
+and for the screen to settle. The wait has a five second cap. Codex also needs
+a minimum pause proportional to the line length. The key goes separately
+inside the same ordered input operation, so later queued input cannot
+interleave. Muse keeps its own delay. After Enter, a readable composer that
+still holds the line or placeholder gets one further Enter, without retyping.
+A changed composer or later human input never triggers a retry. An empty
+composer confirms submission only after the draft was seen painted; a busy
+indicator or the line appearing in the transcript also confirms it. Otherwise
+the result says submission was not confirmed. The result reports a retry and
+reports `submitted: false` when the draft remains after it. A module without
+a readable composer reports only that the key was sent.
 | `terminal_key` | Press a semantic key | `session`, `key` |
 | `terminal_wait` | Wait for a screen condition, prompt or supported provider stall | `session` (id, list of ids or omitted for supervision), `text`\|`regex`\|`quiet` or `prompt` and/or `stalled`, `timeout`, `debounce`, `matchAfterInput`, `now`, `hideReasoning` |
 | `terminal_find` | Regex search the current screen, with line numbers | `session`, `pattern`, `hideReasoning` |
