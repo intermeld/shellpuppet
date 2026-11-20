@@ -39,7 +39,10 @@ it('retries an initial fit lost on socket close', async (context) => {
       document.querySelector('.pane-size')?.textContent.includes('×') ? true : null)()`,
     interact: async ({ evaluate }) => {
       await eventually(async () => Number(await evaluate('window.__droppedTakes')) >= 1, 10_000);
-      await new Promise(resolve => setTimeout(resolve, 5_000));
+      await eventually(async () => await evaluate(`window.__droppedTakes >= 2 &&
+        window.__dashboardDiagnostics.streams.some(stream => stream.socket.readyState === 1 &&
+          stream.resizes.some(frame => frame.take) && stream.geometry.at(-1)?.control === 'yours')`) === true,
+        10_000, 50, 'the replacement stream to receive grid ownership');
       return await evaluate(`({ takes: window.__droppedTakes, size: document.querySelector('.pane-size')?.textContent })`);
     },
   });
