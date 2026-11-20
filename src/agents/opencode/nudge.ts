@@ -4,9 +4,12 @@ import { matchesWrappedDraft, onlyBlankRowsAfter } from '../nudgeReading.js';
 import type { NudgeReadiness, NudgeView } from '../types.js';
 import { reading } from './reading.js';
 
-// Both footers start with the folder. The welcome screen adds agent shortcuts
-// and can show a separate version row. After a turn it shows context usage.
-const FOOTER = /^(?:[A-Za-z]:[\\/]|[\\/~]|…|\.\.?[\\/]).*? {2,}(shift\+tab agents|\d+(?:\.\d+)?[KMB]? \(\d+%\)) {2}ctrl\+p commands$/u;
+// The idle footer starts with the folder. The running footer replaces it with
+// progress cells and the interrupt control. Both end with the same key hints.
+const CONTROLS = String.raw`(shift\+tab agents|\d+(?:\.\d+)?[KMB]? \(\d+%\)) {2}ctrl\+p commands`;
+const FOOTER = new RegExp(String.raw`^(?:[A-Za-z]:[\\/]|[\\/~]|…|\.\.?[\\/]).*? {2,}${CONTROLS}$`, 'u');
+const BUSY_FOOTER = new RegExp(String.raw`^[⬝■]{8} esc interrupt {2,}${CONTROLS}$`, 'u');
+const BUSY_TAB = /^ {3}.*[⠀-⣿] \S.* {2,}\+\s*$/u;
 const WELCOME_VERSION = /^(?: {2}⊙ \d+ MCP failed \/mcps)? {2,}\d+\.\d+\.\d+$/u;
 const SUGGESTION = /^Ask anything… ".+"$/u;
 
@@ -29,6 +32,29 @@ function isPlaceholder(text: string, line: StyledLine | undefined, from: number)
   return true;
 }
 
+function isBusyFooter(row: string, indent: number): boolean {
+  return row.startsWith(' '.repeat(indent)) && BUSY_FOOTER.test(row.slice(indent).trimEnd());
+}
+
+function composerTop(rows: readonly string[], foot: number, gutter: string): number {
+  let top = foot - 2;
+  while (top > 0 && rows[top - 1]!.startsWith(gutter)) top--;
+  return top;
+}
+
+/** Compare the whole gutter block, ignoring the eight-cell progress animation in the recognised footer. */
+export function composerBlock(rows: readonly string[]): string {
+  const bar = barFrame({ rows });
+  if (bar === null) return rows.join('\n');
+  const top = composerTop(rows, bar.foot, bar.gutter);
+  const block = rows.slice(top);
+  const footer = rows[bar.foot + 1] ?? '';
+  if (isBusyFooter(footer, bar.gutter.length)) {
+    block[bar.foot + 1 - top] = footer.replace(/[⬝■]{8}/u, '⬝'.repeat(8));
+  }
+  return block.join('\n');
+}
+
 export function readiness(view: NudgeView): NudgeReadiness {
   const bar = barFrame(view);
   if (bar === null) return 'unknown';
@@ -37,14 +63,20 @@ export function readiness(view: NudgeView): NudgeReadiness {
   const inset = gutter + '  ';
   const status = rows[foot - 1]!;
   if (!status.startsWith(inset) || !/^Build · \S/u.test(status.slice(inset.length))) return 'unknown';
-  // The running footer can replace the folder with the interrupt control.
-  if (barIsBusy(view, reading)) return 'busy';
-  if (rows[foot]!.trimEnd().length !== end || !hasFooter(rows, foot, gutter.length - 1)) return 'unknown';
+  const busy = isBusyFooter(rows[foot + 1] ?? '', gutter.length);
+  if (busy) {
+    if (!onlyBlankRowsAfter(rows, foot + 1) || status.trimEnd().length > end ||
+      !/^Build · \S+(?: \S+)*$/u.test(status.slice(inset.length).trimEnd())) return 'busy';
+  } else {
+    // The tab spinner and other running markers can block input during a partial redraw.
+    if (BUSY_TAB.test(rows[0] ?? '') || barIsBusy(view, reading)) return 'busy';
+    if (!hasFooter(rows, foot, gutter.length - 1)) return 'unknown';
+  }
+  if (rows[foot]!.trimEnd().length !== end) return 'unknown';
 
   // OpenCode paints a fresh gutter on every continuation, even when xterm
   // marks the padding and status rows as wraps. Read between the two pads.
-  let top = foot - 2;
-  while (top > 0 && rows[top - 1]!.startsWith(gutter)) top--;
+  const top = composerTop(rows, foot, gutter);
   if (foot - top < 4 || rows[top]!.trimEnd() !== gutter || rows[foot - 2]!.trimEnd() !== gutter) return 'unknown';
   const pieces: string[] = [];
   for (let i = top + 1; i < foot - 2; i++) {
@@ -53,8 +85,10 @@ export function readiness(view: NudgeView): NudgeReadiness {
     pieces.push(row.slice(inset.length));
   }
   if (view.expectedDraft !== undefined) {
-    return pieces.every(piece => piece !== '') && matchesWrappedDraft(pieces, view.expectedDraft) ? 'ready' : 'draft';
+    if (pieces.every(piece => piece !== '') && matchesWrappedDraft(pieces, view.expectedDraft)) return 'ready';
+    return busy ? 'busy' : 'draft';
   }
+  if (busy) return pieces.length === 1 && pieces[0] === '' ? 'queue' : 'busy';
   return pieces.length === 1 && (pieces[0] === '' || isPlaceholder(pieces[0]!, view.styled?.[top + 1], inset.length))
     ? 'ready' : 'draft';
 }

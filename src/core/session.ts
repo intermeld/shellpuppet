@@ -1392,7 +1392,7 @@ export class Session implements WaitTarget {
     const rendered = this.renderer.snapshot();
     const styled = this.renderer.styledLines().lines;
     const rows = styled.map((line) => line.text);
-    const key = composerBlockKey(rows);
+    const key = this.nudgeComposerBlock(rows);
     if (key !== this.nudgeComposerKey) {
       this.nudgeComposerKey = key;
       this.nudgeComposerSince = now;
@@ -1409,8 +1409,8 @@ export class Session implements WaitTarget {
   }
 
   /** The composer block as last measured by nudgeState, compared again before typing. */
-  nudgeComposerBlock(): string {
-    return composerBlockKey(this.renderer.styledLines().lines.map((line) => line.text));
+  nudgeComposerBlock(rows = this.renderer.styledLines().lines.map(line => line.text)): string {
+    return this.agentModule?.nudge?.composerBlock?.(rows) ?? composerBlockKey(rows);
   }
 
   private pendingComposerVerdict(): ReturnType<typeof nudgeVerdict> {

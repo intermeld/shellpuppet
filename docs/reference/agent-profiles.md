@@ -215,7 +215,10 @@ to nudge.
 OpenCode reads the gutter rows above its Build line and folder footer. A blank
 input or a grey (`#808080`) `Ask anything… "<suggestion>"` on the welcome
 screen counts as empty. Before pressing Enter it checks the full nudge across
-all input rows. A recognised running turn keeps the message waiting.
+all input rows. OpenCode 2.3 queues a message during a running turn when the
+input is blank and the eight progress cells and `esc interrupt` appear in its
+footer. The composer and footer must remain quiet for 1,500 ms apart from the
+progress animation. A draft or extra panel keeps the message waiting.
 
 Two Qoder specifics worth knowing:
 
