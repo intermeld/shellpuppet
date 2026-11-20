@@ -25,10 +25,17 @@ export function readiness(view: NudgeView): NudgeReadiness {
     anyHintInPlaceholderInk: true,
     // Enter during a running turn hands the line to that turn.
     queueWhileBusy: true,
-    // Under the lower rule Muse Code paints its model line and, while tasks run,
-    // its background-task list. Anything else there blocks a queued nudge.
-    queueFooterRow: (line) => /^ {2}\S[^·]* · [^·]+ · [^·]+ · Launch overrides$/u.test(line.text) ||
-      /^main · ↓ to select$/u.test(line.text.trim()) || /^└ [◇◆◈] \S/u.test(line.text),
+    // Under the lower rule Muse Code paints its background-task list while tasks run
+    // (a "main · ↓ to select" header, then one row per task ending in its state)
+    // and always ends with its model line. Anything else there blocks a queued nudge.
+    queueFooter: (rows) => {
+      const last = rows[rows.length - 1];
+      if (last === undefined || !/^ {2}\S[^·]* · [^·]+ · [^·]+ · Launch overrides$/u.test(last.text.trimEnd())) return false;
+      const tasks = rows.slice(0, -1);
+      if (tasks.length === 0) return true;
+      return tasks[0]!.text.trim() === 'main · ↓ to select' && tasks.length >= 2 &&
+        tasks.slice(1).every((row) => /^└ [◇◆◈] \S.* {2}(?:running|queued|done|failed|cancelled)$/u.test(row.text.trimEnd()));
+    },
     // The Voice input rule above the composer and the plain rule under it.
     ruleRows: [/^── Voice input \(Alt\+V to start\) ─+$/u, /^─{10,}$/u],
     ruleInk: (line) => line.spans.some((span) => span.from === 0 && span.dim && span.fg === RULE_INK) &&
