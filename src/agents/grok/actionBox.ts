@@ -32,12 +32,18 @@ function isBoxAction(line: Row | undefined, footer: string): boolean {
     label?.fg === '#6c6c6c' && label.bg === '#404040' && label.to === line.text.length;
 }
 
-/** Read the same controls from a filtered screen or verify their ink for a reasoning claim. */
-export function actionBox(lines: readonly Row[]) {
+const FOOTER = /^ {2}1\/([1-9]\d*):select\b/u;
+
+export function hasActionBoxFooter(lines: readonly string[]): boolean {
+  return FOOTER.test(lines.at(-1) ?? '');
+}
+
+/** Read the visible controls, or verify their ink when claiming rows for the filter. */
+export function actionBox(lines: readonly Row[], styled?: readonly StyledLine[]) {
   let footerRow = lines.length - 1;
   while (footerRow >= 0 && text(lines[footerRow]).trim() === '') footerRow--;
   const footer = text(lines[footerRow]);
-  const count = /^ {2}1\/([1-9]\d*):select\b/u.exec(footer);
+  const count = FOOTER.exec(footer);
   if (!count) return null;
   let row = footerRow - 1;
   const status = lines[row];
@@ -69,12 +75,41 @@ export function actionBox(lines: readonly Row[]) {
   if (!isBoxAction(lines[row], footer)) return null;
   while (isBoxAction(lines[row - 1], footer)) row--;
 
-  // A plain bar above the marked command rows may belong to reasoning.
+  // A physical wrap has box background right from column zero. A repainted
+  // box row has its own margin and bar, even if xterm still calls it wrapped.
+  const inkRow = (index: number): StyledLine | undefined => {
+    const line = lines[index];
+    if (typeof line !== 'string') return line;
+    const ink = styled?.[index];
+    return ink?.text === line.trimEnd() ? ink : undefined;
+  };
+  const rowStart = (end: number): number => {
+    let start = end;
+    while (start > 0) {
+      const line = inkRow(start);
+      if (!line?.wrapped || (line.text !== '' && line.spans.length === 0) ||
+          line.spans.some(span => span.bg !== '#404040')) break;
+      start--;
+    }
+    return start;
+  };
   const actionRow = row;
-  while (/^[│:] /u.test(boxBody(lines[row - 1]) ?? '')) row--;
+  let start = rowStart(row - 1);
+  while (/^[│:] /u.test(boxBody(lines[start]) ?? '')) {
+    row = start;
+    start = rowStart(row - 1);
+  }
   if (row === actionRow || !boxBody(lines[row])?.startsWith('│ ')) return null;
-  const questionRow = boxBody(lines[row - 1])?.startsWith('> ') ? row - 1 : undefined;
-  if (questionRow !== undefined) row = questionRow;
+  const body = boxBody(lines[start]);
+  let question: string | undefined;
+  if (body?.startsWith('> ')) {
+    question = body.slice(2);
+    for (let i = start + 1; i < row; i++) {
+      if (inkRow(i - 1)?.wrapPadding) question += ' ';
+      question += text(lines[i]);
+    }
+    row = start;
+  }
   if (boxBody(lines[row - 1]) === '') row--;
-  return { top: row, bottom, questionRow, firstOption, selectedRow };
+  return { top: row, bottom, questionRow: question === undefined ? undefined : start, question, firstOption, selectedRow };
 }

@@ -25,6 +25,7 @@ import { markSelectedOption } from './selection.js';
 import { detectPrompt } from './promptDetector.js';
 import { promptShapesFor } from '../agents/index.js';
 import { hasClippedQuestionShape } from '../agents/opencode/prompts.js';
+import { hasActionBoxFooter } from '../agents/grok/actionBox.js';
 
 const { Terminal } = xterm;
 const { SerializeAddon } = serializeAddon;
@@ -451,6 +452,11 @@ export class ScreenRenderer {
     return false;
   }
 
+  /** Cell styles and soft wraps for menus whose text alone is ambiguous. */
+  promptStyles(lines: readonly string[]): StyledLine[] | undefined {
+    return hasClippedQuestionShape(lines, this.rows) || hasActionBoxFooter(lines) ? this.styledLines().lines : undefined;
+  }
+
   /** Render the visible viewport (the bottom page when scrolled fully down). */
   snapshot(): RenderedScreen {
     if (this.closed) return { cols: this.width, rows: this.height,
@@ -466,12 +472,12 @@ export class ScreenRenderer {
     }
     // Muse's staged menus use their visible text to identify the question;
     // marking the selected option still needs the styled rows.
-    const styled = hasClippedQuestionShape(lines, this.term.rows) ? this.styledLines().lines : undefined;
+    const styled = this.promptStyles(lines);
     const prompt = detectPrompt(lines.join('\n'), this.agent, this.term.rows, styled);
     const styledHeading = promptShapesFor(this.agent).some(shape => shape.kind === 'rows' && shape.styledHeading !== undefined && lines.some(line => shape.styledHeading!.test(line)));
     const marked = prompt?.optionRows === undefined && !styledHeading
       ? lines
-      : markSelectedOption(this.styledLines().lines, prompt).slice(0, lines.length);
+      : markSelectedOption(styled ?? this.styledLines().lines, prompt).slice(0, lines.length);
     return {
       cols: this.term.cols,
       rows: this.term.rows,
@@ -575,10 +581,15 @@ export class ScreenRenderer {
         else spans.push({ ...style, from: offset, to });
         offset += chars.length;
       }
+      const next = buffer.getLine(y + 1);
+      let wrapPadding = next?.isWrapped ? text.length - trimmed.length : 0;
+      // Xterm leaves an empty cell when a double-width character cannot fit
+      // at the right edge. Only written spaces separate words at that wrap.
+      if (wrapPadding && next?.getCell(0, cell)?.getWidth() === 2 &&
+          line.getCell(line.length - 1, cell)?.getChars() === '') wrapPadding--;
       lines.push({ text: trimmed, spans,
         ...(line.isWrapped ? { wrapped: true } : {}),
-        ...(buffer.getLine(y + 1)?.isWrapped && text.length > trimmed.length
-          ? { wrapPadding: text.length - trimmed.length } : {}) });
+        ...(wrapPadding ? { wrapPadding } : {}) });
     }
     if (options.last === undefined) {
       while (lines.length > firstVisible && lines[lines.length - 1]?.text.trim() === '') lines.pop();

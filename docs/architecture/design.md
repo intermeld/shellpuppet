@@ -494,11 +494,8 @@ safety checks flag another model's reasoning (Claude models at present) passes
 `hideReasoning: true` on every reading call; a session needing the full screen
 leaves it off. The `hideReasoning` filter reads 400 lines of scrollback over
 what it returns, so a block whose first line has scrolled away is still
-recognised. A question the program is waiting on is never
-hidden: the rows the prompt detection claims for a question on screen, and the
-border rows beside them, stay whatever the signature's rules would take, so a
-permission box drawn in the same style as the reasoning keeps every row of its
-own. Grok's box question is the row `│  > ` (two spaces between the bar and
+recognised. The filter keeps the rows a live prompt claims and the border
+rows beside them. Grok's box question is the row `│  > ` (two spaces between the bar and
 `>`); the composer is `│ >` with one space and is not that question. A numbered
 list is not claimed when the only live signal is a question with nothing below
 it and every row of the list sits inside a reasoning block that began above
@@ -519,8 +516,19 @@ Grok Build 1.0.89 can paint a shortcut such as `e edit pattern` below the
 command and draw its radios on rows the terminal still marks as wrapped.
 The reader recognises the shortcut by its key and label inks inside the box,
 and checks the radio count and selection against the live footer. It keeps
-the marked command rows and the question immediately above them.
-Single-session prompt waits read the visible controls on that filtered screen.
+the marked command rows and the question immediately above them. Both can
+span several physical rows. The reader follows a continuation back to its
+marked row using the terminal's wrap flag and the box background from the
+first column. Prompt waits join the visible question across those rows,
+preserving word boundaries at the right edge.
+
+During a redraw Grok can paint the question before the separator above it.
+If the terminal still marks the question as a continuation of reasoning, the
+reasoning block consumes it even when the box reader has verified the row.
+This ordering can only hide text. The preceding reasoning and its genuine
+continuations stay hidden.
+
+Single-session prompt waits read the visible controls on the filtered screen.
 The footer counts radio rows, including a choice without a numeric shortcut.
 Its position in the returned options stays the same when the selection moves.
 Hiding wins over showing when reasoning
