@@ -226,6 +226,12 @@ OpenCode 2.3 queues during a turn when the empty composer has settled for
 control in its footer colours. The progress cells can animate during that
 period. A draft or a panel holding focus keeps the message waiting.
 
+The screen cannot show whitespace a person typed once OpenCode has repainted it, nor
+whether a wrap in a line the daemon did not write is a space or a newline. A
+space-only draft can therefore be read as empty after a resize, and the nudge is
+then typed after those spaces. The check before Enter proves only the daemon's own
+line: any other input after it stops the submit.
+
 Two Qoder specifics worth knowing:
 
 - Its **folder-trust prompt** (`Do you trust the files in this folder?`)
