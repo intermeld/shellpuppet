@@ -454,13 +454,16 @@ extra wait for paint and quiet expires. For Codex, the effective upper bound
 before Enter is the greater of 150 ms and 3 ms per body character, plus
 5 seconds of extra wait, polling every 50 ms. Immediately before Enter, the
 same queued operation checks that the composer still shows exactly the typed
-line or a paste placeholder created by this write, no answerable prompt is
+line or a paste placeholder taken as this write's (below), no answerable prompt is
 showing and no other input has arrived since the body. A placeholder that
 was visible before the body, or whose displayed character count differs from
-the body, is not proof. A placeholder can prove this body only if no input
-was written and nothing was painted for one second before the body: an earlier
-paste could otherwise still paint its placeholder during the wait. Without that,
-only the exact typed line is proof. If this check fails, no Enter is sent and the result
+the body, is not proof. A placeholder is taken as this write's only if no input
+was written and nothing was painted for one second before the body, so an
+earlier paste is not still painting. Without that, only the exact typed line is
+proof. The placeholder carries no identity: an earlier paste that painted its
+placeholder more than a second late, with exactly this body's size and no screen
+change in between, would be mistaken for it. Programs paint a paste within
+milliseconds, so this is accepted as a limitation. If this check fails, no Enter is sent and the result
 reports `submitted: false`. The submit key is otherwise written separately
 on the ordered input chain. Muse keeps its own delay. After Enter, the exact
 remaining draft can receive one further Enter, subject to the same checks.
