@@ -593,17 +593,15 @@ function claimedRows(
   signature: CompiledSignature,
   prompt: DetectedPrompt | null,
 ): ReadonlySet<number> | null {
-  if (prompt === null) return null;
-  const [first, last] = prompt.rows;
-  if (prompt.basis === 'question' && enclosedByReasoning(lines, signature, first, last)) return null;
-  let top = first;
-  while (top > 0 && BORDER_ROW.test(lines[top - 1]!.text)) top--;
-  let bottom = last;
-  while (bottom + 1 < lines.length && BORDER_ROW.test(lines[bottom + 1]!.text)) bottom++;
+  if (prompt?.basis === 'question' && enclosedByReasoning(lines, signature, ...prompt.rows)) return null;
   const claim = moduleFor(signature.name)?.readingRules?.claimPromptRows?.(lines, prompt);
-  if (claim !== undefined && claim !== null) {
-    top = claim[0];
-    bottom = claim[1];
+  const bounds = prompt?.rows ?? claim;
+  if (!bounds) return null;
+  const [first, last] = bounds;
+  let [top, bottom] = claim ?? bounds;
+  if (!claim) {
+    while (top > 0 && BORDER_ROW.test(lines[top - 1]!.text)) top--;
+    while (bottom + 1 < lines.length && BORDER_ROW.test(lines[bottom + 1]!.text)) bottom++;
   }
   const rows = new Set<number>();
   for (let i = top; i <= bottom; i++) {

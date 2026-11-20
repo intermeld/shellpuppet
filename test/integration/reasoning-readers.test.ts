@@ -8,6 +8,7 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { findBrowser } from '../../src/daemon/viewerLauncher.js';
 import { api, eventually, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 
@@ -23,7 +24,7 @@ afterAll(async () => {
 }, 120_000);
 
 /** Start a session that draws a captured screen and then sits still. */
-async function replay(name: string, agent?: string): Promise<string> {
+async function replay(name: string, agent?: string, ready = /Type your message|\? for shortcuts|Ask Codex/): Promise<string> {
   const meta = JSON.parse(fs.readFileSync(path.join(FIXTURES, `${name}.json`), 'utf8')) as {
     cols: number;
     rows: number;
@@ -45,13 +46,12 @@ async function replay(name: string, agent?: string): Promise<string> {
   });
   expect(started.status).toBe(200);
   const id = String(started.body['id']);
-  // The replay is drawn once it is on screen: wait for its composer.
-  let composerScreen = '';
+  let screen = '';
   await eventually(async () => {
     const snap = await api(td.port, td.token, `/sessions/${id}/snapshot`);
-    composerScreen = String(snap.body['screen']);
-    return /Type your message|\? for shortcuts|Ask Codex/.test(composerScreen);
-  }, 30_000, 100, 'the replay composer', () => composerScreen.slice(-500));
+    screen = String(snap.body['screen']);
+    return ready.test(screen);
+  }, 30_000, 100, 'the replay controls', () => screen.slice(-500));
   return id;
 }
 
@@ -74,6 +74,35 @@ async function longWrappedLine(name: string, line: string): Promise<string> {
   }, 30_000, 100, 'the wrapped line in the snapshot', () => visibleScreen.slice(-500));
   return id;
 }
+
+describe('Grok permission box with an edit pattern action', () => {
+  let id: string;
+  beforeAll(async () => {
+    id = await replay('grok-permission-edit-pattern', 'grok', /1\/5:select/);
+  });
+
+  it('keeps the selected option in the filtered snapshot and at its original find row', async () => {
+    const snapshot = await api(td.port, td.token, `/sessions/${id}/snapshot?hideReasoning=1`);
+    expect(snapshot.status).toBe(200);
+    expect(String(snapshot.body['screen'])).toContain('3 (•) Yes, proceed');
+    const find = `/sessions/${id}/find?pattern=Yes%2C%20proceed`;
+    const plain = await api(td.port, td.token, find);
+    expect(plain.body['matches']).toHaveLength(1);
+    const filtered = await api(td.port, td.token, find + '&hideReasoning=1');
+    expect(filtered.status).toBe(200);
+    expect(filtered.body['matches']).toEqual(plain.body['matches']);
+  });
+
+  it('leaves the radio choices uncovered in a filtered screenshot', async (context) => {
+    if (await findBrowser() === null) { context.skip(); return; }
+    const shot = await api(td.port, td.token, `/sessions/${id}/screenshot`, { body: { hideReasoning: true } });
+    expect(shot.status, JSON.stringify(shot.body['diagnostics'] ?? shot.body['error'])).toBe(200);
+    const rows = (shot.body['lines'] as string[]).join('\n');
+    expect(rows).toContain('Always allow:');
+    expect(rows).toContain('3 (•) Yes, proceed');
+    expect(rows).toContain('always-approve mode');
+  }, 120_000);
+});
 
 describe('wrapped lines longer than the reasoning context', () => {
   it('keeps a visible answer in snapshot, lastLines, find and result', async () => {
