@@ -41,8 +41,8 @@ export interface ReadingContext {
 export interface ReadingRules {
   /** Crop only independently framed adjacent UI, before any reading walk. */
   contentRegion?: (lines: readonly StyledLine[]) => readonly StyledLine[];
-  /** Expand the rows owned by a live prompt using this program's own frame. */
-  claimPromptRows?: (lines: readonly StyledLine[], prompt: DetectedPrompt) => readonly [number, number] | null;
+  /** Rows owned by a live frame, even if its controls were painted on physical wraps. */
+  claimPromptRows?: (lines: readonly StyledLine[], prompt: DetectedPrompt | null) => readonly [number, number] | null;
   composer?: (lines: readonly StyledLine[], index: number, signature: CompiledSignature, context: ReadingContext) => boolean;
   busyWithoutComposer?: boolean;
   busy?: (lines: readonly StyledLine[], turnStart: number, chrome: number, signature: CompiledSignature, context: ReadingContext) => boolean;

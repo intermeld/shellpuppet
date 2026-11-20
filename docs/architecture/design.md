@@ -541,7 +541,13 @@ must be the live bottom row. That claim is made only when no question-shaped
 (`│  > `) row and no reasoning start is left in the run, and only when the run
 begins with a command's first-row marker (`│` inside the bar): reasoning sits
 above the question and its text can read `> ` or begin with a colon, so with
-any other row at the top the ordinary rules above decide, unchanged. Hiding wins over showing when reasoning
+any other row at the top the ordinary rules above decide, unchanged.
+Grok Build 1.0.89 can paint a shortcut such as `e edit pattern` below the
+command and draw its radios on rows the terminal still marks as wrapped.
+The reader recognises the shortcut by its key and label inks inside the box,
+and checks the radio count and selection against the live footer. It keeps
+the marked command rows and the question immediately above them.
+Hiding wins over showing when reasoning
 and command text cannot be told apart, so plain command rows near `> ` command
 text, or a command whose footer a redraw has not yet painted, can stay hidden;
 rows carrying the box's own command marker always stay. The limits: a row
