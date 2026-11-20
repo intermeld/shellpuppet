@@ -6,8 +6,11 @@ import { reading } from './reading.js';
 /** Claude Code draws the rules above and below its composer in this grey. */
 const RULE_INK = '#888888';
 
-/** Claude Code's status line: model name, its effort when shown, a ten-cell context bar and a percentage. */
-const CLAUDE_MODEL_LINE = /^ {2}[A-Z][A-Za-z]*(?: [A-Za-z0-9.]+){0,3}(?: (?:low|medium|high|xhigh|max))? [█░]{10} \d{1,3}%$/u;
+/**
+ * Claude Code's status line: a Claude model family and version, its effort when
+ * shown, a ten-cell context bar and a percentage.
+ */
+const CLAUDE_MODEL_LINE = /^ {2}(?:Opus|Sonnet|Haiku|Mythos|Fable) \d+(?:\.\d+)?(?: \(1M context\))?(?: (?:low|medium|high|xhigh|max))? [█░]{10} \d{1,3}%$/u;
 
 /** Claude Code's mode line under its status line, in its own wording. */
 const CLAUDE_MODE_LINE = /^ {2}(?:(?:⏵⏵ (?:auto mode on|accept edits on|bypass permissions on)|⏸ plan mode on)(?: \(shift\+tab to cycle\))?(?: · (?:\d+ shells?|esc to interrupt|↓ to manage))*|\? for shortcuts)$/u;

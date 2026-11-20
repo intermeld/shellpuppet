@@ -155,6 +155,8 @@ describe('what lies below a busy composer', () => {
     expect(claude.nudge!.readiness(claudeBusy(['  Opus 5.5 medium █░░░░░░░░░ 6%', '  ⏵⏵ Allow workspace access']))).toBe('busy');
     expect(claude.nudge!.readiness(claudeBusy(['  Opus 5.5 medium █░░░░░░░░░ 6%', '  ⏵⏵ auto mode on · Allow workspace access']))).toBe('busy');
     expect(claude.nudge!.readiness(claudeBusy(['  Opus 5.5 medium █░░░░░░░░░ 6%', '  ⏵⏵ auto mode on · ctrl+y to approve access']))).toBe('busy');
+    expect(claude.nudge!.readiness(claudeBusy(['  Approve Access █████░░░░░ 50%']))).toBe('busy');
+    expect(muse.nudge!.readiness(museBusy(['  muse-wonder-1.0 · high · Would you like to allow this tool action? · Launch overrides']))).toBe('busy');
     expect(claude.nudge!.readiness(claudeBusy(['  Opus 5.5 medium █░░░░░░░░░ 6%',
       '  ⏵⏵ auto mode on (shift+tab to cycle) · 1 shell · esc to interrupt · ↓ to manage']))).toBe('queue');
     expect(muse.nudge!.readiness(museBusy(['main · ↓ to select', '└ ◇ Allow workspace access', '└ ◆ Cancel access']))).toBe('busy');
