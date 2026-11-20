@@ -51,6 +51,7 @@ import {
   NULL_LOGGER,
   RESERVED_FEATURE_CREDENTIALS,
   SESSION_IDENTITY_ENV_NAMES,
+  validResumeId,
 } from './types.js';
 
 type NudgeAbortReason = 'line-not-seen' | 'other-input-arrived' | 'screen-changed' |
@@ -736,6 +737,9 @@ export class Session implements WaitTarget {
   readonly command: string;
   readonly args: string[];
   /** The agent it was started as, which chooses how its screen is read. */
+  readonly launchProfile: SessionOptions['launchProfile'];
+  private inheritedResumeId?: string;
+  private observedResumeId?: string;
   readonly agent: string;
   readonly agentSource: AgentSource;
   private readonly agentModule: AgentModule | undefined;
@@ -853,7 +857,8 @@ export class Session implements WaitTarget {
     this.command = options.command;
     this.args = options.args ?? [];
     this.label = options.label ?? options.command;
-    this.role = (options.parent === undefined || options.profileLaunch === true) && options.role === 'chair' ? 'chair' : 'delegate';
+    this.launchProfile = options.launchProfile;
+    this.role = (options.parent === undefined || options.launchProfile !== undefined) && options.role === 'chair' ? 'chair' : 'delegate';
     this.purpose = options.purpose ?? '';
     this.startedBy = options.startedBy ?? 'unknown';
     this.parent = options.parent;
@@ -936,6 +941,13 @@ export class Session implements WaitTarget {
       options.env,
     );
     if (deps.identity !== undefined) {
+      if (options.launchProfile && this.agentModule?.resumeId) {
+        const original = this.platform === 'win32'
+          ? Object.fromEntries(Object.entries(sessionEnv).map(([key, value]) => [key.toUpperCase(), value]))
+          : sessionEnv;
+        this.inheritedResumeId = this.agentModule.resumeId(original);
+        sessionEnv['SHELLPUPPET_PROFILE_AGENT'] = this.agent;
+      }
       sessionEnv['SHELLPUPPET_SESSION'] = id;
       sessionEnv['SHELLPUPPET_SESSION_TOKEN'] = deps.identity.token;
       sessionEnv['SHELLPUPPET_DAEMON_INSTANCE'] = deps.identity.instanceId;
@@ -1871,6 +1883,16 @@ export class Session implements WaitTarget {
         since: new Date().toISOString() };
     }
     if (previous !== this.getStalled()) for (const listener of this.stallListeners) listener(this.getStalled());
+  }
+
+  observeResumeId(value: unknown): void {
+    if (this.launchProfile && this.agentModule?.resumeId && validResumeId(value) && value !== this.inheritedResumeId) {
+      this.observedResumeId = value;
+    }
+  }
+
+  get resumeId(): string | null {
+    return this.observedResumeId ?? this.launchProfile?.resumeId ?? null;
   }
 
   getStalled(): StallState | undefined { return this.mcpStall ?? this.stallState; }

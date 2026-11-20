@@ -37,7 +37,8 @@ import { daemonRunning } from '../daemon/liveness.js';
 import { packageVersion } from '../daemon/meta.js';
 import { readRestartHold, restartHoldError } from '../daemon/restartHold.js';
 import type { RestartHold } from '../daemon/restartHold.js';
-import { NULL_LOGGER } from '../core/types.js';
+import { moduleFor } from '../agents/index.js';
+import { validResumeId, NULL_LOGGER } from '../core/types.js';
 import { taskkillTrees } from '../core/session.js';
 import type { Logger } from '../core/types.js';
 
@@ -748,6 +749,8 @@ export async function request(
     const sessionInstance = process.env['SHELLPUPPET_DAEMON_INSTANCE'];
     const presentIdentity = session !== undefined && sessionToken !== undefined
       && sessionInstance !== undefined && sessionInstance === conn.instanceId;
+    const agent = process.env['SHELLPUPPET_PROFILE_AGENT'];
+    const resumeId = presentIdentity && agent ? moduleFor(agent)?.resumeId?.(process.env) : undefined;
     const claim = options.claim ?? process.env['SHELLPUPPET_CLAIM'];
     const claimParts = claim?.match(/^(claim_[a-f0-9]{32}):(.+)$/);
     const response = await fetch(`http://127.0.0.1:${String(conn.port)}${path}`, {
@@ -759,6 +762,7 @@ export async function request(
           ? { 'x-shellpuppet-inside-session': '1' } : {}),
         ...(actor !== undefined ? { 'x-shellpuppet-actor': actor } : {}),
         ...(presentIdentity ? {
+          ...(validResumeId(resumeId) ? { 'x-shellpuppet-resume-id': resumeId } : {}),
           'x-shellpuppet-session': session,
           'x-shellpuppet-session-token': sessionToken,
         } : {}),

@@ -715,7 +715,8 @@ start. Connected feature credentials reserved under ADR-007 and ShellPuppet's
 per-session variables, including `SHELLPUPPET_SESSION`, are excluded.
 This includes `SHELLPUPPET_SESSION_TOKEN`, `SHELLPUPPET_DAEMON_INSTANCE`,
 `SHELLPUPPET_CLI` and `SHELLPUPPET_HOME`, for both an explicit list and `"all"`.
-An explicit list naming one of these five variables gets a config problem;
+`SHELLPUPPET_PROFILE_AGENT` is also reserved for the daemon.
+An explicit list naming one of these variables gets a config problem;
 the profile remains available with that entry ignored. The pre-existing
 `SHELLPUPPET_` exclusion also covers these names in `"all"`. The daemon gives
 every session its own absolute home as `SHELLPUPPET_HOME`, so a launched process
@@ -875,4 +876,6 @@ does not see what you, or an agent, type after the shell is up.
 | `~/.shellpuppet/config.json` | This configuration |
 | `~/.shellpuppet/daemon.json` | Daemon discovery record + client token (managed; do not edit) |
 | `~/.shellpuppet/daemon.log` | Daemon log (JSONL) |
+| `~/.shellpuppet/previous-sessions.json` | Latest restart record for live profile sessions, written before shutdown |
+| `~/.shellpuppet/launcher-claims.json` | Granted outside claim names, ids, last activity and proof digests |
 | `~/.shellpuppet/audit.log` | Action audit (JSONL, append-only) |

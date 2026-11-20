@@ -110,8 +110,21 @@ export interface SessionOptions {
   /** The verified caller session, when a session starts another session. */
   parent?: string;
   /** Set internally from a launch profile, never from a client request. */
-  profileLaunch?: boolean;
+  launchProfile?: ProfileOrigin;
   role?: 'chair' | 'delegate';
+}
+
+/** Keep a caller value a single literal shell word and disallow option prefixes. */
+export function validResumeId(id: unknown): id is string {
+  return typeof id === 'string' && id.length >= 1 && id.length <= 128 &&
+    /^[A-Za-z0-9]/.test(id) && !/[^A-Za-z0-9-]/.test(id);
+}
+
+export interface ProfileOrigin {
+  profile: string;
+  folder: string;
+  folderChoice: { folder?: string; rootIndex?: number; folderPath?: string };
+  resumeId?: string;
 }
 
 /** One session's public state, as returned by `terminal_list`. */
@@ -393,6 +406,7 @@ export const RESERVED_FEATURE_CREDENTIALS: ReadonlySet<string> = new Set();
 export const SESSION_IDENTITY_ENV_NAMES: ReadonlySet<string> = new Set([
   'SHELLPUPPET_SESSION',
   'SHELLPUPPET_SESSION_TOKEN',
+  'SHELLPUPPET_PROFILE_AGENT',
   'SHELLPUPPET_DAEMON_INSTANCE',
   'SHELLPUPPET_CLI',
   'SHELLPUPPET_HOME',

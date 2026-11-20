@@ -161,6 +161,17 @@ if the state file names another daemon that is running, even one too busy to ans
 - **Shutdown kills all session process trees** (§3.1). The daemon must never exit and
   strand running agent CLIs.
 
+**Relaunch after restart.** A restart or a stop with a restart hold asks for
+a snapshot in the authenticated shutdown request (`restart: true`). The
+daemon first checks the force requirement. Before killing any session it
+atomically replaces `previous-sessions.json` in its private home using a
+mode 0600 file. A write failure refuses shutdown. Each live profile session
+contributes its profile, current participant name, resolved folder, original
+folder selection, agent, conversation id if known, and shutdown timestamp.
+The version 1 file holds only the most recent restart. A granted caller reads
+`GET /launcher/previous` and chooses entries to launch through the normal
+profile checks. A normal stop or process crash does not produce this record.
+
 ### 2.4 Module layout
 
 ```

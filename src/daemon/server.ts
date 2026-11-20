@@ -46,7 +46,7 @@ import { WaitConditionError } from '../core/waiter.js';
 import { agentNames, hideReasoning, latestResult, programName, signatureForSession } from '../core/reasoning.js';
 import type { CompiledSignature, FilteredLines } from '../core/reasoning.js';
 import type { Session } from '../core/session.js';
-import { DEFAULT_WAIT_TIMEOUT_MS, ENV_NAME_PATTERN, MAX_WAIT_TIMEOUT_MS, WAIT_POLL_INTERVAL_MS, howSessionEnded } from '../core/types.js';
+import { validResumeId, DEFAULT_WAIT_TIMEOUT_MS, ENV_NAME_PATTERN, MAX_WAIT_TIMEOUT_MS, WAIT_POLL_INTERVAL_MS, howSessionEnded } from '../core/types.js';
 import type {
   Logger,
   PolicyConfig,
@@ -105,7 +105,6 @@ import {
   expandProfileText,
   resolveLaunchCommand,
   resolveAnyFolder,
-  validResumeId,
 } from './launchProfiles.js';
 import type { LaunchFolder, LaunchProfile, LauncherConfig } from './launchProfiles.js';
 import { listRootFolders, resolveRootFolder } from './launchProfiles.js';
@@ -2036,7 +2035,10 @@ export class Daemon {
       label: body['name'] === undefined
         ? (profile.label !== undefined ? expandProfileText(profile.label, profile.name, folderLabel) : profile.name)
         : requestedName,
-      profileLaunch: launcher !== undefined,
+      launchProfile: { profile: profile.name, folder: resolved.cwd,
+        folderChoice: freeCwd !== undefined ? { folderPath: freeCwd } : typeof folderName === 'string'
+          ? { folder: folderName, ...(typeof rootIndex === 'number' ? { rootIndex } : {}) } : {},
+        ...(typeof resumeId === 'string' ? { resumeId } : {}) },
       role: launcher !== undefined || caller.session === undefined ? (profile.role ?? ('delegate' as const)) : ('delegate' as const),
       ...((launcher?.id ?? caller.session) === undefined ? {} : { parent: launcher?.id ?? caller.session }),
       ...(profile.purpose !== undefined
@@ -2067,6 +2069,7 @@ export class Daemon {
       }
     }
 
+    if (this.stopping) { json(res, 503, { error: 'The daemon is stopping.' }); return; }
     if (launcher && this.grantedLauncher(req)?.id !== launcher.id) {
       json(res, 403, { error: 'Session launch permission required.' });
       return;
@@ -2601,6 +2604,9 @@ export class Daemon {
       return;
     }
 
+    if (caller.session !== undefined) {
+      this.manager.get(caller.session)?.observeResumeId(req.headers['x-shellpuppet-resume-id']);
+    }
     return this.callerContext.run(caller.session, () =>
       this.handleClientRequest(req, res, url, segments, actor));
   }
@@ -2613,6 +2619,17 @@ export class Daemon {
       ...(typeof id === 'string' && typeof token === 'string'
         && this.manager.recognisesCaller(id, token) ? { session: id } : {}),
     };
+  }
+
+  private savePreviousSessions(): void {
+    const endedAt = new Date(this.now()).toISOString();
+    const sessions = this.manager.list().flatMap(summary => {
+      const session = this.manager.get(summary.id);
+      if (!session || session.exited || session.isKilled || !session.launchProfile) return [];
+      return [{ ...session.launchProfile, name: this.mailbox.participant(session.id)?.name ?? session.launchProfile.profile,
+        agent: session.agent, resumeId: session.resumeId, endedAt }];
+    });
+    writePrivateRecord(path.join(this.options.home, 'previous-sessions.json'), { version: 1, sessions });
   }
 
   private saveLauncherClaims(excludeId?: string): void {
@@ -2949,6 +2966,7 @@ export class Daemon {
     try {
       if (segments[0] === 'daemon' && segments[1] === 'shutdown' && req.method === 'POST') {
         const body = await readBody(req);
+        if (this.stopping) { json(res, 200, { ok: true, stopping: true }); return; }
         const force = asBoolean(body['force']) ?? false;
         const live = this.manager.liveCount();
         if (live > 0 && !force) {
@@ -2960,6 +2978,7 @@ export class Daemon {
           return;
         }
         this.saveLauncherClaims();
+        if (body['restart'] === true) this.savePreviousSessions();
         this.audit.record(actor, 'shutdown', undefined, { force, liveSessions: live });
         json(res, 200, { ok: true, stopping: true });
         void this.stop().then(() => {
@@ -2982,6 +3001,19 @@ export class Daemon {
 
       if (req.method === 'POST' && segments[0] === 'desktop' && segments[1] === 'open' && segments.length === 2) {
         await this.handleDesktopOpen(req, res, actor);
+        return;
+      }
+
+      if (url.pathname === '/launcher/previous' && req.method === 'GET') {
+        if (!this.grantedLauncher(req)) { json(res, 403, { error: 'Session launch permission required.' }); return; }
+        const file = path.join(this.options.home, 'previous-sessions.json');
+        try {
+          const record: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+          json(res, 200, record);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') json(res, 200, { version: 1, sessions: [] });
+          else json(res, 500, { error: 'The previous sessions record could not be read.' });
+        }
         return;
       }
 
