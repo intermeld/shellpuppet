@@ -1,4 +1,6 @@
 import type { PromptShape } from '../types.js';
+import { normalise } from '../../core/promptText.js';
+import { actionBox } from './actionBox.js';
 
 /**
  * Grok's permission question row: two spaces, the bar, two spaces, `>`,
@@ -64,7 +66,24 @@ export const radioRows: PromptShape = {
   marker: /\([•●]\)/,
 };
 
-export const prompts: PromptShape[] = [radioRows, {
+const actionMenu: PromptShape = {
+  kind: 'menu', order: 1,
+  detect: (raw) => {
+    const box = actionBox(raw);
+    if (!box) return null;
+    const options = raw.slice(box.firstOption, box.bottom).map((line) => normalise(line.slice(5)));
+    const question = box.questionRow === undefined ? options[0]! : normalise(raw[box.questionRow]!.replace(GROK_BOX_QUESTION, ''));
+    const signature = [question, ...options].join(' | ').replace(/\([•●]\)/gu, '(○)');
+    return {
+      question, options, signature, selectedOption: box.selectedRow - box.firstOption,
+      optionRows: options.map((_, index) => box.firstOption + index),
+      // Only the styled claim establishes ownership of the command and action.
+      rows: [box.firstOption, box.bottom - 1], basis: 'frame',
+    };
+  },
+};
+
+export const prompts: PromptShape[] = [actionMenu, radioRows, {
   kind: 'rows', keyHint: KEY_HINT_ROW,
   questionPrefix: GROK_BOX_QUESTION, commandStart: commandAboveRadios,
 }];
