@@ -78,6 +78,7 @@ const observe = `(() => {
     return { frames: gaps.length, samples: gaps.length,
       frameInterval: gaps[Math.floor(gaps.length / 2)] ?? null,
       maxFrameGap: gaps.at(-1) ?? null,
+      firstFrameAfterStart: times.length ? times[0] - start : null, lastFrameBeforeEnd: times.length ? end - times.at(-1) : null,
       frameSpan: times.length < 2 ? 0 : times.at(-1) - times[0], observedMs: end - start };
   };
   window.__showEndBanner = () => {
@@ -156,7 +157,12 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
       if (!browser) { context.skip(); return; }
       await withPage(mode, 24, async ({ evaluate }, input) => {
         await evaluate(deliveredNoticeScript);
-        await evaluate('window.__delivered = observeDeliveredNotice(__notice.term, __notice.notices, performance.now(), 0)');
+        // A parsed snapshot and an alert can precede Chromium's first rendered
+        // frame. Arm the cursor observer before releasing the real PTY word.
+        await evaluate(`(async () => {
+          window.__delivered = observeDeliveredNotice(__notice.term, __notice.notices, performance.now(), 0);
+          await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        })()`);
         await input('r');
         // Row 8 starts the neutral section of each word. The fourth arrival in
         // the long word closes the fourth top rest. The third in the rest word
