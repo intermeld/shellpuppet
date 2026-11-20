@@ -157,12 +157,12 @@ make a reachable terminal safe.
   ports, so a planted `sp_dash` is tried and skipped. The value the daemon
   issued still wins.
   Dashboard windows opened from the page use the same browser profile and
-  `sp_dash` cookie. The URL fragment carries only a window identifier and
-  screen coordinates, or a session id for Pop out. It carries no grant or
-  cookie. `BroadcastChannel` shares the window roster and pane assignment
-  within that browser profile; each window reads session state from the
-  daemon's authenticated feed. Closing a window returns its panes to another
-  window. The channel cannot mint a grant or widen the cookie's authority.
+  `sp_dash` cookie. The URL fragment carries only a window identifier, no
+  grant or cookie. The authenticated dashboard feed owns the window roster,
+  designation and pane assignments. Its move command checks the recorded
+  source owner and an open target. `BroadcastChannel` synchronises preferences;
+  its messages cannot assign panes. Closing a window returns its
+  panes to another open window.
 - **DNS-rebinding defences.** Any website you visit can make your browser send
   requests to loopback ports. The daemon rejects requests whose `Host` header
   is not its own, rejects WebSocket upgrades from foreign `Origin`s, sends no

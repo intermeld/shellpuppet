@@ -18,7 +18,7 @@ client token must remain outside the browser.
   ShellPuppet's isolated Chromium profile. Native xterm.js panes share the
   single-session viewer's terminal client. The daemon still owns every PTY;
   the dashboard adds no outbound connection. Each session appears in one
-  window only, including when panes are assigned to other screens.
+  window only, including when panes are assigned to other windows.
 - **A browser credential for this dashboard.** This is not a user sign-in:
   there is no login, password or account. `shellpuppet dashboard` mints a
   one-use grant and opens the dashboard in its own browser profile; the page
@@ -115,19 +115,14 @@ client token must remain outside the browser.
   shared text size if it fits, otherwise the largest size that shows its
   whole screen. The header keeps its floor note. Growing above the floor
   restores normal fitting.
-- **Windows and placement.** A pane's Pop out control opens that session in
-  its own movable, full-screen-capable window. It leaves the grid and returns
-  when that window closes. This uses the same multi-window support as panes
-  assigned to other screens: one click opens at most one window, and an
-  unavailable screen-placement API falls back to a window the person moves.
-  A profile's `open` setting is `grid` by default, or `focus` or `window`.
-  It can therefore open a supervising session focused or popped out while
-  sessions it starts appear in the grid. Dashboard windows fill their readable
-  capacities in stable creation order, including windows opened separately.
-  Once all are full, further sessions are spread in proportion to capacity.
-  A window that closes releases its sessions promptly; slowed browser timers
-  alone do not remove it from the roster. Auto fit runs in a window that
-  receives a session.
+- **Windows and placement.** New window opens an empty dashboard window that
+  the person can move to another screen. Pop out opens the same kind of window
+  and moves one pane into it. Panes can also be dragged between windows. One
+  window is designated for agent and CLI starts; each window's own launcher
+  places its sessions there. A profile's `open` setting is `grid` by default,
+  or `focus` or `window`. The daemon owns the roster and assignments, and a
+  closed window releases its sessions to another. Auto fit runs in the
+  window that receives a moved session.
 - **Handoff and attention.** An agent joins a person-started session through
   the existing list and session tools; Copy session id helps the handoff.
   Prompt attention uses a badge and title count, with no sound, operating
@@ -143,14 +138,14 @@ client token must remain outside the browser.
   allow-all policy. A named shell profile still grants shell access when a
   person explicitly configures it.
 - Mirroring every session in every window wastes readable space. Assigning
-  each session to one window lets each screen fill to its readable capacity.
+  each session to one window keeps each pane in one place.
 - A separate port would not isolate cookies, which are not scoped to ports.
   A single multiplexed stream would also couple sessions' backpressure.
 
 ## Consequences
 
 - The design specifies the dashboard routes, document proof, pane geometry,
-  launch profiles, screen assignment and shared viewer client. The security
+  launch profiles, window assignment and shared viewer client. The security
   model states its authority and residual risks.
 - A dashboard cookie at `Path=/` is presented across this origin. Script
   running in any page the daemon serves could use it to act on every live

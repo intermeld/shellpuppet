@@ -390,20 +390,21 @@ arguments to an `.exe` or `.com`, use `--no-shell`; the same choice is
 starts run directly by default; an explicit `shell: true` uses `/bin/sh -c`
 and its shell syntax.
 
-`shellpuppet dashboard` opens a window with a pane for every session in ShellPuppet's
-isolated browser profile and prints only whether a window opened. It never
+`shellpuppet dashboard` opens a dashboard window in ShellPuppet's
+isolated browser profile and prints only whether a window opened. The first
+window receives existing sessions; later windows open empty. It never
 prints the link, and it never uses your default browser: if the isolated
 window cannot open, the command fails rather than hand the grant to a profile
 with extensions.
 
-To share sessions across screens, use **Open on screen** in the dashboard
-toolbar, or open another dashboard window and move it yourself. Each session
-appears in one window. Windows fill their readable grid capacity in order;
-when every window is full, extra sessions are shared according to each
-window's capacity. The toolbar shows the number of sessions in this window
-and the number of sharing windows. The screen buttons follow windows moved
-between screens. Closing a window returns its sessions to the others. Auto fit
-refits a session in the window that receives it.
+Use **New window** to open an empty dashboard window and move it to another
+screen if you wish. Drag a pane title into another window to move that session;
+drop it on a pane to insert there, or elsewhere to append. **Pop out** opens
+an ordinary new dashboard window with the pane. **New sessions here** marks
+the one window that receives sessions started by agents or the CLI. A window's
+own launcher starts its session there. When the designated window closes, the
+most recently focused remaining window takes over. Closing any window moves
+its panes to a remaining window. Auto fit refits a moved session there.
 
 Auto fit sizes each terminal to its pane. If 80 by 24 cells cannot fit at your
 chosen text size, the pane keeps exactly 80 by 24 cells and shows the whole

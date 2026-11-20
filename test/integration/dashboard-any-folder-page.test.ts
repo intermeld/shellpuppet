@@ -57,7 +57,8 @@ describe('any-folder dashboard controls', () => {
           return nativeFetch(target, options);
         };
       })()`,
-      probe: `(() => document.getElementById('profile')?.value === 'open' ? true : null)()`,
+      probe: `(() => document.getElementById('profile')?.value === 'open' &&
+        document.getElementById('start')?.disabled === false ? true : null)()`,
       interact: async ({ evaluate }) => evaluate(`(async () => {
         const box = document.getElementById('folder-path');
         const browse = document.getElementById('browse-folder');
