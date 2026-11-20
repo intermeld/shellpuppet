@@ -94,7 +94,6 @@ function params<T extends z.ZodRawShape>(shape: T): z.ZodObject<T, z.core.$stric
 }
 
 export interface McpToolOptions extends ClientOptions {
-  onDaemonSuccess?: () => void;
   /**
    * Register the session_* messaging tools. The server sets it from
    * `messaging.enabled` in config.json when it starts; off by default, so a
@@ -248,7 +247,6 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
       const message = typeof payload['error'] === 'string' ? payload['error'] : 'Request failed.';
       throw new Error(message);
     }
-    options.onDaemonSuccess?.();
     return { payload, warnings };
   };
 

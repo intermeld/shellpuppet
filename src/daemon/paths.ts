@@ -156,13 +156,15 @@ export function ensureHome(home: string): void {
 }
 
 /**
- * What the state file holds: a daemon record; content that is not one (an
+ * The state file can hold a live discovery record, a credential-free restart
+ * handoff for the next owner, or content that is neither (an
  * emptied, truncated or hand-edited file), kept so that only that same content
  * is ever removed; nothing; or a read that failed, which says nothing about
  * the content and so is left alone.
  */
 export type DaemonStateFile =
   | { kind: 'record'; state: DaemonState }
+  | { kind: 'restart-handoff'; raw: string; instanceId: string }
   | { kind: 'not-a-record'; raw: string }
   | { kind: 'missing' }
   | { kind: 'unreadable' };
@@ -176,11 +178,10 @@ export function inspectDaemonState(home: string): DaemonStateFile {
       ? { kind: 'missing' }
       : { kind: 'unreadable' };
   }
-  const state = parseDaemonState(raw);
-  return state !== null ? { kind: 'record', state } : { kind: 'not-a-record', raw };
+  return parseDaemonState(raw);
 }
 
-function parseDaemonState(raw: string): DaemonState | null {
+function parseDaemonState(raw: string): DaemonStateFile {
   try {
     const parsed: unknown = JSON.parse(raw);
     if (
@@ -190,12 +191,14 @@ function parseDaemonState(raw: string): DaemonState | null {
       typeof (parsed as DaemonState).token === 'string' &&
       typeof (parsed as DaemonState).pid === 'number'
     ) {
-      return parsed as DaemonState;
+      return { kind: 'record', state: parsed as DaemonState };
     }
-    return null;
-  } catch {
-    return null;
-  }
+    if (typeof parsed === 'object' && parsed !== null && 'restartFrom' in parsed &&
+        typeof parsed.restartFrom === 'string' && /^[a-f0-9-]{36}$/.test(parsed.restartFrom)) {
+      return { kind: 'restart-handoff', raw, instanceId: parsed.restartFrom };
+    }
+  } catch { /* Incomplete or hand-edited discovery record. */ }
+  return { kind: 'not-a-record', raw };
 }
 
 export function readDaemonState(home: string): DaemonState | null {
@@ -216,9 +219,10 @@ export function removeDaemonState(home: string): void {
  * clearing a stale record cannot delete one that another daemon has just
  * claimed in its place.
  */
-export function removeDaemonStateIf(home: string, record: { pid: number; port: number }): void {
+export function removeDaemonStateIf(home: string, record: { pid: number; port: number; instanceId?: string }): void {
   const current = readDaemonState(home);
-  if (current !== null && current.pid === record.pid && current.port === record.port) {
+  if (current !== null && current.pid === record.pid && current.port === record.port &&
+      (record.instanceId === undefined || current.instanceId === record.instanceId)) {
     removeDaemonState(home);
   }
 }
@@ -231,7 +235,7 @@ export function removeDaemonStateIf(home: string, record: { pid: number; port: n
  */
 export function removeDaemonStateIfNotARecord(home: string, raw: string): void {
   const current = inspectDaemonState(home);
-  if (current.kind === 'not-a-record' && current.raw === raw) {
+  if ((current.kind === 'not-a-record' || current.kind === 'restart-handoff') && current.raw === raw) {
     removeDaemonState(home);
   }
 }

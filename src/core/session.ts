@@ -760,6 +760,8 @@ export class Session implements WaitTarget {
   private readonly readyListeners = new Set<() => void>();
   private readonly stallListeners = new Set<(state: StallState | undefined) => void>();
   private readonly stallTracker = new StallTracker();
+  // Ignore late tool requests from an adapter whose final report already arrived.
+  private readonly retiredAdapters = new Set<string>();
   private readonly connectedAdapters = new Set<string>();
   private mcpStall?: StallState;
   private stallState: StallState | undefined;
@@ -1696,20 +1698,24 @@ export class Session implements WaitTarget {
     if (this.exitedFlag || this.isKilled) return;
     const previous = this.getStalled();
     if (status === 'connected') {
+      if (this.retiredAdapters.has(adapter)) return;
       this.connectedAdapters.add(adapter);
       this.mcpStall = undefined;
-    } else if (this.connectedAdapters.delete(adapter) && status === 'failed' &&
-      this.connectedAdapters.size === 0 && this.mcpStall === undefined) {
-      this.mcpStall = { reason: 'mcp-connection-lost', description: 'The ShellPuppet MCP connection failed.',
-        since: new Date().toISOString() };
+    } else {
+      this.retiredAdapters.add(adapter);
+      const wasConnected = this.connectedAdapters.delete(adapter);
+      if (wasConnected && status === 'failed' && this.connectedAdapters.size === 0 && this.mcpStall === undefined) {
+        this.mcpStall = { reason: 'mcp-connection-lost', description: 'The ShellPuppet MCP connection failed.',
+          since: new Date().toISOString() };
+      }
     }
     if (previous !== this.getStalled()) for (const listener of this.stallListeners) listener(this.getStalled());
   }
 
-  observeResumeId(value: unknown): void {
-    if (this.launchProfile && this.agentModule?.resumeIdMarkers && validResumeId(value) && !this.inheritedResumeIds.includes(value)) {
-      this.observedResumeId = value;
-    }
+  observeResumeId(...candidates: unknown[]): void {
+    if (!this.launchProfile || !this.agentModule?.resumeIdMarkers) return;
+    const own = candidates.find((id): id is string => validResumeId(id) && !this.inheritedResumeIds.includes(id));
+    if (own !== undefined) this.observedResumeId = own;
   }
 
   get resumeId(): string | null {

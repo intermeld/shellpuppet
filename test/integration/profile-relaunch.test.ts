@@ -14,7 +14,8 @@ it('records a live agent conversation before restart and relaunches it from the 
   writeFileSync(file, `
     const {execFile} = require('node:child_process');
     const fs = require('node:fs');
-    process.env.CODEX_THREAD_ID = 'thread-42';
+    if (process.env.CODEX_THREAD_ID !== 'parent-thread') throw new Error('Missing inherited marker');
+    process.env.CODEX_SESSION_ID = 'thread-42';
     execFile(process.execPath, [process.env.SHELLPUPPET_CLI, 'list', '--json'], error => {
       fs.writeFileSync('observed.json', JSON.stringify({success: !error, args: process.argv.slice(2)}));
     });
@@ -22,9 +23,9 @@ it('records a live agent conversation before restart and relaunches it from the 
   `);
   const config = parseDaemonConfig({ launcher: { sessionLaunch: ['outside'], profiles: [
     { name: 'worker', command: process.execPath, args: [file], shell: false, cwd: 'ask',
-      folders: [{ name: 'repo', path: home }], agent: 'codex', resume: ['--resume', '{id}'] }
+      folders: [{ name: 'repo', path: home }], agent: 'codex', envFromDaemon: ['CODEX_THREAD_ID'], resume: ['--resume', '{id}'] }
   ] } }).config;
-  const opts = { home, launchProfiles: config.launcher, messaging: { enabled: true, allow: [] } };
+  const opts = { home, daemonEnv: { CODEX_THREAD_ID: 'parent-thread' }, launchProfiles: config.launcher, messaging: { enabled: true, allow: [] } };
   let td = await startTestDaemon(opts);
   const cli = join(repoRoot, 'dist', 'cli', 'index.js');
   let client: Client | undefined;
@@ -46,16 +47,15 @@ it('records a live agent conversation before restart and relaunches it from the 
     if (process.platform !== 'win32') expect(statSync(record).mode & 0o777).toBe(0o600);
     td = await startTestDaemon(opts);
     const complete = readFileSync(record, 'utf8');
-    try {
-      writeFileSync(record, JSON.stringify({ version: 1, sessions: [{ profile: 'worker', name: 's12' }] }));
-      const legacy = await runCli('previous', '--json');
-      expect(JSON.parse(legacy.stdout)).toMatchObject({ sessions: [{ name: null }] });
-    } finally { writeFileSync(record, complete); }
     const { stdout } = await runCli('previous', '--json');
     const saved = JSON.parse(stdout) as { sessions: { profile: string; name: string; resumeId: string; endedAt: string; folderChoice: object }[] };
     expect(saved.sessions).toEqual([expect.objectContaining({ profile: 'worker', name: 'my-worker', agent: 'codex',
       folder: home, folderChoice: { folder: 'repo' }, resumeId: 'thread-42' })]);
     expect(Number.isFinite(Date.parse(saved.sessions[0]!.endedAt))).toBe(true);
+    try {
+      writeFileSync(record, JSON.stringify({ version: 1, sessions: [{ profile: 'worker', name: 's12' }] }));
+      await expect(runCli('previous', '--json')).rejects.toThrow(/snapshot/i);
+    } finally { writeFileSync(record, complete); }
     client = new Client({ name: 'test', version: '1' });
     await client.connect(new StdioClientTransport({ command: process.execPath, args: [cli, 'mcp'], env }));
     expect((await client.listTools()).tools).toHaveLength(12);

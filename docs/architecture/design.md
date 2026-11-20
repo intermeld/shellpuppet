@@ -167,11 +167,16 @@ daemon first checks the force requirement. Before killing any session it
 atomically replaces `previous-sessions.json` in its private home using a
 mode 0600 file on POSIX or an explicit owner-only ACL on Windows. The daemon
 logs any record-write failure, includes a warning in the shutdown result and
-continues the restart. The last complete snapshot remains available. Each live profile session
+continues the restart. Each live profile session
 contributes its profile, current participant name, resolved folder, original
 folder selection, agent, conversation id if known, and shutdown timestamp.
 A system-assigned name is saved as null. Omit it when relaunching.
-The version 1 file holds only the most recent restart. A granted caller reads
+The version 1 file includes the outgoing daemon's `outgoingInstanceId`. Even if
+the snapshot write fails, the owner replaces its discovery record with a credential-free
+`{"restartFrom":"<instance id>"}` handoff. The next owner consumes this
+handoff when claiming the home. A retained snapshot from another owner or
+an unstamped legacy file receives HTTP 409. CLI and MCP readers see the same
+error. A granted caller reads
 `GET /launcher/previous` and chooses entries to launch through the normal
 profile checks. A normal stop or process crash does not produce this record.
 
@@ -886,10 +891,12 @@ configurable 300 s. A wrongly low timeout is indistinguishable from a hard failu
 ### 3.2 Sessions that stall, noticed
 
 A managed MCP adapter reports its completed handshake to its own authenticated
-session. The adapter checks the registration response and retries after a transient failure,
-including when another daemon call succeeds. A broken or reset stdio pipe on the last known connected adapter raises
-`mcp-connection-lost` through the existing stall events until a new handshake
-or session exit. Normal EOF, idle time and an absent adapter are inconclusive.
+session. Each authenticated tool call identifies its adapter before the daemon
+handles the request, including while handshake registration is being retried.
+The adapter retries a refused terminal report while its original daemon and
+session are available. A broken or reset stdio pipe on the last known connected adapter raises
+`mcp-connection-lost` through the existing stall events until a replacement registers or makes
+an authenticated tool call, or the session exits. Normal EOF, idle time and an absent adapter are inconclusive.
 
 A supported error block at the end of an idle turn or a persistent local server
 connection banner is `stalled`, distinct

@@ -86,7 +86,6 @@ import {
   writePrivateRecord,
   inspectDaemonState,
   readDaemonState,
-  removeDaemonState,
   removeDaemonStateIf,
   removeDaemonStateIfNotARecord,
 } from './paths.js';
@@ -702,6 +701,8 @@ export class Daemon {
   private statePublishTimer: NodeJS.Timeout | null = null;
   private statePublishRunning = false;
   /** What this daemon published in daemon.json, once it has claimed it. */
+  private previousInstanceId?: string;
+  private claimsRestored = false;
   private publishedState: DaemonState | null = null;
   private readonly instanceId = randomUUID();
   /** The pid of another running daemon already reported as owning daemon.json. */
@@ -869,6 +870,7 @@ export class Daemon {
     const existing = readDaemonState(home);
     if (existing !== null) {
       if (await this.incumbentRunning(existing)) throw new AlreadyRunningError(existing);
+      if (this.stopping) throw new Error('Daemon stopped during startup.');
       this.logger.info('clearing stale daemon state', { stalePid: existing.pid });
       removeDaemonStateIf(home, existing);
     }
@@ -887,6 +889,10 @@ export class Daemon {
         resolve();
       });
     });
+    if (this.stopping) {
+      await this.closeServerOnly();
+      throw new Error('Daemon stopped during startup.');
+    }
     const address = this.server.address();
     if (address === null || typeof address === 'string') {
       throw new Error('Failed to determine bound port.');
@@ -920,11 +926,13 @@ export class Daemon {
         if (winner.kind === 'record' && (await this.incumbentRunning(winner.state))) {
           throw new AlreadyRunningError(winner.state);
         }
+        if (this.stopping) throw new Error('Daemon stopped during startup.');
         if (winner.kind === 'record') removeDaemonStateIf(home, winner.state);
-        if (winner.kind === 'not-a-record') {
-          this.logger.warn('clearing a daemon.json that holds no daemon record', {
-            length: winner.raw.length,
-          });
+        if (winner.kind === 'restart-handoff') {
+          this.previousInstanceId = winner.instanceId;
+          removeDaemonStateIfNotARecord(home, winner.raw);
+        } else if (winner.kind === 'not-a-record') {
+          this.logger.warn('clearing a daemon.json that holds no daemon record', { length: winner.raw.length });
           removeDaemonStateIfNotARecord(home, winner.raw);
         }
         if (!claimDaemonState(home, state)) {
@@ -939,13 +947,17 @@ export class Daemon {
       throw error;
     }
 
+    this.publishedState = state;
     const claimsFile = path.join(home, 'launcher-claims.json');
-    if (fs.existsSync(claimsFile)) {
-      try {
-        const rows: unknown = JSON.parse(fs.readFileSync(claimsFile, 'utf8'));
-        this.claimCount = this.mailbox.restoreClaims(rows, this.options.messaging?.enabled ? this.launchProfiles.sessionLaunch ?? [] : []);
-        this.saveLauncherClaims();
-      } catch { this.logger.warn('Could not restore saved launcher claims.'); }
+    try {
+      const rows: unknown = JSON.parse(fs.readFileSync(claimsFile, 'utf8'));
+      if (!Array.isArray(rows)) throw new Error('Expected saved launcher claims to be an array.');
+      this.claimCount = this.mailbox.restoreClaims(rows, this.options.messaging?.enabled ? this.launchProfiles.sessionLaunch ?? [] : []);
+      this.claimsRestored = true;
+      this.saveLauncherClaims();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') this.claimsRestored = true;
+      else this.logger.warn(this.claimsRestored ? 'Could not update saved launcher claims.' : 'Could not restore saved launcher claims.');
     }
 
     // Belt and braces for the unlink/claim TOCTOU sliver: shortly after
@@ -956,7 +968,7 @@ export class Daemon {
       const current = readDaemonState(home);
       if (
         current !== null &&
-        current.pid !== process.pid &&
+        current.instanceId !== this.instanceId &&
         this.manager.size() === 0 &&
         this.sockets.size === 0
       ) {
@@ -986,7 +998,6 @@ export class Daemon {
       );
     }
 
-    this.publishedState = state;
     this.statePublishTimer = setInterval(() => {
       void this.keepStatePublished();
     }, this.options.statePublishCheckMs ?? STATE_PUBLISH_CHECK_MS);
@@ -1135,8 +1146,8 @@ export class Daemon {
 
   // ------------------------------------------------------------------- stop
   /**
-   * Kill every session's process tree, close everything, remove the state
-   * file (unless we lost the race and it now belongs to the winner).
+   * Kill every session's process tree and release our discovery record. A
+   * restart leaves a credential-free handoff for the next owner.
    * The daemon must never exit and strand running agent CLIs (design §2.3).
    */
   stop(opts: { removeState?: boolean; restart?: boolean } = {}): Promise<void> {
@@ -1144,9 +1155,14 @@ export class Daemon {
     // awaits the one real shutdown.
     if (this.stopPromise === null) {
       this.stopping = true;
-      if (opts.removeState !== false) {
-        this.writeShutdownRecord('launcher-claims.json', () => this.saveLauncherClaims());
-        if (opts.restart) this.writeShutdownRecord('previous-sessions.json', () => this.savePreviousSessions());
+      if (opts.removeState !== false && this.publishedState &&
+          readDaemonState(this.options.home)?.instanceId === this.instanceId) {
+        if (this.claimsRestored) this.writeShutdownRecord('launcher-claims.json', () => this.saveLauncherClaims());
+        if (opts.restart) {
+          this.writeShutdownRecord('previous-sessions.json', () => this.savePreviousSessions());
+          this.writeShutdownRecord('daemon.json', () =>
+            writePrivateRecord(daemonStatePath(this.options.home), { restartFrom: this.instanceId }));
+        }
       }
       this.stopPromise = this.doStop(opts);
     }
@@ -1218,15 +1234,10 @@ export class Daemon {
       ]);
       if (timer !== undefined) clearTimeout(timer);
     }
-    if (opts.removeState !== false) {
-      // Remove this daemon's record, or a file that holds none. A file that
-      // cannot be read says nothing about what it holds, so it stays.
+    if (opts.removeState !== false && this.publishedState) {
       const file = inspectDaemonState(this.options.home);
-      if (file.kind === 'record' && file.state.pid === process.pid) {
-        removeDaemonState(this.options.home);
-      } else if (file.kind === 'not-a-record') {
-        removeDaemonStateIfNotARecord(this.options.home, file.raw);
-      }
+      if (file.kind === 'not-a-record') removeDaemonStateIfNotARecord(this.options.home, file.raw);
+      else removeDaemonStateIf(this.options.home, this.publishedState);
     }
     // Only now terminate lingering keep-alive connections, so close() cannot hang.
     this.server.closeAllConnections();
@@ -2587,7 +2598,11 @@ export class Daemon {
     }
 
     if (caller.session !== undefined) {
-      this.manager.get(caller.session)?.observeResumeId(req.headers['x-shellpuppet-resume-id']);
+      const session = this.manager.get(caller.session);
+      const candidates = headerOne(req, 'x-shellpuppet-resume-ids') ?? headerOne(req, 'x-shellpuppet-resume-id');
+      if (candidates) session?.observeResumeId(...candidates.split(','));
+      const adapter = headerOne(req, 'x-shellpuppet-mcp-adapter');
+      if (adapter && /^[a-f0-9-]{36}$/.test(adapter)) session?.mcpConnection(adapter, 'connected');
     }
     return this.callerContext.run(caller.session, () =>
       this.handleClientRequest(req, res, url, segments, actor));
@@ -2613,12 +2628,13 @@ export class Daemon {
       return [{ ...session.launchProfile, name: participant.name === session.id ? null : participant.name,
         agent: session.agent, resumeId: session.resumeId, endedAt }];
     });
-    writePrivateRecord(path.join(this.options.home, 'previous-sessions.json'), { version: 1, sessions });
+    writePrivateRecord(path.join(this.options.home, 'previous-sessions.json'), { version: 1, outgoingInstanceId: this.instanceId, sessions });
   }
 
   private saveLauncherClaims(excludeId?: string): void {
     const grants = this.launchProfiles.sessionLaunch ?? [];
     const file = path.join(this.options.home, 'launcher-claims.json');
+    if (!this.claimsRestored) throw new Error('Saved launcher claims could not be restored.');
     if (grants.length || fs.existsSync(file)) writePrivateRecord(file, this.mailbox.savedClaims(grants).filter(claim => claim.id !== excludeId));
   }
 
@@ -2995,10 +3011,17 @@ export class Daemon {
           // Older version 1 records used the generated session id as an explicit name.
           const record: unknown = JSON.parse(fs.readFileSync(file, 'utf8'), (key, value: unknown) =>
             key === 'name' && typeof value === 'string' && /^s[0-9]+$/.test(value) ? null : value);
+          if (!this.previousInstanceId || typeof record !== 'object' || record === null ||
+              !('outgoingInstanceId' in record) || record.outgoingInstanceId !== this.previousInstanceId) {
+            json(res, 409, { error: 'No verified session snapshot is available for the previous restart.' });
+            return;
+          }
           json(res, 200, record);
         } catch (error) {
-          if ((error as NodeJS.ErrnoException).code === 'ENOENT') json(res, 200, { version: 1, sessions: [] });
-          else json(res, 500, { error: 'The previous sessions record could not be read.' });
+          if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+            if (this.previousInstanceId) json(res, 409, { error: 'The previous restart did not leave a session snapshot.' });
+            else json(res, 200, { version: 1, sessions: [] });
+          } else json(res, 500, { error: 'The previous sessions record could not be read.' });
         }
         return;
       }

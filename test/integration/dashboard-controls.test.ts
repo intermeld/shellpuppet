@@ -691,10 +691,10 @@ describe('human controls in the browser', () => {
     expect(result.ok, JSON.stringify(result)).toBe(true);
     const bodies = (result.bodies ?? []).map((body) => JSON.parse(body) as Record<string, unknown>);
     expect(bodies).toEqual([
-      { profile: 'hold', name: 'hold', folder: 'work' },
-      { profile: 'hold', name: 'hold', folder: 'work' },
-      { profile: 'focus-shell', name: 'focus-shell' },
-      { profile: 'pop-shell', name: 'pop-shell' },
+      { profile: 'hold', folder: 'work' },
+      { profile: 'hold', folder: 'work' },
+      { profile: 'focus-shell' },
+      { profile: 'pop-shell' },
     ]);
     expect(bodies.every((body) => body['command'] === undefined && body['env'] === undefined)).toBe(true);
     expect(result.agentHidden).toBe(true);

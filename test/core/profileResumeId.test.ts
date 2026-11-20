@@ -24,17 +24,23 @@ it.each([
     identity: { token: 'test', instanceId: 'test', cliPath: 'test' },
   });
   try {
-    const read = (env: NodeJS.ProcessEnv) => agentResumeIds(moduleFor(agent), env)[0];
-    session.observeResumeId(read({ [marker]: 'parent-id' }));
+    const read = (env: NodeJS.ProcessEnv) => agentResumeIds(moduleFor(agent), env);
+    session.observeResumeId(...read({ [marker]: 'parent-id' }));
     expect(session.resumeId).toBe('supplied');
     if (agent === 'codex') {
       const other = marker === 'CODEX_THREAD_ID' ? 'CODEX_SESSION_ID' : 'CODEX_THREAD_ID';
-      session.observeResumeId(read({ [other]: other === 'CODEX_SESSION_ID' ? 'old-session' : 'old-thread' }));
+      session.observeResumeId(...read({ [other]: other === 'CODEX_SESSION_ID' ? 'old-session' : 'old-thread' }));
       expect(session.resumeId).toBe('supplied');
     }
-    session.observeResumeId(read({ [marker]: 'bad id' }));
+    session.observeResumeId(...read({ [marker]: 'bad id' }));
     expect(session.resumeId).toBe('supplied');
-    session.observeResumeId(read({ [marker]: 'child-id' }));
+    if (agent === 'codex') {
+      session.observeResumeId(...read({ CODEX_THREAD_ID: 'primary-new', CODEX_SESSION_ID: 'fallback-new' }));
+      expect(session.resumeId).toBe('primary-new');
+      session.observeResumeId(...read({ CODEX_THREAD_ID: 'invalid id', CODEX_SESSION_ID: 'fallback-new' }));
+      expect(session.resumeId).toBe('fallback-new');
+    }
+    session.observeResumeId(...read({ [marker]: 'child-id' }));
     expect(session.resumeId).toBe(agent === 'muse' ? 'supplied' : 'child-id');
   } finally { await session.kill(); }
 });

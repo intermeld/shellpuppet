@@ -1,13 +1,12 @@
-import { execFile, execFileSync } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { createServer } from 'node:http';
+import { execFile, execFileSync, spawn } from 'node:child_process';
+import { mkdirSync, readFileSync, renameSync, rmdirSync, writeFileSync } from 'node:fs';
 import { once } from 'node:events';
-import type { AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { expect, it, vi } from 'vitest';
+import { Daemon } from '../../src/daemon/server.js';
 import { parseDaemonConfig } from '../../src/daemon/config.js';
 import { ensureHome, readDaemonState, writePrivateRecord } from '../../src/daemon/paths.js';
 import { buildSessionEnv } from '../../src/core/session.js';
@@ -123,7 +122,7 @@ it('reports each failed shutdown record and finishes the requested stop', async 
       expect.stringContaining('launcher-claims.json'), expect.stringContaining('previous-sessions.json'),
     ]));
     expect(warn).toHaveBeenCalledTimes(2);
-    await eventually(() => !existsSync(join(td.home, 'daemon.json')));
+    await eventually(() => readDaemonState(td.home) === null);
   } finally { await td.stop(); }
 });
 
@@ -165,43 +164,90 @@ it('uses the profile name for untitled CLI and MCP launches and records a replay
   } finally { await client.close(); await td.stop(); }
 }, 120_000);
 
-it('registers a healthy replacement adapter after a transient registration refusal', async () => {
-  const home = makeTempHome();
-  const instanceId = 'private-fixture';
-  let attempts = 0;
-  let stalled = true;
-  const server = createServer((req, res) => {
-    req.resume();
-    if (req.url === '/session/mcp-connection') {
-      if (++attempts === 1) res.statusCode = 503;
-      else stalled = false;
-    }
-    res.setHeader('content-type', 'application/json');
-    res.end(JSON.stringify(req.url === '/health' ? { ok: true, version: '0.2.1', pid: process.pid, instanceId } : { sessions: [] }));
-  });
-  const client = new Client({ name: 'replacement', version: '1' });
-  try {
-    server.listen(0, '127.0.0.1');
-    await once(server, 'listening');
-    writeFileSync(join(home, 'daemon.json'), JSON.stringify({ port: (server.address() as AddressInfo).port,
-      pid: process.pid, token: 'fixture', version: '0.2.1', instanceId }));
-    await client.connect(new StdioClientTransport({ command: process.execPath, args: [cli, 'mcp'],
-      env: { ...process.env, SHELLPUPPET_HOME: home, SHELLPUPPET_SESSION: 's1', SHELLPUPPET_SESSION_TOKEN: 'fixture',
-        SHELLPUPPET_DAEMON_INSTANCE: instanceId } }));
-    await eventually(() => attempts >= 1);
-    expect((await client.callTool({ name: 'terminal_list', arguments: {} })).isError).not.toBe(true);
-    await eventually(() => !stalled, 5000, 50, 'replacement registration');
-  } finally {
-    await client.close();
-    server.closeAllConnections();
-    await new Promise<void>(resolve => server.close(() => resolve()));
-    removeTempHome(home);
-  }
-});
-
 it('documents the durable claim record and the dashboard resume field', () => {
   const read = (file: string) => readFileSync(join(repoRoot, 'docs', file), 'utf8');
   expect.soft(read('reference/security-model.md').includes('launcher-claims.json')).toBe(true);
   const contract = read('architecture/design.md').split('`POST /dashboard/launch` accepts JSON')[1]!.split('\n\n')[0];
   expect(contract).toContain('`resumeId`');
 });
+
+it('preserves the incumbent discovery record and durable claim when a contender stops before acquiring the home', async () => {
+  const options = { home: makeTempHome(), launchProfiles: { sessionLaunch: ['chair'], profiles: [], problems: [] },
+    messaging: { enabled: true, allow: [] }, logger: NULL_LOGGER };
+  let td = await startTestDaemon(options);
+  try {
+    const claim = (await api(td.port, td.token, '/messages/claims', { body: { name: 'chair' } })).body;
+    const file = join(td.home, 'launcher-claims.json');
+    const saved = readFileSync(file, 'utf8');
+    const contender = new Daemon(options);
+    const start = expect(contender.start()).rejects.toThrow(/running/i);
+    await contender.stop();
+    await start;
+    expect.soft(readFileSync(file, 'utf8') === saved).toBe(true);
+    expect.soft(readDaemonState(td.home)?.port).toBe(td.port);
+    // Simulate the incumbent leaving without another orderly save.
+    await td.daemon.stop({ removeState: false });
+    td = await startTestDaemon(options);
+    expect((await api(td.port, td.token, '/launcher/previous', { headers: {
+      'x-shellpuppet-claim': String(claim['claimId']), 'x-shellpuppet-claim-secret': String(claim['secret']),
+    } })).status).toBe(200);
+  } finally { await td.stop(); }
+});
+
+async function preventSnapshotReplacement(snapshot: string): Promise<() => void | Promise<void>> {
+  if (process.platform === 'win32') {
+    // A real Windows read handle that denies delete sharing blocks the atomic rename.
+    const reader = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      "$ErrorActionPreference = 'Stop'; $f = [IO.File]::Open($env:SP_TEST_SNAPSHOT, 'Open', 'Read', 'Read'); [Console]::WriteLine('ready'); [void][Console]::ReadLine(); $f.Dispose()"],
+    { windowsHide: true, env: { ...process.env, SP_TEST_SNAPSHOT: snapshot }, stdio: 'pipe' });
+    const exit = once(reader, 'exit');
+    try {
+      const ready = await Promise.race([once(reader.stdout, 'data'), exit]);
+      expect(String(ready[0]).trim()).toBe('ready');
+    } catch (error) { reader.kill(); await exit; throw error; }
+    return async () => { reader.stdin.end(); await exit; };
+  }
+  // POSIX permits replacing an open file. Keep the same complete bytes and
+  // obstruct the destination until the outgoing daemon has attempted its write.
+  const backup = snapshot + '.saved';
+  renameSync(snapshot, backup);
+  mkdirSync(snapshot);
+  return () => { rmdirSync(snapshot); renameSync(backup, snapshot); };
+}
+
+it('refuses a complete but stale snapshot after the next restart cannot replace it', async () => {
+  const { config } = parseDaemonConfig({ launcher: { sessionLaunch: ['chair'], profiles: [{ name: 'worker', ...program }] } });
+  const options = { home: makeTempHome(), launchProfiles: config.launcher, messaging: { enabled: true, allow: [] } };
+  let td = await startTestDaemon(options);
+  const client = new Client({ name: 'reader', version: '1' });
+  try {
+    const claim = (await api(td.port, td.token, '/messages/claims', { body: { name: 'chair' } })).body;
+    const headers = { 'x-shellpuppet-claim': String(claim['claimId']), 'x-shellpuppet-claim-secret': String(claim['secret']) };
+    const env = { ...process.env, SHELLPUPPET_HOME: td.home, SHELLPUPPET_CLAIM: headers['x-shellpuppet-claim'] + ':' + headers['x-shellpuppet-claim-secret'] };
+    for (const key of ['SHELLPUPPET_SESSION', 'SHELLPUPPET_SESSION_TOKEN', 'SHELLPUPPET_DAEMON_INSTANCE']) delete (env as NodeJS.ProcessEnv)[key];
+    expect((await api(td.port, td.token, '/launcher/launch', { headers, body: { profile: 'worker', name: 'old-run' } })).status).toBe(200);
+    const owner = readDaemonState(td.home)!.instanceId;
+    await td.daemon.stop({ restart: true });
+    td = await startTestDaemon(options);
+    const snapshot = join(td.home, 'previous-sessions.json');
+    const old = readFileSync(snapshot, 'utf8');
+    const current = await api(td.port, td.token, '/launcher/previous', { headers });
+    expect(current.status).toBe(200);
+    expect(current.body['sessions']).toContainEqual(expect.objectContaining({ name: 'old-run' }));
+    expect.soft(current.body['outgoingInstanceId']).toBe(owner);
+    const unlock = await preventSnapshotReplacement(snapshot);
+    try {
+      const stop = await api(td.port, td.token, '/daemon/shutdown', { body: { restart: true } });
+      expect(stop.body['warnings']).toContainEqual(expect.stringContaining('previous-sessions.json'));
+      await td.daemon.stop();
+    } finally { await unlock(); }
+    td = await startTestDaemon(options);
+    expect(readFileSync(snapshot, 'utf8')).toBe(old);
+    expect.soft((await api(td.port, td.token, '/launcher/previous', { headers })).status).toBe(409);
+    await expect.soft(promisify(execFile)(process.execPath, [cli, 'previous', '--json'], { env })).rejects.toThrow(/snapshot/i);
+    await client.connect(new StdioClientTransport({ command: process.execPath, args: [cli, 'mcp'], env }));
+    const result = await client.callTool({ name: 'terminal_list', arguments: { previous: true } });
+    expect(result.isError).toBe(true);
+    expect(JSON.stringify(result.content)).toMatch(/snapshot/i);
+  } finally { await client.close(); await td.stop(); }
+}, 90_000);
