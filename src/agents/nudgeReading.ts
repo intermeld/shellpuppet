@@ -217,10 +217,7 @@ function plainWrapRows(rows: readonly StyledLine[]): boolean {
 }
 
 /** Rejoin only visual composer wraps, allowing a space lost at a wrap edge. */
-function holdsExpectedDraft(rows: readonly StyledLine[], expected: string): boolean {
-  const [first, ...rest] = rows;
-  const pieces = [stripGlyph(first?.text ?? '').trimEnd(), ...rest.map((line) => line.text.trim())]
-    .filter((piece) => piece !== '');
+export function matchesWrappedDraft(pieces: readonly string[], expected: string): boolean {
   let positions = new Set([0]);
   for (const piece of pieces) {
     const next = new Set<number>();
@@ -307,7 +304,9 @@ export function readingReadiness(view: NudgeView, reading: AgentSignature, rule:
     if (lines.slice(0, at).some((line) =>
       composer.test(line.text) && stripGlyph(line.text) === view.expectedDraft)) return 'draft';
     if (rule.unprovenContinuations === true && !plainWrapRows(region.rows)) return 'draft';
-    return holdsExpectedDraft(region.rows, view.expectedDraft) ? 'ready' : 'draft';
+    const [first, ...rest] = region.rows;
+    const pieces = [stripGlyph(first?.text ?? ''), ...rest.map(line => line.text.trim())].filter(Boolean);
+    return matchesWrappedDraft(pieces, view.expectedDraft) ? 'ready' : 'draft';
   }
   const clear = region.rows.every((line) => rowClear(line, rule, view.exactEmpty));
   // A draft during a running turn waits: the person may be typing a reply.

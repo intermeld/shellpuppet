@@ -73,8 +73,8 @@ function lastIndexWhere(rows: readonly string[], matches: (row: string) => boole
 for (const [name, module] of Object.entries(modules)) {
   describe(`${name} nudge readiness`, () => {
     for (const [capture, expected] of [
-      ['empty', name === 'agy' || name === 'grok' ? 'ready' : 'unknown'],
-      ['draft', name === 'opencode' || name === 'mimo' ? 'unknown' : 'draft'],
+      ['empty', name === 'mimo' ? 'unknown' : 'ready'],
+      ['draft', name === 'mimo' ? 'unknown' : 'draft'],
       ['after-empty', 'ready'], ['after-draft', 'draft'],
     ] as const) {
       it(`${capture} is ${expected}`, () => {
