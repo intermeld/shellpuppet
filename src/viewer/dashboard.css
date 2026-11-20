@@ -10,7 +10,6 @@ button { font: inherit; color: #d7e3ee; background: #1c2633; border: 1px solid #
 button:hover, button:focus-visible { border-color: #79b8f5; }
 button.active { color: #9dd4ff; border-color: #4b9adc; background: #173249; }
 #attention-count:empty { display: none; }
-#screens { display: inline-flex; gap: 5px; }
 #error { background: #3d1d1f; color: #ffa198; padding: 6px 12px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 #error[hidden] { display: none; }
 #panes { flex: 1; min-height: 0; display: grid; gap: 6px; padding: 6px; position: relative; }
@@ -43,7 +42,7 @@ button.active { color: #9dd4ff; border-color: #4b9adc; background: #173249; }
 .pane.selected { border-color: #6cb6ff; }
 .pane.attention { border-color: #e8b85f; }
 .pane.below-floor .pane-head::after { content: 'Below 80×24 floor'; color: #e8b85f; font-size: 11px; }
-.pane-head { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; min-height: 38px; padding: 4px 7px; background: #141922; }
+.pane-head { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; min-height: 38px; padding: 4px 7px; background: #141922; cursor: grab; }
 .pane-label { font-weight: bold; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pane-purpose { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .pane-head .spacer { min-width: 0; }
@@ -68,7 +67,7 @@ button.active { color: #9dd4ff; border-color: #4b9adc; background: #173249; }
 #folder-path { width: 20em; font: inherit; color: #d7e3ee; background: #1c2633; border: 1px solid #455366; border-radius: 4px; }
 #recent-folders { display: inline-flex; gap: 3px; }
 #recent-folders button { padding: 2px 5px; }
-#launcher[hidden], #folder-field[hidden], #bounded-folder[hidden], #any-folder[hidden], #watch-only[hidden], #fullscreen[hidden], #profile-problems[hidden] { display: none; }
+#launcher[hidden], #folder-field[hidden], #bounded-folder[hidden], #any-folder[hidden], #watch-only[hidden], #profile-problems[hidden] { display: none; }
 select { font: inherit; color: #d7e3ee; background: #1c2633; border: 1px solid #455366; border-radius: 4px; }
 #profile-problems { margin: 0; padding: 4px 12px; background: #3d2f14; color: #e8b85f; }
 .pane-menu { display: flex; flex-wrap: wrap; gap: 5px; padding: 4px 7px; background: #101820; border-bottom: 1px solid #303b4a; }

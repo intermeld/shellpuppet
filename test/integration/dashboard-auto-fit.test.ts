@@ -452,7 +452,8 @@ it.each([true, false])('focus profile keeps one floor-sized fit with Auto fit %s
       if (state.phase === 0) {
         const profile = document.getElementById('profile');
         if (document.getElementById('connection')?.textContent !== 'Connected' ||
-            !profile?.querySelector('option[value="focus-shell"]')) return null;
+            !profile?.querySelector('option[value="focus-shell"]') ||
+            document.getElementById('start')?.disabled) return null;
         state.started = Date.now();
         if (!${String(enabled)}) document.getElementById('auto-fit').click();
         profile.value = 'focus-shell';
@@ -593,6 +594,22 @@ it('clears a same-size Fit request and sends no repeat take across three relayou
   expect(shot.probe).toMatchObject({ acknowledged: true, sameSize: true, repeats: 0 });
 }, 150_000);
 
+// The daemon publishes the registered window pairs before it accepts a move.
+async function movePanes(evaluate: (expression: string) => Promise<unknown>, ids: string[],
+  target: 'primary' | 'second', before?: string): Promise<void> {
+  const feed = "window.__dashboardDiagnostics.streams.findLast(entry => entry.url.endsWith('/dashboard/events'))";
+  await eventually(async () => await evaluate(`${feed}?.windowState?.windows.length === 2`) === true,
+    20_000, 50, 'both dashboard windows to register');
+  await evaluate(`(() => {
+    const feed = ${feed};
+    const [primary, second] = feed.windowState.windows;
+    for (const session of ${JSON.stringify(ids)}) feed.socket.send(JSON.stringify({
+      type: 'window-move', session, source: ${target === 'primary' ? 'second' : 'primary'},
+      target: ${target}, before: ${JSON.stringify(before)},
+    }));
+  })()`);
+}
+
 it('keeps pane control through Enlarge, a closed session, and Restore in two windows', async (context) => {
   if (!browser) { context.skip(); return; }
   const urls: string[] = [];
@@ -656,8 +673,14 @@ it('keeps pane control through Enlarge, a closed session, and Restore in two win
         throw new Error(`${step} did not settle after ${String(Date.now() - started)} ms: ${JSON.stringify(last)}`);
       };
       const share = (read: (expression: string) => Promise<unknown>) => read("document.getElementById('share-count')?.textContent");
+      await movePanes(evaluate, ids.slice(4), 'second');
       await waitFor('primary sharing six sessions', () => share(evaluate), value => value === '4 of 6 here, 2 windows');
       await waitFor('second window sharing six sessions', () => share(evaluateSecond), value => value === '2 of 6 here, 2 windows');
+      // Restore must take the returning pane back from its acknowledged owner.
+      await eventually(async () => await evaluateSecond(`${JSON.stringify(ids.slice(4))}.every(id =>
+        window.__dashboardDiagnostics.streams.findLast(entry => entry.socket.readyState === 1 &&
+          entry.url.endsWith('/sessions/' + id + '/stream'))?.geometry.at(-1)?.control === 'yours')`) === true,
+        20_000, 50, 'second window to control both moved panes before Enlarge');
       await evaluateSecond(`(() => {
         window.__resizes = [];
         const secondSend = WebSocket.prototype.send;
@@ -674,6 +697,7 @@ it('keeps pane control through Enlarge, a closed session, and Restore in two win
       value => (value as { count: number; restore: boolean })?.count === 1 && (value as { restore: boolean }).restore);
       expect((await api(daemon.port, daemon.token, `/sessions/${ids[0]}`, { method: 'DELETE' })).status).toBe(200);
       await evaluateSecond(`window.__resizes.length = 0`);
+      await movePanes(evaluate, [ids[4]!], 'primary');
       await waitFor('primary sharing five sessions', () => share(evaluate), value => value === '4 of 5 here, 2 windows');
       await evaluate(`(() => { window.__resizes.length = 0; window.__delayRestoredTake = true;
         document.querySelector('.pane button[aria-label="Restore"]').click(); })()`);
@@ -745,15 +769,6 @@ it('takes only the final grid when two window assignments arrive in separate ste
         entry.url.endsWith('/sessions/' + pane.dataset.session + '/stream') &&
         entry.socket.readyState === 1 && entry.geometry.at(-1)?.control === 'yours')) ? true : null)()`,
     interact: async ({ evaluate, send }) => {
-      // Capture the real assignment published when the second window joins.
-      await evaluate(`(() => {
-        const post = BroadcastChannel.prototype.postMessage;
-        BroadcastChannel.prototype.postMessage = function(data) {
-          if (data.type === 'window-assignment') window.__publishedAssignment = data;
-          return post.call(this, data);
-        };
-        window.__restoreAssignmentCapture = () => { BroadcastChannel.prototype.postMessage = post; };
-      })()`);
       const target = await send('Target.createTarget', { url: 'about:blank', newWindow: true }, true) as { targetId: string };
       const attached = await send('Target.attachToTarget', { targetId: target.targetId, flatten: true }, true) as { sessionId: string };
       const evaluateSecond = async (expression: string): Promise<unknown> => {
@@ -784,6 +799,7 @@ it('takes only the final grid when two window assignments arrive in separate ste
           return ready(last);
         }, 20_000, 100, step, () => last);
       };
+      await movePanes(evaluate, ids.slice(4), 'second');
       await waitFor('initial primary share', () => read(evaluate),
         value => (value as { share?: string })?.share === '4 of 6 here, 2 windows');
       await waitFor('initial second share',
@@ -814,21 +830,11 @@ it('takes only the final grid when two window assignments arrive in separate ste
       await waitForQuietFit('settled initial primary fit', evaluate);
       await send('Page.bringToFront', {}, attached.sessionId);
       await waitForQuietFit('settled initial second fit', evaluateSecond);
-      const assignment = await evaluate(`(() => {
-        __restoreAssignmentCapture();
-        return window.__publishedAssignment;
-      })()`) as { owner: string; byWindow: Record<string, string[]> };
-      expect(assignment?.owner).toBeTruthy();
-      const secondId = Object.keys(assignment.byWindow).find(id => id !== assignment.owner);
-      expect(secondId).toBeTruthy();
       const clearResizes = 'window.__dashboardDiagnostics.streams.forEach(entry => { entry.resizes.length = 0; })';
       await evaluate(clearResizes);
       await evaluateSecond(clearResizes);
-      // The staged assignment timer belongs to the primary document.
       await send('Page.bringToFront');
       await evaluate(`(() => {
-        const layout = ShellPuppetDashboardLayout;
-        const assign = layout.assign;
         // Keep the old window's controller alive while the transferred pane
         // connects, so its first geometry explicitly reports that owner.
         const close = WebSocket.prototype.close;
@@ -840,22 +846,11 @@ it('takes only the final grid when two window assignments arrive in separate ste
           }
           return close.apply(this, args);
         };
-        const first = { '${assignment.owner}': ${JSON.stringify(ids.slice(0, 5))},
-          '${secondId}': ${JSON.stringify(ids.slice(5))} };
-        const final = { '${assignment.owner}': ${JSON.stringify([...ids.slice(0, 3), ids[4]])},
-          '${secondId}': ${JSON.stringify([ids[3], ids[5]])} };
-        layout.assign = (...args) => window.__stagedAssignment || assign(...args);
-        window.__stagedAssignment = first;
-        const channel = new BroadcastChannel('shellpuppet.dashboard');
-        channel.postMessage({ type: 'window-assignment', token: 'test-two-step',
-          owner: '${assignment.owner}', byWindow: first });
-        setTimeout(() => {
-          window.__stagedAssignment = final;
-          channel.postMessage({ type: 'window-assignment', token: 'test-two-step',
-            owner: '${assignment.owner}', byWindow: final });
-          channel.close();
-        }, 350);
       })()`);
+      await movePanes(evaluate, [ids[4]!], 'primary');
+      await waitFor('intermediate primary assignment', () => evaluate("document.getElementById('share-count').textContent"),
+        value => value === '5 of 6 here, 2 windows');
+      await movePanes(evaluate, [ids[3]!], 'second', ids[5]);
       await waitFor('final primary assignment', () => read(evaluate),
         value => {
           const state = value as { share?: string; panes?: { id: string }[] };
