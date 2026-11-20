@@ -202,6 +202,69 @@ describe('every question shape the detector knows survives hideReasoning', () =>
 describe('Grok box question row', () => {
   const grok = builtIn('grok');
 
+  it('keeps every physical row of the permission box with an edit pattern action', async () => {
+    const lines = await screen('grok-permission-edit-pattern');
+    const question = lines.findIndex((line) => line.text.startsWith('  │  > '));
+    const footer = lines.findIndex((line) => line.text.includes('1/5:select'));
+    expect(question).toBe(81);
+    expect(footer).toBe(97);
+    expect(lines.filter((line) => line.wrapped && /\([○•]\)/u.test(line.text))).toHaveLength(5);
+    const filtered = hideReasoning(lines, grok)!;
+    expect(filtered.lines).toContain('  │  3 (•) Yes, proceed');
+    for (let row = question; row <= footer; row++) {
+      expect(filtered.markers[filtered.rows.indexOf(row)], `screen row ${row}`).toBe(false);
+    }
+  });
+
+  it('recognises another single-key action drawn in the same inks', async () => {
+    const lines = await screen('grok-permission-edit-pattern');
+    for (const line of lines) {
+      line.text = line.text.replace(/e([ :])edit pattern/u, '?$1view details');
+    }
+    const filtered = hideReasoning(lines, grok)!;
+    expect(filtered.lines).toContain('  │  ? view details');
+    expect(filtered.lines).toContain('  │  3 (•) Yes, proceed');
+  });
+
+  it('hides the choices when the edit pattern box has lost its footer', async () => {
+    const lines = await screen('grok-permission-edit-pattern');
+    const footer = lines.findIndex((line) => line.text.includes('1/5:select'));
+    const filtered = hideReasoning(lines.slice(0, footer), grok)!;
+    expect(filtered.hiddenLines).toBeGreaterThan(0);
+    expect(filtered.lines.join('\n')).not.toContain('Yes, proceed');
+  });
+
+  it('hides a lone action and reasoning that mentions edit pattern above a live box', async () => {
+    const lines = await screen('grok-permission-edit-pattern');
+    const action = lines.find((line) => line.text === '  │  e edit pattern')!;
+    const transcript = [{ ...action, wrapped: false }, plain('  │  think about edit pattern')];
+    for (const frame of [transcript, [...transcript, ...lines]]) {
+      const filtered = hideReasoning(frame, grok)!;
+      expect(filtered.markers[filtered.rows.indexOf(0)]).toBe(true);
+      expect(filtered.lines.join('\n')).not.toContain('think about edit pattern');
+    }
+  });
+
+  it('requires the action to be in box ink and the footer to be live', async () => {
+    const lines = await screen('grok-permission-edit-pattern');
+    // Keep the bar and key as drawn. Only the label has transcript ink.
+    const wrongInk = lines.map((line) => line.text === '  │  e edit pattern'
+      ? { ...line, spans: line.spans.map((span) => span.from === 7 ? { ...span, bg: '#141414' } : span) }
+      : line);
+    for (const frame of [wrongInk, [...lines, { ...plain('  │ >'), wrapped: true }]]) {
+      expect(hideReasoning(frame, grok)!.lines.join('\n')).not.toContain('Yes, proceed');
+    }
+  });
+
+  it('hides ambiguous bar prose between a genuine action and the radios', async () => {
+    const lines = await screen('grok-permission-edit-pattern');
+    const hint = lines.find((line) => line.text.includes('Auto-review blocked'))!;
+    hint.text = hint.text.replace('Auto-review blocked this action.', 'We should edit pattern settings.');
+    const kept = hideReasoning(lines, grok)!.lines.join('\n');
+    expect(kept).not.toContain('We should edit pattern settings.');
+    expect(kept).not.toContain('Yes, proceed');
+  });
+
   it('reports only the question text from a Grok Build permission box', () => {
     const lines = [
       '  │  >  Rebuild the sample index',
