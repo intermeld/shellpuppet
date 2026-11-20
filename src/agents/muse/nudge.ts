@@ -29,7 +29,7 @@ export function readiness(view: NudgeView): NudgeReadiness {
     // effort, working folder and its launch label. While Muse lists background tasks
     // (free text) there, the nudge waits until the turn ends.
     queueFooter: (rows) => rows.length === 1 &&
-      /^ {2}[a-z0-9][a-z0-9.-]* · (?:low|medium|high|xhigh|max) · [^·]+ · Launch overrides$/u.test(rows[0]!.text.trimEnd()),
+      /^ {2}[a-z0-9][a-z0-9.-]* · (?:low|medium|high|xhigh|max) · (?:(?:[A-Za-z]:[\\/]|\/|~)[^·?]*|[^\s·?]+) · Launch overrides$/u.test(rows[0]!.text.trimEnd()),
     // The Voice input rule above the composer and the plain rule under it.
     ruleRows: [/^── Voice input \(Alt\+V to start\) ─+$/u, /^─{10,}$/u],
     ruleInk: (line) => line.spans.some((span) => span.from === 0 && span.dim && span.fg === RULE_INK) &&
