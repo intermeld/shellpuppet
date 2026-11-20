@@ -46,7 +46,7 @@ do it differently, and some offer none.
   writes reaches the user's turn. The daemon types it only when the module for that session's agent
   can tell the session is idle, with an empty composer and no prompt waiting,
   or, for an agent that takes a submitted line while it works (Claude Code,
-  Grok Build and Muse Code queue it or hand it to the running turn), when a
+  Grok Build and OpenCode queue it, and Muse Code hands it to the turn), when a
   turn is running and the composer is visible, empty and unchanged; a
   person's draft during a turn always waits.
   Otherwise the message waits, and the session sees it the next time it reads

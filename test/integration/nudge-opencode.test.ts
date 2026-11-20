@@ -5,7 +5,7 @@ import { buildNudge } from '../../src/core/mailbox.js';
 import { auditLogPath, createAuditor } from '../../src/daemon/audit.js';
 import { api, eventually, makeTempHome, repoRoot, startTestDaemon } from './helpers.js';
 
-it('submits one wrapped OpenCode nudge from a parent through the PTY', async () => {
+it.each(['idle', 'busy'])('submits one wrapped nudge while the OpenCode PTY is %s', async state => {
   const home = makeTempHome('nudge-opencode-');
   const td = await startTestDaemon({ home, audit: createAuditor(home),
     messaging: { enabled: true, allow: ['parent-child'] } });
@@ -22,7 +22,7 @@ it('submits one wrapped OpenCode nudge from a parent through the PTY', async () 
       setInterval(() => {}, 1000);
     `;
     const start = await api(td.port, td.token, '/sessions', { body: { command: process.execPath,
-      args: ['-e', parent, fixture, input], label: sender, shell: false, openViewer: false } });
+      args: ['-e', parent, fixture, input, state], label: sender, shell: false, openViewer: false } });
     expect(start.status).toBe(200);
     const audit = () => readFileSync(auditLogPath(home), 'utf8').trimEnd().split('\n').map(row =>
       JSON.parse(row) as { action: string; meta?: { messageIds: string[]; queued?: boolean } });
@@ -30,7 +30,7 @@ it('submits one wrapped OpenCode nudge from a parent through the PTY', async () 
     const nudges = audit().filter(entry => entry.action === 'nudge');
     expect(nudges).toHaveLength(1);
     const meta = nudges[0]!.meta!;
-    expect(meta.queued).toBeUndefined();
+    expect(meta.queued).toBe(state === 'busy' ? true : undefined);
     const line = buildNudge([{ id: meta.messageIds[0]!, from: { name: sender, id: String(start.body['id']) } }]);
     expect(line.length).toBeGreaterThan(80);
     await eventually(() => existsSync(input) && readFileSync(input, 'utf8') === line + '\r');
