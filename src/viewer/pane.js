@@ -71,6 +71,7 @@ window.ShellPuppetPane = (() => {
    * @param {HTMLElement} config.container - The element to host the terminal.
    * @param {string} config.sessionId - The session to connect to.
    * @param {boolean} [config.captureMode=false] - Headless screenshot mode.
+   * @param {boolean} [config.passive=false] - Opt the stream out of taking an unowned grid on connect.
    * @param {boolean} [config.redactedCapture=false] - Redact sensitive rows.
    * @param {Object} config.elements - References to badge elements.
    * @param {number|null} [config.initialFontOverride=null] - Initial font size.
@@ -89,6 +90,7 @@ window.ShellPuppetPane = (() => {
       container,
       sessionId,
       captureMode = false,
+      passive = false,
       redactedCapture = false,
       elements = {},
       initialFontOverride = null,
@@ -126,6 +128,7 @@ window.ShellPuppetPane = (() => {
     let pendingTakeSize = null;
     let pendingTakeSocket = null;
     let followingExternal = false;
+    let transferOffered = false;
     let temporaryGeometry = false;
     let dashboardFontLimit = null;
     let fontScale = 1;
@@ -1061,7 +1064,7 @@ window.ShellPuppetPane = (() => {
 
     function connect() {
       if (destroyed) return;
-      ws = new WebSocket(`ws://${location.host}/sessions/${encodeURIComponent(sessionId)}/stream`,
+      ws = new WebSocket(`ws://${location.host}/sessions/${encodeURIComponent(sessionId)}/stream${passive ? '?drive=0' : ''}`,
         dashboardProof === null ? undefined : [`sp-csrf.${dashboardProof}`]);
       const socket = ws;
       ws.binaryType = 'arraybuffer';
@@ -1140,6 +1143,8 @@ window.ShellPuppetPane = (() => {
             const firstGeometry = !geometryDecided;
             geometryDecided = true;
             controlMode = captureMode ? 'adopt' : control.control || 'adopt';
+            const wasOffered = transferOffered;
+            transferOffered = controlMode === 'adopt' && control.dashboardTransferable === true;
             const wasTemporary = temporaryGeometry;
             temporaryGeometry = control.temporary === true;
             if (pendingTakeSocket !== null && pendingTakeSocket !== socket) {
@@ -1166,20 +1171,18 @@ window.ShellPuppetPane = (() => {
                 pendingTakeSize = null;
                 pendingTakeSocket = null;
                 onGridTaken();
-              } else if (controlMode === 'adopt' && !followingExternal &&
-                  control.dashboardTransferable !== true) {
+              } else if (controlMode === 'adopt' && !followingExternal && !transferOffered) {
                 pendingTakeGrid = false;
                 pendingTakeSize = null;
                 pendingTakeSocket = null;
                 followingExternal = true;
                 onOutsideGeometry();
-              } else if (controlMode === 'adopt' && control.dashboardTransferable === true && followingExternal) {
+              } else if (transferOffered) {
                 followingExternal = false;
-                onGeometryReady();
               }
             }
             applyGeometry(control.cols, control.rows, control.max);
-            if (firstGeometry || (wasTemporary && !temporaryGeometry)) onGeometryReady();
+            if (firstGeometry || (transferOffered && !wasOffered) || (wasTemporary && !temporaryGeometry)) onGeometryReady();
             if (controlMode === 'yours' && !temporaryGeometry && !captureMode && dashboardProof === null) requestFit();
           } else if (control && control.type === 'identity') {
             showIdentity(control);
@@ -1311,7 +1314,7 @@ window.ShellPuppetPane = (() => {
         const belowFloor = belowDashboardFloor(floorCols, floorRows);
         const cols = Math.min(gridMax.cols, belowFloor ? floorCols : Math.max(floorCols, proposed.cols));
         const rows = Math.min(gridMax.rows, belowFloor ? floorRows : Math.max(floorRows, proposed.rows));
-        if (cols === gridCols && rows === gridRows && !force) return false;
+        if (cols === gridCols && rows === gridRows && !force && !transferOffered) return false;
         if (pendingTakeSocket === ws && pendingTakeSize?.cols === cols && pendingTakeSize?.rows === rows) return false;
         return this.takeGrid(cols, rows);
       },

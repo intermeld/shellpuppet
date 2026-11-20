@@ -3,7 +3,8 @@ import { beforeAll, expect, it } from 'vitest';
 import { captureDashboard } from './dashboardCapture.js';
 import { parseDaemonConfig } from '../../src/daemon/config.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
-import { api, startTestDaemon } from './helpers.js';
+import { api, eventually, startTestDaemon } from './helpers.js';
+import type { TestDaemon } from './helpers.js';
 
 let browser: string | null = null;
 beforeAll(async () => { browser = await findBrowser(); }, 60_000);
@@ -12,8 +13,9 @@ type Page = { evaluate: (expression: string) => Promise<unknown>;
   send: (method: string, params?: Record<string, unknown>, browserWideOrSession?: boolean | string) => Promise<unknown> };
 type Target = { targetId: string; url: string; type: string };
 type Child = Page & { id: string };
+type Primary = Parameters<NonNullable<Parameters<typeof captureDashboard>[0]['interact']>>[0];
 
-async function until<T>(read: () => Promise<T | null>, limitMs = 30_000): Promise<T> {
+async function until<T>(read: () => T | null | Promise<T | null>, limitMs = 30_000): Promise<T> {
   const deadline = Date.now() + limitMs;
   do {
     const value = await read();
@@ -26,8 +28,8 @@ async function until<T>(read: () => Promise<T | null>, limitMs = 30_000): Promis
 const ids = (evaluate: Page['evaluate']): Promise<unknown> =>
   evaluate(`[...document.querySelectorAll('#panes .pane')].map(p => p.dataset.session)`);
 
-async function exercise(count: number, action: (primary: Page, openChild: (useButton?: boolean) => Promise<Child>,
-  start: () => Promise<string>) => Promise<unknown>): Promise<unknown> {
+async function exercise(count: number, action: (primary: Primary, openChild: (useButton?: boolean) => Promise<Child>,
+  start: () => Promise<string>, daemon: TestDaemon) => Promise<unknown>): Promise<unknown> {
   const urls: string[] = [];
   const profiles = parseDaemonConfig({ launcher: { profiles: [{ name: 'lead', command: process.execPath,
     args: ['-e', 'setInterval(() => {}, 1000)'], shell: false }] } }).config.launcher;
@@ -87,7 +89,7 @@ async function exercise(count: number, action: (primary: Page, openChild: (useBu
             !existing.has(entry.targetId) && entry.url.includes('/dashboard#screen=')) ?? null);
           return attach(target, windowCount);
         };
-        return action(primary, openChild, start);
+        return action(primary, openChild, start, daemon);
       },
     });
     return result.probe;
@@ -139,35 +141,38 @@ it('places a profile launch in its own window regardless of designation', async 
   expect(result).toMatchObject({ primary: [], child: [expect.any(String)], primaryDesignated: 'true' });
 }, 240_000);
 
-async function dragPane(source: Page, target: Page, id: string, selector: string, fraction = 0.5) {
+async function dragPane(source: Primary, target: Page, id: string, selector: string, fraction = 0.5, moveAllowed = true) {
   await source.send('Page.bringToFront');
   await source.send('Input.setInterceptDrags', { enabled: true });
   const start = await source.evaluate(`(() => {
-    delete window.__nativePaneDrag;
-    document.addEventListener('dragstart', e => {
-      if (e.isTrusted) window.__nativePaneDrag = e.dataTransfer.getData('application/x-shellpuppet-pane');
-    }, { once: true });
     const box = document.querySelector('.pane[data-session=${JSON.stringify(id)}] .pane-head').getBoundingClientRect();
     return { x: box.left + 3, y: box.top + 3 };
   })()`) as { x: number; y: number };
+  let intercepted: { items: { mimeType: string; data: string }[]; dragOperationsMask: number } | undefined;
+  const unsubscribe = source.onEvent('Input.dragIntercepted', params => {
+    intercepted = params['data'] as typeof intercepted;
+  });
   try {
     await source.send('Input.dispatchMouseEvent', { type: 'mouseMoved', ...start });
     await source.send('Input.dispatchMouseEvent', { type: 'mousePressed', ...start, button: 'left', buttons: 1, clickCount: 1 });
     await source.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: start.x + 24, y: start.y + 2, buttons: 1, button: 'left' });
-    const payload = await source.evaluate('window.__nativePaneDrag');
-    expect(typeof payload, 'Chromium started a trusted drag from the title bar').toBe('string');
-    const data = { items: [{ mimeType: 'application/x-shellpuppet-pane', data: payload }], dragOperationsMask: 16 };
+    const data = await until(() => intercepted ?? null);
+    expect(data.items.find(item => item.mimeType === 'application/x-shellpuppet-pane')?.data).toBeTruthy();
+    expect(data.dragOperationsMask, 'operation authorised by the source').toBe(moveAllowed ? 16 : 1);
     await target.send('Page.bringToFront');
     const point = await target.evaluate(`(() => {
       delete window.__acceptedDrop;
-      window.addEventListener('dragover', e => { window.__acceptedDrop = e.isTrusted && e.defaultPrevented; }, { once: true });
+      window.addEventListener('dragover', e => {
+        window.__acceptedDrop = e.isTrusted && e.defaultPrevented && e.dataTransfer.dropEffect === 'move';
+      }, { once: true });
       const box = document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();
       return { x: box.left + box.width * ${fraction}, y: box.top + box.height * ${fraction} };
     })()`) as { x: number; y: number };
     for (const type of ['dragEnter', 'dragOver']) await target.send('Input.dispatchDragEvent', { type, ...point, data });
-    expect(await target.evaluate('window.__acceptedDrop'), 'the destination accepted dragover').toBe(true);
-    await target.send('Input.dispatchDragEvent', { type: 'drop', ...point, data });
+    expect(await target.evaluate('window.__acceptedDrop'), 'destination accepted a move').toBe(moveAllowed);
+    await target.send('Input.dispatchDragEvent', { type: moveAllowed ? 'drop' : 'dragCancel', ...point, data });
   } finally {
+    unsubscribe();
     await source.send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...start, button: 'left', clickCount: 1 });
     await source.send('Input.setInterceptDrags', { enabled: false });
   }
@@ -192,7 +197,51 @@ it.for(['toolbar', 'before', 'after'])('drags the last pane from its title to %s
   });
 });
 
+it('refuses a native drag whose source allows only copy', async (context) => {
+  if (!browser) { context.skip(); return; }
+  await exercise(1, async (primary, openChild) => {
+    const child = await openChild();
+    const [id] = await ids(primary.evaluate) as [string];
+    await primary.evaluate(`document.addEventListener('dragstart', event => {
+      event.dataTransfer.effectAllowed = 'copy';
+    }, {once: true})`);
+    await dragPane(primary, child, id, 'h1', 0.5, false);
+    expect(await ids(primary.evaluate)).toEqual([id]);
+    expect(await ids(child.evaluate)).toEqual([]);
+  });
+}, 240_000);
+
 const feedEntry = "window.__dashboardDiagnostics.streams.filter(s => s.url.endsWith('/dashboard/events')).at(-1)";
+it('retains the last real focus of a survivor across its background reconnect', async (context) => {
+  if (!browser) { context.skip(); return; }
+  await exercise(0, async (primary, openChild, start, { daemon }) => {
+    const b = await openChild();
+    const c = await openChild();
+    const registration = async (page: Page) => {
+      const protocol = 'sp-csrf.' + String(await page.evaluate("document.querySelector('meta[name=sp-csrf]').content"));
+      return () => daemon['dashboardWindows']().find(window => window.socket.protocol === protocol);
+    };
+    const aReg = await registration(primary), bReg = await registration(b), cReg = await registration(c);
+    // Bring A forward first so all three focus changes below are real transitions.
+    await primary.send('Page.bringToFront');
+    for (const [page, current] of [[c, cReg], [b, bReg], [primary, aReg]] as const) {
+      const before = current()!.focused;
+      await page.send('Page.bringToFront');
+      await eventually(() => (current()?.focused ?? 0) > before, 15_000, 50, 'daemon acknowledged real window focus');
+    }
+    const old = bReg()!;
+    old.socket.close();
+    await eventually(() => !!bReg() && bReg()!.socket !== old.socket);
+    expect(await b.evaluate('document.hasFocus()')).toBe(false);
+    const departing = aReg()!;
+    departing.socket.close();
+    await eventually(() => daemon['dashboardDesignated'] !== departing.pair && daemon['dashboardWindows']().length === 2);
+    expect(daemon['dashboardDesignated'], 'survivor most recently focused before the reconnect').toBe(bReg()!.pair);
+    const id = await start();
+    await eventually(async () => (await ids(b.evaluate) as string[]).includes(id));
+  });
+}, 240_000);
+
 async function sendMove(primary: Page, session: string) {
   await primary.evaluate(`(() => {
     const feed = ${feedEntry};
@@ -200,6 +249,47 @@ async function sendMove(primary: Page, session: string) {
     feed.socket.send(JSON.stringify({ type: 'window-move', session: ${JSON.stringify(session)}, source, target }));
   })()`);
 }
+
+it.for(['release first', 'recipient first'])('takes an equal-sized grid with %s', { timeout: 240_000 }, async (order, context) => {
+  if (!browser) { context.skip(); return; }
+  await exercise(1, async (primary, openChild, _start, { daemon }) => {
+    const child = await openChild();
+    const [id] = await ids(primary.evaluate) as [string];
+    for (const page of [primary, child]) await page.send('Emulation.setDeviceMetricsOverride',
+      { width: 600, height: 210, deviceScaleFactor: 1, mobile: false });
+    const badge = "document.querySelector('.pane-size')?.textContent";
+    await primary.evaluate(`document.querySelector('.pane button[aria-label="Fit"]').click()`);
+    await eventually(async () => await primary.evaluate(badge) === '80×24', 15_000, 50, 'source controls the floor grid',
+      () => primary.evaluate(badge));
+    if (order === 'release first') {
+      // Let the source process the move while the destination cannot handle its assignment yet.
+      await child.send('Debugger.enable');
+      await child.send('Debugger.pause');
+      try {
+        await sendMove(primary, id);
+        await eventually(() => daemon['dashboardTransferable'].has(id));
+      } finally { await child.send('Debugger.resume'); }
+    } else {
+      // Keep the genuine release and close queued until the recipient has seen the existing controller.
+      await primary.evaluate(`(() => {
+        const socket = window.__dashboardDiagnostics.streams.find(s => s.url.includes('/stream') && s.socket.readyState === 1).socket;
+        const send = socket.send.bind(socket), close = socket.close.bind(socket);
+        socket.send = data => {
+          if (data === JSON.stringify({type:'release-grid'})) window.__releaseGrid = () => { send(data); close(); };
+          else send(data);
+        };
+        socket.close = () => { if (!window.__releaseGrid) close(); };
+      })()`);
+      await sendMove(primary, id);
+      await eventually(async () => await child.evaluate(badge) === '80×24 (following)');
+      await primary.evaluate('window.__releaseGrid()');
+    }
+    const protocol = 'sp-csrf.' + String(await child.evaluate("document.querySelector('meta[name=sp-csrf]').content"));
+    await eventually(() => daemon['geometryController'].get(id)?.protocol === protocol, 15_000, 50,
+      'recipient acknowledged ownership at equal dimensions', () => child.evaluate(badge));
+    await eventually(async () => await child.evaluate(badge) === '80×24');
+  });
+});
 
 it('removes an enlarged pane from its source and scopes keyboard enlargement to the assignment', async (context) => {
   if (!browser) { context.skip(); return; }

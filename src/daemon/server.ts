@@ -669,6 +669,8 @@ export class Daemon {
   private readonly dashboardAssignments = new Map<string, string[]>();
   private dashboardDesignated: string | null = null;
   private dashboardFocusSerial = 0;
+  /** The document proof survives a feed reconnect and expires with the proof ring. */
+  private readonly dashboardDocumentFocus = new Map<string, { id: string; focused: number }>();
 
   private readonly liveDashboardEventSockets = new Set<WebSocket>();
   /** A launched dashboard has 30 seconds to connect before a start may retry. */
@@ -2445,7 +2447,7 @@ export class Daemon {
         // learns it. A link whose `s=` had been edited would otherwise spend
         // its grant on a page that then asks for the wrong stream.
         if (url.searchParams.get('s') !== redeemed.sessionId) {
-          headers['location'] = `/view?s=${encodeURIComponent(redeemed.sessionId)}`;
+          headers['location'] = `/view?s=${encodeURIComponent(redeemed.sessionId)}${passiveDrive(url) ? '&drive=0' : ''}`;
           res.writeHead(302, headers);
           res.end();
           return;
@@ -4513,6 +4515,9 @@ export class Daemon {
   }
 
   private retireDashboardFeeds(): void {
+    for (const protocol of this.dashboardDocumentFocus.keys()) {
+      if (!this.tokens.acceptsDashboardProof(dashboardProofFromProtocol(protocol))) this.dashboardDocumentFocus.delete(protocol);
+    }
     let changed = false;
     for (const ws of this.dashboardEventSockets) {
       if (ws.readyState === ws.OPEN && !this.dashboardFeedCurrent(ws)) {
@@ -4570,6 +4575,7 @@ export class Daemon {
         const pair = this.dashboardPair(current);
         if (claim.type === 'window-focus') {
           current.focused = ++this.dashboardFocusSerial;
+          this.dashboardDocumentFocus.set(ws.protocol, { id: current.id, focused: current.focused });
           this.publishDashboardWindows();
         } else if (claim.type === 'window-designate') {
           this.dashboardDesignated = pair;
@@ -4598,8 +4604,9 @@ export class Daemon {
           typeof claim.instance !== 'string' ||
           !/^[a-z0-9]+-[a-z0-9]+(?:-[1-9][0-9]*)?$/.test(claim.instance) ||
           claim.instance.length > 100) return;
+      const previous = this.dashboardDocumentFocus.get(ws.protocol);
       this.dashboardWindowIds.set(ws, { id: claim.id, instance: claim.instance,
-        focused: 0 });
+        focused: previous?.id === claim.id ? previous.focused : 0 });
       this.publishDashboardWindows();
     });
     ws.on('close', () => {
