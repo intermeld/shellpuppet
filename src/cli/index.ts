@@ -35,6 +35,7 @@ import type { Logger, SessionSummary } from '../core/types.js';
 const USAGE = `ShellPuppet: drive a real terminal session; humans watch and type via the viewer.
 
 Usage:
+  shellpuppet previous [--json]                       Read sessions saved before a daemon restart
   shellpuppet launch <profile> [--name NAME] [--folder NAME] [--root-index N] [--folder-path PATH] [--resume-id ID]
   shellpuppet start [options] <command> [args...]   Launch a program in a new session
       --label <s> --purpose <s> --cols <n> --rows <n> --cwd <dir>
@@ -400,6 +401,9 @@ async function main(): Promise<void> {
   }
 
   switch (verb) {
+    case 'previous':
+      printJson(await call(connection, 'GET', '/launcher/previous'));
+      return;
     case 'launch': {
       if (parsed.positionals.length !== 1 || parsed.lists.size || [...parsed.flags.keys()].some(key =>
         !['json', 'name', 'folder', 'folder-path', 'root-index', 'resume-id'].includes(key))) {
@@ -847,7 +851,7 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
   const stopRunning = async (connection: DaemonConnection): Promise<boolean> => {
     let response;
     try {
-      response = await request(connection, 'POST', '/daemon/shutdown', { force }, {
+      response = await request(connection, 'POST', '/daemon/shutdown', { force, ...(sub === 'restart' || holdSeconds !== undefined ? { restart: true } : {}) }, {
         logger: stderrLogger,
         actor: 'cli',
         ...daemonOnly,
@@ -858,6 +862,10 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
     }
     if (response.status === 409) {
       fail(1, `${String((response.body as Body)['error'])} (use --force)`);
+    }
+    if (response.status >= 400) {
+      const message = (response.body as Body)['error'];
+      throw new Error(typeof message === 'string' ? message : 'Daemon shutdown failed.');
     }
     // Wait for the port to actually go quiet so restart cannot race it.
     const deadline = Date.now() + 10_000;

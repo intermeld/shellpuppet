@@ -790,11 +790,16 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
         'If your model flags another model\'s reasoning (Claude models at present), pass hideReasoning: true on every reading call; leave it off when you need the full screen.',
       inputSchema: params({
         hideReasoning: z.boolean().optional().describe('Leave prompt question text out of waiting session summaries (default false).'),
+        previous: z.boolean().optional().describe('Read profile sessions recorded before restart. Requires session launch permission.'),
         waitingOnly: z.boolean().optional().describe('Return only waiting sessions, with id, label, question, options, selectedOption and waiting age.'),
       }),
     },
-    async ({ hideReasoning, waitingOnly }) =>
+    async ({ hideReasoning, waitingOnly, previous }) =>
       run(async () => {
+        if (previous) {
+          const { payload, warnings } = await call('GET', '/launcher/previous');
+          return text(withWarnings(warnings, frame(JSON.stringify(payload, null, 2))));
+        }
         const query = new URLSearchParams();
         if (hideReasoning === true) query.set('hideReasoning', '1');
         if (waitingOnly === true) query.set('waitingOnly', '1');

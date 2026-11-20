@@ -131,12 +131,6 @@ export interface LaunchProfilePolicy {
   deny?: string[];
 }
 
-/** Keep a caller value a single literal shell word and disallow option prefixes. */
-export function validResumeId(id: unknown): id is string {
-  return typeof id === 'string' && id.length >= 1 && id.length <= 128 &&
-    /^[A-Za-z0-9]/.test(id) && !/[^A-Za-z0-9-]/.test(id);
-}
-
 export interface LaunchProfile {
   resume?: string[];
   name: string;

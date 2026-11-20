@@ -158,6 +158,8 @@ export interface AgentModule {
     /** A separately framed idle pane whose neighbours can repaint without holding up input. */
     idlePane?: (view: NudgeView) => string | undefined;
   };
+  /** Conversation id exported to a child tool by this agent, when available. */
+  resumeId?: (env: NodeJS.ProcessEnv) => string | undefined;
   env?: { sessionMarkers: string[] };
   safety?: SafetyAdapter;
   stalls?: StallSignature[];

@@ -233,3 +233,11 @@ only `profile` and applicable `name`, `folder`, `rootIndex`, `folderPath` and
 `resumeId`. A resume id requires a profile resume template. The HTTP
 equivalent is `POST /launcher/launch` with the same JSON. Free-form starts
 continue to take `command` and the existing arguments.
+
+A granted caller can request `terminal_list({"previous":true})` or
+`GET /launcher/previous` after a restart. The response has `version: 1`
+and a `sessions` array. An empty array means no profile session was saved.
+Pass the saved `profile`, `name`, fields of `folderChoice` and a known
+`resumeId` to `terminal_start`. An empty folder choice uses the current
+fixed directory. `folder` in the record is the resolved directory for
+inspection. `endedAt` is the time the daemon took its shutdown snapshot.
