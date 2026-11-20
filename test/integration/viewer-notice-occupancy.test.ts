@@ -214,13 +214,13 @@ describe.each(['viewer', 'dashboard'])('%s notice occupancy', mode => {
       await p.move(22);
       p.control({ type: 'session-stalled', stalled: { reason: 'provider-refused',
         since: '2026-01-01T00:00:00.000Z', description: 'The provider declined to answer.' } });
-      const immediate = p.measure(); await noticePause(60); const afterFrame = p.measure();
+      const immediate = p.measure(); await new Promise(requestAnimationFrame); const afterFrame = p.measure();
       await noticePause(600); const later = p.measure();
       // A prompt that replaces the visible stall is a different notice too.
       await p.move(0); p.show(); const replaced = p.measure();
-      await noticePause(60); const replacedFrame = p.measure();
+      await new Promise(requestAnimationFrame); const replacedFrame = p.measure();
       p.destroy(); return [{ first, immediate, afterFrame, later, replaced, replacedFrame }];
-    })()`))[0]!;
+    })()`, true))[0]!;
     const details = JSON.stringify(result);
     expect.soft(result.first.side, details).toBe('bottom');
     for (const key of ['immediate', 'afterFrame', 'later', 'replaced', 'replacedFrame'] as const) {
