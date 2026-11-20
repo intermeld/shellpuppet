@@ -457,7 +457,10 @@ same queued operation checks that the composer still shows exactly the typed
 line or a paste placeholder created by this write, no answerable prompt is
 showing and no other input has arrived since the body. A placeholder that
 was visible before the body, or whose displayed character count differs from
-the body, is not proof. If this check fails, no Enter is sent and the result
+the body, is not proof. A placeholder can prove this body only if no input
+was written and nothing was painted for one second before the body: an earlier
+paste could otherwise still paint its placeholder during the wait. Without that,
+only the exact typed line is proof. If this check fails, no Enter is sent and the result
 reports `submitted: false`. The submit key is otherwise written separately
 on the ordered input chain. Muse keeps its own delay. After Enter, the exact
 remaining draft can receive one further Enter, subject to the same checks.
