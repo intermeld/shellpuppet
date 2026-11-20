@@ -150,6 +150,9 @@ describe('what lies below a busy composer', () => {
     // Rows shaped like Claude's mode line or Muse's task list are not their footers.
     expect(claude.nudge!.readiness(claudeBusy(['  ⏵⏵ Allow workspace access', '  ⏸ Cancel access']))).toBe('busy');
     expect(claude.nudge!.readiness(claudeBusy(['  Opus 5.5 medium █░░░░░░░░░ 6%', '  ⏵⏵ Allow workspace access']))).toBe('busy');
+    expect(claude.nudge!.readiness(claudeBusy(['  Opus 5.5 medium █░░░░░░░░░ 6%', '  ⏵⏵ auto mode on · Allow workspace access']))).toBe('busy');
+    expect(claude.nudge!.readiness(claudeBusy(['  Opus 5.5 medium █░░░░░░░░░ 6%',
+      '  ⏵⏵ auto mode on (shift+tab to cycle) · 1 shell · esc to interrupt · ↓ to manage']))).toBe('queue');
     expect(muse.nudge!.readiness(museBusy(['main · ↓ to select', '└ ◇ Allow workspace access', '└ ◆ Cancel access']))).toBe('busy');
     expect(muse.nudge!.readiness(museBusy(['main · ↓ to select', '└ ◇ Allow workspace access',
       '  muse-wonder-1.0 · high · C:/work/project · Launch overrides']))).toBe('busy');
