@@ -776,12 +776,8 @@ window.ShellPuppetPane = (() => {
     function relayout(deliberate) {
       if (destroyed) return;
       if (!geometryDecided) return;
-      if (dashboardProof !== null) {
-        applyFontPreference(gridCols, gridRows);
-        positionNotices();
-        return;
-      }
-      if (controlMode === 'held' || captureMode || (controlMode === 'adopt' && !deliberate)) {
+      if (dashboardProof !== null || passive || readOnlyEnforced || controlMode === 'held' ||
+          captureMode || (controlMode === 'adopt' && !deliberate)) {
         applyFontPreference(gridCols, gridRows);
       } else {
         requestFit();
@@ -941,7 +937,8 @@ window.ShellPuppetPane = (() => {
     }
 
     function fitGridByFont(cols, rows, maximum = MAX_FONT_PX) {
-      const font = largestFittingFont(cols, rows, maximum, dashboardProof === null ? MIN_FONT_PX : 1);
+      const minimum = dashboardProof !== null || passive || readOnlyEnforced ? 1 : MIN_FONT_PX;
+      const font = largestFittingFont(cols, rows, maximum, minimum);
       if (font !== null) drawFont(font);
     }
 
@@ -987,6 +984,8 @@ window.ShellPuppetPane = (() => {
         if (font !== null) drawFont(font);
       } else if (fontOverride === null) {
         fitGridByFont(cols, rows);
+      } else if (passive || readOnlyEnforced) {
+        fitGridByFont(cols, rows, fontOverride);
       } else if (dashboardProof !== null) {
         const capped = cols >= gridMax.cols || rows >= gridMax.rows;
         // Retained owned grids must still fit when Auto fit is off. The saved
@@ -1041,18 +1040,7 @@ window.ShellPuppetPane = (() => {
       if (destroyed) return;
       fontOverride = value;
       onFontOverrideChange(value);
-      if (dashboardProof !== null) {
-        applyFontPreference(gridCols, gridRows);
-        positionNotices();
-        return;
-      }
-      if (controlMode === 'held' || captureMode) {
-        applyFontPreference(gridCols, gridRows);
-        positionNotices();
-        return;
-      }
-      requestFit();
-      positionNotices();
+      relayout(true);
     }
 
     function nudgeFont(delta) {
@@ -1322,17 +1310,17 @@ window.ShellPuppetPane = (() => {
         const rows = Math.min(gridMax.rows, belowFloor ? floorRows : Math.max(floorRows, proposed.rows));
         if (cols === gridCols && rows === gridRows && !force && !transferOffered) return false;
         if (pendingTakeSocket === ws && pendingTakeSize?.cols === cols && pendingTakeSize?.rows === rows) return false;
-        return this.takeGrid(cols, rows);
+        return this.takeGrid(cols, rows, transferOffered);
       },
       isTemporaryGeometry() { return temporaryGeometry; },
-      takeGrid(cols, rows) {
+      takeGrid(cols, rows, acceptOffer = false) {
         if (destroyed) return false;
         if (dashboardProof === null || !ws || ws.readyState !== 1 || !geometryDecided) return false;
         const wanted = { cols: Math.max(2, Math.min(400, cols)), rows: Math.max(2, Math.min(150, rows)) };
         pendingTakeGrid = true;
         pendingTakeSize = wanted;
         pendingTakeSocket = ws;
-        ws.send(JSON.stringify({ type: 'resize', ...wanted, take: true }));
+        ws.send(JSON.stringify({ type: 'resize', ...wanted, take: true, ...(acceptOffer ? { acceptOffer } : {}) }));
         return true;
       },
       fitGrid(floorCols = 80, floorRows = 24) {
