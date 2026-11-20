@@ -212,13 +212,19 @@ its placeholder. The screen must also have no prompt waiting, no settled
 stall, and no change for 1,500 ms before that empty composer counts as ready
 to nudge.
 
-OpenCode reads the gutter rows above its Build line and folder footer. A blank
-input or a grey (`#808080`) `Ask anything… "<suggestion>"` on the welcome
-screen counts as empty. Before pressing Enter it checks the full nudge across
-all input rows. OpenCode 2.3 queues a message during a running turn when the
-input is blank and the eight progress cells and `esc interrupt` appear in its
-footer. The composer and footer must remain quiet for 1,500 ms apart from the
-progress animation. A draft or extra panel keeps the message waiting.
+OpenCode reads the Build or Plan composer up to its right edge, including when
+the standard sidebar shares those rows. On the welcome screen, the entire
+`Ask anything… "<suggestion>"` hint must use the default grey (`#808080`).
+A theme that changes the hint colour keeps the welcome nudge waiting. The
+welcome footer can show a connected or failed MCP server count beside the version.
+
+After a turn, a blank input needs the cursor at the start of its first row.
+Spaces drawn in typed ink count as a draft. Before Enter, the input rows
+must spell the full nudge with each wrap explained by the input width.
+OpenCode 2.3 queues during a turn when the empty composer has settled for
+1,500 ms and the eight progress cells precede the live `esc interrupt`
+control in its footer colours. The progress cells can animate during that
+period. A draft or a panel holding focus keeps the message waiting.
 
 Two Qoder specifics worth knowing:
 
