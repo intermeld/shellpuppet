@@ -9,6 +9,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
+import type { ScreenRenderer } from '../../src/core/renderer.js';
 import { api, eventually, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 
@@ -129,6 +130,58 @@ describe('Grok permission box with an edit pattern action', () => {
     expect(rows).toContain('3 (•) Yes, proceed');
     expect(rows).toContain('always-approve mode');
   }, 120_000);
+
+  describe.each([196, 80])('at %i columns', (cols) => {
+    it.each(['command', 'question'] as const)('reads the full prompt when the %s wraps', async (part) => {
+      // Insert room in the captured frame, then let xterm wrap the extra text.
+      // Replaying a redraw through ConPTY can change its physical wrap flags.
+      const manager = (td.daemon as unknown as { manager: {
+        get(id: string): { renderer: ScreenRenderer };
+      } }).manager;
+      const renderer = manager.get(id).renderer;
+      const capture = fs.readFileSync(path.join(FIXTURES, 'grok-permission-edit-pattern.ansi'), 'utf8');
+      try {
+        await renderer.write('\x1bc' + capture);
+        const captured = renderer.styledLines().lines;
+        const row = part === 'command' ? 85 : 81;
+        const original = captured[row]!.text;
+        const ink = part === 'command' ? '137;221;255' : '200;200;200';
+        // At 80 a real space ends the first row. A double-width character
+        // moves to the third row, leaving an unused cell at the right edge.
+        const extended = part === 'question' && cols === 80
+          ? ((original.padEnd(79, 'x') + ' second').padEnd(159, 'x') + '界').padEnd(206, 'x')
+          : original.padEnd(207, 'x');
+        const question = (part === 'question' ? extended : captured[81]!.text).slice(7).trim();
+        const extraRows = Math.ceil(extended.length / cols) - 1;
+        renderer.resize(cols, 99 + extraRows);
+        // Collapsing two earlier rows changes the box's filtered row numbers.
+        if (cols === 80) await renderer.write('\x1b[H\x1b[0m\x1b[2K  │  ♦ Thinking…\r\n\x1b[2K  │  earlier detail\r\n\x1b[2K');
+        const column = Math.min(original.length, cols - 1);
+        await renderer.write(`\x1b[${row + 2};1H\x1b[${extraRows}L\x1b[${row + 1};${column + 1}H` +
+          `\x1b[38;2;${ink};48;2;64;64;64m${extended.slice(column)}\x1b[0m`);
+        const lines = renderer.styledLines().lines;
+        const physical = lines.slice(row, row + extraRows + 1);
+        expect(physical[0]!.text).toBe(extended.slice(0, cols).trimEnd());
+        expect(extended.endsWith(physical.at(-1)!.text)).toBe(true);
+        for (let i = 1; i <= extraRows; i++) expect(lines[row + i]!.wrapped).toBe(true);
+        const options = lines.filter(line => /^ {2}│ {2}(?:\d+| ) \([○•]\)/u.test(line.text))
+          .map(line => line.text.slice(5).trim());
+        expect(options).toHaveLength(5);
+        for (const hide of [true, false]) {
+          const wait = await api(td.port, td.token, `/sessions/${id}/wait?prompt=1&hideReasoning=${hide}&timeout=500`);
+          expect(wait.body['reason']).toBe('prompt');
+          expect(wait.body['prompt']).toMatchObject({ question, options, selectedOption: 1 });
+          if (hide && cols === 80) expect(wait.body['screen']).not.toContain('earlier detail');
+          for (const line of lines.slice(row, row + extraRows + 1)) expect(wait.body['screen']).toContain(line.text);
+        }
+        const snapshot = await api(td.port, td.token, `/sessions/${id}/snapshot?hideReasoning=1`);
+        for (const option of options) expect(snapshot.body['screen']).toContain(option);
+      } finally {
+        renderer.resize(196, 99);
+        await renderer.write('\x1bc' + capture);
+      }
+    });
+  });
 });
 
 describe('wrapped lines longer than the reasoning context', () => {

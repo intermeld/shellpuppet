@@ -8,6 +8,7 @@ import * as path from 'node:path';
 import { describe, expect, it, vi } from 'vitest';
 import * as promptDetector from '../../src/core/promptDetector.js';
 import { ScreenRenderer } from '../../src/core/renderer.js';
+import { readingRules as grokReadingRules } from '../../src/agents/grok/readingRules.js';
 import type { StyledLine } from '../../src/core/renderer.js';
 import { BUILT_IN_SIGNATURES, compileSignatures, hideReasoning } from '../../src/core/reasoning.js';
 import type { CompiledSignature } from '../../src/core/reasoning.js';
@@ -280,6 +281,29 @@ describe('Grok box question row', () => {
     for (const frame of [wrongInk, [...lines, { ...plain('  │ >'), wrapped: true }]]) {
       expect(hideReasoning(frame, grok)!.lines.join('\n')).not.toContain('Yes, proceed');
     }
+  });
+
+  it('does not claim a hard line or transcript ink as a wrapped command', async () => {
+    const lines = await screen('grok-permission-edit-pattern');
+    const action = lines.findIndex(line => line.text === '  │  e edit pattern');
+    for (const [wrapped, bg] of [[false, '#404040'], [true, '#141414']] as const) {
+      const prose = plain('private detail');
+      const ink = prose.spans[0]!;
+      prose.spans = [{ ...ink, bg: '#404040', to: 7 }, { ...ink, bg, from: 7 }];
+      const frame = [...lines.slice(0, action), { ...prose, wrapped }, ...lines.slice(action)];
+      expect(grokReadingRules.claimPromptRows!(frame, null)).toBeNull();
+    }
+  });
+
+  it('keeps reasoning hidden when the question is painted before its separator', async () => {
+    const lines = await screen('grok-permission-edit-pattern');
+    const question = lines.findIndex(line => line.text.startsWith('  │  > '));
+    expect(lines[question]!.wrapped).toBe(true);
+    lines[question - 1] = plain('  │  ♦ Thinking about a private detail');
+    expect(grokReadingRules.claimPromptRows!(lines, null)?.[0]).toBe(question);
+    const filtered = hideReasoning(lines, grok)!;
+    expect(filtered.lines.join('\n')).not.toContain('private detail');
+    expect(filtered.lines).not.toContain(lines[question]!.text);
   });
 
   it('hides ambiguous bar prose between a genuine action and the radios', async () => {

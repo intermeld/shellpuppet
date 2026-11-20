@@ -68,11 +68,11 @@ export const radioRows: PromptShape = {
 
 const actionMenu: PromptShape = {
   kind: 'menu', order: 1,
-  detect: (raw) => {
-    const box = actionBox(raw);
+  detect: (raw, _lines, _tail, _busy, _viewportRows, styled) => {
+    const box = actionBox(raw, styled);
     if (!box) return null;
     const options = raw.slice(box.firstOption, box.bottom).map((line) => normalise(line.slice(5)));
-    const question = box.questionRow === undefined ? options[0]! : normalise(raw[box.questionRow]!.replace(GROK_BOX_QUESTION, ''));
+    const question = box.question === undefined ? options[0]! : normalise(box.question);
     const signature = [question, ...options].join(' | ').replace(/\([•●]\)/gu, '(○)');
     return {
       question, options, signature, selectedOption: box.selectedRow - box.firstOption,
