@@ -1568,7 +1568,10 @@ export class Session implements WaitTarget {
           await new Promise((resolve) => setTimeout(resolve, delayMs));
         }
         this.refuseIfInputFailed();
-        this.refuseIfEnded();
+        // A program without a readable composer (a plain shell) keeps writing input as
+        // before: the write itself fails if the terminal has gone. Only a nudge or a
+        // readable agent composer is refused here once the session has ended.
+        if (nudge || this.agentModule?.nudge !== undefined) this.refuseIfEnded();
         if (ready !== undefined) {
           // A program may paint a pasted line some time after it arrives, so
           // the check repeats until the screen holds the line or the wait ends.
