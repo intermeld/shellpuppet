@@ -2,6 +2,7 @@
 import { beforeAll, expect, it } from 'vitest';
 import { captureDashboard } from './dashboardCapture.js';
 import { parseDaemonConfig } from '../../src/daemon/config.js';
+import type { LaunchOpen } from '../../src/daemon/launchProfiles.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
 import { api, eventually, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
@@ -29,10 +30,10 @@ const ids = (evaluate: Page['evaluate']): Promise<unknown> =>
   evaluate(`[...document.querySelectorAll('#panes .pane')].map(p => p.dataset.session)`);
 
 async function exercise(count: number, action: (primary: Primary, openChild: (useButton?: boolean) => Promise<Child>,
-  start: () => Promise<string>, daemon: TestDaemon) => Promise<unknown>): Promise<unknown> {
+  start: () => Promise<string>, daemon: TestDaemon) => Promise<unknown>, open: LaunchOpen = 'grid'): Promise<unknown> {
   const urls: string[] = [];
   const profiles = parseDaemonConfig({ launcher: { profiles: [{ name: 'lead', command: process.execPath,
-    args: ['-e', 'setInterval(() => {}, 1000)'], shell: false }] } }).config.launcher;
+    args: ['-e', 'setInterval(() => {}, 1000)'], shell: false, open }] } }).config.launcher;
   const daemon = await startTestDaemon({ launchProfiles: profiles,
     launcher: (url) => { urls.push(url); return Promise.resolve({ launched: true, mode: 'isolated-app' as const, browser: 'mock' }); },
     idleCheckIntervalMs: 600_000 });
@@ -212,6 +213,41 @@ it('refuses a native drag whose source allows only copy', async (context) => {
 }, 240_000);
 
 const feedEntry = "window.__dashboardDiagnostics.streams.filter(s => s.url.endsWith('/dashboard/events')).at(-1)";
+
+it('keeps Grid when a Focus launch reply arrives after feed re-registration', async (context) => {
+  if (!browser) { context.skip(); return; }
+  await exercise(0, async (primary, openChild) => {
+    const child = await openChild();
+    const originalWindow = await primary.evaluate(`${feedEntry}.windowState.designated`);
+    await eventually(async () => await primary.evaluate("document.getElementById('profile').value === 'lead' && !document.getElementById('start').disabled") === true);
+    let reply: { requestId: string; responseStatusCode: number } | undefined;
+    const unsubscribe = primary.onEvent('Fetch.requestPaused', params => { reply = params as typeof reply; });
+    await primary.send('Fetch.enable', { patterns: [{ urlPattern: '*/dashboard/launch', requestStage: 'Response' }] });
+    try {
+      await primary.evaluate("document.getElementById('grid').click(); document.getElementById('start').click()");
+      const paused = await until(() => reply ?? null);
+      expect(paused.responseStatusCode).toBe(200);
+      const id = await until(async () => (await ids(primary.evaluate) as string[])[0] ?? null);
+      await primary.evaluate(`${feedEntry}.socket.close()`);
+      await eventually(async () => (await ids(child.evaluate) as string[]).includes(id));
+      await eventually(async () => await primary.evaluate(`(() => {
+        const state = ${feedEntry}.windowState;
+        return state?.windows.length === 2 && !state.windows.includes(${JSON.stringify(originalWindow)}) &&
+          !document.getElementById('start').disabled;
+      })()`) === true);
+      await primary.send('Fetch.continueResponse', { requestId: paused.requestId });
+      // Restart in the receiving window acknowledges that the launch reply was processed.
+      await eventually(async () => await child.evaluate(`document.querySelector('.pane:has([data-action=restart]:not([hidden]))')?.dataset.session`) === id);
+      await sendMove(primary, id);
+      await eventually(async () => (await ids(primary.evaluate) as string[]).includes(id));
+      expect(await primary.evaluate("document.getElementById('panes').dataset.layout")).toBe('grid');
+    } finally {
+      unsubscribe();
+      await primary.send('Fetch.disable');
+    }
+  }, 'focus');
+}, 240_000);
+
 it('retains the last real focus of a survivor across its background reconnect', async (context) => {
   if (!browser) { context.skip(); return; }
   await exercise(0, async (primary, openChild, start, { daemon }) => {
