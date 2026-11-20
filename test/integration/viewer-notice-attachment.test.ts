@@ -165,9 +165,13 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
         const cadence = await evaluate(kind === 'rchange'
           ? '(async () => { await __pause(24500); return __delivered.stop(); })()'
           : `(async () => {
-              const start = performance.now();
-              while (__delivered.peek().legs.filter(leg => leg.row === 8).length < ${String(neutralVisits)} &&
-                     performance.now() - start < 60000) await __pause(100);
+              let visits = 0, lastDelivery = performance.now();
+              while (performance.now() - lastDelivery < 60000) {
+                const legs = __delivered.peek().legs;
+                if (legs.filter(leg => leg.row === 8).length >= ${String(neutralVisits)}) break;
+                if (legs.length !== visits) { visits = legs.length; lastDelivery = performance.now(); }
+                await __pause(100);
+              }
               return __delivered.stop();
             })()`) as DeliveredCadence;
         const assessment = assessDeliveredCadence(cadence);
