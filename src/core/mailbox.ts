@@ -322,9 +322,11 @@ export class Mailbox extends EventEmitter {
   }
 
   savedClaims(granted: readonly string[]) {
+    const waiting = new Set([...this.waiters].map(waiter => waiter.readerId));
+    const now = this.now();
     return [...this.participants.values()]
       .filter(p => p.kind === 'claim' && granted.includes(p.name))
-      .map(({ id, name, digest, lastActivity }) => ({ id, name, digest, lastActivity }));
+      .map(({ id, name, digest, lastActivity }) => ({ id, name, digest, lastActivity: waiting.has(id) ? now : lastActivity }));
   }
 
   restoreClaims(rows: unknown, granted: readonly string[]): number {

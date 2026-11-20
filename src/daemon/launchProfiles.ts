@@ -302,8 +302,9 @@ export function parseLaunchProfile(
     return { problem: `name must match ${PROFILE_NAME_PATTERN.source}` };
   }
   const resume = raw['resume'];
-  if (resume !== undefined && (!isStringArray(resume) || !resume.some(arg => arg.includes('{id}')))) {
-    return { problem: 'resume must be an array of arguments containing {id}' };
+  if (resume !== undefined && (!isStringArray(resume) || !resume.includes('{id}') ||
+    resume.some(arg => arg !== '{id}' && arg.includes('{id}')))) {
+    return { problem: 'resume must be an array with {id} as a whole argument wherever it appears' };
   }
   const invalidRole = raw['role'] !== undefined && raw['role'] !== 'chair';
 

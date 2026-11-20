@@ -198,6 +198,8 @@ resume id to `shellpuppet launch`. For example:
 shellpuppet launch review --name chair --folder repo --resume-id thread-42
 ```
 
+Omit `--name` when the saved name is null. A restart that cannot save a record
+continues and reports the affected file in `--json` warnings or on stderr.
 An entry with a null resume id can be started fresh. Resume requires the
 current profile to declare a resume template. Changing the configured command
 or named folder changes the next launch.

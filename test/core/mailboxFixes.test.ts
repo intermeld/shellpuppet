@@ -197,3 +197,20 @@ describe('waiting and copies', () => {
     await expect(wait).rejects.toMatchObject({ name: 'AbortError' });
   });
 });
+
+it('restores a granted claim with a pending inbox wait through its next idle interval', async () => {
+  let now = 0;
+  const options = { enabled: true, now: () => now, claimIdleMinutes: 1 };
+  const mailbox = new Mailbox(options);
+  const { claimId, secret } = mailbox.claim('supervisor');
+  mailbox.claim('inactive');
+  const waiting = mailbox.waitForMessage(claimId);
+  try {
+    now = 61_000;
+    const restored = new Mailbox(options);
+    expect(restored.restoreClaims(mailbox.savedClaims(['supervisor', 'inactive']), ['supervisor', 'inactive'])).toBe(1);
+    expect(restored.verifyClaim(claimId, secret)).toBe(true);
+    now += 60_000;
+    expect(restored.expiredClaims()).toEqual([claimId]);
+  } finally { mailbox.end(claimId); await waiting; }
+});

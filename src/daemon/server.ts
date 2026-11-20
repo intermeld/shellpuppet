@@ -696,6 +696,7 @@ export class Daemon {
   private portValue: number | null = null;
   private waitsInFlight = 0;
   private lastActivity = Date.now();
+  private readonly shutdownWarnings: string[] = [];
   private idleTimer: NodeJS.Timeout | null = null;
   private raceCheckTimer: NodeJS.Timeout | null = null;
   private statePublishTimer: NodeJS.Timeout | null = null;
@@ -861,10 +862,7 @@ export class Daemon {
   // ------------------------------------------------------------------ start
   async start(): Promise<{ port: number; token: string }> {
     const { home } = this.options;
-    const homeResult = await ensureHome(home);
-    if (homeResult.warning !== undefined) {
-      this.logger.warn('home hardening warning', { warning: homeResult.warning });
-    }
+    ensureHome(home);
 
     // Defer to an incumbent that is running, even one too busy to answer its
     // health check; clear a record whose daemon has gone (design §2.3).
@@ -916,26 +914,29 @@ export class Daemon {
     // Atomic claim; on losing the race, defer to the winner (design §2.2:
     // the race is normal, not exceptional). A file that holds no record at all,
     // such as an emptied one, is cleared like a stale record.
-    if (!claimDaemonState(home, state)) {
-      const winner = inspectDaemonState(home);
-      if (winner.kind === 'record' && (await this.incumbentRunning(winner.state))) {
-        await this.closeServerOnly();
-        throw new AlreadyRunningError(winner.state);
-      }
-      if (winner.kind === 'record') removeDaemonStateIf(home, winner.state);
-      if (winner.kind === 'not-a-record') {
-        this.logger.warn('clearing a daemon.json that holds no daemon record', {
-          length: winner.raw.length,
-        });
-        removeDaemonStateIfNotARecord(home, winner.raw);
-      }
+    try {
       if (!claimDaemonState(home, state)) {
-        await this.closeServerOnly();
-        throw new Error(
-          `Could not claim ${daemonStatePath(home)}: it could not be read, or another ` +
-            `daemon claimed it first.`,
-        );
+        const winner = inspectDaemonState(home);
+        if (winner.kind === 'record' && (await this.incumbentRunning(winner.state))) {
+          throw new AlreadyRunningError(winner.state);
+        }
+        if (winner.kind === 'record') removeDaemonStateIf(home, winner.state);
+        if (winner.kind === 'not-a-record') {
+          this.logger.warn('clearing a daemon.json that holds no daemon record', {
+            length: winner.raw.length,
+          });
+          removeDaemonStateIfNotARecord(home, winner.raw);
+        }
+        if (!claimDaemonState(home, state)) {
+          throw new Error(
+            `Could not claim ${daemonStatePath(home)}: it could not be read, or another ` +
+              `daemon claimed it first.`,
+          );
+        }
       }
+    } catch (error) {
+      await this.closeServerOnly();
+      throw error;
     }
 
     const claimsFile = path.join(home, 'launcher-claims.json');
@@ -1138,14 +1139,27 @@ export class Daemon {
    * file (unless we lost the race and it now belongs to the winner).
    * The daemon must never exit and strand running agent CLIs (design §2.3).
    */
-  stop(opts: { removeState?: boolean } = {}): Promise<void> {
+  stop(opts: { removeState?: boolean; restart?: boolean } = {}): Promise<void> {
     // Idle-stop, signal handlers and explicit stops can overlap, so everyone
     // awaits the one real shutdown.
     if (this.stopPromise === null) {
       this.stopping = true;
+      if (opts.removeState !== false) {
+        this.writeShutdownRecord('launcher-claims.json', () => this.saveLauncherClaims());
+        if (opts.restart) this.writeShutdownRecord('previous-sessions.json', () => this.savePreviousSessions());
+      }
       this.stopPromise = this.doStop(opts);
     }
     return this.stopPromise;
+  }
+
+  private writeShutdownRecord(file: string, save: () => void): void {
+    try { save(); }
+    catch (error) {
+      const message = `Could not save ${file} during shutdown.`;
+      this.shutdownWarnings.push(message);
+      this.logger.warn(message, { code: (error as NodeJS.ErrnoException).code });
+    }
   }
 
   private async doStop(opts: { removeState?: boolean }): Promise<void> {
@@ -1315,8 +1329,8 @@ export class Daemon {
     return null;
   }
 
-  private auditDashboardRefusal(req: http.IncomingMessage, reason: string): void {
-    this.audit.record('dashboard', 'refuse', undefined, {
+  private auditDashboardRefusal(req: http.IncomingMessage, reason: string, actor = 'dashboard'): void {
+    this.audit.record(actor, 'refuse', undefined, {
       method: req.method ?? '',
       path: pathOnly(req.url),
       reason,
@@ -1849,12 +1863,12 @@ export class Daemon {
       body = await readBody(req);
     } catch (error) {
       if (error instanceof RequestBodyTooLargeError) {
-        this.auditDashboardRefusal(req, 'body-size');
+        this.auditDashboardRefusal(req, 'body-size', launcher?.name);
         json(res, 413, { error: error.message });
         return;
       }
       if (error instanceof Error && error.message.startsWith('Request body')) {
-        this.auditDashboardRefusal(req, 'body');
+        this.auditDashboardRefusal(req, 'body', launcher?.name);
         json(res, 400, { error: error.message });
         return;
       }
@@ -1867,7 +1881,7 @@ export class Daemon {
     }
     for (const key of Object.keys(body)) {
       if (key !== 'profile' && key !== 'folder' && key !== 'rootIndex' && key !== 'folderPath' && key !== 'name' && key !== 'resumeId') {
-        this.auditDashboardRefusal(req, 'body');
+        this.auditDashboardRefusal(req, 'body', launcher?.name);
         json(res, 400, {
           error:
             `The launch body may name only profile, name, folder, rootIndex, folderPath and resumeId: "${key}" is not accepted. ` +
@@ -1887,7 +1901,7 @@ export class Daemon {
       return;
     }
     const args = [...profile.args];
-    if (typeof resumeId === 'string') args.push(...profile.resume!.map(arg => arg.replaceAll('{id}', resumeId)));
+    if (typeof resumeId === 'string') args.push(...profile.resume!.map(arg => arg === '{id}' ? resumeId : arg));
     const caller = this.resolveCallerIdentity(req);
     if (caller.presented && caller.session === undefined) {
       json(res, 403, { error: 'Session identity was not recognised.' });
@@ -1909,13 +1923,13 @@ export class Daemon {
     if (profile.askCwd) {
       if (freePath !== undefined) {
         if (!profile.anyFolder || folderName !== undefined || rootIndex !== undefined) {
-          this.auditDashboardRefusal(req, 'body');
+          this.auditDashboardRefusal(req, 'body', launcher?.name);
           json(res, 400, { error: 'This profile does not accept that folder path.' });
           return;
         }
         const choice = resolveAnyFolder(freePath);
         if ('error' in choice) {
-          this.auditDashboardRefusal(req, 'body');
+          this.auditDashboardRefusal(req, 'body', launcher?.name);
           json(res, 400, { error: choice.error });
           return;
         }
@@ -1932,7 +1946,7 @@ export class Daemon {
         if (rootIndex !== undefined) {
           const choice = await resolveRootFolder(profile.folderRoots.map((root) => path.resolve(os.homedir(), root)), rootIndex, folderName);
           if ('error' in choice) {
-            this.auditDashboardRefusal(req, 'body');
+            this.auditDashboardRefusal(req, 'body', launcher?.name);
             json(res, 400, { error: choice.error });
             return;
           }
@@ -1940,14 +1954,14 @@ export class Daemon {
         } else {
           folder = profile.folders.find((entry) => entry.name === folderName);
           if (folder === undefined) {
-            this.auditDashboardRefusal(req, 'body');
+            this.auditDashboardRefusal(req, 'body', launcher?.name);
             json(res, 400, { error: `No such folder for profile "${profileName}": ${folderName}` });
             return;
           }
         }
       }
     } else if (folderName !== undefined || rootIndex !== undefined || freePath !== undefined) {
-      this.auditDashboardRefusal(req, 'body');
+      this.auditDashboardRefusal(req, 'body', launcher?.name);
       json(res, 400, {
         error: `Profile "${profileName}" uses a fixed working directory and does not accept a folder.`,
       });
@@ -1956,7 +1970,7 @@ export class Daemon {
 
     const resolved = freeCwd !== undefined ? { cwd: freeCwd } : rootCwd === undefined ? this.resolveLaunchCwd(profile, folder) : { cwd: rootCwd };
     if ('error' in resolved) {
-      this.auditDashboardRefusal(req, 'body');
+      this.auditDashboardRefusal(req, 'body', launcher?.name);
       json(res, 400, { error: resolved.error });
       return;
     }
@@ -1965,7 +1979,7 @@ export class Daemon {
     // Both see the real command line, before any Windows shell wrap.
     const globalDecision = evaluateCommand(this.compiledPolicy, profile.command, args);
     if (!globalDecision.allowed) {
-      this.auditDashboardRefusal(req, 'policy');
+      this.auditDashboardRefusal(req, 'policy', launcher?.name);
       json(res, 403, { error: globalDecision.reason ?? 'Command refused by policy.' });
       return;
     }
@@ -1976,7 +1990,7 @@ export class Daemon {
         args,
       );
       if (!ownDecision.allowed) {
-        this.auditDashboardRefusal(req, 'policy');
+        this.auditDashboardRefusal(req, 'policy', launcher?.name);
         json(res, 403, { error: ownDecision.reason ?? 'Command refused by policy.' });
         return;
       }
@@ -1987,7 +2001,7 @@ export class Daemon {
     // absolute path, so the folder's contents cannot choose the program.
     const resolvedCommand = resolveLaunchCommand(profile.command, resolved.cwd);
     if ('error' in resolvedCommand) {
-      this.auditDashboardRefusal(req, 'command');
+      this.auditDashboardRefusal(req, 'command', launcher?.name);
       json(res, 400, {
         error: `Profile "${profile.name}" cannot be started: ${resolvedCommand.error}`,
       });
@@ -2030,7 +2044,7 @@ export class Daemon {
     if (rootCwd !== undefined) {
       const latest = await resolveRootFolder(profile.folderRoots.map((root) => path.resolve(os.homedir(), root)), rootIndex, folderName);
       if ('error' in latest || latest.cwd !== rootCwd) {
-        this.auditDashboardRefusal(req, 'body');
+        this.auditDashboardRefusal(req, 'body', launcher?.name);
         json(res, 400, { error: 'Folder is no longer available from this root.' });
         return;
       }
@@ -2038,7 +2052,7 @@ export class Daemon {
     if (freeCwd !== undefined) {
       const latest = resolveAnyFolder(freePath);
       if ('error' in latest || latest.cwd !== freeCwd) {
-        this.auditDashboardRefusal(req, 'body');
+        this.auditDashboardRefusal(req, 'body', launcher?.name);
         json(res, 400, { error: 'The chosen folder is no longer available.' });
         return;
       }
@@ -2052,7 +2066,7 @@ export class Daemon {
     const now = this.now();
     this.pruneLaunchTimes(now);
     if (this.launchTimes.length >= 8) {
-      this.auditDashboardRefusal(req, 'rate');
+      this.auditDashboardRefusal(req, 'rate', launcher?.name);
       json(res, 429, {
         error:
           'Dashboard launch rate reached (8 in 60 seconds). Wait before starting another profile.',
@@ -2063,7 +2077,7 @@ export class Daemon {
     const live = this.manager.liveCount();
     if (this.compiledPolicy.maxSessions === undefined) {
       if (live >= 32) {
-        this.auditDashboardRefusal(req, 'limit');
+        this.auditDashboardRefusal(req, 'limit', launcher?.name);
         json(res, 403, {
           error:
             'Session limit reached (32 live sessions). Kill a session or set policy.maxSessions.',
@@ -2073,7 +2087,7 @@ export class Daemon {
     } else {
       const capacity = checkSessionCapacity(this.compiledPolicy, live);
       if (!capacity.allowed) {
-        this.auditDashboardRefusal(req, 'limit');
+        this.auditDashboardRefusal(req, 'limit', launcher?.name);
         json(res, 403, { error: capacity.reason ?? 'Session limit reached.' });
         return;
       }
@@ -2084,7 +2098,7 @@ export class Daemon {
       session = (this.options.dashboardSessionFactory ?? ((value) => this.manager.create(value)))(options);
     } catch (error) {
       if (error instanceof PolicyViolationError) {
-        this.auditDashboardRefusal(req, 'policy');
+        this.auditDashboardRefusal(req, 'policy', launcher?.name);
         json(res, 403, { error: error.message });
         return;
       }
@@ -2122,8 +2136,7 @@ export class Daemon {
     // that has just started is not reaped sooner than `idleMinutes` allows.
     this.lastActivity = Date.now();
 
-    this.registerMailboxSession(session,
-      body['name'] === undefined && NAME_PATTERN.test(session.label) ? undefined : requestedName, true);
+    this.registerMailboxSession(session, requestedName);
     this.sessionFeed.add(this.summaryWithPrompt(session.summary()));
     session.onExit(() => {
       this.geometryController.delete(session.id);
@@ -2594,8 +2607,10 @@ export class Daemon {
     const endedAt = new Date(this.now()).toISOString();
     const sessions = this.manager.list().flatMap(summary => {
       const session = this.manager.get(summary.id);
-      if (!session || session.exited || session.isKilled || !session.launchProfile) return [];
-      return [{ ...session.launchProfile, name: this.mailbox.participant(session.id)?.name ?? session.launchProfile.profile,
+      // A deferred start has no participant until the program has started and acquired its name.
+      const participant = this.mailbox.participant(summary.id);
+      if (!participant || !session || session.exited || session.isKilled || !session.launchProfile) return [];
+      return [{ ...session.launchProfile, name: participant.name === session.id ? null : participant.name,
         agent: session.agent, resumeId: session.resumeId, endedAt }];
     });
     writePrivateRecord(path.join(this.options.home, 'previous-sessions.json'), { version: 1, sessions });
@@ -2763,12 +2778,13 @@ export class Daemon {
     return 'sent';
   }
 
-  private registerMailboxSession(session: Session, preferredName?: string, numberTaken = false): void {
-    const label = preferredName ?? session.label;
-    let name = label !== undefined && NAME_PATTERN.test(label) &&
+  private registerMailboxSession(session: Session, profileName?: string): void {
+    const label = profileName ?? session.label;
+    const freeFormGrant = profileName === undefined && this.launchProfiles.sessionLaunch?.includes(label);
+    let name = !freeFormGrant && NAME_PATTERN.test(label) &&
       (!/^s[0-9]+$/.test(label) || label === session.id) &&
       !this.mailbox.nameTaken(label) ? label : session.id;
-    if (numberTaken && name === session.id && NAME_PATTERN.test(label) &&
+    if (profileName !== undefined && name === session.id && NAME_PATTERN.test(label) &&
       !/^s[0-9]+$/.test(label) && !this.isReservedClaimName(label)) {
       for (let index = 2; index < 10_000; index++) {
         const candidate = `${label.slice(0, 40 - String(index).length - 1)}-${index}`;
@@ -2935,7 +2951,7 @@ export class Daemon {
     try {
       if (segments[0] === 'daemon' && segments[1] === 'shutdown' && req.method === 'POST') {
         const body = await readBody(req);
-        if (this.stopping) { json(res, 200, { ok: true, stopping: true }); return; }
+        if (this.stopping) { json(res, 200, { ok: true, stopping: true, warnings: this.shutdownWarnings }); return; }
         const force = asBoolean(body['force']) ?? false;
         const live = this.manager.liveCount();
         if (live > 0 && !force) {
@@ -2946,11 +2962,10 @@ export class Daemon {
           });
           return;
         }
-        this.saveLauncherClaims();
-        if (body['restart'] === true) this.savePreviousSessions();
+        const stopping = this.stop({ restart: body['restart'] === true });
         this.audit.record(actor, 'shutdown', undefined, { force, liveSessions: live });
-        json(res, 200, { ok: true, stopping: true });
-        void this.stop().then(() => {
+        json(res, 200, { ok: true, stopping: true, warnings: this.shutdownWarnings });
+        void stopping.then(() => {
           this.options.onSelfStop?.('shutdown-request');
         });
         return;
@@ -2977,7 +2992,9 @@ export class Daemon {
         if (!this.grantedLauncher(req)) { json(res, 403, { error: 'Session launch permission required.' }); return; }
         const file = path.join(this.options.home, 'previous-sessions.json');
         try {
-          const record: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+          // Older version 1 records used the generated session id as an explicit name.
+          const record: unknown = JSON.parse(fs.readFileSync(file, 'utf8'), (key, value: unknown) =>
+            key === 'name' && typeof value === 'string' && /^s[0-9]+$/.test(value) ? null : value);
           json(res, 200, record);
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code === 'ENOENT') json(res, 200, { version: 1, sessions: [] });
@@ -3837,8 +3854,7 @@ export class Daemon {
 
     // Registration is synchronous with creation, before any asynchronous
     // viewer launch or readiness work can publish a change for this id.
-    const childGrant = session.parent !== undefined && this.launchProfiles.sessionLaunch?.includes(session.label);
-    this.registerMailboxSession(session, childGrant ? session.id : undefined);
+    this.registerMailboxSession(session);
     this.sessionFeed.add(this.summaryWithPrompt(session.summary()));
     session.onExit(() => {
       this.clearPromptGraceCheck(session.id);

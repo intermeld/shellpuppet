@@ -24,6 +24,11 @@ export function moduleFor(name: string): AgentModule | undefined {
   return AGENT_MODULES.find(module => module.name === name);
 }
 
+/** All conversation ids in marker precedence order, including inherited fallback values. */
+export function agentResumeIds(module: AgentModule | undefined, env: NodeJS.ProcessEnv): string[] {
+  return (module?.resumeIdMarkers ?? []).map(key => env[key]).filter((id): id is string => id !== undefined);
+}
+
 /** A program's basename, independent of the host platform. */
 export function programName(command: string): string {
   const base = command.split(/[\\/]/).pop() ?? command;

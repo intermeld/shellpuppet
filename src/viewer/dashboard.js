@@ -1511,7 +1511,8 @@
   function startSelected() {
     const profile = selectedProfile();
     if (profile === null) return;
-    const body = { profile: profile.name, name: sessionName.value };
+    const body = { profile: profile.name };
+    if (sessionName.value !== profile.name) body.name = sessionName.value;
     if (profile.canResume && resumeId.value) body.resumeId = resumeId.value;
     if (profile.folderRequired) {
       if (profile.anyFolder) {

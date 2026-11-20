@@ -221,6 +221,6 @@ A granted caller can request `terminal_list({"previous":true})` or
 `GET /launcher/previous` after a restart. The response has `version: 1`
 and a `sessions` array. An empty array means no profile session was saved.
 Pass the saved `profile`, `name`, fields of `folderChoice` and a known
-`resumeId` to `terminal_start`. An empty folder choice uses the current
+`resumeId` to `terminal_start`. Omit a null name or resume id. An empty folder choice uses the current
 fixed directory. `folder` in the record is the resolved directory for
 inspection. `endedAt` is the time the daemon took its shutdown snapshot.

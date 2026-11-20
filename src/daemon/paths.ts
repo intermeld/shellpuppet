@@ -7,13 +7,10 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { execFile } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { promisify } from 'node:util';
-
-const execFileAsync = promisify(execFile);
 
 /** Daemon discovery record: written atomically, read by every client. */
 export interface DaemonState {
@@ -36,15 +33,108 @@ export function daemonStatePath(home: string): string {
   return path.join(home, 'daemon.json');
 }
 
-/** Publish a complete owner-only record in the hardened daemon home. */
-export function writePrivateRecord(target: string, value: unknown): void {
-  const temp = target + '.' + randomUUID() + '.tmp';
-  const fd = fs.openSync(temp, 'wx', 0o600);
+// Windows PowerShell ships with the .NET Framework ACL APIs. Paths are data
+// in the environment, including homes containing quotes or wildcard characters.
+const windowsAclScript = `
+$ErrorActionPreference = 'Stop'
+$ProgressPreference = 'SilentlyContinue'
+$identity = [Security.Principal.WindowsIdentity]::GetCurrent()
+$sid = $identity.User
+function Is-Private($acl, $flags) {
+  $rules = @($acl.GetAccessRules($true, $true, $sid.GetType()))
+  return ($acl.AreAccessRulesProtected -and $acl.GetOwner($sid.GetType()) -eq $sid -and
+    $rules.Count -eq 1 -and !$rules[0].IsInherited -and $rules[0].IdentityReference -eq $sid -and
+    $rules[0].AccessControlType -eq 'Allow' -and $rules[0].FileSystemRights -eq 'FullControl' -and
+    [int]$rules[0].InheritanceFlags -eq $flags -and [int]$rules[0].PropagationFlags -eq 0)
+}
+function Protect-Item($item, $directory) {
+  if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw 'Unexpected reparse point' }
+  $inherit = if ($directory) { 'OICI' } else { '' }
+  $desired = 'D:P(A;' + $inherit + ';FA;;;' + $sid.Value + ')'
+  $flags = if ($directory) { 3 } else { 0 }
+  $acl = $item.GetAccessControl()
+  $section = [Security.AccessControl.AccessControlSections]::Access
+  if (!(Is-Private $acl $flags)) {
+    $acl.SetSecurityDescriptorSddlForm($desired, $section)
+    if ($acl.GetOwner($sid.GetType()) -ne $sid) { $acl.SetOwner($sid) }
+    $item.SetAccessControl($acl)
+    $acl = $item.GetAccessControl()
+    if (!(Is-Private $acl $flags)) {
+      throw 'Owner-only ACL verification failed'
+    }
+  }
+}
+$dir = [IO.DirectoryInfo]::new($env:SP_PRIVATE_HOME)
+Protect-Item $dir $true
+foreach ($name in ([string]$env:SP_PRIVATE_FILES).Split('|', [StringSplitOptions]::RemoveEmptyEntries)) {
+  $item = [IO.FileInfo]::new([IO.Path]::Combine($dir.FullName, $name))
+  if ($name -in 'audit.log','daemon.log' -and !$item.Exists) {
+    $item.Open([IO.FileMode]::OpenOrCreate, [IO.FileAccess]::Write, [IO.FileShare]::ReadWrite).Dispose()
+    $item.Refresh()
+  }
+  if ($item.Exists) { Protect-Item $item $false }
+}
+[Console]::Write($sid.Value + '|' + $identity.Owner.Value)
+`;
+
+interface WindowsHome {
+  path: string;
+  sid: string;
+  setFileOwner: boolean;
+}
+
+let privateWindowsHome: WindowsHome | undefined;
+
+function systemTool(...parts: string[]): string {
+  return path.join(process.env['SystemRoot'] ?? 'C:\\Windows', 'System32', ...parts);
+}
+
+function secureWindowsHome(home: string): WindowsHome {
+  const powershell = systemTool('WindowsPowerShell', 'v1.0', 'powershell.exe');
+  const files = ['daemon.json', 'launcher-claims.json', 'previous-sessions.json', 'config.json', 'daemon.log', 'audit.log'];
   try {
-    try { fs.writeFileSync(fd, JSON.stringify(value)); }
-    finally { fs.closeSync(fd); }
-    fs.renameSync(temp, target);
-  } finally { fs.rmSync(temp, { force: true }); }
+    const identity = execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand',
+      Buffer.from(windowsAclScript, 'utf16le').toString('base64')], {
+      windowsHide: true, stdio: 'pipe', timeout: 15_000, encoding: 'utf8',
+      env: { SystemRoot: process.env['SystemRoot'] ?? 'C:\\Windows', SP_PRIVATE_HOME: path.resolve(home),
+        SP_PRIVATE_FILES: files.join('|') },
+    }).trim();
+    const [sid, owner] = identity.split('|');
+    if (!sid || !owner || !/^S-1-[0-9-]+$/.test(sid)) throw new Error('Missing Windows identity.');
+    return { path: path.resolve(home), sid, setFileOwner: owner !== sid };
+  } catch {
+    throw new Error('Could not verify owner-only Windows permissions in the ShellPuppet home.');
+  }
+}
+
+/** Prepare and write the private inode before linking or renaming it into place. */
+function withPrivateTemp(target: string, contents: string, publish: (temporary: string) => void): void {
+  const temporary = target + '.' + randomUUID() + '.tmp';
+  if (process.platform === 'win32') {
+    const home = fs.realpathSync.native(path.dirname(target));
+    if (privateWindowsHome?.path !== home) privateWindowsHome = secureWindowsHome(home);
+  }
+  const fd = fs.openSync(temporary, 'wx', 0o600);
+  try {
+    try {
+      if (process.platform === 'win32') {
+        // The new empty file inherits only the verified home ACL. Replace
+        // inheritance with an explicit grant before writing the first byte.
+        const security = privateWindowsHome!;
+        const icacls = systemTool('icacls.exe');
+        const options = { windowsHide: true, stdio: 'pipe' as const, timeout: 15_000 };
+        execFileSync(icacls, [temporary, '/inheritance:r', '/grant:r', '*' + security.sid + ':F', '/L', '/Q'], options);
+        // An elevated token can create files owned by its Administrators group.
+        if (security.setFileOwner) execFileSync(icacls, [temporary, '/setowner', '*' + security.sid, '/L', '/Q'], options);
+      }
+      fs.writeFileSync(fd, contents);
+    } finally { fs.closeSync(fd); }
+    publish(temporary);
+  } finally { fs.rmSync(temporary, { force: true }); }
+}
+
+export function writePrivateRecord(target: string, value: unknown): void {
+  withPrivateTemp(target, JSON.stringify(value), temporary => fs.renameSync(temporary, target));
 }
 
 export function daemonLogPath(home: string): string {
@@ -55,37 +145,14 @@ export function configPath(home: string): string {
   return path.join(home, 'config.json');
 }
 
-/**
- * Create the home directory if absent and harden its permissions on first
- * creation (design §4.1). `fs.chmod` is a near-no-op on Windows, so there we
- * strip ACL inheritance and grant only the current user, with `(OI)(CI)` so
- * files created inside inherit the restriction. POSIX gets a real 0700.
- *
- * Hardening failures are reported, not fatal: a working daemon with a warning
- * beats a dead one, and the token file being unreadable to others is
- * defence-in-depth on top of loopback binding + bearer auth.
- */
-export async function ensureHome(home: string): Promise<{ created: boolean; warning?: string }> {
-  if (fs.existsSync(home)) return { created: false };
+/** Repair existing homes too, before reading a credential or publishing one. */
+export function ensureHome(home: string): void {
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   if (process.platform === 'win32') {
-    const user = process.env['USERNAME'];
-    if (user === undefined || user === '') {
-      return { created: true, warning: 'USERNAME not set: directory ACL not hardened' };
-    }
-    try {
-      await execFileAsync(
-        'icacls',
-        [home, '/inheritance:r', '/grant:r', `${user}:(OI)(CI)F`],
-        { windowsHide: true },
-      );
-    } catch (error) {
-      return { created: true, warning: `icacls hardening failed: ${String(error)}` };
-    }
+    privateWindowsHome = secureWindowsHome(fs.realpathSync.native(home));
   } else {
     fs.chmodSync(home, 0o700);
   }
-  return { created: true };
 }
 
 /**
@@ -184,18 +251,14 @@ export function removeDaemonStateIfNotARecord(home: string, raw: string): void {
  */
 export function claimDaemonState(home: string, state: DaemonState): boolean {
   const target = daemonStatePath(home);
-  const temp = path.join(home, `daemon.json.${String(state.pid)}.tmp`);
-  fs.writeFileSync(temp, JSON.stringify(state, null, 2), { mode: 0o600 });
-  try {
-    fs.linkSync(temp, target);
-    return true;
-  } catch {
-    return false;
-  } finally {
+  let claimed = false;
+  withPrivateTemp(target, JSON.stringify(state, null, 2), temporary => {
     try {
-      fs.unlinkSync(temp);
-    } catch {
-      // Best effort.
+      fs.linkSync(temporary, target);
+      claimed = true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
     }
-  }
+  });
+  return claimed;
 }
