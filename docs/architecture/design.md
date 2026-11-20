@@ -165,9 +165,12 @@ if the state file names another daemon that is running, even one too busy to ans
 a snapshot in the authenticated shutdown request (`restart: true`). The
 daemon first checks the force requirement. Before killing any session it
 atomically replaces `previous-sessions.json` in its private home using a
-mode 0600 file. A write failure refuses shutdown. Each live profile session
+mode 0600 file on POSIX or an explicit owner-only ACL on Windows. The daemon
+logs any record-write failure, includes a warning in the shutdown result and
+continues the restart. The last complete snapshot remains available. Each live profile session
 contributes its profile, current participant name, resolved folder, original
 folder selection, agent, conversation id if known, and shutdown timestamp.
+A system-assigned name is saved as null. Omit it when relaunching.
 The version 1 file holds only the most recent restart. A granted caller reads
 `GET /launcher/previous` and chooses entries to launch through the normal
 profile checks. A normal stop or process crash does not produce this record.
@@ -936,7 +939,8 @@ configurable 300 s. A wrongly low timeout is indistinguishable from a hard failu
 ### 3.2 Sessions that stall, noticed
 
 A managed MCP adapter reports its completed handshake to its own authenticated
-session. A broken or reset stdio pipe on the last known connected adapter raises
+session. The adapter checks the registration response and retries after a transient failure,
+including when another daemon call succeeds. A broken or reset stdio pipe on the last known connected adapter raises
 `mcp-connection-lost` through the existing stall events until a new handshake
 or session exit. Normal EOF, idle time and an absent adapter are inconclusive.
 
@@ -1254,8 +1258,8 @@ Token-based, following the Jupyter / SSH-agent model, with **five credentials**:
   reveals nothing sensitive.
 
 **Windows file-permission reality:** `fs.chmod(0o600)` is a near-no-op on Windows. Harden
-`~/.shellpuppet/` explicitly with `icacls <dir> /inheritance:r /grant:r "<user>:F"` on
-first creation, and cover it with a test. (POSIX: real `0700`/`0600`.)
+both new and existing homes. Verify an explicit protected ACL granting the current user full
+control before publishing daemon state, claim digests or a restart snapshot. POSIX uses `0700`/`0600`.
 
 ### 4.2 Network exposure
 
@@ -1395,7 +1399,9 @@ session's initial dashboard placement.
 
 `POST /dashboard/launch` accepts JSON containing `profile`, an optional `name`, and, only when
 that profile has `cwd: "ask"`, one listed `folder` name and, for a root choice,
-its `rootIndex`. An `any` profile may instead send `folderPath`. Any other key
+its `rootIndex`. An `any` profile may instead send `folderPath`. A profile with
+resume arguments also accepts a validated `resumeId`. The dashboard may send
+its registered `window`, which must match the request's document proof. Any other key
 is `400` and starts nothing. The folder resolves to its configured existing
 directory as spawn `cwd`, never to a command-line fragment. A root choice is
 rebuilt by the daemon and its real path must remain inside the root's real

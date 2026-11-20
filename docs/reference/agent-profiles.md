@@ -432,8 +432,8 @@ Record: first-frame time, any new swallowed-input windows, any prompt changes
 A profile launch keeps the id supplied at launch. When a verified child
 ShellPuppet client contacts its daemon, the built-in agent module can read
 the conversation marker that the agent exported to that client. A later
-observed id takes precedence. A marker inherited unchanged from the launch
-environment is excluded: it could identify a different conversation.
+observed id takes precedence. The daemon excludes every conversation id inherited
+at launch, including both Codex markers when both were present.
 
 | Agent | Marker read when the agent provides it |
 |---|---|

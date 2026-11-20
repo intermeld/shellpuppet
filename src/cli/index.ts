@@ -847,6 +847,9 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
   // and being asked is reported as not running.
   const daemonOnly = { autoStart: false };
 
+  const shutdownWarnings: string[] = [];
+  const warningFields = () => shutdownWarnings.length ? { warnings: shutdownWarnings } : {};
+
   /** Stop the daemon, or say false when it had already gone. */
   const stopRunning = async (connection: DaemonConnection): Promise<boolean> => {
     let response;
@@ -866,6 +869,14 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
     if (response.status >= 400) {
       const message = (response.body as Body)['error'];
       throw new Error(typeof message === 'string' ? message : 'Daemon shutdown failed.');
+    }
+    const warnings = (response.body as Body)['warnings'];
+    if (Array.isArray(warnings)) {
+      for (const warning of warnings) {
+        if (typeof warning !== 'string') continue;
+        shutdownWarnings.push(warning);
+        if (!wantJson) console.error(warning);
+      }
     }
     // Wait for the port to actually go quiet so restart cannot race it.
     const deadline = Date.now() + 10_000;
@@ -978,7 +989,7 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
           writeRestartHold(shellpuppetHome(), holdSeconds);
           return didStop;
         });
-        if (wantJson) printJson({ running: false, stopped: true, holdRemainingSeconds: holdSeconds });
+        if (wantJson) printJson({ running: false, stopped: true, ...warningFields(), holdRemainingSeconds: holdSeconds });
         else console.log(stopped ? `stopped; restart hold ends in ${String(holdSeconds)} s` :
           `not running; restart hold ends in ${String(holdSeconds)} s`);
         return;
@@ -988,11 +999,11 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
       if (connection === null || !(await stopRunning(connection))) {
         // Nothing to stop IS the outcome asked for, so it reads the same to a
         // script as a daemon that was stopped.
-        if (wantJson) printJson({ running: false, stopped: true });
+        if (wantJson) printJson({ running: false, stopped: true, ...warningFields() });
         else console.log('not running');
         return;
       }
-      if (wantJson) printJson({ running: false, stopped: true });
+      if (wantJson) printJson({ running: false, stopped: true, ...warningFields() });
       else console.log('stopped');
       return;
     }
@@ -1023,7 +1034,7 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
       });
       surfaceWarnings(connection);
       if (wantJson) {
-        printJson({ running: true, port: connection.port, version: connection.version, startedWrapped: readDaemonState(shellpuppetHome())?.startedWrapped === true });
+        printJson({ running: true, ...warningFields(), port: connection.port, version: connection.version, startedWrapped: readDaemonState(shellpuppetHome())?.startedWrapped === true });
       } else {
         console.log(`restarted on port ${String(connection.port)}, version ${connection.version}`);
       }

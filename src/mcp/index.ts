@@ -69,9 +69,11 @@ async function main(): Promise<void> {
   // Messaging tools are offered only when messaging is switched on when this
   // server starts; a change to config.json applies at the next MCP start.
   const messaging = readDaemonConfig(home).config.messaging?.enabled === true;
+  let reconcileRegistration: (() => void) | undefined;
   const releaseClaim = registerTools(server, {
     logger: stderrLogger,
     messaging,
+    onDaemonSuccess: () => reconcileRegistration?.(),
     untrustedFraming: config.untrustedFraming,
     readPassLists,
     // Audit actor (design §4.5): identify the calling MCP client (Claude
@@ -86,27 +88,48 @@ async function main(): Promise<void> {
   if (process.env['SHELLPUPPET_SESSION_TOKEN'] && process.env['SHELLPUPPET_DAEMON_INSTANCE']) {
     const adapter = randomUUID();
     let initialised = false;
-    let pending = Promise.resolve();
-    const report = (status: 'connected' | 'failed' | 'closed'): void => {
-      pending = pending.then(async () => {
-        const connection = await discoverDaemon({ home }, Date.now() + 3000);
-        if (connection?.instanceId !== process.env['SHELLPUPPET_DAEMON_INSTANCE'] || !connection) return;
-        await request(connection, 'POST', '/session/mcp-connection', { adapter, status },
-          { home, autoStart: false, signal: AbortSignal.timeout(3000) });
-      }).catch(() => undefined);
-    };
-    server.server.oninitialized = () => { initialised = true; report('connected'); };
-    const failed = (error: NodeJS.ErrnoException): void => {
-      if (initialised && (error.code === 'EPIPE' || error.code === 'ECONNRESET')) {
+    let registered = false;
+    let inFlight: Promise<void> | undefined;
+    let retry: NodeJS.Timeout | undefined;
+    let delay = 250;
+    const report = async (status: 'connected' | 'failed' | 'closed'): Promise<boolean> => {
+      const connection = await discoverDaemon({ home }, Date.now() + 3000);
+      if (!connection) return false;
+      if (connection.instanceId !== process.env['SHELLPUPPET_DAEMON_INSTANCE']) {
         initialised = false;
-        report('failed');
+        return false;
       }
+      const { status: code } = await request(connection, 'POST', '/session/mcp-connection', { adapter, status },
+        { home, autoStart: false, signal: AbortSignal.timeout(3000) });
+      // These credentials belong to the lifetime of this session and daemon.
+      if (code === 401 || code === 403 || code === 404) initialised = false;
+      return code >= 200 && code < 300;
     };
-    const closed = (): void => {
+    const register = (): void => {
+      if (!initialised || registered || inFlight) return;
+      clearTimeout(retry);
+      inFlight = report('connected').then(ok => { registered = ok; }).catch(() => {}).finally(() => {
+        inFlight = undefined;
+        if (initialised && !registered) {
+          retry = setTimeout(register, delay);
+          retry.unref();
+          delay = Math.min(30_000, delay * 2);
+        }
+      });
+    };
+    reconcileRegistration = register;
+    server.server.oninitialized = () => { initialised = true; register(); };
+    const finish = (status: 'failed' | 'closed'): void => {
       if (!initialised) return;
       initialised = false;
-      report('closed');
+      clearTimeout(retry);
+      // A registration already on the wire must reach the daemon before the close.
+      void Promise.resolve(inFlight).then(() => report(status)).catch(() => {});
     };
+    const failed = (error: NodeJS.ErrnoException): void => {
+      if (error.code === 'EPIPE' || error.code === 'ECONNRESET') finish('failed');
+    };
+    const closed = (): void => finish('closed');
     process.stdin.once('end', closed);
     process.once('beforeExit', closed);
     process.stdin.on('error', failed);

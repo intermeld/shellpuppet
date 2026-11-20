@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, rmdirSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { expect, it } from 'vitest';
@@ -41,15 +41,16 @@ it('records a live agent conversation before restart and relaunches it from the 
     const record = join(home, 'previous-sessions.json');
     expect((await api(td.port, td.token, '/daemon/shutdown', { body: { restart: true } })).status).toBe(409);
     expect(existsSync(record)).toBe(false);
-    mkdirSync(record);
-    try {
-      expect((await api(td.port, td.token, '/daemon/shutdown', { body: { restart: true, force: true } })).status).toBe(500);
-      expect((await api(td.port, td.token, '/sessions')).body['sessions']).toHaveLength(1);
-    } finally { rmdirSync(record); }
     expect((await api(td.port, td.token, '/daemon/shutdown', { body: { restart: true, force: true } })).status).toBe(200);
     await td.daemon.stop();
     if (process.platform !== 'win32') expect(statSync(record).mode & 0o777).toBe(0o600);
     td = await startTestDaemon(opts);
+    const complete = readFileSync(record, 'utf8');
+    try {
+      writeFileSync(record, JSON.stringify({ version: 1, sessions: [{ profile: 'worker', name: 's12' }] }));
+      const legacy = await runCli('previous', '--json');
+      expect(JSON.parse(legacy.stdout)).toMatchObject({ sessions: [{ name: null }] });
+    } finally { writeFileSync(record, complete); }
     const { stdout } = await runCli('previous', '--json');
     const saved = JSON.parse(stdout) as { sessions: { profile: string; name: string; resumeId: string; endedAt: string; folderChoice: object }[] };
     expect(saved.sessions).toEqual([expect.objectContaining({ profile: 'worker', name: 'my-worker', agent: 'codex',

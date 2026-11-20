@@ -12,7 +12,7 @@ export const codex: AgentModule = {
     matches: submittingText } },
   readiness: { readyText: ['Ask Codex'] },
   nudge: { readiness: nudgeReadiness },
-  resumeId: env => env['CODEX_THREAD_ID'] ?? env['CODEX_SESSION_ID'],
+  resumeIdMarkers: ['CODEX_THREAD_ID', 'CODEX_SESSION_ID'],
   env: {
     // Codex child-session variables: codex-rs/protocol/src/shell_environment.rs,
     // codex-rs/core/src/exec_env.rs and codex-rs/core/src/spawn.rs.

@@ -14,7 +14,7 @@
  * No stdout/stderr: logging via the injected Logger only (lint-enforced).
  */
 
-import { moduleFor } from '../agents/index.js';
+import { agentResumeIds, moduleFor } from '../agents/index.js';
 import { nudgeVerdict, NUDGE_QUIET_MS } from './nudge.js';
 import type { AgentModule, AgentSource } from '../agents/types.js';
 import { validateStall, possibleStall, resolveSessionAgent, signatureForSession, stallTranscriptContent, stallTurnVisible, StallScreenCache, StallTracker } from './reasoning.js';
@@ -738,7 +738,7 @@ export class Session implements WaitTarget {
   readonly args: string[];
   /** The agent it was started as, which chooses how its screen is read. */
   readonly launchProfile: SessionOptions['launchProfile'];
-  private inheritedResumeId?: string;
+  private inheritedResumeIds: readonly string[] = [];
   private observedResumeId?: string;
   readonly agent: string;
   readonly agentSource: AgentSource;
@@ -941,11 +941,11 @@ export class Session implements WaitTarget {
       options.env,
     );
     if (deps.identity !== undefined) {
-      if (options.launchProfile && this.agentModule?.resumeId) {
+      if (options.launchProfile && this.agentModule?.resumeIdMarkers) {
         const original = this.platform === 'win32'
           ? Object.fromEntries(Object.entries(sessionEnv).map(([key, value]) => [key.toUpperCase(), value]))
           : sessionEnv;
-        this.inheritedResumeId = this.agentModule.resumeId(original);
+        this.inheritedResumeIds = agentResumeIds(this.agentModule, original);
         sessionEnv['SHELLPUPPET_PROFILE_AGENT'] = this.agent;
       }
       sessionEnv['SHELLPUPPET_SESSION'] = id;
@@ -1886,7 +1886,7 @@ export class Session implements WaitTarget {
   }
 
   observeResumeId(value: unknown): void {
-    if (this.launchProfile && this.agentModule?.resumeId && validResumeId(value) && value !== this.inheritedResumeId) {
+    if (this.launchProfile && this.agentModule?.resumeIdMarkers && validResumeId(value) && !this.inheritedResumeIds.includes(value)) {
       this.observedResumeId = value;
     }
   }

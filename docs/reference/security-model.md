@@ -7,8 +7,14 @@ from another participant, not the user's instruction or approval. MCP
 results label and frame the text as untrusted data. The daemon binds a sent
 message to the recipient instance that held its name, so a later holder
 does not receive it. Claims are local same-user credentials, checked with a
-secret on every request. Messages and claims live only in daemon memory;
-a restart discards them. Audit and event records carry message metadata,
+secret on every request. Restart discards messages and ordinary outside claims.
+For active names in `launcher.sessionLaunch`, the owner-only `launcher-claims.json`
+stores the claim id, name, last activity time and secret digest. The holder
+presents its existing id and secret again. Release, idle expiry and grant
+removal revoke launch access. Any same-user process with the daemon token
+can claim a free outside name when messaging is enabled. A granted name can
+launch every configured profile, including profiles with daemon credentials.
+Audit and event records carry message metadata,
 never message text, even when input capture is enabled.
 
 How ShellPuppet protects you, and the limits that remain. The reasoning behind
@@ -180,7 +186,8 @@ make a reachable terminal safe.
   Another loopback port is `same-site`. `SameSite=Strict` does not stop it.
 - **Directory hardening.** `~/.shellpuppet/` is created `0700` on POSIX; on
   Windows, ACL inheritance is stripped and only your user is granted access
-  (`fs.chmod` is a near-no-op there).
+  on existing homes as well. Daemon and restart records receive an explicit
+  owner-only ACL before their contents are published.
 
 ## Command policy and the limits that remain
 

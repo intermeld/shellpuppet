@@ -37,8 +37,8 @@ import { daemonRunning } from '../daemon/liveness.js';
 import { packageVersion } from '../daemon/meta.js';
 import { readRestartHold, restartHoldError } from '../daemon/restartHold.js';
 import type { RestartHold } from '../daemon/restartHold.js';
-import { moduleFor } from '../agents/index.js';
-import { validResumeId, NULL_LOGGER } from '../core/types.js';
+import { agentResumeIds, moduleFor } from '../agents/index.js';
+import { removeClaimCredentials, validResumeId, NULL_LOGGER } from '../core/types.js';
 import { taskkillTrees } from '../core/session.js';
 import type { Logger } from '../core/types.js';
 
@@ -423,8 +423,7 @@ function callDeadline(home: string, logger: Logger): number {
 /** Hold the start endpoint while a daemon verb stops and replaces a daemon. */
 export async function withDaemonStartLock<T>(options: ClientOptions, action: (lock: Exclude<StartLockClaim, null>) => Promise<T>): Promise<T> {
   const home = options.home ?? shellpuppetHome();
-  const homeResult = await ensureHome(home);
-  if (homeResult.warning !== undefined) (options.logger ?? NULL_LOGGER).warn(homeResult.warning);
+  if (!fs.existsSync(home)) ensureHome(home);
   const deadline = Date.now() + startWaitBound(home);
   let lock: StartLockClaim = null;
   while (Date.now() < deadline) {
@@ -570,8 +569,7 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
     warnedInvalidDirect = true;
   }
 
-  const homeResult = await ensureHome(home);
-  if (homeResult.warning !== undefined) logger.warn(homeResult.warning);
+  if (!fs.existsSync(home)) ensureHome(home);
   let lock: StartLockClaim = heldLock ?? null;
   while (heldLock === undefined && Date.now() < waitDeadline) {
     const hold = readRestartHold(home, logger);
@@ -622,6 +620,7 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
   const entry = options.daemonEntry ?? defaultDaemonEntry();
   const cwd = daemonWorkingDirectory();
   const env: NodeJS.ProcessEnv = { ...process.env, SHELLPUPPET_HOME: home };
+  removeClaimCredentials(env);
   const parsed = readDaemonConfig(home);
   for (const problem of parsed.problems) {
     if ((problem.startsWith('daemon.') || problem.startsWith('daemon must') || problem.startsWith('daemon has')) &&
@@ -750,7 +749,7 @@ export async function request(
     const presentIdentity = session !== undefined && sessionToken !== undefined
       && sessionInstance !== undefined && sessionInstance === conn.instanceId;
     const agent = process.env['SHELLPUPPET_PROFILE_AGENT'];
-    const resumeId = presentIdentity && agent ? moduleFor(agent)?.resumeId?.(process.env) : undefined;
+    const resumeId = presentIdentity && agent ? agentResumeIds(moduleFor(agent), process.env)[0] : undefined;
     const claim = options.claim ?? process.env['SHELLPUPPET_CLAIM'];
     const claimParts = claim?.match(/^(claim_[a-f0-9]{32}):(.+)$/);
     const response = await fetch(`http://127.0.0.1:${String(conn.port)}${path}`, {

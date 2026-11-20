@@ -402,8 +402,18 @@ export const ENV_NAME_PATTERN = /^(?!__proto__$)[A-Za-z_][A-Za-z0-9_]*$/;
  */
 export const RESERVED_FEATURE_CREDENTIALS: ReadonlySet<string> = new Set();
 
+export const CLAIM_ENV_NAMES: ReadonlySet<string> = new Set(['SHELLPUPPET_CLAIM', 'SHELLPUPPET_CLAIM_SECRET']);
+
+/** Strip caller-held proofs before spawning a daemon, including a start wrapper. */
+export function removeClaimCredentials(env: NodeJS.ProcessEnv): void {
+  for (const name of Object.keys(env)) {
+    if (CLAIM_ENV_NAMES.has(name.toUpperCase())) delete env[name];
+  }
+}
+
 /** Per-session values are assigned by the daemon, never copied from a caller. */
 export const SESSION_IDENTITY_ENV_NAMES: ReadonlySet<string> = new Set([
+  ...CLAIM_ENV_NAMES,
   'SHELLPUPPET_SESSION',
   'SHELLPUPPET_SESSION_TOKEN',
   'SHELLPUPPET_PROFILE_AGENT',

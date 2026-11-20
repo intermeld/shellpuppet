@@ -10,7 +10,7 @@ export const grok: AgentModule = {
   input: { submit: { key: '\r', delayMs: 150, matches: submittingText } },
   nudge: { readiness },
   readiness: { readyText: ['│ >'] },
-  resumeId: env => env['GROK_SESSION_ID'],
+  resumeIdMarkers: ['GROK_SESSION_ID'],
   env: {
     // Grok child-session variables: crates/codegen/xai-grok-tools/src/util/env.rs.
     sessionMarkers: [

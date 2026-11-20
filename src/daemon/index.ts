@@ -5,6 +5,7 @@
  * Exit codes: 0 = clean stop or deferred to a healthy incumbent; 1 = failure.
  */
 
+import { removeClaimCredentials } from '../core/types.js';
 import { Daemon, AlreadyRunningError } from './server.js';
 import * as path from 'node:path';
 import { createAuditor } from './audit.js';
@@ -13,20 +14,19 @@ import { useDialogSignatures } from '../core/dialogs.js';
 import { useAgentSignatures } from '../core/reasoning.js';
 import { createFileLogger } from './logger.js';
 import { assertNodeVersion } from './meta.js';
-import { daemonLogPath, ensureHome, shellpuppetHome } from './paths.js';
+import { daemonLogPath, shellpuppetHome } from './paths.js';
 
 async function main(): Promise<void> {
   assertNodeVersion();
+  removeClaimCredentials(process.env);
   const home = path.resolve(shellpuppetHome());
-  await ensureHome(home);
   const logger = createFileLogger(daemonLogPath(home));
   // Shape-validated (design §4.3 fail-closed): a malformed policy section
   // arrives here as deny-all with the problem in its refusal reason. It must
   // never be silently ignored, because ignoring it is fail-open.
   const { config, problems } = readDaemonConfig(home);
-  for (const problem of problems) logger.warn('CONFIG PROBLEM', { problem });
   // Recognised by every session's prompt detection from here on. The entries
-  // that did not compile were reported among the problems above; a signature,
+  // that did not compile are included in the configuration problems. A signature
   // built-in or from config, that runs past its time budget on a screen is
   // reported then and set aside for a minute at a time.
   useDialogSignatures(config.dialogs ?? [], (name, builtIn) => {
@@ -77,7 +77,9 @@ async function main(): Promise<void> {
   });
 
   try {
+    // start() secures this home before publishing the daemon state or writing diagnostics.
     await daemon.start();
+    for (const problem of problems) logger.warn('CONFIG PROBLEM', { problem });
   } catch (error) {
     if (error instanceof AlreadyRunningError) {
       logger.info('deferring to the running daemon', {

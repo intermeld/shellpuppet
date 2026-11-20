@@ -22,17 +22,12 @@ For chair-role sessions and an outside client holding a claim:
 
 A session started through `POST /sessions` uses its label as its messaging
 name only if it has 1 to 40 ASCII letters, digits, dots, underscores or
-hyphens, is not already held or reserved for an outside claim, and does not
-match `s` followed by digits unless it is that session's own id. Otherwise it
-uses its session id. For `POST /dashboard/launch` without an explicit `name`,
-the daemon tries the expanded profile label if it is a valid name, or the
-profile name if the label is invalid. A configured group member name, or a
-session-id-shaped candidate other than the session's own id, makes the session
-use its id. If a valid, unreserved candidate is already held, the daemon tries
-numbered forms such as `-2` and `-3` within the 40-character limit. The
-dashboard Name box always sends an explicit `name`, which replaces the profile
-label: an invalid or reserved value returns 400 and starts no session, while
-an already-held valid, unreserved name is numbered. Group member names are
+hyphens, is available and is neither a launch grant nor an outside group member
+name. Names shaped like another session id are also reserved. A free-form start otherwise uses its session id. Dashboard, CLI and MCP
+profile launches default to the profile name. The Name box can override it.
+A reserved default receives a system-assigned id. An explicit reserved name
+is refused. When a valid name is already held the daemon tries numbered
+forms such as `-2` and `-3` within the 40-character limit. Group member names are
 reserved for outside claims. A session name never grants messaging rights.
 
 All configuration lives in one optional file: `~/.shellpuppet/config.json`
@@ -641,7 +636,7 @@ Each entry has these keys. Unknown keys refuse that entry.
 | `role` | no | `"chair"` is the only accepted value. Other values are reported and ignored, leaving a delegate. Starts through the dashboard or a granted session use the profile role. |
 | `command` | yes | The real program, not a shell wrapper. A bare name is found on `PATH` only; a relative path with a separator is taken from the profile's working directory. A launch whose command cannot be resolved is refused. |
 | `args` | no | Array of strings, stored literally. |
-| `resume` | no | Array of additional arguments containing `{id}`, for example `["--resume", "{id}"]`. The launcher offers a Resume session id field for this profile. |
+| `resume` | no | Array of additional arguments with `{id}` as a whole argument, for example `["--resume", "{id}"]`. The launcher offers a Resume session id field for this profile. |
 | `shell` | no | Boolean. Omitted means the platform default. |
 | `cwd` | no | A fixed directory, or `"ask"`. A relative path is from your home directory. |
 | `folders` | no | Named `{ "name", "path" }` choices, or `"any"` to allow a typed or picked local folder path, when `cwd` is `"ask"`. |
@@ -650,7 +645,7 @@ Each entry has these keys. Unknown keys refuse that entry.
 | `envFromDaemon` | no | An array of variable names copied from the daemon's environment, or `"all"` for its whole environment. |
 | `readyText` | no | A literal substring that marks the session ready. |
 | `readyQuiet` | no | Milliseconds of quiet that mark the session ready. Not with `readyText`. |
-| `label`, `purpose` | no | Non-empty text for the profile list. Placeholders: `{name}` and `{folder}`. The dashboard Name box starts with the profile name and sets the session label and messaging name. |
+| `label`, `purpose` | no | Non-empty text for the profile list. Placeholders: `{name}` and `{folder}`. The Name box defaults to the profile name. An explicit name overrides the session label and messaging name. |
 | `policy` | no | `{ "allow": [...], "deny": [...] }` regex lists. No `mode`, no `maxSessions`. |
 | `open` | no | `"grid"` (default), `"focus"` or `"window"`. Returned when the profile starts. |
 
@@ -759,11 +754,14 @@ this. Grant holders can start profiles that inherit daemon credentials.
 A granted outside claim keeps its id and secret through a restart. The
 daemon keeps its name, id, last activity time and SHA-256 secret digest in
 `launcher-claims.json` under the private daemon home. Release, idle expiry
-or removing the grant invalidates that authority. Message bodies remain in memory.
+or removing the grant invalidates that authority. A pending inbox wait counts as
+activity through orderly shutdown. Claim proofs are stripped before daemon
+start or restart and from every child environment, including passthrough and
+`envFromDaemon: "all"`. Message bodies remain in memory.
 
 Resume ids are 1 to 128 ASCII letters, digits or hyphens and start with a
 letter or digit. The daemon appends the configured resume arguments after
-replacing each `{id}`. The expanded arguments go through both policy checks.
+replacing each whole `{id}` argument. A template such as `["--resume={id}"]` is rejected. The expanded arguments go through both policy checks.
 
 To supply secrets at run time, start the daemon itself under a secrets tool,
 for example `op run -- shellpuppet daemon start`. An environment file is

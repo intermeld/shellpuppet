@@ -18,5 +18,6 @@ An unattended supervisor can recover a chair with its configured environment
 and conversation. There is no per-profile grant list. Granting one name can
 expose any credentials a profile passes to its child. A process running as
 the same user with the daemon token can claim a free outside name.
-An outside claimant keeps its proof across daemon restarts. Only its secret
-digest is stored in the private home. Removing a grant revokes launch access.
+An active, granted outside claimant keeps its proof across daemon restarts.
+The private claim record stores a digest of the secret. Free-form starts
+cannot register grant names, including starts without a verified parent. Removing a grant revokes launch access.

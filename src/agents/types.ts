@@ -159,7 +159,7 @@ export interface AgentModule {
     idlePane?: (view: NudgeView) => string | undefined;
   };
   /** Conversation id exported to a child tool by this agent, when available. */
-  resumeId?: (env: NodeJS.ProcessEnv) => string | undefined;
+  resumeIdMarkers?: readonly string[];
   env?: { sessionMarkers: string[] };
   safety?: SafetyAdapter;
   stalls?: StallSignature[];
