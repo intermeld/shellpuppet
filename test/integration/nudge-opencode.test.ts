@@ -5,7 +5,7 @@ import { buildNudge } from '../../src/core/mailbox.js';
 import { auditLogPath, createAuditor } from '../../src/daemon/audit.js';
 import { api, eventually, makeTempHome, repoRoot, startTestDaemon } from './helpers.js';
 
-it.each(['idle', 'busy'])('submits one wrapped nudge while the OpenCode PTY is %s', async state => {
+it.each(['idle', 'busy', 'sidebar'])('submits one nudge while the OpenCode PTY is %s', async state => {
   const home = makeTempHome('nudge-opencode-');
   const td = await startTestDaemon({ home, audit: createAuditor(home),
     messaging: { enabled: true, allow: ['parent-child'] } });
@@ -17,7 +17,7 @@ it.each(['idle', 'busy'])('submits one wrapped nudge while the OpenCode PTY is %
       const { execFileSync } = require('node:child_process');
       const cli = (...args) => execFileSync(process.execPath, [process.env.SHELLPUPPET_CLI, ...args]);
       cli('start', '--no-shell', '--no-viewer', '--label', 'chair', '--agent', 'opencode',
-        '--cols', '80', '--rows', '24', process.execPath, ...process.argv.slice(1));
+        '--cols', '${state === 'sidebar' ? '200' : '80'}', '--rows', '24', process.execPath, ...process.argv.slice(1));
       cli('msg', 'send', 'chair', 'ok');
       setInterval(() => {}, 1000);
     `;
