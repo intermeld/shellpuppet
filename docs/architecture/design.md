@@ -1816,7 +1816,10 @@ window and moves the selected pane into it. Closing a window moves its panes
 to the designated remaining window. A profile may set `"open": "grid"` (default),
 `"focus"` or `"window"` for the session it starts. This permits a
 supervising session to open focused or popped out while sessions it starts
-appear in the grid.
+appear in the grid. A Focus or Pop out launch action belongs to the window
+registration that requested it. If that registration ends before the reply
+arrives, the dashboard records the successful launch for Restart and discards
+the presentation action.
 
 The authenticated `/dashboard/events` socket registers one window instance.
 Replacing the dashboard credential retires its feeds immediately. Issuing a ninth
