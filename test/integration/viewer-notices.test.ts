@@ -74,13 +74,14 @@ const observePane = `(() => {
     const style = getComputedStyle(__noticeTest.notices);
     return { top: style.top, bottom: style.bottom };
   };
-  window.__sample = async ms => {
+  window.__sample = async (ms, requiredMoves = 0) => {
     const state = __noticeTest;
     state.moves = state.rects = 0; state.halves.clear();
     const samples = [], changes = [], visitsAt = state.visits.length;
     const start = performance.now();
     let last = JSON.stringify(__placement());
-    while (performance.now() - start < ms) {
+    while (performance.now() - start < ms ||
+           (state.moves < requiredMoves && performance.now() - start < 10000)) {
       const placement = __placement(), current = JSON.stringify(placement);
       if (current !== last) { changes.push({ at: performance.now() - start, placement }); last = current; }
       samples.push({ ...placement, hidden: state.alert.hidden });
@@ -392,10 +393,13 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
       const trace = moving.cadence;
       const judged = assessDeliveredCadence(trace);
       recordDeliveredCadence(`${mode}-${String(period)}-r`, trace);
-      const steady = trace.samples.filter(sample => sample.time >= 2500);
+      const upperRest = (judged.rests as { edge: string; start: number; end: number; deadline?: number }[])
+        .find(rest => rest.edge === 'top');
+      const steadyEnd = upperRest?.start ?? trace.end;
+      const steady = trace.samples.filter(sample => sample.time >= 2500 && sample.time < steadyEnd);
       const promptSamples = steady.filter(sample => sample.row === 22);
       const promptMs = trace.legs.filter(leg => leg.row === 22).reduce((total, leg) =>
-        total + Math.max(0, leg.end - Math.max(leg.start, 2500)), 0);
+        total + Math.max(0, Math.min(leg.end, steadyEnd) - Math.max(leg.start, 2500)), 0);
       const evidence = JSON.stringify({ assessment: judged, firstSteady: steady[0], lastSteady: steady.at(-1) });
       expect(judged.violations, evidence).toEqual([]);
       expect(moving.hidden, evidence).toBe(false);
@@ -403,7 +407,14 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
           !trace.legs.some(leg => leg.row === 0) || trace.end < 6000) {
         throw new Error(`runner stalled before the split repaint and steady prompt were observed: ${evidence}`);
       }
-      expect(promptMs / (trace.end - 2500), evidence).toBeGreaterThan(0.6);
+      if (upperRest) {
+        const word = trace.legs.filter(leg => leg.start >= 2500 && leg.end <= steadyEnd);
+        if (!word.some((leg, i) => leg.row === 22 && word[i + 1]?.row === 0 && word[i + 2]?.row === 22) ||
+            !trace.samples.some(sample => sample.time > (upperRest.deadline ?? Infinity) && sample.time < upperRest.end)) {
+          throw new Error(`runner stalled before a complete steady repaint and an observable upper rest: ${evidence}`);
+        }
+      }
+      expect(promptMs / (steadyEnd - 2500), evidence).toBeGreaterThan(0.6);
       expect(trace.samples.find(sample => sample.side === 'top')?.time, evidence).toBeLessThanOrEqual(2500);
       expect(new Set(steady.map(sample => sample.side)), evidence).toEqual(new Set(['top']));
       expect(promptSamples.some(sample => sample.covered), evidence).toBe(false);
@@ -443,7 +454,7 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
       // The initial clear-edge decision has its own deadline. Observe the
       // subsequent repaint cadence after that startup placement has settled.
       await evaluate('__pause(1600)');
-      const result = await evaluate('__sample(3000)') as {
+      const result = await evaluate('__sample(3000, 31)') as {
         placements: string[]; samples: number; hidden: boolean; moves: number; halves: number; rects: number;
         frames: number; frameInterval: number; maxFrameGap: number; frameSpan: number; observedMs: number;
       };
