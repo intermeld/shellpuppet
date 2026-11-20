@@ -57,6 +57,7 @@ export const dashboardDiagnosticsScript = `(() => {
         try {
           const frame = JSON.parse(event.data);
           if (frame.type === 'geometry') entry.geometry.push({ at: performance.now(), ...frame });
+          if (frame.type === 'window-state') entry.windowState = frame;
           if (frame.type === 'snapshot') entry.snapshotIds = frame.sessions.map(session => session.id);
           if (frame.type === 'window-gone') entry.gone.push({ at: performance.now(), ...frame });
         } catch { /* Only protocol frames contribute to these diagnostics. */ }

@@ -4,22 +4,19 @@
  * Typing stays in the focused pane until Ctrl+Shift+A. The follow-up keys,
  * bound or not, stay out of the session. Kill is one DELETE with the same
  * origin and document proof as launch. Copy writes the session id and makes
- * no request. Restart repeats a profile this page started. Layout memory
- * stays in the browser.
+ * no request. Layout memory stays in the browser.
  */
 
 import { afterEach, beforeAll, describe, expect, it } from 'vitest';
 import * as fs from 'node:fs';
 import * as http from 'node:http';
-import * as os from 'node:os';
 import * as path from 'node:path';
 import { createAuditor } from '../../src/daemon/audit.js';
-import { parseDaemonConfig } from '../../src/daemon/config.js';
 import { createFileLogger } from '../../src/daemon/logger.js';
 import type { LauncherConfig } from '../../src/daemon/launchProfiles.js';
 import { captureDashboard } from './dashboardCapture.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
-import { api, eventually, makeTempHome, startTestDaemon } from './helpers.js';
+import { api, makeTempHome, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 
 interface RawResult {
@@ -122,13 +119,6 @@ function auditEntries(home: string): AuditLine[] {
     .split('\n')
     .filter((line) => line.trim() !== '')
     .map((line) => JSON.parse(line) as AuditLine);
-}
-
-function profilesOf(entries: unknown[]): LauncherConfig {
-  const { config, problems } = parseDaemonConfig({ launcher: { profiles: entries } });
-  expect(problems).toEqual([]);
-  if (config.launcher === undefined) throw new Error('launcher did not parse');
-  return config.launcher;
 }
 
 async function sessionIds(daemon: TestDaemon): Promise<string[]> {
@@ -548,168 +538,6 @@ describe('human controls in the browser', () => {
     });
   }, 180_000);
 
-  it('starts a profile with its folder, restarts that and not an agent session, and pops a pane out', async (context) => {
-    if (!browser) { context.skip(); return; }
-    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dash-controls-work-'));
-    tempDirs.push(workDir);
-    const daemon = await startPageDaemon({
-      launcher: profilesOf([
-        {
-          name: 'hold', command: process.execPath, args: ['-e', 'process.exit(0)'], shell: false,
-          cwd: 'ask', folders: [{ name: 'work', path: workDir }], open: 'grid', label: 'Hold',
-        },
-        {
-          name: 'focus-shell', command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'],
-          shell: false, cwd: workDir, open: 'focus',
-        },
-        {
-          name: 'pop-shell', command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'],
-          shell: false, cwd: workDir, open: 'window',
-        },
-      ]),
-    });
-    const agent = await startLive(daemon, 'agent-ended', 'process.exit(0)');
-    await eventually(async () => {
-      const list = await api(daemon.port, daemon.token, '/sessions');
-      const session = ((list.body['sessions'] as { id: string; exited?: boolean; exitCode?: number | null }[] | undefined) ?? [])
-        .find((entry) => entry.id === agent);
-      return session?.exited === true && session.exitCode === 0;
-    }, 15_000);
-    const url = await freshDashboardUrl(daemon);
-    const shot = await captureDashboard({
-      browser, viewerUrl: url, width: 1920, height: 1080,
-      drive: true, timeoutMs: 120_000, beforeNavigateScript: instrument,
-      probe: `(() => { try {
-        const state = (window.__startProbe ||= { phase: 0, started: Date.now() });
-        const agentId = ${JSON.stringify(agent)};
-        const timedOut = () => Date.now() - state.started > 12000;
-        const fail = (detail) => JSON.stringify(Object.assign({ ok: false, phase: state.phase, detail: detail,
-          error: document.getElementById('error')?.textContent || '',
-          fetches: window.__fetches, opens: window.__opened || [] }));
-        const card = (id) => document.querySelector('[data-session="' + id + '"]');
-        const launches = () => { try { return JSON.parse(localStorage.getItem('shellpuppet.dashboard.launches') || '{}'); } catch (e) { return {}; } };
-        const bodies = () => window.__fetches.filter((entry) => entry.url.indexOf('/dashboard/launch') !== -1 && entry.method === 'POST').map((entry) => entry.body);
-        const resetTimer = () => { state.started = Date.now(); };
-        if (state.phase === 0) {
-          const launcher = document.getElementById('launcher');
-          const restart = card(agentId)?.querySelector('[data-action="restart"]');
-          const ended = card(agentId)?.querySelector('.pane-state')?.textContent || '';
-          if (!launcher || launcher.hidden || !restart || ended !== 'Ended (code 0)') {
-            if (timedOut()) return fail({ launcher: launcher ? !launcher.hidden : null, ended, hidden: restart ? restart.hidden : null });
-            return null;
-          }
-          if (restart.hidden !== true) return fail({ hidden: restart.hidden });
-          state.agentHidden = true;
-          state.layoutBefore = document.getElementById('panes').dataset.layout;
-          document.getElementById('profile').value = 'hold';
-          document.getElementById('profile').dispatchEvent(new Event('change', { bubbles: true }));
-          document.getElementById('folder').value = 'work';
-          document.getElementById('start').click();
-          state.phase = 1; resetTimer(); return null;
-        }
-        if (state.phase === 1) {
-          const hold = Object.keys(launches()).find((id) => launches()[id].profile === 'hold');
-          const ended = hold ? (card(hold)?.querySelector('.pane-state')?.textContent || '') : '';
-          const restart = hold ? card(hold)?.querySelector('[data-action="restart"]') : null;
-          if (!hold || ended !== 'Ended (code 0)' || !restart || restart.hidden) {
-            if (timedOut()) return fail({ hold, ended, bodies: bodies() });
-            return null;
-          }
-          state.hold = hold;
-          state.layoutAfterGrid = document.getElementById('panes').dataset.layout;
-          restart.click();
-          state.phase = 2; resetTimer(); return null;
-        }
-        if (state.phase === 2) {
-          if (bodies().length < 2) { if (timedOut()) return fail({ bodies: bodies() }); return null; }
-          state.deletesBefore = window.__fetches.filter((entry) => entry.method === 'DELETE').length;
-          card(state.hold).querySelector('[data-action="dismiss"]').click();
-          state.phase = 3; resetTimer(); return null;
-        }
-        if (state.phase === 3) {
-          if (card(state.hold)) { if (timedOut()) return fail({ hold: state.hold }); return null; }
-          state.longTimers = window.__timeouts.filter((delay) => delay >= 60000);
-          state.deletesAfter = window.__fetches.filter((entry) => entry.method === 'DELETE').length;
-          document.getElementById('profile').value = 'focus-shell';
-          document.getElementById('profile').dispatchEvent(new Event('change', { bubbles: true }));
-          document.getElementById('start').click();
-          state.phase = 4; resetTimer(); return null;
-        }
-        if (state.phase === 4) {
-          const focus = Object.keys(launches()).find((id) => launches()[id].profile === 'focus-shell');
-          const main = document.querySelector('#main-pane .pane')?.dataset.session || '';
-          if (!focus || document.getElementById('panes').dataset.layout !== 'focus' || main !== focus) {
-            if (timedOut()) return fail({ focus, main, layout: document.getElementById('panes').dataset.layout, bodies: bodies() });
-            return null;
-          }
-          state.orderBefore = JSON.parse(localStorage.getItem('shellpuppet.dashboard') || '{}').order;
-          window.__opened = [];
-          window.open = (url) => { window.__opened.push(String(url)); return { closed: false }; };
-          document.getElementById('profile').value = 'pop-shell';
-          document.getElementById('profile').dispatchEvent(new Event('change', { bubbles: true }));
-          document.getElementById('start').click();
-          state.phase = 5; resetTimer(); return null;
-        }
-        if (state.phase === 5) {
-          const pop = Object.keys(launches()).find((id) => launches()[id].profile === 'pop-shell');
-          if (!pop || window.__opened.length !== 1 || card(pop)) {
-            if (timedOut()) return fail({ pop, opens: window.__opened, present: pop ? card(pop) !== null : null });
-            return null;
-          }
-          state.pop = pop;
-          const channel = new BroadcastChannel('shellpuppet.dashboard');
-          channel.postMessage({ type: 'pop-release', id: pop, token: 'not-ours' });
-          state.phase = 6; resetTimer(); return null;
-        }
-        const back = card(state.pop) !== null;
-        if (!back) { if (timedOut()) return fail({ pop: state.pop }); return null; }
-        const pref = JSON.parse(localStorage.getItem('shellpuppet.dashboard') || '{}');
-        return JSON.stringify({
-          ok: true,
-          agentHidden: state.agentHidden,
-          layoutBefore: state.layoutBefore,
-          layoutAfterGrid: state.layoutAfterGrid,
-          hold: state.hold,
-          bodies: bodies(),
-          longTimers: state.longTimers,
-          deletesBefore: state.deletesBefore,
-          deletesAfter: state.deletesAfter,
-          orderBefore: state.orderBefore,
-          orderAfter: pref.order,
-          prefKeys: Object.keys(pref).sort(),
-          opened: window.__opened,
-          pop: state.pop,
-          back: back,
-        });
-      } catch (error) { return JSON.stringify({ ok: false, error: String(error) }); } })()`,
-    });
-    const result = JSON.parse(String(shot.probe)) as {
-      ok: boolean; agentHidden?: boolean; layoutBefore?: string; layoutAfterGrid?: string;
-      bodies?: string[]; longTimers?: number[]; deletesBefore?: number; deletesAfter?: number;
-      orderBefore?: string[]; orderAfter?: string[]; prefKeys?: string[]; opened?: string[]; pop?: string;
-    };
-    expect(result.ok, JSON.stringify(result)).toBe(true);
-    const bodies = (result.bodies ?? []).map((body) => JSON.parse(body) as Record<string, unknown>);
-    expect(bodies).toEqual([
-      { profile: 'hold', name: 'hold', folder: 'work' },
-      { profile: 'hold', name: 'hold', folder: 'work' },
-      { profile: 'focus-shell', name: 'focus-shell' },
-      { profile: 'pop-shell', name: 'pop-shell' },
-    ]);
-    expect(bodies.every((body) => body['command'] === undefined && body['env'] === undefined)).toBe(true);
-    expect(result.agentHidden).toBe(true);
-    expect(result.layoutBefore).toBe('grid');
-    expect(result.layoutAfterGrid).toBe('grid');
-    expect(result.longTimers).toEqual([]);
-    expect(result.deletesBefore).toBe(0);
-    expect(result.deletesAfter).toBe(0);
-    expect(result.opened).toEqual([`http://127.0.0.1:${String(daemon.port)}/dashboard#pop=${result.pop ?? ''}`]);
-    expect(result.opened?.[0]).not.toContain('dt=');
-    expect(result.orderAfter).toEqual([...(result.orderBefore ?? []), result.pop]);
-    expect(result.orderAfter).toContain(result.pop);
-    expect(result.prefKeys).toEqual(['autoFit', 'fontSize', 'mode', 'order', 'pins', 'prefix']);
-  }, 180_000);
-
   it('restores mode, order and pin from the browser and writes nothing to the daemon home', async (context) => {
     if (!browser) { context.skip(); return; }
     const daemon = await startPageDaemon();
@@ -770,31 +598,4 @@ describe('human controls in the browser', () => {
     expect(fs.existsSync(path.join(daemon.home, 'dashboard.json'))).toBe(false);
   }, 180_000);
 
-  it('makes a popped-out document full screen from its own button', async (context) => {
-    if (!browser) { context.skip(); return; }
-    const daemon = await startPageDaemon();
-    const id = await startLive(daemon, 'pop-target');
-    const url = await freshDashboardUrl(daemon);
-    const shot = await captureDashboard({
-      browser, viewerUrl: url, width: 1280, height: 720,
-      drive: true, timeoutMs: 90_000,
-      beforeNavigateScript: `(() => { if (!location.hash.startsWith('#pop=')) history.replaceState(null, '', location.pathname + location.search + '#pop=' + encodeURIComponent(${JSON.stringify(id)})); })()`,
-      probe: `(() => {
-        const button = document.getElementById('fullscreen');
-        const started = window.__fsStarted || (window.__fsStarted = Date.now());
-        if (!button || button.hidden) {
-          if (Date.now() - started > 8000) return JSON.stringify({ ok: false, hash: location.hash, hidden: button ? button.hidden : null });
-          return null;
-        }
-        document.documentElement.requestFullscreen = () => { window.__fullscreen = ['request']; return Promise.resolve(); };
-        button.click();
-        return JSON.stringify({ ok: true, text: button.textContent, calls: window.__fullscreen || [], hash: location.hash });
-      })()`,
-    });
-    const result = JSON.parse(String(shot.probe)) as { ok: boolean; text?: string; calls?: string[]; hash?: string };
-    expect(result.ok, JSON.stringify(result)).toBe(true);
-    expect(result.text).toBe('Full screen');
-    expect(result.calls).toEqual(['request']);
-    expect(result.hash).toBe(`#pop=${encodeURIComponent(id)}`);
-  }, 120_000);
 });
