@@ -6,6 +6,16 @@ import { fileURLToPath } from 'node:url';
 // A wrapper may import the start script with its own arguments still in argv.
 const override = process.argv[2] === '--daemon-entry' ? process.argv[3] : undefined;
 const entry = override ?? fileURLToPath(new URL('./index.js', import.meta.url));
-const daemon = spawn(process.execPath, [entry], { detached: true, windowsHide: true, stdio: 'ignore' });
-daemon.once('error', () => { process.exitCode = 1; });
-daemon.once('spawn', () => daemon.unref());
+const supervisor = fileURLToPath(new URL('./wrappedSupervisor.js', import.meta.url));
+const child = spawn(process.execPath, [supervisor, entry], {
+  detached: true, windowsHide: true, stdio: ['ignore', 'ignore', 'ignore', 'ipc'],
+});
+child.once('error', () => { process.exitCode = 1; });
+const failed = () => { process.exitCode = 1; };
+child.once('exit', failed);
+child.once('message', () => {
+  // A waiting wrapper can exit as soon as the starting client owns the hand-off.
+  child.off('exit', failed);
+  child.disconnect();
+  child.unref();
+});

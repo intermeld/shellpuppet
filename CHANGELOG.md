@@ -9,6 +9,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Keep a slow Windows wrapped restart in control until health or bounded cleanup. Check failure-log permissions within the start deadline, keep private home paths out of start errors and honour relative and quoted Windows search directories.
 - Resolve Windows Start menu wrapper and profile commands with mixed-case environment names, log daemon start failures, keep interactive desktop errors visible and detach the wrapped daemon from its console.
 - Wait for a typed line or a new, matching paste placeholder to settle before Enter; do not send Enter without final composer proof, and honour the full length-based minimum before a single safe retry.
 
