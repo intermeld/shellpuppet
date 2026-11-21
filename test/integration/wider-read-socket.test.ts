@@ -1,11 +1,12 @@
 import type { IPty } from 'node-pty';
+import { once } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { expect, it, vi } from 'vitest';
 import { SessionManager } from '../../src/core/manager.js';
 import { SessionProgramEndedError } from '../../src/core/session.js';
 import type { SessionDeps } from '../../src/core/session.js';
 import { startTestDaemon, connectWs, api } from './helpers.js';
-import type { TestDaemon } from './helpers.js';
+import type { TestDaemon, WsClient } from './helpers.js';
 
 function injectPty(td: TestDaemon, pty: IPty): SessionManager {
   const manager = (td.daemon as unknown as { manager: SessionManager }).manager;
@@ -106,32 +107,50 @@ it('restores the original grid if its controlling socket closes during a wider r
   }
 });
 
-it.each(['program exit', 'renderer fault'])('refuses a wider read without restoring after a %s', async cause => {
+it.each([
+  'program exit during growth', 'program exit while waiting (control)', 'renderer fault while waiting',
+])('refuses a wider read without restoring after a %s', async cause => {
   const td = await startTestDaemon({ policy: { mode: 'allow-all' } });
+  const duringGrowth = cause === 'program exit during growth';
+  const rendererFault = cause === 'renderer fault while waiting';
+  let watcher: WsClient | undefined;
   let exit: (event: { exitCode: number }) => void = () => {};
   const pty = {
     pid: 0, cols: 80, rows: 24, process: 'synthetic', handleFlowControl: false,
     onData: () => ({ dispose() {} }),
     onExit: (fn: (event: { exitCode: number }) => void) => { exit = fn; return { dispose() {} }; },
-    resize(cols: number, rows: number) { Object.assign(this, { cols, rows }); },
+    resize(cols: number, rows: number) {
+      Object.assign(this, { cols, rows });
+      // Deliver the exit after growth but before the route resumes from await resize().
+      if (duringGrowth && cols === 140) queueMicrotask(() => exit({ exitCode: 0 }));
+    },
     write() {}, clear() {}, kill() {}, pause() {}, resume() {},
   } satisfies IPty;
   try {
     const manager = injectPty(td, pty);
     const session = manager.create({ command: process.execPath, cols: 80, rows: 24 });
-    const watcher = await connectWs(td.port, session.id, td.token);
+    watcher = await connectWs(td.port, session.id, td.token);
     await watcher.waitForControl(c => c['type'] === 'geometry' && c['cols'] === 80);
     const pending = api(td.port, td.token, `/sessions/${session.id}/snapshot?wider=140x40&widerTimeout=1000`);
-    await watcher.waitForControl(c => c['type'] === 'geometry' && c['cols'] === 140);
-    if (cause === 'program exit') exit({ exitCode: 0 });
-    else session['failRenderer'](new Error('broken viewport'));
+    if (!duringGrowth) {
+      await watcher.waitForControl(c => c['type'] === 'geometry' && c['cols'] === 140);
+      if (rendererFault) session['failRenderer'](new Error('broken viewport'));
+      else exit({ exitCode: 0 });
+    }
     const result = await pending;
     expect(result.status).toBe(409);
-    expect(result.body['error']).toContain(cause === 'program exit' ? 'exited (code 0)' : 'terminal rendering failed');
+    expect(result.body['error']).toContain(rendererFault ? 'terminal rendering failed' : 'exited (code 0)');
     expect([pty.cols, pty.rows]).toEqual([140, 40]);
-    expect(watcher.controls().filter(c => c['type'] === 'geometry').map(c => c['cols'])).toEqual([80, 140]);
-    watcher.close();
+    // The pong follows all frames the completed HTTP request sent to this viewer.
+    const pong = once(watcher.ws, 'pong');
+    watcher.ws.ping();
+    await pong;
+    const frames = watcher.controls();
+    expect(frames).toContainEqual(expect.objectContaining({ type: 'exited', exitCode: rendererFault ? null : 0 }));
+    const widths = frames.filter(c => c['type'] === 'geometry').map(c => c['cols']);
+    expect(widths).toEqual(duringGrowth ? [80] : [80, 140]);
   } finally {
+    watcher?.close();
     await td.stop();
   }
 });
