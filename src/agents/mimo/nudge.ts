@@ -38,9 +38,10 @@ export function readiness(view: NudgeView): NudgeReadiness {
     return { ...line, text: `> ${body}`, spans };
   });
   const placeholder = placeholders.find((candidate) => candidate === body) ?? placeholders[0] ?? '';
-  if (barIsBusy(view, reading)) return 'busy';
+  const busy = barIsBusy(view, reading);
+  if (busy && view.whenBusy === undefined) return 'busy';
   const result = readingReadiness({ rows: changed, styled, expectedDraft: view.expectedDraft,
-    exactEmpty: view.exactEmpty }, { ...reading, composer: { text: '^> ' } }, {
+    exactEmpty: view.exactEmpty, whenBusy: view.whenBusy }, { ...reading, composer: { text: '^> ' } }, {
     placeholder,
     continuations: false,
     placeholderInk: (line) => {
@@ -50,5 +51,5 @@ export function readiness(view: NudgeView): NudgeReadiness {
   });
   if (result === 'ready' && [view.rows[frame - 4], view.rows[frame - 2]].some((row) =>
     row !== undefined && barBody(row) !== '')) return 'draft';
-  return result;
+  return busy && result !== 'draft' ? 'busy' : result;
 }

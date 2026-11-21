@@ -17,6 +17,7 @@ import { resolve } from 'node:path';
 import process from 'node:process';
 import { DaemonGoneError, daemonStartMode, discoverDaemon, ensureDaemon, request, waitForPendingDaemon, withDaemonStartLock } from '../client/http.js';
 import type { DaemonConnection } from '../client/http.js';
+import type { ListedSchedule } from '../daemon/schedules.js';
 import { assertNodeVersion, packageVersion } from '../daemon/meta.js';
 import { NO_MATCHES } from '../core/find.js';
 import { visibleMessageText } from '../core/messageText.js';
@@ -36,6 +37,7 @@ const USAGE = `ShellPuppet: drive a real terminal session; humans watch and type
 
 Usage:
   shellpuppet previous [--json]                       Read sessions saved before a daemon restart
+  shellpuppet schedule list [--json]                  List scheduled prompts and their last outcomes
   shellpuppet launch <profile> [--name NAME] [--folder NAME] [--root-index N] [--folder-path PATH] [--resume-id ID]
   shellpuppet start [options] <command> [args...]   Launch a program in a new session
       --label <s> --purpose <s> --cols <n> --rows <n> --cwd <dir>
@@ -401,6 +403,25 @@ async function main(): Promise<void> {
   }
 
   switch (verb) {
+    case 'schedule': {
+      if (parsed.positionals.length !== 1 || parsed.positionals[0] !== 'list' || parsed.lists.size ||
+        [...parsed.flags.keys()].some(key => key !== 'json')) fail(2, 'Usage: shellpuppet schedule list [--json]');
+      const payload = await call(connection, 'GET', '/schedules');
+      if (wantJson) printJson(payload);
+      else {
+        const schedules = payload['schedules'] as ListedSchedule[];
+        if (!schedules.length) console.log('No schedules configured.');
+        else {
+          console.log('Name\tSession\tCron (UTC)\tWhen busy\tEnabled\tNext run (UTC)\tLast outcome');
+          for (const row of schedules) {
+            const last = row.lastOutcome;
+            console.log([row.name, row.session, row.cron, row.whenBusy, row.enabled, row.nextRunUtc ?? '-',
+              last ? [last.outcome, last.reason, last.at].filter(Boolean).join(' ') : '-'].join('\t'));
+          }
+        }
+      }
+      return;
+    }
     case 'previous':
       printJson(await call(connection, 'GET', '/launcher/previous'));
       return;

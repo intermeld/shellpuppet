@@ -7,6 +7,10 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+### Added
+
+- Scheduled prompts for named sessions with UTC cron, live configuration reload and a read-only `schedule list` command.
+
 ## [0.3.0] - 2026-11-21
 
 Several dashboard windows, messages between sessions, session names and

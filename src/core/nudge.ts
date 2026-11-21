@@ -58,8 +58,9 @@ export function nudgeVerdict(module: AgentModule | undefined, observation: Nudge
   if (observation.stall !== undefined) return { ready: false, reason: 'stalled' };
   const reading = module.nudge.readiness({ rows: screen.rows, styled: screen.styled,
     cursor: observation.cursor, untrimmedRow: observation.untrimmedRow,
-    expectedDraft: observation.expectedDraft, exactEmpty: observation.exactEmpty });
+    expectedDraft: observation.expectedDraft, exactEmpty: observation.exactEmpty, whenBusy: observation.whenBusy });
   if (reading === 'queue') {
+    if (observation.whenBusy === 'skip') return { ready: false, reason: 'busy' };
     if (observation.expectedDraft !== undefined) return { ready: false, reason: 'busy' };
     const quiet = observation.composerUnchangedMs;
     if (quiet === undefined || !Number.isFinite(quiet) || quiet < NUDGE_QUIET_MS) return { ready: false, reason: 'quiet' };

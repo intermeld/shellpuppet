@@ -33,6 +33,8 @@
 
 import * as fs from 'node:fs';
 import { configPath } from './paths.js';
+import { ScheduleStore } from './schedules.js';
+import type { Schedule } from './schedules.js';
 import { compileDialogs } from '../core/dialogs.js';
 import type { DialogSignature } from '../core/dialogs.js';
 import { BUILT_IN_SIGNATURES, compileSignatures } from '../core/reasoning.js';
@@ -48,6 +50,7 @@ import type { LauncherConfig } from './launchProfiles.js';
 export const DEFAULT_VIEWER_LAUNCH_MODE: ViewerLaunchMode = 'dashboard';
 
 export interface DaemonConfig {
+  schedules?: readonly Schedule[];
   /** How clients start a missing daemon. This is read before daemon startup. */
   daemon?: { startWith?: string[]; startWithOnlyIfEnvContains?: string };
   policy?: PolicyConfig;
@@ -141,6 +144,7 @@ const POLICY_KEYS = new Set(['mode', 'allow', 'deny', 'maxSessions']);
  * daemon looks inside it only for a `passEnv`, which it reports.
  */
 const TOP_LEVEL_KEYS = new Set([
+  'schedules',
   'policy',
   'idleMinutes',
   'sessionEnv',
@@ -490,6 +494,12 @@ export function parseDaemonConfig(raw: unknown): ParsedDaemonConfig {
   }
 
   if (raw['policy'] !== undefined) config.policy = parsePolicy(raw['policy'], problems);
+
+  if (raw['schedules'] !== undefined) {
+    const store = new ScheduleStore();
+    problems.push(...store.replace(raw['schedules']).problems);
+    config.schedules = store.read();
+  }
 
   if (raw['daemon'] !== undefined) {
     const daemon = raw['daemon'];
