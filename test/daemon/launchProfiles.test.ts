@@ -538,6 +538,10 @@ describe('the daemon environment copy', () => {
       copied: ['WANTED'],
     });
   });
+
+  it.runIf(process.platform === 'win32')('matches named profile variables in a case-sensitive copy', () => {
+    expect(copyDaemonEnv(['PATH'], { Path: 'fixture' }).copied).toEqual(['PATH']);
+  });
   it('never copies any per-session identity even when a profile lists it', () => {
     const source = {
       SHELLPUPPET_SESSION: 's1',
@@ -602,6 +606,14 @@ describe('a launch command is resolved to the file that runs', () => {
     const real = makeProgram(bin, 'sptool');
     makeProgram(work, 'sptool'); // the decoy a shell searching the folder would run
     expect(resolveLaunchCommand('sptool', work, { PATH: bin }, host)).toEqual({ file: real });
+  });
+
+  it.runIf(process.platform === 'win32')('uses Path and mixed-case PATHEXT from a copied environment', () => {
+    const bin = makeDir('launch-path-');
+    const work = makeDir('launch-work-');
+    const tool = makeProgram(bin, 'sptool.custom');
+    makeProgram(work, 'sptool.custom');
+    expect(resolveLaunchCommand('sptool', work, { Path: bin, PathExt: '.custom' })).toEqual({ file: tool });
   });
 
   it('takes a relative path with a separator from the folder', () => {

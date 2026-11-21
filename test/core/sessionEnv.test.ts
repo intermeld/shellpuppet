@@ -50,6 +50,15 @@ describe('buildSessionEnv with variables of the session’s own', () => {
     expect(env['INHERITED_KEY']).toBe('new');
   });
 
+  it('hands a Windows child only one PATH, including when the copy already has aliases', () => {
+    for (const mode of ['clean', 'passthrough'] as const) {
+      const inherited = { Path: 'first', PATH: 'second' };
+      const paths = (env: NodeJS.ProcessEnv): string[] => Object.keys(env).filter(key => key.toUpperCase() === 'PATH');
+      expect(paths(buildSessionEnv(mode, 'win32', inherited))).toEqual(['PATH']);
+      expect(paths(buildSessionEnv(mode, 'win32', inherited, { pAtH: 'override' }))).toEqual(['pAtH']);
+    }
+  });
+
   it('elsewhere keeps names that differ in case apart, as the platform does', () => {
     const env = buildSessionEnv('passthrough', 'linux', { Inherited_Key: 'old' }, { INHERITED_KEY: 'new' });
     expect(env['Inherited_Key']).toBe('old');
