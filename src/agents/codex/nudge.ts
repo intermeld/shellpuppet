@@ -1,23 +1,22 @@
 import type { StyledLine } from '../../core/renderer.js';
 import { bodyStyles, readingReadiness } from '../nudgeReading.js';
 import type { NudgeReadiness, NudgeView } from '../types.js';
+import { matchesDraft } from './draft.js';
 import { reading } from './reading.js';
 
 /** Dim placeholder on an idle Codex composer. The status row under it is not text. */
 const PLACEHOLDER = 'Ask Codex to do anything';
 
 /**
- * Footer under the composer on every captured Codex screen: the model and
- * context line, then `? for shortcuts`. No capture shows a frame around a
- * second composer row, so any other text under the composer is unknown.
+ * Codex draws its model and context below the composer, sometimes followed
+ * by a shortcuts hint. The 80-column captures show only the model line.
  */
-const MODEL_STATUS = /^ {2}GPT-\S+ high\s+·\s+Context \d+% left\s+·\s+weekly \d+% left\b/u;
+const MODEL_STATUS = /^ {2}GPT-\S+ x?high\s+·\s+Context \d+% left\s+·\s+weekly \d+% left\b/u;
 const SHORTCUTS = /^\s*(?:← for agents\s+·\s+)?\? for shortcuts\s*$/u;
 
 /**
- * A status-shaped row is the footer only when nothing but blank rows and the
- * shortcuts hint follows it. Draft text shaped like the status row has more
- * text, or the real footer, below it, so it stays part of the composer.
+ * A status-shaped row in a draft has the real footer below it. The footer
+ * itself can be followed only by blank rows and the shortcuts hint.
  */
 function isFooter(line: StyledLine, below: readonly StyledLine[]): boolean {
   if (!SHORTCUTS.test(line.text) && !MODEL_STATUS.test(line.text)) return false;
@@ -34,7 +33,7 @@ export function readiness(view: NudgeView): NudgeReadiness {
     placeholder: PLACEHOLDER,
     continuations: true,
     placeholderInk,
-    unprovenContinuations: true,
+    matchesDraft,
     status: isFooter,
   });
 }

@@ -9,6 +9,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Codex now recognises a typed line or nudge that wraps at spaces or path separators and sends Enter once the complete draft is visible.
 - A launch command typed into an agent session before the agent has started (at its shell prompt) is submitted with its Enter again.
 - Wait for a typed line or a new, matching paste placeholder to settle before Enter; do not send Enter without final composer proof, and honour the full length-based minimum before a single safe retry.
 

@@ -1427,7 +1427,8 @@ export class Session implements WaitTarget {
 
   private nudgeView() {
     const styled = this.renderer.styledLines().lines;
-    return { styled, rows: styled.map(line => line.text), cursor: this.renderer.cursor, viewportRows: this.renderer.rows,
+    return { styled, rows: styled.map(line => line.text), cursor: this.renderer.cursor,
+      viewportRows: this.renderer.rows, viewportCols: this.renderer.cols,
       untrimmedRow: (y: number) => this.renderer.untrimmedRow(y) };
   }
 

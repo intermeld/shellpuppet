@@ -103,6 +103,8 @@ export type NudgeReadiness = 'ready' | 'busy' | 'queue' | 'draft' | 'unknown';
  * the recorded placeholder from a draft. A difference is not judged.
  */
 export interface NudgeView {
+  /** Terminal width in cells, when known. */
+  viewportCols?: number;
   /** Cursor and optional physical cells from the same viewport as the text. */
   cursor?: CursorPosition;
   untrimmedRow?: (y: number) => StyledLine | undefined;

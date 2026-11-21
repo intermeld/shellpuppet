@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { IPty } from 'node-pty';
 import { describe, expect, it, vi } from 'vitest';
 import { MUSE_SUBMIT_DELAY_MS, NUDGE_SUBMIT_DELAY_MS, NUDGE_SUBMIT_WAIT_MS, Session } from '../../src/core/session.js';
@@ -19,9 +21,9 @@ class RecordingPty implements IPty {
   resume(): void {}
 }
 
-function recordingSession(agent: string): { session: Session; pty: RecordingPty } {
+function recordingSession(agent: string, size?: { cols: number; rows: number }): { session: Session; pty: RecordingPty } {
   const pty = new RecordingPty();
-  const session = new Session('input-order', { command: process.execPath, shell: false, agent }, {
+  const session = new Session('input-order', { command: process.execPath, shell: false, agent, ...size }, {
     platform: 'linux', spawn: () => pty,
   });
   return { session, pty };
@@ -37,6 +39,38 @@ function draftWait(session: Session, seen: boolean, delayMs = 150): void {
 }
 
 describe('Muse input submission', () => {
+  it.each([
+    ['codex-wrapped-draft', 'Please run this check: set PATH so that C:\\Windows\\System32\\bash.exe is found ' +
+      'first, then run "D:/dev-sandbox/draft-notes/archive4/test-stubs:$PATH" with the quoted argument ' +
+      "'a\\b\\c' and report back exactly what it printed, including any error text, without changing any files " +
+      'in this folder or anywhere else on the machine. Repeat the check twice and compare the two outputs ' +
+      'carefully before replying with a short summary only.'],
+    ['codex-midtoken-draft', 'Check that the path a bb ccc dd eee ffff gg hhh iii jjjj kk ' +
+      'C:\\Windows\\System32\\bash.exe exists, then list D:/dev-sandbox/draft-notes/archive4/test-stubs:$PATH ' +
+      'entries, and report.'],
+  ])('sends one Enter for the captured Codex composer in %s', async (name, body) => {
+    const { session, pty } = recordingSession('codex', { cols: 80, rows: 24 });
+    const capture = readFileSync(join(__dirname, '../fixtures/nudge', name + '.ansi'), 'utf8');
+    const idle = '\x1b[2J\x1b[H› \x1b[2mAsk Codex to do anything\x1b[0m';
+    const renderer = session['renderer'];
+    const record = pty.write.bind(pty);
+    vi.spyOn(pty, 'write').mockImplementation(data => {
+      record(data);
+      void renderer.write(data === body ? capture : idle);
+    });
+    try {
+      await renderer.write(idle);
+      const result = await session.writeWithResult(body + '\r');
+      expect(pty.writes.map(entry => entry.data)).toEqual([body, '\r']);
+      expect(result).toMatchObject({ submitted: true, submitRetried: false });
+      await renderer.write(capture);
+      expect(session.nudgeReadyWithLine(body)).toBe(true);
+      expect(session.nudgeReadyWithLine(body + ' more')).toBe(false);
+    } finally {
+      await renderer.dispose();
+    }
+  }, 12_000);
+
   it('submits a Codex nudge after a separate delay', async () => {
     const { session, pty } = recordingSession('codex');
     const phases: string[] = [];
