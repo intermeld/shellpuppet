@@ -1432,6 +1432,12 @@ export class Session implements WaitTarget {
     });
   }
 
+  /** Whether the agent's own composer can be read on screen (not, say, a shell prompt before it starts). */
+  typedComposerOnScreen(): boolean {
+    const verdict = this.pendingComposerVerdict();
+    return verdict.ready || verdict.reason !== 'unknown';
+  }
+
   nudgeSubmit(): string {
     return this.agentModule?.input?.submit?.key ?? '\r';
   }
@@ -1550,9 +1556,14 @@ export class Session implements WaitTarget {
         : Math.max(submit!.delayMs!, Math.ceil(Array.from(body).length * (submit?.perCharacterMs ?? 0)));
       const queuedInputVersion = this.inputQueueVersion;
       if (!nudge && this.agentModule?.nudge !== undefined) await this.renderer.flush();
+      // Typed text waits for proof only when the agent's own composer is on screen. Before the
+      // agent has started (a shell prompt typing its launch command), the module cannot read a
+      // composer, so the line and its Enter are written as for any other program.
+      const readableComposer = !nudge && this.agentModule?.nudge !== undefined &&
+        this.typedComposerOnScreen();
       // Without a settled screen before the body, no placeholder can prove this write:
       // only the exact typed line can.
-      const placeholdersBefore = !nudge && this.agentModule?.nudge !== undefined && settledBefore
+      const placeholdersBefore = readableComposer && settledBefore
         ? this.visiblePastePlaceholders() : null;
       if (nudge) {
         this.pendingNudgeLine = body;
@@ -1568,7 +1579,7 @@ export class Session implements WaitTarget {
       const bodyWrittenAt = Date.now();
       try {
         let typedDraftSeen = false;
-        if (!nudge && this.agentModule?.nudge !== undefined) {
+        if (readableComposer) {
           typedDraftSeen = await this.waitForTypedDraft(body, placeholdersBefore, bodyWrittenAt,
             delayMs, bodyInputVersion);
         } else {
@@ -1600,7 +1611,7 @@ export class Session implements WaitTarget {
             this.refuseIfInputFailed();
           }
         }
-        if (!nudge && this.agentModule?.nudge !== undefined) {
+        if (readableComposer) {
           await this.renderer.flush();
           this.refuseIfInputFailed();
           this.refuseIfEnded();
@@ -1608,7 +1619,7 @@ export class Session implements WaitTarget {
         const beforeSubmitScreen = !nudge ? this.renderer.snapshot().screen : '';
         const beforeSubmitVerdict = !nudge ? this.pendingComposerVerdict() : null;
         const wasBusy = beforeSubmitVerdict?.ready === false && beforeSubmitVerdict.reason === 'busy';
-        if (!nudge && this.agentModule?.nudge !== undefined) {
+        if (readableComposer) {
           if (this.inputVersion !== bodyInputVersion) {
             onTypedSubmit?.({ submitted: false, submitRetried: false,
               message: 'Other input arrived after the typed text; Enter was not sent.' });
@@ -1622,8 +1633,11 @@ export class Session implements WaitTarget {
         }
         this.pty.write(key);
         if (!nudge) {
-          onTypedSubmit?.(await this.checkTypedSubmission(body, key, queuedInputVersion,
-            typedDraftSeen, beforeSubmitScreen, wasBusy, placeholdersBefore));
+          onTypedSubmit?.(readableComposer || this.agentModule?.nudge === undefined
+            ? await this.checkTypedSubmission(body, key, queuedInputVersion,
+              typedDraftSeen, beforeSubmitScreen, wasBusy, placeholdersBefore)
+            : { submitRetried: false,
+              message: "Submit key sent; the agent's composer was not on screen when the text was typed." });
         }
         if (!nudge && this.pendingNudgeLine !== null) {
           this.pendingQuietSince = Date.now();

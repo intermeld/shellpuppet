@@ -28,6 +28,8 @@ function recordingSession(agent: string): { session: Session; pty: RecordingPty 
 }
 
 function draftWait(session: Session, seen: boolean, delayMs = 150): void {
+  // These cases model a composer already on screen when the text is typed.
+  vi.spyOn(session, 'typedComposerOnScreen').mockReturnValue(true);
   vi.spyOn(session, 'waitForTypedDraft').mockImplementation(async () => {
     await new Promise((resolve) => setTimeout(resolve, delayMs));
     return seen;
@@ -205,6 +207,17 @@ describe('Muse input submission', () => {
     expect(pty.writes.map((entry) => entry.data)).toEqual(['hello']);
     expect(result).toMatchObject({ submitted: false, submitRetried: false });
     expect(result.message).toContain('Other input arrived');
+  });
+
+  it('sends Enter for a launch line typed at a shell prompt before the agent starts', async () => {
+    const { session, pty } = recordingSession('codex');
+    vi.spyOn(session['renderer'], 'styledLines').mockReturnValue({
+      lines: [{ text: 'PS D:\\work> ', spans: [] }], firstVisible: 0,
+    });
+    const line = 'codex -m example --add-dir \'D:\\A & B\'';
+    const result = await session.writeWithResult(`${line}\r`);
+    expect(pty.writes.map((entry) => entry.data)).toEqual([line, '\r']);
+    expect(result.submitRetried).toBe(false);
   });
 
   it('rejects a paste placeholder that was visible before this body', async () => {
