@@ -540,26 +540,33 @@ it('preserves both launcher records and offers Restart to the receiving window',
       return until(async () => await page.evaluate("document.querySelector('.pane:has([data-action=restart]:not([hidden]))')?.dataset.session") as string ?? null);
     };
     const [a, b] = await Promise.all([launch(primary), launch(child)]);
+    const expected = [a, b].sort();
+    const restartable = "[...document.querySelectorAll('.pane:has([data-action=restart]:not([hidden]))')].map(p => p.dataset.session).sort()";
     await sendMove(primary, a);
-    await until(async () => (await ids(child.evaluate) as string[]).includes(a) ? true : null);
-    const restartable = () => child.evaluate("[...document.querySelectorAll('.pane:has([data-action=restart]:not([hidden]))')].map(p=>p.dataset.session).sort()");
-    expect(await restartable()).toEqual([a,b].sort());
-    // When the other window closes, this surviving document receives every pane.
-    await primary.send('Target.closeTarget', {targetId: child.id}, true);
-    await until(async () => (await ids(primary.evaluate) as string[]).length === 2 ? true : null);
-    const previous = Number(await primary.evaluate('performance.timeOrigin'));
-    await primary.send('Page.reload');
-    await until(async () => {
-      try {
-        return await primary.evaluate(`performance.timeOrigin !== ${previous} &&
-          document.querySelectorAll('#panes .pane').length === 2`) ? true : null;
-      } catch (error) {
-        if (/Execution context was destroyed|Cannot find context/i.test(String(error))) return null;
-        throw error;
-      }
+    await expect.poll(() => child.evaluate(restartable), { timeout: 30_000 }).toEqual(expected);
+    await primary.send('Target.closeTarget', { targetId: child.id }, true);
+    const survivorState = `(() => {
+      const state = ${feedEntry}?.windowState;
+      const assigned = state?.windows.length === 1 ? state.assignments[state.designated] : [];
+      return { assigned: [...(assigned ?? [])].sort(), restartable: ${restartable} };
+    })()`;
+    const waitForSurvivor = () => expect.poll(() => primary.evaluate(survivorState), { timeout: 30_000 })
+      .toEqual({ assigned: expected, restartable: expected });
+    await waitForSurvivor();
+
+    // Page.reload can return while Runtime.evaluate still targets the departing document.
+    await primary.send('Page.setLifecycleEventsEnabled', { enabled: true });
+    const { frameTree: { frame } } = await primary.send('Page.getFrameTree') as {
+      frameTree: { frame: { id: string; loaderId: string } } };
+    let loaded = false;
+    const unsubscribe = primary.onEvent('Page.lifecycleEvent', event => {
+      if (event['name'] === 'load' && event['frameId'] === frame.id && event['loaderId'] !== frame.loaderId) loaded = true;
     });
-    expect(await primary.evaluate("[...document.querySelectorAll('.pane:has([data-action=restart]:not([hidden]))')].map(p=>p.dataset.session).sort()"))
-      .toEqual([a,b].sort());
+    try {
+      await primary.send('Page.reload', { loaderId: frame.loaderId });
+      await eventually(() => loaded, 30_000, 50, 'the replacement primary document to load');
+    } finally { unsubscribe(); }
+    await waitForSurvivor();
     return true;
   });
 }, 240_000);
