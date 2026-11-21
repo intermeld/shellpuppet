@@ -1,6 +1,6 @@
 import * as path from 'node:path';
-import type { execFile } from 'node:child_process';
-import { describe, expect, it } from 'vitest';
+import { ChildProcess, type execFile, type ExecFileOptions } from 'node:child_process';
+import { describe, expect, it, vi } from 'vitest';
 import { chooseFolder, FOLDER_PICKER_FORCE_KILL_MS, FolderPickerFailureError, FolderPickerTimeoutError } from '../../src/daemon/folderPicker.js';
 
 function fakeHelper(exitOnFirstKill: boolean): {
@@ -29,21 +29,24 @@ function fakeHelper(exitOnFirstKill: boolean): {
 }
 
 describe('native folder picker runner', () => {
-  it('pins Windows PowerShell, sets UTF-8 output and preserves a Unicode path with spaces', async () => {
-    const calls: Array<{ file: string; args: string[]; options: { shell: false; windowsHide: true; cwd: string } }> = [];
+  it('runs an owned Windows picker with a hidden console and preserves a Unicode path', async () => {
     const folder = 'C:\\Users\\Renée\\Project space';
+    const powershell = path.win32.join('C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+    const launch = vi.fn((_file: string, _args: string[], _options: ExecFileOptions, done: (error: null, stdout: Buffer) => void) => {
+      queueMicrotask(() => done(null, Buffer.from(`${folder}\r\n`, 'utf8')));
+      return new ChildProcess();
+    });
     const selected = await chooseFolder(new AbortController().signal, {
-      platform: 'win32', systemRoot: 'C:\\Windows', executableExists: () => true,
-      runner: (file, args, options) => {
-        calls.push({ file, args, options });
-        return Promise.resolve(Buffer.from(`${folder}\r\n`, 'utf8'));
-      },
+      platform: 'win32', systemRoot: 'C:\\Windows', executableExists: () => true, execFileImpl: launch as unknown as typeof execFile,
     });
     expect(selected).toBe(folder);
-    expect(calls[0]?.file).toBe(path.win32.join('C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'));
-    expect(calls[0]?.args.join(' ')).toContain('[Console]::OutputEncoding = [Text.Encoding]::UTF8');
-    expect(calls[0]?.options).toMatchObject({ shell: false, windowsHide: true });
-    expect(calls[0]?.options.cwd).toBe(path.win32.dirname(calls[0]?.file ?? ''));
+    expect(launch).toHaveBeenCalledExactlyOnceWith(powershell, ['-NoProfile', '-STA', '-Command', expect.any(String)],
+      expect.objectContaining({ cwd: path.win32.dirname(powershell), shell: false, windowsHide: true }), expect.any(Function));
+    const script = launch.mock.calls[0]?.[1][3];
+    expect(script).toContain('[Console]::OutputEncoding = [Text.Encoding]::UTF8');
+    expect(script).toContain('$owner.Opacity = 0');
+    expect(script).toContain('$owner.ShowInTaskbar = $false');
+    expect(script).toMatch(/\$owner\.TopMost = \$true[\s\S]*\$owner\.Show\(\)[\s\S]*\.BrowseForFolder\(\$owner\.Handle\.ToInt32\(\),/);
   });
 
   it('returns no path for an empty successful picker result', async () => {
