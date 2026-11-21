@@ -9,7 +9,8 @@ version may change behaviour, and every such change is listed here.
 
 ### Added
 
-- Recover active launcher claims across orderly restarts. The home owner saves claim activity even if discovery disappears. Restart reports snapshot failures and continues.
+- Recover active launcher claims across orderly restarts. The home owner saves claim activity even if discovery is missing or empty. Restart reports snapshot failures and continues.
+- Preserve a verified restart snapshot when discovery is locked or lost, and allow startup with a read-locked recovery source.
 - Protect Windows daemon records with owner-only ACLs and strip claim proofs from daemon and child environments.
 - Save live profile sessions and known conversation ids before a daemon restart for a granted supervisor to relaunch. Verified snapshots survive interrupted takeover and ordinary stops.
 - Allow named sessions and outside claims to launch owner-configured profiles, including conversation resume.

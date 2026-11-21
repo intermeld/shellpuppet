@@ -1,6 +1,5 @@
-import { execFile, execFileSync, spawn } from 'node:child_process';
-import { mkdirSync, readFileSync, renameSync, rmdirSync, writeFileSync } from 'node:fs';
-import { once } from 'node:events';
+import { execFile, execFileSync } from 'node:child_process';
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -13,6 +12,7 @@ import { buildSessionEnv } from '../../src/core/session.js';
 import { NULL_LOGGER } from '../../src/core/types.js';
 import { copyDaemonEnv } from '../../src/daemon/launchProfiles.js';
 import { api, eventually, makeTempHome, removeTempHome, repoRoot, startTestDaemon } from './helpers.js';
+import { lockRecord } from './record-lock.js';
 
 const cli = join(repoRoot, 'dist', 'cli', 'index.js');
 const program = { command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], shell: false };
@@ -195,27 +195,6 @@ it('preserves the incumbent discovery record and durable claim when a contender 
   } finally { await td.stop(); }
 });
 
-async function preventSnapshotReplacement(snapshot: string): Promise<() => void | Promise<void>> {
-  if (process.platform === 'win32') {
-    // A real Windows read handle that denies delete sharing blocks the atomic rename.
-    const reader = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
-      "$ErrorActionPreference = 'Stop'; $f = [IO.File]::Open($env:SP_TEST_SNAPSHOT, 'Open', 'Read', 'Read'); [Console]::WriteLine('ready'); [void][Console]::ReadLine(); $f.Dispose()"],
-    { windowsHide: true, env: { ...process.env, SP_TEST_SNAPSHOT: snapshot }, stdio: 'pipe' });
-    const exit = once(reader, 'exit');
-    try {
-      const ready = await Promise.race([once(reader.stdout, 'data'), exit]);
-      expect(String(ready[0]).trim()).toBe('ready');
-    } catch (error) { reader.kill(); await exit; throw error; }
-    return async () => { reader.stdin.end(); await exit; };
-  }
-  // POSIX permits replacing an open file. Keep the same complete bytes and
-  // obstruct the destination until the outgoing daemon has attempted its write.
-  const backup = snapshot + '.saved';
-  renameSync(snapshot, backup);
-  mkdirSync(snapshot);
-  return () => { rmdirSync(snapshot); renameSync(backup, snapshot); };
-}
-
 it('refuses a complete but stale snapshot after the next restart cannot replace it', async () => {
   const { config } = parseDaemonConfig({ launcher: { sessionLaunch: ['chair'], profiles: [{ name: 'worker', ...program }] } });
   const options = { home: makeTempHome(), launchProfiles: config.launcher, messaging: { enabled: true, allow: [] } };
@@ -236,7 +215,7 @@ it('refuses a complete but stale snapshot after the next restart cannot replace 
     expect(current.status).toBe(200);
     expect(current.body['sessions']).toContainEqual(expect.objectContaining({ name: 'old-run' }));
     expect.soft(current.body['outgoingInstanceId']).toBe(owner);
-    const unlock = await preventSnapshotReplacement(snapshot);
+    const unlock = await lockRecord(snapshot);
     try {
       const stop = await api(td.port, td.token, '/daemon/shutdown', { body: { restart: true } });
       expect(stop.body['warnings']).toContainEqual(expect.stringContaining('previous-sessions.json'));

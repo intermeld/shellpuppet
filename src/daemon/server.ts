@@ -85,13 +85,15 @@ import {
   ensureHome,
   writePrivateRecord,
   inspectDaemonState,
+  isDaemonInstanceId,
   readDaemonState,
   removeDaemonStateIf,
   removeDaemonStateIfNotARecord,
+  restartSourceId,
 } from './paths.js';
 import { acquireHomeOwner, AlreadyRunningError, type HomeOwner } from './homeOwner.js';
 import { daemonRunning } from './liveness.js';
-import type { DaemonState } from './paths.js';
+import type { DaemonState, DaemonStateFile } from './paths.js';
 import { packageVersion } from './meta.js';
 import { terminalReportKind } from './terminalReports.js';
 import { ViewerSync } from './viewerSync.js';
@@ -384,6 +386,11 @@ function endedRefusal(id: string, exitCode: number | null): string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function isSnapshotFrom(record: unknown, instanceId: string): boolean {
+  return isRecord(record) && record['version'] === 1 && Array.isArray(record['sessions']) &&
+    record['outgoingInstanceId'] === instanceId;
 }
 
 function json(res: http.ServerResponse, code: number, body: unknown): void {
@@ -909,7 +916,6 @@ export class Daemon {
       startedWrapped: this.options.startedWrapped ?? false,
     };
 
-    const source = path.join(home, 'restart-source.json');
     // Hold the home independently of discovery, including while restoring
     // claims and publishing shutdown records. This also serialises takeovers.
     try {
@@ -921,22 +927,7 @@ export class Daemon {
       }
       if (this.stopping) throw new Error('Daemon stopped during startup.');
       if (file.kind === 'unreadable') throw new Error('Could not read daemon.json to claim the home.');
-      state.restartFrom = null;
-      if (file.kind === 'restart-handoff') {
-        // Keep the credential-free handoff independently of discovery. If
-        // either publication fails, the next starter can repeat the transfer.
-        writePrivateRecord(source, { restartFrom: file.instanceId });
-        state.restartFrom = file.instanceId;
-      } else if (file.kind === 'record' && file.state.restartFrom) {
-        // A crash leaves the live record in place. A failed requested restart
-        // can also leave it locked in place, but retires its old source first.
-        try {
-          const saved: unknown = JSON.parse(fs.readFileSync(source, 'utf8'));
-          if (isRecord(saved) && saved['restartFrom'] === file.state.restartFrom) state.restartFrom = file.state.restartFrom;
-        } catch (error) {
-          if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
-        }
-      }
+      this.restoreRestartSource(file, state);
       if (file.kind === 'missing') {
         if (!claimDaemonState(home, state)) throw new Error('Another daemon claimed daemon.json first.');
       } else {
@@ -1074,6 +1065,47 @@ export class Daemon {
     return false;
   }
 
+  private restoreRestartSource(file: DaemonStateFile, state: DaemonState): void {
+    const source = path.join(this.options.home, 'restart-source.json');
+    let saved: string | null | undefined;
+    try {
+      saved = restartSourceId(JSON.parse(fs.readFileSync(source, 'utf8')));
+      if (saved === null) throw new Error('Invalid restart source.');
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === 'ENOENT') saved = null;
+      else {
+        saved = undefined;
+        this.logger.warn('Could not read restart-source.json.', { code });
+      }
+    }
+    let handoff = file.kind === 'restart-handoff' ? file.instanceId : null;
+    // A crash can leave a live record carrying the only copy of a handoff.
+    // A source naming that daemon itself already identifies its newer restart.
+    if (file.kind === 'record' && saved !== undefined && saved !== file.state.instanceId) {
+      const last = file.state;
+      if (last.restartSourcePending === true) handoff = restartSourceId(last);
+      // A locked discovery record still identifies its last live owner. This
+      // also recovers snapshots from older daemons that wrote the rows first.
+      if (isDaemonInstanceId(last.instanceId) && (saved === null || saved === last.restartFrom || handoff !== null)) {
+        try {
+          const snapshot: unknown = JSON.parse(fs.readFileSync(path.join(this.options.home, 'previous-sessions.json'), 'utf8'));
+          if (isSnapshotFrom(snapshot, last.instanceId)) handoff = last.instanceId;
+        } catch (error) {
+          const code = (error as NodeJS.ErrnoException).code;
+          if (code !== 'ENOENT') this.logger.warn('Could not read previous-sessions.json during recovery.', { code });
+        }
+      }
+    }
+    state.restartFrom = handoff ?? saved ?? null;
+    if (handoff === null || handoff === saved) return;
+    try { writePrivateRecord(source, { restartFrom: handoff }); }
+    catch (error) {
+      state.restartSourcePending = true;
+      this.logger.warn('Could not update restart-source.json.', { code: (error as NodeJS.ErrnoException).code });
+    }
+  }
+
   /**
    * Keep daemon.json naming this daemon while it runs. When the file is
    * missing, holds no daemon record or names a daemon that has gone, publish
@@ -1162,10 +1194,10 @@ export class Daemon {
         const state = this.publishedState;
         this.writeShutdownRecord('launcher-claims.json', () => this.saveLauncherClaims());
         if (opts.restart) {
-          if (state.restartFrom) this.writeShutdownRecord('restart-source.json', () => {
+          this.writeShutdownRecord('restart-source.json', () => {
             this.requireHomeOwner();
-            fs.rmSync(path.join(this.options.home, 'restart-source.json'), { force: true });
-          }, 'retire');
+            writePrivateRecord(path.join(this.options.home, 'restart-source.json'), { restartFrom: this.instanceId });
+          });
           this.writeShutdownRecord('previous-sessions.json', () => {
             this.requireHomeOwner();
             this.savePreviousSessions();
@@ -1180,20 +1212,12 @@ export class Daemon {
   }
 
   private finishDiscovery(state: DaemonState, restart: boolean): void {
-    const file = inspectDaemonState(this.options.home);
-    if (!restart && file.kind === 'not-a-record' && this.homeOwner?.held()) {
-      removeDaemonStateIfNotARecord(this.options.home, file.raw);
-      return;
-    }
     this.requireHomeOwner();
     const predecessor = restart ? this.instanceId : state.restartFrom;
     if (predecessor) {
-      try { writePrivateRecord(daemonStatePath(this.options.home), { restartFrom: predecessor }); }
-      catch (error) {
-        // Do not let a failed restart revive an earlier verified snapshot.
-        if (restart) removeDaemonStateIf(this.options.home, state);
-        throw error;
-      }
+      // If replacement fails, the live record can still confirm a snapshot
+      // stamped by this instance after the storage fault clears.
+      writePrivateRecord(daemonStatePath(this.options.home), { restartFrom: predecessor });
     } else {
       removeDaemonStateIf(this.options.home, state);
     }
@@ -1221,7 +1245,8 @@ export class Daemon {
       const file = inspectDaemonState(home);
       if (file.kind === 'record' && file.state.instanceId === this.instanceId &&
           file.state.pid === state.pid && file.state.port === state.port) return;
-      if (file.kind === 'missing' && claimDaemonState(home, state)) return;
+      if (file.kind === 'not-a-record') removeDaemonStateIfNotARecord(home, file.raw);
+      if ((file.kind === 'missing' || file.kind === 'not-a-record') && claimDaemonState(home, state)) return;
     }
     throw new HomeOwnershipError('This daemon no longer owns the discovery record.');
   }
@@ -3057,9 +3082,7 @@ export class Daemon {
           const record: unknown = JSON.parse(fs.readFileSync(file, 'utf8'), (key, value: unknown) =>
             key === 'name' && typeof value === 'string' && /^s[0-9]+$/.test(value) ? null : value);
           const predecessor = this.homeOwner?.held() && this.publishedState?.restartFrom;
-          if (!predecessor || typeof record !== 'object' || record === null ||
-              !('outgoingInstanceId' in record) || record.outgoingInstanceId !== predecessor ||
-              !('version' in record) || record.version !== 1 || !('sessions' in record) || !Array.isArray(record.sessions)) {
+          if (!predecessor || !isSnapshotFrom(record, predecessor)) {
             json(res, 409, { error: 'No verified session snapshot is available for the previous restart.' });
             return;
           }
