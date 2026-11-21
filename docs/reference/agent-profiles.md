@@ -215,7 +215,9 @@ to nudge.
 OpenCode reads the Build or Plan composer up to its right edge, including when
 the standard sidebar shares those rows. On the welcome screen, the entire
 `Ask anything… "<suggestion>"` hint must use the default grey (`#808080`).
-A theme that changes the hint colour keeps the welcome nudge waiting. The
+A theme that changes the hint colour keeps the welcome nudge waiting. A custom theme
+that draws ordinary text in the default hint grey defeats the hint check, so the
+welcome nudge is supported with the default theme only. The
 welcome footer can show a connected or failed MCP server count beside the version.
 
 After a turn, a blank input needs the cursor at the start of its first row.
