@@ -90,6 +90,27 @@ function fixedLinuxHelper(name: 'zenity' | 'kdialog', exists: (file: string) => 
   return undefined;
 }
 
+// The transparent form consumes the helper's initial hidden show state.
+// Its topmost status keeps the owned picker above the dashboard even when
+// Windows leaves keyboard focus with the foreground application.
+const windowsFolderPicker = `
+$ErrorActionPreference = 'Stop'
+[Console]::OutputEncoding = [Text.Encoding]::UTF8
+Add-Type -AssemblyName System.Windows.Forms
+$owner = New-Object System.Windows.Forms.Form
+try {
+  $owner.ShowInTaskbar = $false
+  $owner.Opacity = 0
+  $owner.TopMost = $true
+  $owner.StartPosition = 'CenterScreen'
+  $owner.Show()
+  $owner.Activate()
+  $folder = (New-Object -ComObject Shell.Application).BrowseForFolder($owner.Handle.ToInt32(), 'Choose a folder', 0x50)
+  if ($null -ne $folder) { $folder.Self.Path }
+} finally {
+  $owner.Dispose()
+}`.trim();
+
 export async function chooseFolder(signal: AbortSignal, deps: PickerDependencies = {}): Promise<string | null> {
   const platform = deps.platform ?? process.platform;
   const exists = deps.executableExists ?? executableExists;
@@ -97,8 +118,7 @@ export async function chooseFolder(signal: AbortSignal, deps: PickerDependencies
   if (platform === 'win32') {
     const file = path.win32.join(deps.systemRoot ?? process.env['SystemRoot'] ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
     if (!exists(file)) throw new FolderPickerUnavailableError('No folder picker is available.');
-    const script = "[Console]::OutputEncoding = [Text.Encoding]::UTF8; $folder = (New-Object -ComObject Shell.Application).BrowseForFolder(0, 'Choose a folder', 0x50); if ($null -ne $folder) { $folder.Self.Path }";
-    return runPicker(file, ['-NoProfile', '-STA', '-Command', script], signal, runner, platform);
+    return runPicker(file, ['-NoProfile', '-STA', '-Command', windowsFolderPicker], signal, runner, platform);
   }
   if (platform === 'darwin') {
     const file = '/usr/bin/osascript';
