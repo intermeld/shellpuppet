@@ -19,6 +19,7 @@
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import { once } from 'node:events';
 import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as os from 'node:os';
@@ -235,18 +236,11 @@ export function planDaemonStart(
   if (process.platform === 'win32' && !/\.(exe|com)$/i.test(resolved.file)) {
     throw new DaemonStartError(`daemon.startWith program ${name} needs an .exe or .com on Windows. Point it at the program itself.`);
   }
-  const args = [...wrapper.slice(1), process.execPath];
-  if (process.platform === 'win32') {
-    args.push(fileURLToPath(new URL('../daemon/wrappedLaunch.js', import.meta.url)));
-    if (entry !== defaultDaemonEntry()) args.push('--daemon-entry', entry);
-  } else {
-    args.push(entry);
-  }
-  return { command: resolved.file, args };
+  return { command: resolved.file, args: [...wrapper.slice(1), process.execPath, entry] };
 }
 
 /** End only the process tree rooted at the child this client spawned. */
-async function endSpawnedWrapper(child: ChildProcess, logger: Logger): Promise<void> {
+async function endSpawnedWrapper(child: ChildProcess, logger: Logger, deadline: number): Promise<void> {
   const pid = child.pid;
   if (pid === undefined || pid <= 0) return;
   // Until Node observes the exit it holds the Windows process handle, so the
@@ -255,12 +249,13 @@ async function endSpawnedWrapper(child: ChildProcess, logger: Logger): Promise<v
   if (child.exitCode !== null || child.signalCode !== null) return;
   if (process.platform === 'win32') {
     const began = Date.now();
+    const treeTimeout = Math.max(1, Math.min(WRAPPER_TREE_KILL_TIMEOUT_MS, deadline - began));
     let timer: ReturnType<typeof setTimeout> | undefined;
     const failure = await Promise.race([
-      taskkillTrees([pid], WRAPPER_TREE_KILL_TIMEOUT_MS),
+      taskkillTrees([pid], treeTimeout),
       new Promise<Awaited<ReturnType<typeof taskkillTrees>>>((resolve) => {
         timer = setTimeout(() => resolve({ timedOut: true, exitCode: null,
-          elapsedMs: Date.now() - began }), WRAPPER_TREE_KILL_TIMEOUT_MS + 1_000);
+          elapsedMs: Date.now() - began }), Math.max(1, Math.min(treeTimeout + 1_000, deadline - began)));
       }),
     ]);
     if (timer !== undefined) clearTimeout(timer);
@@ -270,8 +265,8 @@ async function endSpawnedWrapper(child: ChildProcess, logger: Logger): Promise<v
       if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
       logger.warn('daemon.startWith process tree cleanup did not complete', { pid, timedOut: failure.timedOut });
     }
-    while (child.exitCode === null && child.signalCode === null && Date.now() - began < WRAPPER_CLEANUP_TIMEOUT_MS) {
-      await new Promise((resolve) => setTimeout(resolve, Math.min(50, WRAPPER_CLEANUP_TIMEOUT_MS - (Date.now() - began))));
+    while (child.exitCode === null && child.signalCode === null && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, Math.min(50, deadline - Date.now())));
     }
   } else {
     const began = Date.now();
@@ -644,6 +639,8 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
   }
   let handoff: Awaited<ReturnType<typeof openWrappedStart>> | undefined;
   let spawnedWrapper: ChildProcess | undefined;
+  let directChild: ChildProcess | undefined;
+  let previousInstance: string | undefined;
   let healthy = false;
   try {
     if (heldLock === undefined) {
@@ -683,9 +680,14 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
     const programName = program === undefined ? undefined : path.basename(program);
     let command = process.execPath;
     let args = [entry];
-    if (program !== undefined) {
+    if (wrapper !== undefined) {
       try {
-        ({ command, args } = planDaemonStart(wrapper ?? [], entry, cwd ?? process.cwd(), env));
+        if (process.platform === 'win32') {
+          try { handoff = await openWrappedStart(home, entry, logger); }
+          catch { throw new DaemonStartError('Could not prepare the private Windows daemon launcher.'); }
+          setEnvValue(env, process.platform, WRAPPED_START_ID, handoff.id);
+        }
+        ({ command, args } = planDaemonStart(wrapper, handoff?.launcher ?? entry, cwd ?? process.cwd(), env));
       } catch (error) {
         const raced = await discoverDaemon(options, startDeadline);
         if (raced !== null) return raced;
@@ -698,10 +700,7 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
     let childExitAt: number | null = null;
     let child: ChildProcess;
     try {
-      if (wrapped && process.platform === 'win32') {
-        handoff = await openWrappedStart();
-        setEnvValue(env, process.platform, WRAPPED_START_ID, handoff.id);
-      }
+      if (!wrapped) previousInstance = readDaemonState(home)?.instanceId;
       child = spawn(command, args, {
         detached: true,
         stdio: 'ignore', // MUST be 'ignore': inherited handles hang the caller (§2.2)
@@ -711,6 +710,7 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
         ...(cwd !== undefined ? { cwd } : {}),
       });
       if (wrapped) spawnedWrapper = child;
+      else directChild = child;
     } catch {
       if (programName !== undefined) {
         throw new DaemonStartError(`daemon.startWith program ${programName} could not be started.`);
@@ -752,7 +752,6 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
       await new Promise((resolve) => setTimeout(resolve, Math.min(AUTO_START_POLL_MS, Math.max(1, deadline - Date.now()))));
     }
     if (heldLock === undefined && Date.now() >= waitDeadline) {
-      if (!wrapped && child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
       throw new DaemonStartError(pendingStartMessage);
     }
     if (programName !== undefined) {
@@ -767,9 +766,20 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
     throw error;
   } finally {
     try {
-      // Keep the claim during both cleanups. They share the same time allowance.
-      await Promise.all([handoff?.finish(healthy, WRAPPER_CLEANUP_TIMEOUT_MS),
-        !healthy && spawnedWrapper ? endSpawnedWrapper(spawnedWrapper, logger) : undefined]);
+      if (!healthy && directChild?.pid && directChild.exitCode === null && directChild.signalCode === null) {
+        // A stale record can name a reused PID. Only a new publication makes
+        // this child discoverable to stop and to peers that may have used it.
+        const state = readDaemonState(home);
+        if (state?.pid !== directChild.pid || !state.instanceId || state.instanceId === previousInstance) {
+          directChild.ref();
+          const exited = once(directChild, 'exit');
+          directChild.kill('SIGKILL');
+          await exited;
+        }
+      }
+      const cleanupDeadline = Date.now() + WRAPPER_CLEANUP_TIMEOUT_MS;
+      const published = await handoff?.finish(WRAPPER_CLEANUP_TIMEOUT_MS);
+      if (!healthy && !published && spawnedWrapper) await endSpawnedWrapper(spawnedWrapper, logger, cleanupDeadline);
     } finally {
       if (heldLock === undefined && lock !== UNCOORDINATED_START) await releaseStartLock(lock);
     }

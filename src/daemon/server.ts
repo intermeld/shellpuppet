@@ -273,6 +273,8 @@ export interface DaemonOptions {
   logger: Logger;
   messaging?: MessagingConfig;
   startedWrapped?: boolean;
+  /** Release the pending Windows process after discovery, before any client can use it. */
+  afterPublish?: () => Promise<void>;
   policy?: PolicyConfig;
   /** Session environment hygiene (design §4.6, ADR-008). Defaults to clean. */
   sessionEnv?: SessionEnvMode;
@@ -880,6 +882,8 @@ export class Daemon {
       if (this.stopping) throw new Error('Daemon stopped during startup.');
     }
 
+    const refusePending = (socket: import('node:net').Socket): void => { socket.destroy(); };
+    if (this.options.afterPublish) this.server.on('connection', refusePending);
     await new Promise<void>((resolve, reject) => {
       this.server.once('error', reject);
       this.server.listen(0, '127.0.0.1', () => {
@@ -939,6 +943,10 @@ export class Daemon {
       } else {
         // A failed rename leaves the entire predecessor record in place.
         writePrivateRecord(daemonStatePath(home), state);
+      }
+      if (this.options.afterPublish) {
+        await this.options.afterPublish();
+        this.server.off('connection', refusePending);
       }
     } catch (error) {
       this.releaseOwnership();
