@@ -110,6 +110,8 @@ export interface NudgeView {
   styled?: readonly StyledLine[];
   /** Exact daemon line allowed in the composer during a delayed submission. */
   expectedDraft?: string;
+  /** A scheduled write needs the reason a busy composer blocks this particular run. */
+  whenBusy?: 'skip' | 'queue';
   /** Require a blank composer or the module's exact known placeholder. */
   exactEmpty?: boolean;
 }

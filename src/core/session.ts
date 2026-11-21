@@ -16,6 +16,7 @@
 
 import { agentResumeIds, moduleFor } from '../agents/index.js';
 import { nudgeVerdict, NUDGE_QUIET_MS } from './nudge.js';
+import type { NudgeBlock } from './nudge.js';
 import type { AgentModule, AgentSource } from '../agents/types.js';
 import { validateStall, possibleStall, resolveSessionAgent, signatureForSession, stallTranscriptContent, stallTurnVisible, StallScreenCache, StallTracker } from './reasoning.js';
 import { execFile } from 'node:child_process';
@@ -55,8 +56,8 @@ import {
   validResumeId,
 } from './types.js';
 
-type NudgeAbortReason = 'line-not-seen' | 'other-input-arrived' | 'screen-changed' |
-  'prompt-showing' | 'stalled' | 'messages-changed' | 'session-ended';
+export type NudgeAbortReason = 'line-not-seen' | 'other-input-arrived' | 'screen-changed' |
+  'prompt-showing' | 'stalled' | 'messages-changed' | 'schedule-changed' | 'session-ended';
 import type {
   Logger,
   ScreenSnapshot,
@@ -792,6 +793,8 @@ export class Session implements WaitTarget {
   private inputQueueVersion = 0;
   /** A nudge body accepted by the PTY without a confirmed submit. */
   private pendingNudgeLine: string | null = null;
+  private nudgeSchedule?: string;
+  private writingNudge = false;
   private pendingNudgeIds: string[] = [];
   /** Any input from outside the daemon permanently claims this pending composer. */
   private pendingNudgeTouched = false;
@@ -809,6 +812,8 @@ export class Session implements WaitTarget {
   private lastChange = Date.now();
   /** When input was last written to the PTY. */
   private lastInputAt = 0;
+  private lastOrdinaryInputAt = 0;
+  private awaitingInputPaint = false;
   /** Sticky: the rendered screen has shown something at least once. */
   private painted = false;
   /**
@@ -1000,6 +1005,7 @@ export class Session implements WaitTarget {
     this.stallPtyRows = this.pty.rows;
     this.pty.onData((data) => {
       if (this.exitedFlag || this.isKilled) return;
+      this.awaitingInputPaint = false;
       if (this.pendingNudgeLine !== null) this.pendingQuietSince = Date.now();
       // node-pty can apply a requested resize later, after its first output.
       // Observe the dimensions it reports as well as our explicit requests.
@@ -1308,12 +1314,14 @@ export class Session implements WaitTarget {
 
   /** Queue a daemon nudge, reporting why a typed body could not be submitted. */
   writeNudgeWithReason(data: string, ready: (screen: string, phase: 'before' | 'submit') => boolean,
-    messageIds: string[] = [], failedCheck: () => NudgeAbortReason = () => 'line-not-seen'):
+    messageIds: string[] = [], failedCheck: () => NudgeAbortReason = () => 'line-not-seen', schedule?: string):
     Promise<'sent' | 'wait' | `aborted-${NudgeAbortReason}`> {
     let abortReason: NudgeAbortReason | null = null;
     const queued = this.writeChain.then(async () => {
       try {
         if (this.pendingNudgeLine !== null) return 'wait' as const;
+        this.nudgeSchedule = schedule;
+        this.writingNudge = true;
         const result = await this.writeInput(data, false, ready, (reason) => { abortReason = reason; }, true,
           messageIds, failedCheck);
         return abortReason !== null ? `aborted-${abortReason}` as const
@@ -1321,6 +1329,8 @@ export class Session implements WaitTarget {
       } catch (error) {
         if (abortReason !== null) return `aborted-${abortReason}` as const;
         throw error;
+      } finally {
+        this.writingNudge = false;
       }
     });
     this.writeChain = queued.then(() => undefined, () => undefined);
@@ -1328,6 +1338,7 @@ export class Session implements WaitTarget {
   }
 
   nudgePendingLine(): string | null { return this.pendingNudgeLine; }
+  pendingSchedule(): string | undefined { return this.pendingNudgeLine === null ? undefined : this.nudgeSchedule; }
   nudgePendingIds(): readonly string[] { return this.pendingNudgeIds; }
   nudgePendingUntouched(): boolean { return !this.pendingNudgeTouched; }
   nudgePendingTouchRefusal(): boolean {
@@ -1337,8 +1348,10 @@ export class Session implements WaitTarget {
   }
   /** Clear after an observed submitted turn or a whole quiet period of proven emptiness. */
   async clearConsumedNudge(): Promise<boolean> {
-    if (this.pendingNudgeLine === null) return false;
+    if (this.pendingNudgeLine === null || this.writingNudge) return false;
+    const line = this.pendingNudgeLine;
     await this.renderer.flush();
+    if (this.pendingNudgeLine !== line || this.writingNudge) return false;
     const verdict = this.pendingComposerVerdict();
     if (!verdict.ready && verdict.reason === 'busy' && this.pendingTurnSubmitted) this.pendingTurnBusy = true;
     if (!verdict.ready) {
@@ -1387,7 +1400,8 @@ export class Session implements WaitTarget {
    * running turn. Each call also measures how long the composer block (the
    * last rows on screen) has stayed the same, which a queued nudge waits on.
    */
-  nudgeState(now: number): { ready: boolean; queued: boolean; paneQuiet: boolean; regionKey: string } {
+  nudgeState(now: number, whenBusy?: 'skip' | 'queue'):
+    { ready: boolean; reason?: NudgeBlock; queued: boolean; paneQuiet: boolean; regionKey: string } {
     const view = this.nudgeView();
     const nudge = this.agentModule?.nudge;
     const pane = nudge?.idlePane?.(view);
@@ -1398,12 +1412,16 @@ export class Session implements WaitTarget {
     }
     const verdict = nudgeVerdict(this.agentModule, {
       ...view,
+      whenBusy,
       stall: this.getStalled(),
       unchangedMs: now - (pane === undefined ? this.lastChangeAt() : this.nudgeComposerSince),
       composerUnchangedMs: now - this.nudgeComposerSince,
     });
     const queued = verdict.ready && verdict.queued === true;
-    return { ready: verdict.ready, queued, paneQuiet: pane !== undefined, regionKey: key };
+    if (whenBusy && verdict.ready && (this.awaitingInputPaint || now - this.lastOrdinaryInputAt < NUDGE_QUIET_MS)) {
+      return { ready: false, reason: 'quiet', queued: false, paneQuiet: pane !== undefined, regionKey: key };
+    }
+    return { ...verdict, queued, paneQuiet: pane !== undefined, regionKey: key };
   }
 
   private nudgeView() {
@@ -1444,10 +1462,10 @@ export class Session implements WaitTarget {
   nudgeQueuedInputVersion(): number { return this.inputQueueVersion; }
   nudgeScreenRevision(): number { return this.screenRevision; }
 
-  nudgeReadyWithLine(line: string): boolean {
+  nudgeReadyWithLine(line: string, whenBusy?: 'skip' | 'queue'): boolean {
     return nudgeVerdict(this.agentModule, {
       ...this.nudgeView(),
-      stall: this.getStalled(), unchangedMs: 0, expectedDraft: line,
+      stall: this.getStalled(), unchangedMs: 0, expectedDraft: line, whenBusy,
     }).ready;
   }
 
@@ -1526,6 +1544,10 @@ export class Session implements WaitTarget {
     // input is answering: the waiter's stale-prompt guard needs that prompt,
     // and its echo guard needs the input itself.
     this.lastInputData = data;
+    if (!nudge && !terminalReport && data.length > 0) {
+      this.awaitingInputPaint = true;
+      this.lastOrdinaryInputAt = Date.now();
+    }
     if (!terminalReport && data.length > 0) {
       // Discovery may still be queued. Capture the screen this input answers
       // before suppressing it, so a delayed check cannot announce that old turn.

@@ -36,14 +36,17 @@ export function readiness(view: NudgeView): NudgeReadiness {
   // During a turn the empty composer keeps the status row and shows the turn's
   // key hints. A typed line under those hints is queued by Enter.
   const busyEmpty = STATUS.test(status) && BUSY_HINTS.test(hints);
-  const busyTyped = STATUS.test(status) && TYPED_BUSY_HINTS.test(hints) && view.expectedDraft !== undefined;
+  const busyTyped = STATUS.test(status) && TYPED_BUSY_HINTS.test(hints);
+  if (busyTyped && view.whenBusy !== undefined && view.expectedDraft === undefined) return 'draft';
+  if ((busyEmpty || busyTyped) && view.expectedDraft !== undefined && view.whenBusy === 'skip') return 'busy';
   // Before the first turn the status and key hints are replaced by a blank
   // row and a right-aligned build channel. A rotating hint line above the frame
   // (a tip, or an offer to resume another program's session) identifies this
   // layout; all three rows must be in the live bottom block.
   const welcome = status === '' && /^ {10,}\[stable\]$/u.test(hints) &&
     view.rows.slice(Math.max(0, at - 5), at - 1).some((row) => /^ {3}\S/u.test(row));
-  if ((!afterTurn && !welcome && !busyEmpty && !busyTyped) || !onlyBlankRowsAfter(view.rows, at + 3)) return 'unknown';
+  if ((!afterTurn && !welcome && !busyEmpty && !(busyTyped && view.expectedDraft !== undefined)) ||
+    !onlyBlankRowsAfter(view.rows, at + 3)) return 'unknown';
   const original = view.rows[at]!;
   const close = original.lastIndexOf('│');
   if (close <= 6) return 'unknown';
@@ -58,7 +61,7 @@ export function readiness(view: NudgeView): NudgeReadiness {
     return index >= at - 1 && index <= at + 3 ? { ...line, wrapped: false } : line;
   });
   const result = readingReadiness({ rows, styled, expectedDraft: view.expectedDraft,
-    exactEmpty: view.exactEmpty }, { ...reading, composer: { text: '^> ' } }, {
+    exactEmpty: view.exactEmpty, whenBusy: view.whenBusy }, { ...reading, composer: { text: '^> ' } }, {
     placeholder: '', continuations: false, placeholderInk: () => false,
     queueWhileBusy: busyEmpty || busyTyped,
     composerFramed: true,

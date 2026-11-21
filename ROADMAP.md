@@ -40,6 +40,10 @@ Releases carry npm provenance through trusted publishing from the first.
 
 ## Now
 
+- **Scheduled prompts.** Set a UTC schedule for a named session in your
+  configuration. Choose whether to skip a busy turn or queue the prompt
+  when the agent supports it. The audit records the daemon's own input.
+
 - **Prompt detection that covers more shapes.** Each new agent CLI brings a
   shape of its own, and each gets a fixture from a real screen. More provider
   errors noticed as stalls, each with a fixture from a real screen.
@@ -54,11 +58,6 @@ Releases carry npm provenance through trusted publishing from the first.
   waiting children, whichever agent supervises.
 - **A Hermes module.** Reading, prompt detection and nudges for Hermes, an agent
   meant to run for a long time.
-- **Scheduled prompts.** Set a schedule and a message for a session you have
-  open, and the daemon types it in at those times: for a long-running agent,
-  a regular job or check. Your choice whether a busy session skips that run or
-  gets the message queued, as nudges are. Off until you set one, recorded as
-  the daemon's own input.
 - **Named hosts for a tunnel you run.** The daemon stays on loopback. A tunnel
   that ends there and presents its own hostname, such as Tailscale Serve or a
   Cloudflare Tunnel, gets in once you name that host in your configuration:
