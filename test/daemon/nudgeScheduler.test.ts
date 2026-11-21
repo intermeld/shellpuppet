@@ -22,6 +22,25 @@ describe('nudge delivery scheduler', () => {
     expect(sent).toEqual(['ready', 'busy', 'draft', 'unknown']);
   });
 
+  it('keeps delivering to later recipients when one recipient fails, then reports the failure', async () => {
+    let now = 100_000;
+    let failA = true;
+    const sent: string[] = [];
+    const scheduler = new NudgeScheduler({ now: () => now, intervalMs: 30_000, perMinute: 20,
+      deliver: (id) => {
+        if (id === 'a' && failA) return Promise.reject(new Error('Session a exited while input was being written.'));
+        sent.push(id);
+        return Promise.resolve('sent');
+      } });
+    scheduler.queue('a'); scheduler.queue('b');
+    await expect(scheduler.tick()).rejects.toThrow('exited while input was being written');
+    expect(sent).toEqual(['b']);
+    failA = false;
+    now += 5_000;
+    await scheduler.tick();
+    expect(sent).toEqual(['b', 'a']);
+  });
+
   it('limits each session to one nudge in thirty seconds and the daemon to two per minute', async () => {
     let now = 100_000;
     const sent: string[] = [];
