@@ -99,21 +99,58 @@ function systemTool(...parts: string[]): string {
   return path.join(process.env['SystemRoot'] ?? 'C:\\Windows', 'System32', ...parts);
 }
 
-function secureWindowsHome(home: string, deadline = Infinity): WindowsHome {
+/** Reserve an empty owner-only file during the same bounded home ACL check. */
+const reserveWindowsLauncher = `
+$acl = [Security.AccessControl.FileSecurity]::new()
+$acl.SetOwner($sid)
+$acl.SetSecurityDescriptorSddlForm('D:P(A;;FA;;;' + $sid.Value + ')', 'Access')
+$trusted = @($sid.Value, 'S-1-5-18', 'S-1-5-32-544')
+$replace = [Security.AccessControl.FileSystemRights]'Delete,DeleteSubdirectoriesAndFiles,ChangePermissions,TakeOwnership'
+$local = [Environment]::GetFolderPath('LocalApplicationData')
+$roots = @($(if ($local) { [IO.Path]::Combine($local, 'Temp') }), $local,
+  [Environment]::GetFolderPath('UserProfile'), [IO.Path]::Combine($env:SystemRoot, 'Temp'))
+foreach ($root in $roots) {
+  if (!$root) { continue }
+  $target = [IO.Path]::Combine($root, $env:SP_SCRIPT_NAME)
+  if ($target.IndexOf($env:SP_LAUNCH_HOME, [StringComparison]::OrdinalIgnoreCase) -ge 0) { continue }
+  # A directory grant to delete children would allow the script to be replaced despite its DACL.
+  try {
+    $directoryAcl = [IO.Directory]::GetAccessControl($root)
+    if ($directoryAcl.GetOwner($sid.GetType()).Value -notin $trusted) { continue }
+    $unsafe = $directoryAcl.GetAccessRules($true, $true, $sid.GetType()) | Where-Object {
+      $_.AccessControlType -eq 'Allow' -and !($_.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -and
+        $_.IdentityReference.Value -notin $trusted -and ($_.FileSystemRights -band $replace)
+    }
+    if ($unsafe) { continue }
+    $stream = [IO.FileStream]::new($target, 'CreateNew', [Security.AccessControl.FileSystemRights]::Write,
+      'None', 4096, 'None', $acl)
+  } catch [UnauthorizedAccessException] { continue }
+    catch [IO.DirectoryNotFoundException] { continue }
+  $stream.Dispose()
+  [Console]::Write('|' + $target)
+  break
+}
+`;
+
+function secureWindowsHome(home: string, deadline = Infinity, launchHome?: string): WindowsHome & { launcher?: string } {
   const powershell = systemTool('WindowsPowerShell', 'v1.0', 'powershell.exe');
   const files = ['daemon.json', 'launcher-claims.json', 'previous-sessions.json', 'restart-source.json', 'config.json', 'daemon.log', 'audit.log'];
   try {
     const timeout = Math.min(15_000, deadline - Date.now());
     if (timeout <= 0) throw new Error('Home permission check deadline expired.');
+    const script = launchHome === undefined ? windowsAclScript :
+      '[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n' + windowsAclScript + reserveWindowsLauncher;
     const identity = execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand',
-      Buffer.from(windowsAclScript, 'utf16le').toString('base64')], {
+      Buffer.from(script, 'utf16le').toString('base64')], {
       windowsHide: true, stdio: 'pipe', timeout, encoding: 'utf8',
       env: { SystemRoot: process.env['SystemRoot'] ?? 'C:\\Windows', SP_PRIVATE_HOME: path.resolve(home),
-        SP_PRIVATE_FILES: files.join('|') },
+        SP_PRIVATE_FILES: files.join('|'), ...(launchHome === undefined ? {} : {
+          SP_LAUNCH_HOME: launchHome, SP_SCRIPT_NAME: 'daemon-start-' + randomUUID() + '.mjs',
+        }) },
     }).trim();
-    const [sid, owner] = identity.split('|');
+    const [sid, owner, launcher] = identity.split('|');
     if (!sid || !owner || !/^S-1-[0-9-]+$/.test(sid)) throw new Error('Missing Windows identity.');
-    return { path: path.resolve(home), sid, setFileOwner: owner !== sid };
+    return { path: path.resolve(home), sid, setFileOwner: owner !== sid, ...(launcher ? { launcher } : {}) };
   } catch {
     throw new Error('Could not verify owner-only Windows permissions in the ShellPuppet home.');
   }
@@ -161,13 +198,16 @@ export function configPath(home: string): string {
 }
 
 /** Repair existing homes too, before reading a credential or publishing one. */
-export function ensureHome(home: string, deadline?: number): void {
+export function ensureHome(home: string, deadline?: number, reserveLauncher = false): string | undefined {
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   if (process.platform === 'win32') {
-    privateWindowsHome = secureWindowsHome(fs.realpathSync.native(home), deadline);
+    const secured = secureWindowsHome(fs.realpathSync.native(home), deadline, reserveLauncher ? path.resolve(home) : undefined);
+    privateWindowsHome = secured;
+    return secured.launcher;
   } else {
     fs.chmodSync(home, 0o700);
   }
+  return undefined;
 }
 
 /**

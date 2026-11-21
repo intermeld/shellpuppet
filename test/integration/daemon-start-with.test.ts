@@ -142,6 +142,51 @@ afterEach(async () => {
 });
 
 describe('configured daemon start wrapper', () => {
+  function observedHome(): string {
+    const { home } = homeWithWrapper();
+    const observe = path.join(repoRoot, 'test', 'fixtures', 'daemon-start-observe.mjs');
+    fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({
+      viewer: { launchMode: 'no-window' }, daemon: { startWith: [process.execPath, observe] },
+    }));
+    return home;
+  }
+
+  it.runIf(process.platform === 'win32')('preserves the caller\'s junction spelling in the wrapped daemon', async () => {
+    const home = observedHome();
+    const root = makeTempHome();
+    const alias = path.join(root, 'alias');
+    fs.symlinkSync(home, alias, 'junction');
+    try {
+      const result = await runCli(alias, ['daemon', 'start', '--json']);
+      expect(result.code).toBe(0);
+      expect(fs.readFileSync(path.join(home, 'same-home'), 'utf8')).toBe('true');
+      expect(result.stderr).not.toContain('filtered');
+      expect((await runCli(alias, ['daemon', 'stop'])).code).toBe(0);
+    } finally { recordPid(home); removeTempHome(root); }
+  });
+
+  it.runIf(process.platform === 'win32')('serves a wrapped daemon after an ordinary IPC progress message', async () => {
+    const home = observedHome();
+    fs.writeFileSync(path.join(home, 'notify-progress'), '');
+    try {
+      expect((await runBound(home, 8_000)).code).toBe(0);
+      const previous = readDaemonState(home)?.instanceId;
+      const restart = await runCli(home, ['daemon', 'restart', '--json']);
+      expect(restart.code).toBe(0);
+      expect(readDaemonState(home)?.instanceId).not.toBe(previous);
+      expect((await runCli(home, ['list', '--json'])).code).toBe(0);
+      expect(readDaemonState(home)?.startedWrapped).toBe(true);
+    } finally { recordPid(home); }
+  });
+
+  it.runIf(process.platform === 'win32')('keeps the private home and proof off the wrapper command line', async () => {
+    const home = observedHome();
+    try {
+      expect((await runCli(home, ['daemon', 'start'])).code).toBe(0);
+      expect(fs.readFileSync(path.join(home, 'private-argv'), 'utf8')).toBe('true');
+    } finally { recordPid(home); }
+  });
+
   it.runIf(process.platform === 'win32')('keeps the serving daemon when the starting client disappears', async () => {
     const home = handoffHome();
     fs.writeFileSync(path.join(home, 'allow-health'), '');
@@ -486,7 +531,7 @@ describe('configured daemon start wrapper', () => {
     const entry = recorded.argv.at(-1)!;
     expect(recorded.argv).toEqual([marker, literal, process.execPath, entry]);
     if (process.platform === 'win32') {
-      expect(path.dirname(entry)).toBe(home);
+      expect(entry.toLowerCase().includes(home.toLowerCase())).toBe(false);
       expect(path.basename(entry)).toMatch(/^daemon-start-[\da-f-]+\.mjs$/);
       expect(fs.existsSync(entry)).toBe(false);
     } else expect(entry).toBe(distDaemonEntry);

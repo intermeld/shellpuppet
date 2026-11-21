@@ -209,15 +209,15 @@ class DaemonStartError extends Error {}
 const pendingStartMessage = 'A pending daemon start did not settle within its health bound.';
 
 /** Verify permissions within the start budget. Only the append runs on failure. */
-function prepareStartLog(home: string, deadline: number): Logger {
+function prepareStart(home: string, deadline: number, reserveLauncher = false) {
   if (Date.now() >= deadline) throw new DaemonStartError(pendingStartMessage);
   try {
-    ensureHome(home, deadline);
+    const launcher = ensureHome(home, deadline, reserveLauncher);
+    return { log: createFileLogger(daemonLogPath(home)), launcher };
   } catch {
     if (Date.now() >= deadline) throw new DaemonStartError(pendingStartMessage);
     throw new DaemonStartError('Could not prepare the ShellPuppet home. SHELLPUPPET_HOME must name a writable private directory.');
   }
-  return createFileLogger(daemonLogPath(home));
 }
 
 /** Resolve a configured wrapper without a shell or joined argument string. */
@@ -451,16 +451,16 @@ function callDeadline(home: string, logger: Logger): number {
 export async function withDaemonStartLock<T>(options: ClientOptions, action: (lock: Exclude<StartLockClaim, null>) => Promise<T>): Promise<T> {
   const home = options.home ?? shellpuppetHome();
   const deadline = Date.now() + startWaitBound(home);
-  let startLog = fs.existsSync(home) ? undefined : prepareStartLog(home, deadline);
+  let start = fs.existsSync(home) ? undefined : prepareStart(home, deadline);
   let lock: StartLockClaim = null;
   while (Date.now() < deadline) {
     lock = await claimStartLock(home, options.logger ?? NULL_LOGGER);
     if (lock !== null) break;
-    startLog ??= prepareStartLog(home, deadline);
+    start ??= prepareStart(home, deadline);
     await new Promise((resolve) => setTimeout(resolve, Math.min(AUTO_START_POLL_MS, Math.max(1, deadline - Date.now()))));
   }
   if (lock === null) {
-    startLog?.error(pendingStartMessage);
+    start?.log.error(pendingStartMessage);
     throw new DaemonStartError(pendingStartMessage);
   }
   try { return await action(lock); }
@@ -604,7 +604,7 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
     warnedInvalidDirect = true;
   }
 
-  let startLog = fs.existsSync(home) ? undefined : prepareStartLog(home, waitDeadline);
+  let start = fs.existsSync(home) ? undefined : prepareStart(home, waitDeadline);
   let lock: StartLockClaim = heldLock ?? null;
   while (heldLock === undefined && Date.now() < waitDeadline) {
     const hold = readRestartHold(home, logger);
@@ -630,11 +630,11 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
       lock = null;
       continue;
     }
-    startLog ??= prepareStartLog(home, waitDeadline);
+    start ??= prepareStart(home, waitDeadline);
     await new Promise((resolve) => setTimeout(resolve, Math.min(AUTO_START_POLL_MS, Math.max(1, waitDeadline - Date.now()))));
   }
   if (lock === null) {
-    startLog?.error(pendingStartMessage);
+    start?.log.error(pendingStartMessage);
     throw new DaemonStartError(pendingStartMessage);
   }
   let handoff: Awaited<ReturnType<typeof openWrappedStart>> | undefined;
@@ -662,8 +662,10 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
     const env = childEnv(process.platform, process.env, { SHELLPUPPET_HOME: home });
     removeClaimCredentials(env);
     const startingAt = Date.now();
-    const startDeadline = Math.min(waitDeadline, startingAt + startWaitBound(home, daemonStartMode(home, options.direct, env)));
-    startLog ??= prepareStartLog(home, startDeadline);
+    const mode = daemonStartMode(home, options.direct, env);
+    const startDeadline = Math.min(waitDeadline, startingAt + startWaitBound(home, mode));
+    const reserveLauncher = process.platform === 'win32' && mode === 'wrapped';
+    if (!start || reserveLauncher) start = prepareStart(home, startDeadline, reserveLauncher);
     if (Date.now() >= startDeadline) throw new DaemonStartError(pendingStartMessage);
     const parsed = readDaemonConfig(home);
     for (const problem of parsed.problems) {
@@ -683,8 +685,14 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
     if (wrapper !== undefined) {
       try {
         if (process.platform === 'win32') {
-          try { handoff = await openWrappedStart(home, entry, logger); }
+          setEnvValue(env, process.platform, 'SHELLPUPPET_HOME', path.resolve(home));
+          // The configuration can change between the initial mode check and
+          // reading it from the verified home.
+          if (!reserveLauncher) start = prepareStart(home, startDeadline, true);
+          if (!start.launcher) throw new DaemonStartError('Could not prepare the private Windows daemon launcher.');
+          try { handoff = await openWrappedStart(home, entry, logger, start.launcher); }
           catch { throw new DaemonStartError('Could not prepare the private Windows daemon launcher.'); }
+          if (Date.now() >= startDeadline) throw new DaemonStartError(pendingStartMessage);
           setEnvValue(env, process.platform, WRAPPED_START_ID, handoff.id);
         }
         ({ command, args } = planDaemonStart(wrapper, handoff?.launcher ?? entry, cwd ?? process.cwd(), env));
@@ -762,7 +770,7 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
     throw new DaemonStartError(`The ShellPuppet daemon did not become healthy within ${String(timeoutMs / 1_000)} s. Check daemon.log in the ShellPuppet home.`);
   } catch (error) {
     // A library or OS error can include argv, paths or environment values.
-    startLog?.error(error instanceof DaemonStartError ? error.message : 'ShellPuppet could not start its daemon.');
+    start?.log.error(error instanceof DaemonStartError ? error.message : 'ShellPuppet could not start its daemon.');
     throw error;
   } finally {
     try {
@@ -781,7 +789,13 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
       const published = await handoff?.finish(WRAPPER_CLEANUP_TIMEOUT_MS);
       if (!healthy && !published && spawnedWrapper) await endSpawnedWrapper(spawnedWrapper, logger, cleanupDeadline);
     } finally {
-      if (heldLock === undefined && lock !== UNCOORDINATED_START) await releaseStartLock(lock);
+      try {
+        if (start?.launcher) fs.rmSync(start.launcher, { force: true });
+      } catch {
+        logger.warn('Could not remove the expired private Windows daemon launcher.');
+      } finally {
+        if (heldLock === undefined && lock !== UNCOORDINATED_START) await releaseStartLock(lock);
+      }
     }
   }
 }
