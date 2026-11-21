@@ -5,6 +5,7 @@ import * as http from 'node:http';
 import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ensureDaemon, waitForPendingDaemon, withDaemonStartLock } from '../../src/client/http.js';
@@ -351,6 +352,33 @@ describe('planned daemon restart hold', () => {
       expect(await startEndpointOccupied(value)).toBe(false);
     } finally { slowAcl.enabled = false; }
   }, 25_000);
+
+  it('reaps a timed-out direct replacement before releasing the restart lock to stop', async () => {
+    const value = home();
+    const entry = path.join(value, 'pending.mjs');
+    const gate = path.join(value, 'resume');
+    fs.writeFileSync(entry, `
+      import fs from 'node:fs';
+      import { setTimeout } from 'node:timers/promises';
+      while (!fs.existsSync(${JSON.stringify(gate)})) await setTimeout(50);
+      await import(${JSON.stringify(pathToFileURL(distDaemonEntry).href)});`);
+    try {
+      await withDaemonStartLock({ home: value }, async lock => {
+        await expect(ensureDaemon({ home: value, direct: true, daemonEntry: entry }, lock)).rejects.toThrow();
+      });
+      const pid = spawnReports[0]?.pid;
+      expect(pid).toBeDefined();
+      const stopped = await cli(value, 'daemon', 'stop', '--json');
+      expect(stopped.code).toBe(0);
+      expect(JSON.parse(stopped.stdout)).toMatchObject({ stopped: true });
+      fs.writeFileSync(gate, '');
+      expect(processAlive(pid!)).toBe(false);
+      expect(readDaemonState(value)).toBeNull();
+    } finally {
+      const pid = spawnReports[0]?.pid;
+      if (pid && processAlive(pid)) process.kill(pid, 'SIGKILL');
+    }
+  }, 30_000);
 
   it('keeps busy discovery inside the deadline when state appears late in a hold', async () => {
     const value = home();

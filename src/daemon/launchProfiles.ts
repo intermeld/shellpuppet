@@ -643,9 +643,9 @@ export function resolveLaunchCommand(
   }
 
   const searchPath = envValue(env, 'PATH', platform) ?? '';
-  // A quoted Windows directory can itself contain a semicolon.
+  // A semicolon stays literal through a closing quote or the end of the path.
   const searchDirs = isWindows
-    ? (searchPath.match(/(?:[^;"]|"[^"]*")+/g) ?? []).map(dir => dir.replaceAll('"', ''))
+    ? (searchPath.match(/(?:[^;"]|"[^"]*"?)+/g) ?? []).map(dir => dir.replaceAll('"', ''))
     : searchPath.split(':');
   for (const dir of searchDirs) {
     if (dir === '') continue;
