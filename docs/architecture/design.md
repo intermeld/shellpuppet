@@ -176,13 +176,14 @@ contributes its profile, current participant name, resolved folder, original
 folder selection, agent, conversation id if known, and shutdown timestamp.
 A system-assigned name is saved as null. Omit it when relaunching.
 The version 1 file includes the outgoing daemon's `outgoingInstanceId`.
-The owner independently publishes a credential-free `{"restartFrom":"<instance id>"}`
-handoff in `daemon.json`. The successor saves this id in `restart-source.json`
-and atomically replaces the handoff with its live discovery record carrying the
-same id. Failed publication leaves the original handoff available for a retry.
-An ordinary stop puts the inherited id back in the handoff. After a crash, a
-successor can verify the inherited id against the independent source. A new
-restart retires that source before attempting either new record. The reader
+The owner writes its instance id to `restart-source.json` before replacing
+the snapshot. It then publishes the same credential-free handoff in
+`daemon.json`. A successor can use the independent source even if discovery
+was lost. If both metadata files were locked, the outgoing daemon's live
+discovery record can still confirm a new snapshot bearing its own instance id.
+A successor reuses a matching source. If it cannot copy a handoff into the
+source, it logs the failure and carries the id in its live discovery record
+so a later owner can retry. An ordinary stop preserves this id. The reader
 returns HTTP 409 for missing evidence, including before the first restart, or
 for a snapshot with a different or absent stamp. A successfully recorded empty
 snapshot returns HTTP 200 with an empty array. A granted caller reads

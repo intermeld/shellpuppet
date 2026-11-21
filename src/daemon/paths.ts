@@ -25,6 +25,8 @@ export interface DaemonState {
   startedWrapped?: boolean;
   /** Last restart snapshot accepted when this owner acquired the home. */
   restartFrom?: string | null;
+  /** The live record is carrying a handoff that could not be copied to restart-source.json. */
+  restartSourcePending?: boolean;
 }
 
 export function shellpuppetHome(env: NodeJS.ProcessEnv = process.env): string {
@@ -186,6 +188,15 @@ export function inspectDaemonState(home: string): DaemonStateFile {
   return parseDaemonState(raw);
 }
 
+export function isDaemonInstanceId(value: unknown): value is string {
+  return typeof value === 'string' && /^[a-f0-9-]{36}$/.test(value);
+}
+
+export function restartSourceId(value: unknown): string | null {
+  return typeof value === 'object' && value !== null && 'restartFrom' in value &&
+    isDaemonInstanceId(value.restartFrom) ? value.restartFrom : null;
+}
+
 function parseDaemonState(raw: string): DaemonStateFile {
   try {
     const parsed: unknown = JSON.parse(raw);
@@ -198,10 +209,8 @@ function parseDaemonState(raw: string): DaemonStateFile {
     ) {
       return { kind: 'record', state: parsed as DaemonState };
     }
-    if (typeof parsed === 'object' && parsed !== null && 'restartFrom' in parsed &&
-        typeof parsed.restartFrom === 'string' && /^[a-f0-9-]{36}$/.test(parsed.restartFrom)) {
-      return { kind: 'restart-handoff', raw, instanceId: parsed.restartFrom };
-    }
+    const instanceId = restartSourceId(parsed);
+    if (instanceId !== null) return { kind: 'restart-handoff', raw, instanceId };
   } catch { /* Incomplete or hand-edited discovery record. */ }
   return { kind: 'not-a-record', raw };
 }
