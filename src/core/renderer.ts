@@ -234,17 +234,23 @@ export class ScreenRenderer {
     };
   }
 
-  /** xterm 6.0.0 may recycle rows without allocating their backing lines. */
+  /** Work around resize defects in xterm 6.0.0. The public buffer API is read-only. */
   private repairViewport(): void {
-    const active = this.term.buffer.active;
-    if (active.length >= active.baseY + this.term.rows &&
-        active.length > active.baseY + active.cursorY) return;
-    // The public buffer API is read-only. Keep this one private repair pinned
-    // to the installed release; the regression test checks its version.
     const core = (this.term as unknown as { _core: {
+      buffers: { alt: { lines: { length: number; maxLength: number } } };
       buffer: { lines: { length: number; push: (line: unknown) => void };
         ybase: number; getBlankLine: () => unknown };
     } })._core;
+    // xterm skips the capacity reduction when the alternate screen is empty.
+    // Once activated, it can then scroll into that spare space and acquire a
+    // positive baseY. The next growth would need more rows than it can hold.
+    const alt = core.buffers.alt.lines;
+    if (alt.length === 0 && alt.maxLength > this.term.rows) alt.maxLength = this.term.rows;
+
+    const active = this.term.buffer.active;
+    if (active.length >= active.baseY + this.term.rows &&
+        active.length > active.baseY + active.cursorY) return;
+    // xterm may also recycle visible rows without allocating their lines.
     const buffer = core.buffer;
     const missing = Math.max(0, buffer.ybase + this.term.rows - buffer.lines.length);
     for (let i = 0; i < missing; i++) {
