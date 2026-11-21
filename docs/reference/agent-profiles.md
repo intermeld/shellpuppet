@@ -444,11 +444,13 @@ id, the daemon uses the new session id.
 | Muse | Explicit resume id only. No verified conversation marker is known. |
 
 When writing a restart record, the daemon checks Claude Code's
-`~/.claude/sessions/<pid>.json` for the Claude process in the session's
-process tree. It uses the session's `CLAUDE_CONFIG_DIR` when set. A valid
+`~/.claude/sessions/<pid>.json` for the outermost Claude process in the
+session's tree. It uses the session's `CLAUDE_CONFIG_DIR` when set. A valid
 `sessionId` takes precedence over the child marker, including after a
 conversation switch with `/resume`. If the file is unavailable, its id is
-invalid or the daemon cannot verify the process within the shutdown time
-budget, the reported id takes precedence over the launch id. The lookup
+invalid or the outer process is ambiguous, the reported id takes precedence
+over the launch id. The same fallback applies to linked metadata, files older
+than the process, and a recorded process start time that does not match.
+All sessions share a 450 ms lookup budget before shutdown saves the records. The lookup
 does not open transcripts. Without a live, reported or supplied id the record
 contains `null`.

@@ -1142,7 +1142,6 @@ export class Daemon {
   private closeServerOnly(): Promise<void> {
     return new Promise((resolve) => {
       this.server.close(() => resolve());
-      // close() waits for idle connections; nothing is connected this early.
     });
   }
 
@@ -1164,16 +1163,17 @@ export class Daemon {
   }
 
   private async saveShutdownRecords(opts: { removeState?: boolean; restart?: boolean }): Promise<void> {
-    if (opts.removeState !== false && this.publishedState && this.homeOwner) {
-      const state = this.publishedState;
+    const state = opts.removeState !== false && this.homeOwner ? this.publishedState : null;
+    const ids = state && opts.restart ? await recordLiveResumeIds(this.manager.liveProfileSessions()) : undefined;
+    if (state) {
+      // Publish the final claims, source, snapshot and handoff in one turn.
       this.writeShutdownRecord('launcher-claims.json', () => this.saveLauncherClaims());
-      if (opts.restart) {
+      if (ids) {
         this.writeShutdownRecord('restart-source.json', () => {
           this.requireHomeOwner();
           writePrivateRecord(path.join(this.options.home, 'restart-source.json'), { restartFrom: this.instanceId });
         });
-        try { await this.savePreviousSessions(); }
-        catch (error) { this.shutdownRecordFailure('previous-sessions.json', 'save', error); }
+        this.writeShutdownRecord('previous-sessions.json', () => this.savePreviousSessions(ids));
       }
       this.writeShutdownRecord('daemon.json', () => this.finishDiscovery(state, opts.restart === true));
     }
@@ -1236,18 +1236,12 @@ export class Daemon {
     this.promptGraceTimers.clear();
     this.folderPickerAbort?.abort(new FolderPickerFailureError('The folder picker was stopped.'));
     for (const read of this.widerReads.values()) read.abort.abort();
-    await Promise.allSettled([...this.widerReads.values()].map((read) => read.done));
+    const readsDone = Promise.allSettled([...this.widerReads.values()].map((read) => read.done));
     await this.shutdownRecords;
-
-    // Stop LISTENING first, before tearing down session trees. Killing process
-    // trees is not fast (`taskkill /T` on a loaded machine can take seconds
-    // per session), and a daemon that still answers on its port while shutting
-    // down looks alive to every client polling /health. `close()` refuses new
-    // connections immediately while letting in-flight responses drain on
-    // their existing socket, notably the reply to this very shutdown request.
-    const listenerClosed = new Promise<void>((resolve) => {
-      this.server.close(() => resolve());
-    });
+    // A free port lets a successor retire the ownership marker. Keep it
+    // bound through publication, then close without waiting for PTY teardown.
+    const listenerClosed = this.closeServerOnly();
+    await readsDone;
     for (const socket of this.sockets) {
       try {
         socket.close();
@@ -2710,20 +2704,16 @@ export class Daemon {
     return state.restartFrom === snapshot;
   }
 
-  private async savePreviousSessions(): Promise<void> {
+  private savePreviousSessions(ids: ReadonlyMap<Session, string>): void {
     this.requireHomeOwner();
     const endedAt = new Date(this.now()).toISOString();
-    const live = this.manager.list().flatMap(summary => {
-      const session = this.manager.get(summary.id);
+    const sessions = this.manager.liveProfileSessions().flatMap(session => {
       // A deferred start has no participant until the program has started and acquired its name.
-      const participant = this.mailbox.participant(summary.id);
-      if (!participant || !session || session.exited || session.isKilled || !session.launchProfile) return [];
-      return [{ session, name: participant.name === session.id ? null : participant.name }];
+      const participant = this.mailbox.participant(session.id);
+      if (!participant) return [];
+      return [{ ...session.launchProfile, name: participant.name === session.id ? null : participant.name,
+        agent: session.agent, resumeId: ids.get(session) ?? session.resumeId, endedAt }];
     });
-    const ids = await recordLiveResumeIds(live.map(row => row.session));
-    const sessions = live.map(({ session, name }) => ({ ...session.launchProfile, name,
-      agent: session.agent, resumeId: ids.get(session) ?? session.resumeId, endedAt }));
-    this.requireHomeOwner();
     writePrivateRecord(path.join(this.options.home, 'previous-sessions.json'), { version: 1, outgoingInstanceId: this.instanceId, sessions });
   }
 

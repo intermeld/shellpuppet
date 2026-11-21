@@ -115,9 +115,20 @@ export interface NudgeView {
 }
 
 /** Process metadata used only when writing a restart record. */
+export interface LiveResumeProcess {
+  pid: number;
+  parent: number;
+  name: string;
+  startedAt: number;
+  /** Upper bound in epoch milliseconds when the OS clock has coarser resolution. */
+  latestStart?: number;
+  /** Native birth time, retaining all the precision the OS reports. */
+  instance?: bigint;
+}
+
 export interface LiveResumeIdSource {
-  candidatePids(root: number, signal: AbortSignal): Promise<number[]>;
-  read(pid: number): Promise<unknown>;
+  matchesProcess(name: string): boolean;
+  read(process: LiveResumeProcess, signal: AbortSignal): Promise<unknown>;
 }
 
 /** Internal harness data and the few detector walks not yet expressed as data. */

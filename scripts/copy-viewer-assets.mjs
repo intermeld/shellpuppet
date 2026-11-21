@@ -15,5 +15,5 @@ fs.mkdirSync(target, { recursive: true });
 for (const name of fs.readdirSync(source)) {
   fs.copyFileSync(path.join(source, name), path.join(target, name));
 }
-fs.copyFileSync(path.join(root, 'src/daemon/windowsProcessParents.wsf'),
-  path.join(root, 'dist/daemon/windowsProcessParents.wsf'));
+fs.copyFileSync(path.join(root, 'src/core/windowsLiveMetadata.cs'),
+  path.join(root, 'dist/core/windowsLiveMetadata.cs'));

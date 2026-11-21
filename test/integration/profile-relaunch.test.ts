@@ -4,6 +4,9 @@ import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { expect, it, vi } from 'vitest';
 import { NULL_LOGGER } from '../../src/core/types.js';
+import * as lookup from '../../src/daemon/liveResumeIds.js';
+import * as records from '../../src/daemon/paths.js';
+import { windowsLiveMetadata } from '../../src/core/windowsLiveMetadata.js';
 import { parseDaemonConfig } from '../../src/daemon/config.js';
 import { api, eventually, makeTempHome, repoRoot, startTestDaemon } from './helpers.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
@@ -13,25 +16,28 @@ it('records the conversation selected after the Claude child reported its launch
   const home = makeTempHome();
   const configDir = join(home, 'claude-config');
   mkdirSync(join(configDir, 'sessions'), { recursive: true });
+  const packageDir = join(home, '@anthropic-ai', 'claude-code');
+  mkdirSync(packageDir, { recursive: true });
+  const script = join(packageDir, 'cli.js');
   const wrapper = join(home, 'wrapper.cjs');
   writeFileSync(wrapper, `
-    const { spawn, execFileSync } = require('node:child_process');
+    require('node:child_process').spawn(process.execPath, [${JSON.stringify(script)}], { stdio: 'inherit' });
+  `);
+  writeFileSync(script, `
+    const { execFileSync } = require('node:child_process');
     const { writeFileSync } = require('node:fs');
     const { join } = require('node:path');
-    if (!process.argv[2]) {
-      spawn(process.execPath, [__filename, 'claude'], { stdio: 'inherit' });
-    } else {
-      execFileSync(process.execPath, [process.env.SHELLPUPPET_CLI, 'list', '--json'], {
-        env: { ...process.env, CLAUDE_CODE_SESSION_ID: 'launch-id' }
-      });
-      writeFileSync(join(__dirname, 'reported'), String(process.pid));
-      setInterval(() => {}, 1000);
-    }
+    const other = process.argv[2] === 'other';
+    execFileSync(process.execPath, [process.env.SHELLPUPPET_CLI, 'list', '--json'], {
+      env: { ...process.env, CLAUDE_CODE_SESSION_ID: other ? 'other-reported' : 'launch-id' }
+    });
+    writeFileSync(join(${JSON.stringify(home)}, other ? 'other-reported' : 'reported'), String(process.pid));
+    setInterval(() => {}, 1000);
   `);
   const claude = { agent: 'claude', command: process.execPath, shell: false, cwd: home, envFromDaemon: ['CLAUDE_CONFIG_DIR'] };
   const { config } = parseDaemonConfig({ launcher: { sessionLaunch: ['chair'], profiles: [
     { ...claude, name: 'worker', args: [wrapper] },
-    { ...claude, name: 'other', args: ['-e', 'setInterval(() => {}, 1000)', '--'], resume: ['{id}'] },
+    { ...claude, name: 'other', args: [script, 'other'], resume: ['{id}'] },
   ] } });
   const info = vi.fn();
   const td = await startTestDaemon({ home, launchProfiles: config.launcher,
@@ -43,18 +49,86 @@ it('records the conversation selected after the Claude child reported its launch
     expect((await api(td.port, td.token, '/launcher/launch', { headers, body: { profile: 'other', resumeId: 'other-id' } })).status).toBe(200);
     const reported = join(home, 'reported');
     await eventually(() => existsSync(reported), 30_000);
+    await eventually(() => existsSync(join(home, 'other-reported')), 30_000);
+    const other = readFileSync(join(home, 'other-reported'), 'utf8');
+    writeFileSync(join(configDir, 'sessions', other + '.json'), JSON.stringify({ sessionId: 'stale-file', startedAt: 1 }));
     const pid = readFileSync(reported, 'utf8');
+    if (process.platform === 'win32') {
+      await windowsLiveMetadata().request(['tree', pid], AbortSignal.timeout(30_000));
+    }
     writeFileSync(join(configDir, 'sessions', pid + '.json'), JSON.stringify({ sessionId: 'after-resume' }));
     const stopped = await api(td.port, td.token, '/daemon/shutdown', { body: { restart: true, force: true } });
     expect(stopped.status).toBe(200);
     const record = JSON.parse(readFileSync(join(home, 'previous-sessions.json'), 'utf8')) as { sessions: unknown[] };
     expect(record.sessions).toEqual([
       expect.objectContaining({ profile: 'worker', resumeId: 'after-resume' }),
-      expect.objectContaining({ profile: 'other', resumeId: 'other-id' }),
+      expect.objectContaining({ profile: 'other', resumeId: 'other-reported' }),
     ]);
     expect(JSON.stringify(info.mock.calls)).not.toMatch(/after-resume|other-id|launch-id/);
   } finally { await td.stop(); }
 }, 120_000);
+
+it('includes claim activity accepted during lookup and publishes the outgoing restart source last', async () => {
+  const home = makeTempHome();
+  let now = Date.now();
+  const td = await startTestDaemon({ home, now: () => now,
+    launchProfiles: { profiles: [], problems: [], sessionLaunch: ['chair'] },
+    messaging: { enabled: true, allow: [] } });
+  const source = join(home, 'restart-source.json');
+  const snapshot = join(home, 'previous-sessions.json');
+  const predecessor = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+  const state = td.daemon['publishedState']!;
+  state.restartCandidates = [predecessor];
+  state.restartSourcePending = true;
+  writeFileSync(snapshot, JSON.stringify({ version: 1, sessions: [], outgoingInstanceId: predecessor }));
+  let entered!: () => void;
+  const lookupStarted = new Promise<void>(resolve => { entered = resolve; });
+  let resume!: () => void;
+  const continueLookup = new Promise<void>(resolve => { resume = resolve; });
+  const spy = vi.spyOn(lookup, 'recordLiveResumeIds').mockImplementation(async () => {
+    entered();
+    await continueLookup;
+    return new Map();
+  });
+  try {
+    const claim = (await api(td.port, td.token, '/messages/claims', { body: { name: 'chair' } })).body;
+    const headers = { 'x-shellpuppet-claim': String(claim['claimId']), 'x-shellpuppet-claim-secret': String(claim['secret']) };
+    const stop = api(td.port, td.token, '/daemon/shutdown', { body: { restart: true } });
+    await lookupStarted;
+    now += 1000;
+    expect((await api(td.port, td.token, '/messages/inbox', { headers })).status).toBe(200);
+    expect((await api(td.port, td.token, '/launcher/previous', { headers })).status).toBe(200);
+    resume();
+    expect((await stop).status).toBe(200);
+    const savedClaims = JSON.parse(readFileSync(join(home, 'launcher-claims.json'), 'utf8')) as { lastActivity: number }[];
+    expect.soft(savedClaims[0]?.lastActivity).toBe(now);
+    expect(JSON.parse(readFileSync(source, 'utf8'))).toEqual({ restartFrom: state.instanceId });
+  } finally { resume(); spy.mockRestore(); await td.stop(); }
+});
+
+it('bounds the delay a stalled lookup adds to the HTTP reply and listener closure', async () => {
+  const td = await startTestDaemon();
+  const record = lookup.recordLiveResumeIds;
+  const stalled = new Promise<never>(() => {});
+  const source = { matchesProcess: () => true, read: () => stalled };
+  const sessions = [1, 2, 3].map(pid => ({ pid, programEnded: false, liveResumeId: source }));
+  let started = 0;
+  const lookupSpy = vi.spyOn(lookup, 'recordLiveResumeIds').mockImplementation(async () => {
+    started = performance.now();
+    await record(sessions, () => stalled);
+    return new Map();
+  });
+  // Measure the lookup's contribution independently of the host's private-file ACL tools.
+  const writes = vi.spyOn(records, 'writePrivateRecord').mockImplementation(() => {});
+  try {
+    const response = await api(td.port, td.token, '/daemon/shutdown', { body: { restart: true } });
+    const elapsed = performance.now() - started;
+    expect(response.status).toBe(200);
+    expect(td.daemon['server'].listening).toBe(false);
+    expect(elapsed).toBeGreaterThanOrEqual(400);
+    expect(elapsed).toBeLessThan(550);
+  } finally { lookupSpy.mockRestore(); writes.mockRestore(); await td.stop(); }
+});
 
 it('records a live agent conversation before restart and relaunches it from the saved folder choice', async () => {
   const home = makeTempHome();
