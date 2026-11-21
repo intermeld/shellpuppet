@@ -346,15 +346,34 @@ it.for(['offline', 'online'])('elects the survivor whose focus came last, %s', {
     })()`);
     oldB!.socket.close();
     await eventually(async () => await b.evaluate("typeof window.resumeFeed === 'function'") === true);
+    // B has no socket while it is offline. Observe the same trusted event its
+    // document will report when it registers again.
+    await b.evaluate(`window.addEventListener('focus', event => {
+      if (event.isTrusted) window.offlineFocusAt = performance.timeOrigin + event.timeStamp;
+    }, { once: true })`);
     await b.send('Page.bringToFront');
-    expect(await b.evaluate('document.hasFocus()')).toBe(true);
-    if (last === 'online') await focus(c, cReg!.pair);
+    const offlineFocus = await until(async () => await b.evaluate('window.offlineFocusAt ?? null') as number | null);
+    // The daemon caps a future timestamp at receipt. Give the two events a
+    // definite order in the clocks used to report and accept them.
+    await eventually(async () => performance.timeOrigin + performance.now() > offlineFocus &&
+      (last === 'offline' || Number(await c.evaluate('performance.timeOrigin + performance.now()')) > offlineFocus),
+      15_000, 50, 'the offline focus timestamp to precede the next transition');
+    const cFocus = () => daemon['dashboardWindows']().find(w => w.pair === cReg!.pair)?.focused;
+    if (last === 'online') {
+      await c.send('Page.bringToFront');
+      await expect.poll(cFocus, { timeout: 15_000 }).toBeGreaterThan(offlineFocus);
+    }
     await focus(primary, aReg!.pair);
     expect(await b.evaluate('document.hasFocus()')).toBe(false);
     await b.evaluate('window.resumeFeed()');
-    await eventually(async () => await b.evaluate("document.getElementById('share-count').textContent.includes('3 windows')") === true);
+    const registeredB = await until(() => daemon['dashboardWindows']().find(w =>
+      w.socket.protocol === oldB!.socket.protocol && w.pair !== oldB!.pair) ?? null);
+    expect(registeredB.focused, 'B registered its offline focus').toBe(offlineFocus);
+    if (last === 'offline') expect(cFocus()).toBeLessThan(offlineFocus);
+    const winnerPair = last === 'offline' ? registeredB.pair : cReg!.pair;
     aReg!.socket.close();
-    await eventually(() => daemon['dashboardDesignated'] !== aReg!.pair);
+    await eventually(() => daemon['dashboardDesignated'] === winnerPair, 15_000, 50,
+      'the daemon to designate the last focused survivor', () => daemon['dashboardDesignated']);
     const winner = last === 'offline' ? b : c;
     await eventually(async () => await winner.evaluate("document.getElementById('designated-window').getAttribute('aria-pressed')") === 'true',
       5000, 50, 'last focused survivor received designation');
