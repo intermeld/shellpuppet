@@ -7,15 +7,14 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Windows daemon starts from the Start menu shortcut and through a start wrapper: program lookup works whatever the case of the PATH variable, a failed start is logged and shown, the wrapped daemon no longer opens a console window, and wrapped restarts stay under the start lock and survive their starting client closing.
+
 ## [0.3.0] - 2026-11-21
 
 Several dashboard windows, messages between sessions, session names and
 roles, launches from sessions, and many reading and nudging fixes.
-- Preserve junction-backed home paths on Windows wrapped starts, keep the private home out of the wrapper arguments and complete restarts when Node instrumentation sends startup messages.
-- Keep a serving Windows daemon alive when its starting client closes, recover the private start information when a wrapper filters its environment, and reap a timed-out direct replacement before stop can return. Windows command lookup follows an unmatched opening quote through the end of the search path.
-- Keep a slow Windows wrapped restart in control until health or bounded cleanup. Check failure-log permissions within the start deadline, keep private home paths out of start errors and honour relative and quoted Windows search directories.
-- Resolve Windows Start menu wrapper and profile commands with mixed-case environment names, log daemon start failures, keep interactive desktop errors visible and detach the wrapped daemon from its console.
-- Wait for a typed line or a new, matching paste placeholder to settle before Enter; do not send Enter without final composer proof, and honour the full length-based minimum before a single safe retry.
 
 ### Added
 
