@@ -7,65 +7,62 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
-### Fixed
+## [0.3.0] - 2026-11-21
 
-- A launch command typed into an agent session before the agent has started (at its shell prompt) is submitted with its Enter again.
-- Show the Windows folder picker in front of the dashboard when Browse is clicked.
-- Keep full-screen sessions alive when a wider snapshot grows the grid after an earlier shrink. If the program ends during the read, report its exit code or rendering fault.
-- Keep full-screen sessions alive when a wider snapshot grows the grid after an earlier shrink. Healthy sessions can still resize if xterm changes its private alternate buffer. If the program ends during the read, report its exit code or rendering fault.
-- Wait for a typed line or a new, matching paste placeholder to settle before Enter; do not send Enter without final composer proof, and honour the full length-based minimum before a single safe retry.
+Several dashboard windows, messages between sessions, session names and
+roles, launches from sessions, and many reading and nudging fixes.
 
 ### Added
 
 - Designate one dashboard window for agent and CLI starts, start profile
   sessions in their own window, drag panes between windows, and open empty
   windows with New window. Pop out now creates an ordinary dashboard window.
-- Queue message nudges in a busy OpenCode session when its empty composer and interrupt footer have settled.
-- Recover active launcher claims and MCP registrations across orderly restarts. Restart reports snapshot failures and continues.
-- Recover active launcher claims across orderly restarts. Restart reports snapshot failures and continues.
-- Recover active launcher claims across orderly restarts. The home owner saves claim activity even if discovery disappears. Restart reports snapshot failures and continues.
-- Recover active launcher claims across orderly restarts. The home owner saves claim activity even if discovery is missing or empty. Restart reports snapshot failures and continues.
-- Preserve a verified restart snapshot when discovery is locked or lost, and allow startup with a read-locked recovery source.
-- Recover active launcher claims across orderly restarts. The home owner saves claim activity even if discovery is missing, damaged or held open. Restart reports snapshot failures and continues.
-- Preserve a verified restart snapshot across successor crashes and retry recovery when a locked source or snapshot becomes readable.
-- Protect Windows daemon records with owner-only ACLs and strip claim proofs from daemon and child environments.
-- Save live profile sessions and known conversation ids before a daemon restart for a granted supervisor to relaunch. Verified snapshots survive interrupted takeover and ordinary stops.
-- Allow named sessions and outside claims to launch owner-configured profiles, including conversation resume.
-
-- Designate one dashboard window for agent and CLI starts, start profile
-  sessions in their own window, drag panes between windows, and open empty
-  windows with New window. Pop out now creates an ordinary dashboard window.
-- Nudge Claude Code, Grok Build and Muse Code sessions while they work, as soon as the composer is free: the line is queued (or handed to the running turn) instead of waiting for the turn to end.
-- Show a chair or delegate role for sessions, with chair set only by a launch profile.
-- Match session messaging groups by role and reserve named members for outside claims.
-- Offer a Name box in the dashboard launcher and number repeated session names.
-- Let dashboard owners rename live sessions, updating the pane and messaging address together.
-- Return a clear permission error for a live recipient disallowed by messaging rules.
-- Lapse idle outside claims and mark their unread messages not delivered.
-- Show delivery states in send results and outboxes.
-- Refuse claims when a client knows it runs inside a session or the request presents session identity; audit configured member claims.
-
-- Type a fixed, rate limited nudge into an idle supported session when a message waits for it, through the normal input queue; name the session_inbox tool, pause before submitting, recheck the screen, waiting messages and terminal size before Enter, and record message ids, never text, in the audit.
-- Show owner-wide messages in the dashboard with session and group filters, safe text display and unread pane counts.
-- Judge when OpenCode, MiMo Code, Grok and Antigravity sessions have an empty idle composer, including MiMo's grey suggestion, before nudging them about waiting messages.
-- Keep messages for named participants in a mailbox core: names and claims, message states, per-recipient limits and the fixed nudge line, with a `messaging` section in `config.json` that says who may message whom. Off until it is switched on; typing of nudges arrives separately.
-- Send and read session messages through daemon routes, MCP tools and CLI commands, with claims for outside callers and text-free audit and event records.
-- Give each session its own daemon instance identity and secret, verify its client calls,
-  and show parent sessions in lists and the dashboard feed.
-- Judge whether a Claude Code, Codex, Qoder or Muse Code session is idle with an empty composer, so a later nudge can wait until the screen is quiet, not stalled and not asking for an answer. A module that cannot tell is left unknown.
-- Read a clipped terminal dialog at a wider grid with `terminal_snapshot` or `snap --wider`, then return the grid and dashboard control to their previous state.
-- Show a session that stops on a refusal from its model provider as stalled, in session lists and the dashboard, wake `--stalled` / `stalled: true` waits for it and tell its supervisor; MiMo's refusal is the first one recognised. After a resize, a stalled session's notice waits up to one second for the program to redraw before it decides the stall has ended, so an end during a resize can take about 1.25 seconds to clear; typing into the session or its exit still clears it at once.
-- Opt in to waiting for a delegate agent's known ready signals at start, with early returns for questions and exits and a time limit that leaves the session running.
+- Messages between sessions ([ADR-010](docs/decisions/ADR-010-messages-between-sessions.md)),
+  off until switched on with a `messaging` section in `config.json` that says
+  who may message whom. Named participants send and read messages through
+  daemon routes, MCP tools (registered only while messaging is on) and CLI
+  commands; outside callers take a claim on a name. Messages wait in a
+  bounded in-memory mailbox; send results and outboxes show delivery states;
+  idle outside claims lapse and their unread messages are marked not
+  delivered. Audit and event records never hold message text.
+- Type a fixed, rate-limited nudge line into a supported session when a
+  message waits for it, through the normal input queue, naming the
+  `session_inbox` tool. Before Enter the daemon rechecks the screen, the
+  waiting messages and the terminal size. Idle Claude Code, Codex, Qoder,
+  Muse Code, OpenCode, MiMo Code, Grok Build and Antigravity composers are
+  recognised; Claude Code, Grok Build, Muse Code and OpenCode sessions are
+  also nudged while they work, once the composer is free, so the line is
+  queued. A program whose composer cannot be read is left alone.
+- Show owner-wide messages in the dashboard with session and group filters,
+  safe text display and unread counts on panes.
+- Give each session its own instance identity and secret
+  (`SHELLPUPPET_SESSION`), verify its client calls, and show parent sessions
+  in lists and the dashboard feed.
+- Name sessions: a Name box in the dashboard launcher, numbered repeats, and
+  renaming live sessions, which updates the pane and the messaging address
+  together. Sessions show a chair or delegate role; chair is set only by a
+  launch profile, and messaging groups can match by role.
+- Let named sessions and outside claims granted in `launcher.sessionLaunch`
+  launch owner-configured profiles, including a conversation to resume.
+  Before a restart the daemon saves its live profile sessions and known
+  conversation ids for a granted supervisor to relaunch (`shellpuppet
+  previous`), and active launcher claims survive orderly restarts. Daemon
+  records on Windows are owner-only, and claim proofs are stripped from
+  child environments.
+- Read a clipped terminal dialog at a wider grid with `terminal_snapshot` or
+  `snap --wider`, then return the grid and dashboard control to their
+  previous state.
+- Show a session that stops on an error from its model provider as stalled,
+  in session lists and the dashboard, wake `--stalled` / `stalled: true`
+  waits for it and tell its supervisor. Recognised: MiMo refusals, output
+  limits and failed requests, other idle error blocks (including long ones
+  whose marker scrolled away), and a persistent OpenCode or MiMo Code
+  server connection loss.
+- Opt in to waiting for a delegate agent's known ready signals at start, with
+  early returns for questions and exits and a time limit that leaves the
+  session running.
 
 ### Changed
-
-- The dashboard's profile list shows each profile's purpose in brackets after its label.
-- Require a complete composer footer as the last visible block before nudging a session about a waiting message.
-- Check each bar composer's screen identity and input width, and require the live Antigravity composer footer before nudging.
-- Scope message history to each participant, reserve the daemon home for sessions, escape displayed message controls, and bound outside claims.
-- Bound retained mailbox history, protect claim ids, settle ended inboxes before events, and validate messaging configuration limits.
-- Check session identity on client-token WebSocket upgrades, keep daemon audit
-  records free of inherited caller identity, and explain reserved identity variables.
 
 - Agent-specific knowledge (reading signatures, prompt shapes and dialogs,
   Muse's input rules) now lives in one module per harness under
@@ -73,59 +70,54 @@ version may change behaviour, and every such change is listed here.
   harness's shapes in every session, so a prompt painted by a program running
   inside an agent is still caught.
 - Sessions resolve their agent once from the explicit agent or the program
-  name, falling back to `generic`. The session list and start audit entries
-  now show that resolved agent. Starting Muse by its program name applies
-  its submit delay, resize ordering and menu settling as an explicit agent does.
-- A screenshot that fails now says which capture step failed, how long each
-  step took and what state the browser was in. It never includes the picture.
+  name, falling back to `generic`; lists and start audit entries show it.
+  Starting Muse by its program name applies its input rules as an explicit
+  agent does.
+- The dashboard's profile list shows each profile's purpose in brackets after
+  its label.
+- A failed screenshot says which capture step failed, how long each step took
+  and what state the browser was in. It never includes the picture.
+- Session identity is checked on client-token WebSocket upgrades, and daemon
+  audit records stay free of inherited caller identity.
 
 ### Fixed
 
-- Keep Grok Build permission choices visible in filtered snapshots, searches and screenshots when the box includes an edit pattern action, even when its command wraps. Prompt waits return the full wrapped question and every radio choice, including the one without a number.
-- Moving a dashboard pane cancels a delayed Focus or Pop out launch action.
-  A released grid follows the pane through successive moves.
-- Dashboard handover counts focus changes made while a window was disconnected.
-- Passive viewers refit their text when resized and keep the session grid.
-- Recognise idle OpenCode composers with a rotating grey suggestion or a blank input after a turn, and submit message nudges that wrap across gutter rows.
-- Protect space-only OpenCode drafts and check wrap positions before Enter. Deliver nudges in Plan mode, with a wide sidebar or connected MCP servers, and after a transcript mentions `esc interrupt`.
-- Nudge Grok Build sessions whose full-width frame rows the terminal marks as wraps, and at the start screen whatever hint line it shows.
-- Nudge a session again when a new message arrives after an earlier nudge went unanswered.
-- Confirm a typed nudge in Grok Build when its key hints name both newline keys (Shift+Enter/Alt+Enter), so the line is submitted.
-- Detect Muse Code's tool-action approval ("Would you like to allow this tool action?", four choices) as a waiting prompt.
-- Submit an untouched pending nudge line when its named messages were read but another message is waiting, and audit the stale ids.
-- Nudge idle Grok sessions with a square composer frame after a turn or on the welcome screen, while keeping typed drafts and incomplete footers unready.
-- Never type an unconfirmed message nudge twice: a line that could not be confirmed stays pending, is submitted with the submit key alone once the composer shows it exactly once, and is left for the person if they have typed since. The audit records why a nudge was not submitted.
-- Let a message wait name its sender by name: a wait for `from` set to a name never returned before.
-- Nudge an idle Claude Code session that shows a suggested next prompt in its composer.
-- Nudge an idle Claude Code session whose padded composer rows are marked as wraps, and an idle Muse Code session showing one of its rotating grey tips.
-- Nudge an idle Muse Code session after a reply, when its padded rows leave the rule above the composer marked as a wrap.
-- Find an agent's composer under a rule that fills the terminal width, so a session showing it can be nudged.
-- Limit message event metadata to participants, bound dashboard badge updates and show invisible message characters as escapes.
-- Bound viewport repair after resize and end only the affected session if terminal rendering fails.
-- Report MiMo output limits and other idle error blocks, including long errors whose marker scrolled away, plus a persistent OpenCode or MiMo Code server connection loss, as stalled sessions.
-- Detect OpenCode and MiMo Code question panels clipped by the terminal height, reporting the choices still visible.
-- Keep the command rows of a live Grok permission box visible when its question has scrolled off the screen, while reasoning above the box stays hidden.
-- Show idle MiMo sessions whose model request failed as stalled, including in session lists, supervisor events and stalled waits.
-- Keep waiting alerts and other notices clear of the prompt they announce and steady while a terminal repaints, following the cursor when it settles elsewhere, through staged and nested repaints, resizes, text size changes, reconnects and reattached sessions.
-- Let a dashboard pane take its grid when the controlling window releases it during a roster move to another window, while keeping the human's grid through socket loss, reload, pane dismissal, window close, controller reconnect and a viewer link or another client connecting meanwhile.
-- Retry a dashboard Auto fit after its pending grid request is lost when the connection closes.
-- Keep Qoder message suggestions and drafts, including numbered and lettered text, from appearing as choices waiting for an answer.
-- Stop text from a wider layout lingering past the right edge after a full-screen program's grid narrows, in snapshots, filtered reads and screenshots.
-- Show Muse's two-choice command approval, "Yes, proceed" or "No, and tell Muse Code what to do differently", as waiting for an answer.
-- Keep a MiMo refusal marked as stalled when its screen narrows and widens, and recognise grey suggestions only when their whole text has suggestion styling.
-- Detect MiMo provider refusals on narrower screens with modern status footers, grey suggestions and expandable tool panels.
-- Keep ending sessions and closing dashboard panes safe while their last
-  output is still being drawn, and ignore output arriving after a session ends.
-- Repair missing screen rows after a scrolled session screen grows, a known
-  terminal emulator fault that could stop the daemon on the next output.
-- Avoid a second real terminal resize when a viewer's fractional character
-  width rounds differently after the first grid change.
-- Keep dashboard screens wholly visible with consistent text below the 80 by
-  24 floor, refit after font or display-scale changes even with a remembered
-  text size and Auto fit off, and recover the chosen size when space allows;
-  preserve scrolling, scrollbar dragging, pointer-aligned right-click menus
-  and the first takeover from another window while avoiding unnecessary
-  terminal resizes and text measurements.
+- Submit a launch command typed at a shell prompt before the agent starts;
+  once an agent's composer is on screen, wait for a typed line or paste
+  placeholder to settle and send Enter only with proof that the composer
+  holds exactly that line, with at most one safe retry.
+- Never type an unconfirmed message nudge twice; a pending line is submitted
+  with the submit key alone once the composer shows it exactly once, and is
+  left for the person if they have typed since. Nudge again when a new
+  message arrives after an unanswered nudge, and let one recipient's failure
+  not stop the others.
+- Show the Windows folder picker in front of the dashboard when Browse is
+  clicked.
+- Keep full-screen sessions alive when a wider read grows the grid after an
+  earlier shrink, and stop text from a wider layout lingering past the right
+  edge after a full-screen program's grid narrows.
+- Bound viewport repair after a resize and end only the affected session if
+  terminal rendering fails; repair missing rows after a scrolled screen grows,
+  a terminal emulator fault that could stop the daemon on the next output;
+  keep ending sessions and closing panes safe while their last output is
+  still being drawn.
+- Keep waiting alerts and other notices clear of the prompt they announce and
+  steady while a terminal repaints.
+- Dashboard grid control: a pane takes its grid when the controlling window
+  releases it during a move to another window, the human's grid survives
+  socket loss, reload and reconnects, Auto fit retries after a lost request,
+  and screens below the 80 by 24 floor stay wholly visible with consistent
+  text after font or display-scale changes.
+- Prompt and dialog reading: Grok Build permission boxes (edit-pattern
+  actions, wrapped commands, a question scrolled off the screen) keep their
+  choices and command rows while reasoning stays hidden; OpenCode and MiMo
+  Code question panels clipped by the terminal height report the visible
+  choices; Muse Code's tool-action and two-choice command approvals read as
+  waiting; Qoder suggestions and drafts no longer read as choices.
+- MiMo refusals are recognised on narrower screens and with modern footers,
+  grey suggestions and expandable tool panels, and stay stalled when the
+  screen narrows and widens.
+- A message wait for `from` set to a name now returns.
 
 ## [0.2.1] - 2026-11-05
 

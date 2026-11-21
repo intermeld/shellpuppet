@@ -20,36 +20,45 @@ Releases carry npm provenance through trusted publishing from the first.
 - **Sessions you start yourself** (0.2.0). Start a session from the
   dashboard's launch profiles and work in it, then hand it to an agent over
   MCP or let one join you: a session is the same thing whoever started it.
+- **Several dashboard windows** (0.3.0). One window takes new starts; drag
+  panes between windows; open empty windows; Pop out makes an ordinary one.
+- **Messages between sessions** (0.3.0). Any named session can message another,
+  whatever agent runs in either; messages wait in a mailbox the daemon keeps and
+  are read with an inbox tool, and a free composer gets one fixed line saying a
+  message is waiting. Off until you switch it on, with who may message whom in
+  your configuration
+  ([ADR-010](docs/decisions/ADR-010-messages-between-sessions.md)).
+- **Session names, roles and identity** (0.3.0). Each session has its own
+  identity and parent, a name you can change, and a chair or delegate role.
+- **Launches from sessions** (0.3.0). A session or claim you grant can launch
+  your profiles, and relaunch the sessions a restart ended.
+- **Sessions that stall, noticed** (0.3.0). A session stopped on a provider
+  error is shown as stalled, wakes stalled waits and tells its supervisor.
+- **A module per agent CLI** (0.3.0), internal: what is specific to one program
+  lives in its own module in this repository
+  ([ADR-006](docs/decisions/ADR-006-per-agent-modules.md)).
 
 ## Now
 
-- **Sessions that stall, noticed.** A session that stops on a refusal from its
-  model provider has a state of its own beside waiting, in session lists, the
-  dashboard and wait conditions, and its supervisor is told. MiMo's refusal is
-  recognised first; each further error shape comes with a fixture from a real
-  screen. Nudging and a supervisor model stay in Later.
-- **A module per agent CLI.** What's specific to one program moves out of the
-  core into a module of its own, in this repository: its prompt detection and
-  its measured profile. It starts as an internal refactor, with the profiles as
-  the starting point. There's no public module interface yet
-  ([ADR-006](docs/decisions/ADR-006-per-agent-modules.md)).
 - **Prompt detection that covers more shapes.** Each new agent CLI brings a
-  shape of its own, and each gets a fixture from a real screen.
+  shape of its own, and each gets a fixture from a real screen. More provider
+  errors noticed as stalls, each with a fixture from a real screen.
+- **Reliable typing and nudges across agent CLIs**, including composers that wrap
+  long lines at punctuation, and restart records that follow the conversation
+  a session has switched to.
 
 ## Next
 
-- **Parent and child sessions.** Give every daemon-started session its id in
-  `SHELLPUPPET_SESSION`. A ShellPuppet MCP server or CLI running in that
-  session can record it as the parent of sessions it starts. The dashboard
-  can group and tag those children and jump to a parent's waiting children,
-  whichever agent supervises and without changes to agent CLIs.
-- **Messages between sessions.** Any session can message another by name,
-  whatever agent runs in either, so any agent can lead others. Messages wait
-  in a mailbox the daemon keeps and are read with an inbox tool, so their
-  text never reaches an agent as its user's words. An idle session gets one
-  fixed line saying a message is waiting. Off until you switch it on, with
-  who may message whom set in your configuration
-  ([ADR-010](docs/decisions/ADR-010-messages-between-sessions.md)).
+- **Parent and child sessions in the dashboard.** Sessions already know their
+  parent; the dashboard groups and tags children and jumps to a parent's
+  waiting children, whichever agent supervises.
+- **A Hermes module.** Reading, prompt detection and nudges for Hermes, an agent
+  meant to run for a long time.
+- **Scheduled prompts.** Set a schedule and a message for a session you have
+  open, and the daemon types it in at those times: for a long-running agent,
+  a regular job or check. Your choice whether a busy session skips that run or
+  gets the message queued, as nudges are. Off until you set one, recorded as
+  the daemon's own input.
 - **Named hosts for a tunnel you run.** The daemon stays on loopback. A tunnel
   that ends there and presents its own hostname, such as Tailscale Serve or a
   Cloudflare Tunnel, gets in once you name that host in your configuration:
