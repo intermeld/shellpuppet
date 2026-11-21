@@ -200,18 +200,21 @@ by Node and a start script. A running daemon is reused without running the
 wrapper. With no setting, the daemon starts directly as before. The wrapper
 is found on `PATH` (or by an explicit path). On Windows, wrapper and launch
 profile lookups accept any casing of `Path` and `PATHEXT`, including the
-environment supplied by the Start menu. Quoted search directories keep their
-place in the list. Relative directories on Windows are resolved from the
+environment supplied by the Start menu. A semicolon inside quotes is part
+of the directory name. An opening quote without a closing quote extends to
+the end of the search path. Relative directories on Windows are resolved from the
 working directory of the launch. Windows wrappers must resolve to
 an `.exe` or `.com` program. Point at the
 program itself. No shell interprets the wrapper arguments. The configured
 program runs with your user's permissions, so choose one you trust.
 
-On Windows the wrapped script hands the start to a hidden helper and exits.
-A console opened by the wrapper can then close while the daemon starts.
-The helper launches the detached daemon with the environment supplied by the
-wrapper and exits once the client confirms health. The daemon keeps any
-resolved secrets for its own lifetime.
+On Windows the client creates a one-use start script in the private
+ShellPuppet home. If the wrapper filters the startup environment, the client
+reports this and the script supplies the home and the proof for this start.
+The daemon still inherits the environment prepared by the wrapper. The script
+exits after a hidden helper spawns the daemon, so the wrapper's console can
+close. Once the daemon publishes its discovery record and the helper releases
+it, it accepts clients and runs independently of the client that started it.
 
 The array has 1 to 16 entries. Each entry must be a non-blank string of at
 most 1024 characters. `startWithOnlyIfEnvContains`, when set, must be a
@@ -264,8 +267,11 @@ for the process it launched. Failure reports the wrapper program and
 `daemon.startWith`, without its arguments or any environment values. An
 early wrapper exit is reported after a short health grace. Once the Windows
 helper has accepted a start, the client waits for the full health bound even
-if the wrapper exits. On failure the helper ends the daemon it launched before
-the client releases the start endpoint, subject to the same cleanup bound.
+if the wrapper exits. If startup is cancelled while the daemon is pending, the
+helper ends it before the client releases the start endpoint, subject to the
+same cleanup bound. A failed direct restart also waits for its pending child
+to exit before clearing the restart hold. A subsequent stop can then finish
+without a delayed replacement appearing afterwards.
 When a start fails, the CLI exits with a non-zero status and the client appends
 a diagnostic to `daemon.log` in the ShellPuppet home when it can verify
 the directory is private within the start deadline. An interactive Windows

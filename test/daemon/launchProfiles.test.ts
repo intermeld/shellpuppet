@@ -642,6 +642,20 @@ describe('a launch command is resolved to the file that runs', () => {
     },
   );
 
+  it.runIf(process.platform === 'win32')('keeps an unmatched quote through the end of the Windows search path', () => {
+    const cwd = makeDir('launch-quote-');
+    const prefix = path.join(cwd, 'bin');
+    const full = prefix + ';tools';
+    for (const dir of [prefix, full]) {
+      fs.mkdirSync(dir);
+      makeProgram(dir, 'profile.cmd');
+      makeProgram(dir, 'wrapper.exe');
+    }
+    const env = { Path: `unused;"${full}`, PathExt: '.cmd;.exe' };
+    expect.soft(resolveLaunchCommand('profile', cwd, env)).toEqual({ file: path.join(full, 'profile.cmd') });
+    expect(planDaemonStart(['wrapper'], 'entry', cwd, env).command).toBe(path.join(full, 'wrapper.exe'));
+  });
+
   it('resolves a quoted command without its quotes', () => {
     const work = makeDir('launch-quoted-');
     const real = makeProgram(work, 'tool');

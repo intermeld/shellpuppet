@@ -15,10 +15,13 @@ import { useAgentSignatures } from '../core/reasoning.js';
 import { createFileLogger } from './logger.js';
 import { assertNodeVersion } from './meta.js';
 import { daemonLogPath, shellpuppetHome } from './paths.js';
+import { releaseWrappedDaemon, WRAPPED_START_IPC } from './wrappedStart.js';
 
 async function main(): Promise<void> {
   assertNodeVersion();
   removeClaimCredentials(process.env);
+  const supervised = process.env[WRAPPED_START_IPC] === '1' && process.send !== undefined;
+  delete process.env[WRAPPED_START_IPC];
   const home = path.resolve(shellpuppetHome());
   const logger = createFileLogger(daemonLogPath(home));
   // Shape-validated (design §4.3 fail-closed): a malformed policy section
@@ -44,6 +47,7 @@ async function main(): Promise<void> {
   const daemon = new Daemon({
     home,
     logger,
+    ...(supervised ? { afterPublish: releaseWrappedDaemon } : {}),
     audit: createAuditor(home, { captureContent: config.audit?.captureContent ?? false }, logger),
     ...(config.messaging !== undefined ? { messaging: config.messaging } : {}),
     ...(config.policy !== undefined ? { policy: config.policy } : {}),

@@ -142,6 +142,55 @@ afterEach(async () => {
 });
 
 describe('configured daemon start wrapper', () => {
+  it.runIf(process.platform === 'win32')('keeps the serving daemon when the starting client disappears', async () => {
+    const home = handoffHome();
+    fs.writeFileSync(path.join(home, 'allow-health'), '');
+    // Delay only this client's health poll. A real peer can still use the daemon.
+    const starter = spawn(process.execPath, ['--input-type=module', '-e',
+      `globalThis.fetch = () => new Promise(() => {});
+       await import(${JSON.stringify(pathToFileURL(cli).href)});`, 'cli', 'daemon', 'start'], {
+      env: { ...process.env, SHELLPUPPET_HOME: home }, stdio: 'ignore', windowsHide: true,
+    });
+    const exited = new Promise(resolve => starter.once('exit', resolve));
+    try {
+      await eventually(() => readDaemonState(home) !== null);
+      const state = readDaemonState(home)!;
+      expect((await runCli(home, ['list', '--json'])).code).toBe(0);
+      expect(starter.kill('SIGKILL')).toBe(true);
+      await exited;
+      const status = await runCli(home, ['daemon', 'status', '--json']);
+      expect(JSON.parse(status.stdout)).toMatchObject({ running: true, port: state.port, startedWrapped: true });
+      expect(readDaemonState(home)?.instanceId).toBe(state.instanceId);
+    } finally {
+      if (starter.exitCode === null && starter.signalCode === null) starter.kill('SIGKILL');
+      await exited;
+      cleanUpHandoff(home);
+    }
+  });
+
+  it.runIf(process.platform === 'win32')('completes a restart through an environment-filtering wrapper', async () => {
+    const { home } = homeWithWrapper();
+    const filter = path.join(repoRoot, 'test', 'fixtures', 'daemon-start-filtered.mjs');
+    fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({
+      viewer: { launchMode: 'no-window' }, daemon: { startWith: [process.execPath, filter] },
+    }));
+    try {
+      expect((await runCli(home, ['daemon', 'start', '--direct'])).code).toBe(0);
+      const old = readDaemonState(home)!;
+      const restart = await runCli(home, ['daemon', 'restart', '--json']);
+      expect(restart.code).toBe(0);
+      expect(restart.stderr).toContain('wrapper filtered the startup environment');
+      expect(restart.stderr.includes(home)).toBe(false);
+      expect(restart.stderr.includes('from-wrapper')).toBe(false);
+      expect(JSON.parse(restart.stdout)).toMatchObject({ running: true, startedWrapped: true });
+      expect(fs.existsSync(path.join(home, 'filtered-entry-ran'))).toBe(true);
+      const replacement = readDaemonState(home)!;
+      expect(replacement.instanceId).not.toBe(old.instanceId);
+      expect((await runCli(home, ['list', '--json'])).code).toBe(0);
+      expect(readDaemonState(home)?.pid).toBe(replacement.pid);
+    } finally { recordPid(home); }
+  });
+
   it.runIf(process.platform === 'win32')('keeps a direct client behind a slow wrapped restart after hand-off', async () => {
     const home = handoffHome();
     try {
@@ -434,8 +483,13 @@ describe('configured daemon start wrapper', () => {
     recordPid(home);
     expect(result.code).toBe(0);
     const recorded = JSON.parse(fs.readFileSync(marker, 'utf8')) as { argv: string[] };
-    const entry = process.platform === 'win32' ? path.join(path.dirname(distDaemonEntry), 'wrappedLaunch.js') : distDaemonEntry;
+    const entry = recorded.argv.at(-1)!;
     expect(recorded.argv).toEqual([marker, literal, process.execPath, entry]);
+    if (process.platform === 'win32') {
+      expect(path.dirname(entry)).toBe(home);
+      expect(path.basename(entry)).toMatch(/^daemon-start-[\da-f-]+\.mjs$/);
+      expect(fs.existsSync(entry)).toBe(false);
+    } else expect(entry).toBe(distDaemonEntry);
   });
 
   it('ends a hung wrapper tree after the injected bound', async () => {
