@@ -39,32 +39,44 @@ function draftWait(session: Session, seen: boolean, delayMs = 150): void {
 }
 
 describe('Muse input submission', () => {
+  const releaseNotes = 'Review the release plan and supporting notes for the next deployment step. ' +
+    'Include the outstanding items reported at the readiness meeting this morning. ' +
+    'Compare the agreed dates against the last copy of the engineering checklist. ' +
+    'Highlight any open questions about the changes in the pending release notes. ';
+  const datedEntry = releaseNotes + 'Please add a dated entry to the project release notes for the build on 2026/11/21';
   it.each([
     ['codex-wrapped-draft', 'Please run this check: set PATH so that C:\\Windows\\System32\\bash.exe is found ' +
       'first, then run "D:/dev-sandbox/draft-notes/archive4/test-stubs:$PATH" with the quoted argument ' +
       "'a\\b\\c' and report back exactly what it printed, including any error text, without changing any files " +
       'in this folder or anywhere else on the machine. Repeat the check twice and compare the two outputs ' +
-      'carefully before replying with a short summary only.'],
+      'carefully before replying with a short summary only.', 24, true],
     ['codex-midtoken-draft', 'Check that the path a bb ccc dd eee ffff gg hhh iii jjjj kk ' +
       'C:\\Windows\\System32\\bash.exe exists, then list D:/dev-sandbox/draft-notes/archive4/test-stubs:$PATH ' +
-      'entries, and report.'],
-  ])('sends one Enter for the captured Codex composer in %s', async (name, body) => {
-    const { session, pty } = recordingSession('codex', { cols: 80, rows: 24 });
+      'entries, and report.', 24, true],
+    ['codex-date-10', datedEntry, 10, true],
+    // A newline and a space after the first slash gave byte-identical screens.
+    ['codex-newline-10', datedEntry, 10, false],
+    ['codex-pipe-10', releaseNotes + 'Please proofread the release note and check the final heading reads Ready|steady',
+      10, true],
+  ] as const)('checks Enter against the captured Codex composer in %s', async (name, body, rows, submit) => {
+    const { session, pty } = recordingSession('codex', { cols: 80, rows });
     const capture = readFileSync(join(__dirname, '../fixtures/nudge', name + '.ansi'), 'utf8');
     const idle = '\x1b[2J\x1b[H› \x1b[2mAsk Codex to do anything\x1b[0m';
     const renderer = session['renderer'];
     const record = pty.write.bind(pty);
     vi.spyOn(pty, 'write').mockImplementation(data => {
       record(data);
-      void renderer.write(data === body ? capture : idle);
+      if (data === '\r') void renderer.write(idle);
+      else if (submit) void renderer.write(capture);
     });
     try {
-      await renderer.write(idle);
+      // A delayed redraw leaves an existing, altered draft visible after the write.
+      await renderer.write(submit ? idle : capture);
       const result = await session.writeWithResult(body + '\r');
-      expect(pty.writes.map(entry => entry.data)).toEqual([body, '\r']);
-      expect(result).toMatchObject({ submitted: true, submitRetried: false });
+      expect(pty.writes.map(entry => entry.data)).toEqual(submit ? [body, '\r'] : [body]);
+      expect(result).toMatchObject({ submitted: submit, submitRetried: false });
       await renderer.write(capture);
-      expect(session.nudgeReadyWithLine(body)).toBe(true);
+      expect(session.nudgeReadyWithLine(body)).toBe(submit);
       expect(session.nudgeReadyWithLine(body + ' more')).toBe(false);
     } finally {
       await renderer.dispose();

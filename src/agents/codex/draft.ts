@@ -1,18 +1,15 @@
 import type { StyledLine } from '../../core/renderer.js';
 import { stringWidth } from '../../core/stringWidth.js';
 import type { NudgeView } from '../types.js';
+import { draftWords } from './lineBreaks.js';
 
-// Spaces stay with the preceding piece. A drive prefix can break before its
-// backslash, while the rest of the Windows path stays together. Forward slashes
-// and hyphens between letters or numbers stay at the end of their piece.
-const WORD_BREAK = /(?<= )(?! )|(?<=[A-Za-z]:)(?=\\)|(?<=\/)(?![ /])|(?<=[\p{Alphabetic}\p{N}]-)(?=[\p{Alphabetic}\p{N}])/u;
 const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 
 /** Pack the next piece if it fits. Spaces at a soft break hang off the preceding row. */
-function* wrappedRows(text: string, width: number): Generator<string> {
+function* wrappedRows(words: readonly string[], width: number): Generator<string> {
   let row = '';
   let cells = 0;
-  for (const word of text.split(WORD_BREAK)) {
+  for (const word of words) {
     const ink = word.replace(/ +$/u, '');
     const inkWidth = stringWidth(ink);
     if (row && cells + inkWidth > width) {
@@ -51,8 +48,10 @@ export function matchesDraft(rows: readonly StyledLine[], expected: string, view
     if (rows[0]?.text !== '› ' + expected || (width > 0 && stringWidth(expected) > width)) return false;
   } else {
     if (width < 1) return false;
+    const words = draftWords(expected);
+    if (!words) return false;
     let i = 0;
-    for (const piece of wrappedRows(expected, width)) {
+    for (const piece of wrappedRows(words, width)) {
       if (i >= count || rows[i]?.text !== (i === 0 ? '› ' : '  ') + piece) return false;
       i++;
     }
