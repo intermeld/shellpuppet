@@ -92,7 +92,9 @@ that folder from being deleted or renamed on Windows for as long as it ran. Sess
 not inherit the daemon's folder either (§3.1).
 
 If `daemon.startWith` is configured, every client that must start a missing daemon runs
-the configured program and leading arguments before Node and the daemon entry. The
+the configured program and leading arguments before Node and its start script. On
+Windows that script starts the daemon detached and hidden, with the environment
+it received from the wrapper, then exits. The
 client still detaches the process, ignores its stdio and polls `/health`; a healthy
 daemon wins even if the spawned wrapper exits. Wrapped starts allow two minutes for
 a person to unlock the secrets tool. `daemon.startWithOnlyIfEnvContains` limits the

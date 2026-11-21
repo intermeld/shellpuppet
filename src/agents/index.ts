@@ -1,4 +1,5 @@
 import type { AgentSignature } from '../core/reasoning.js';
+import { envValue } from '../core/environment.js';
 import type { AgentModule, AgentSource, PromptShape } from './types.js';
 import { claude } from './claude/index.js';
 import { codex } from './codex/index.js';
@@ -25,8 +26,8 @@ export function moduleFor(name: string): AgentModule | undefined {
 }
 
 /** All conversation ids in marker precedence order, including inherited fallback values. */
-export function agentResumeIds(module: AgentModule | undefined, env: NodeJS.ProcessEnv): string[] {
-  return (module?.resumeIdMarkers ?? []).map(key => env[key]).filter((id): id is string => id !== undefined);
+export function agentResumeIds(module: AgentModule | undefined, env: NodeJS.ProcessEnv, platform = process.platform): string[] {
+  return (module?.resumeIdMarkers ?? []).map(key => envValue(env, key, platform)).filter((id): id is string => id !== undefined);
 }
 
 /** A program's basename, independent of the host platform. */

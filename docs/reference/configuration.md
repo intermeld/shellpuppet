@@ -90,8 +90,8 @@ Full example, everything optional:
   // exits (fractions allowed). It never exits while a session is running.
   "idleMinutes": 30,
 
-  // Optional daemon start wrapper. The wrapper receives Node and the daemon
-  // entry after these leading arguments. See the section below.
+  // Optional daemon start wrapper. ShellPuppet appends Node and its start
+  // script after these leading arguments. See the section below.
   "daemon": {
     "startWith": ["op", "run", "--"],
     "startWithOnlyIfEnvContains": "op://"
@@ -196,12 +196,19 @@ Set `daemon.startWith` to a non-empty array containing a program followed by
 its leading arguments. When any CLI command, `shellpuppet dashboard`,
 `shellpuppet desktop`, or the
 MCP server needs to start a missing daemon, it runs those arguments followed
-by Node and the daemon entry. A running daemon is reused without running the
+by Node and a start script. A running daemon is reused without running the
 wrapper. With no setting, the daemon starts directly as before. The wrapper
-is found on `PATH` (or by an explicit path). Windows wrappers must resolve to
-an `.exe` or `.com` program; `.cmd` and `.bat` files are refused. Point at the
+is found on `PATH` (or by an explicit path). On Windows, wrapper and launch
+profile lookups accept any casing of `Path` and `PATHEXT`, including the
+environment supplied by the Start menu. Windows wrappers must resolve to
+an `.exe` or `.com` program. Point at the
 program itself. No shell interprets the wrapper arguments. The configured
 program runs with your user's permissions, so choose one you trust.
+
+On Windows the wrapped script starts the daemon detached with its window
+hidden, then exits. A console opened by the wrapper for that script can close
+as soon as the script finishes. The daemon inherits the environment the wrapper
+gave the script, including any resolved secrets, for its own lifetime.
 
 The array has 1 to 16 entries. Each entry must be a non-blank string of at
 most 1024 characters. `startWithOnlyIfEnvContains`, when set, must be a
@@ -253,6 +260,11 @@ is healthy, that wrapper is responsible
 for the process it launched. Failure reports the wrapper program and
 `daemon.startWith`, without its arguments or any environment values. An
 early wrapper exit is reported after a short health grace.
+When a start fails, the CLI exits with a non-zero status and the client appends
+a diagnostic to `daemon.log` in the ShellPuppet home. An interactive Windows
+`desktop` command keeps its console open for you to read the error and press
+Enter. If the shortcut started minimised, open its console from the taskbar.
+Commands with redirected input or output return immediately after the error.
 `shellpuppet daemon status` reports `startedWrapped` as a boolean, reported
 by the client that started the daemon. It does not reveal the command.
 

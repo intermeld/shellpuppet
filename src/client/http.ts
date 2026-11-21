@@ -26,7 +26,9 @@ import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { readDaemonConfig } from '../daemon/config.js';
 import { resolveLaunchCommand } from '../daemon/launchProfiles.js';
+import { createFileLogger } from '../daemon/logger.js';
 import {
+  daemonLogPath,
   daemonStatePath,
   ensureHome,
   readDaemonState,
@@ -38,6 +40,7 @@ import { packageVersion } from '../daemon/meta.js';
 import { readRestartHold, restartHoldError } from '../daemon/restartHold.js';
 import type { RestartHold } from '../daemon/restartHold.js';
 import { agentResumeIds, moduleFor } from '../agents/index.js';
+import { childEnv, envValue, setEnvValue } from '../core/environment.js';
 import { removeClaimCredentials, validResumeId, NULL_LOGGER } from '../core/types.js';
 import { taskkillTrees } from '../core/session.js';
 import type { Logger } from '../core/types.js';
@@ -197,6 +200,20 @@ function defaultDaemonEntry(): string {
   return fileURLToPath(new URL('../daemon/index.js', import.meta.url));
 }
 
+/** Only these diagnostics may be copied verbatim to the daemon log. */
+class DaemonStartError extends Error {}
+
+const pendingStartMessage = 'A pending daemon start did not settle within its health bound.';
+
+function logStartFailure(home: string, error: unknown): void {
+  // A library or OS error can include argv, paths or environment values.
+  try {
+    ensureHome(home);
+    createFileLogger(daemonLogPath(home)).error(error instanceof DaemonStartError
+      ? error.message : 'ShellPuppet could not connect to or start its daemon.');
+  } catch { /* A home that cannot be secured cannot hold a private diagnostic. */ }
+}
+
 /** Resolve a configured wrapper without a shell or joined argument string. */
 export function planDaemonStart(
   wrapper: readonly string[],
@@ -208,12 +225,19 @@ export function planDaemonStart(
   const name = path.basename(program);
   const resolved = resolveLaunchCommand(program, cwd, env);
   if ('error' in resolved) {
-    throw new Error(`daemon.startWith program ${name} could not be started: program not found.`);
+    throw new DaemonStartError(`daemon.startWith program ${name} could not be started: program not found.`);
   }
   if (process.platform === 'win32' && !/\.(exe|com)$/i.test(resolved.file)) {
-    throw new Error(`daemon.startWith program ${name} cannot start directly on Windows; point it at the program itself (.exe or .com).`);
+    throw new DaemonStartError(`daemon.startWith program ${name} needs an .exe or .com on Windows. Point it at the program itself.`);
   }
-  return { command: resolved.file, args: [...wrapper.slice(1), process.execPath, entry] };
+  const args = [...wrapper.slice(1), process.execPath];
+  if (process.platform === 'win32') {
+    args.push(fileURLToPath(new URL('../daemon/wrappedLaunch.js', import.meta.url)));
+    if (entry !== defaultDaemonEntry()) args.push('--daemon-entry', entry);
+  } else {
+    args.push(entry);
+  }
+  return { command: resolved.file, args };
 }
 
 /** End only the process tree rooted at the child this client spawned. */
@@ -408,7 +432,7 @@ function startWaitBound(home: string, mode?: 'direct' | 'wrapped'): number {
 export function daemonStartMode(home: string, direct: boolean | undefined, env: NodeJS.ProcessEnv = process.env): 'direct' | 'wrapped' {
   const configured = readDaemonConfig(home).config.daemon;
   const condition = configured?.startWithOnlyIfEnvContains;
-  return direct !== true && env['SHELLPUPPET_DAEMON_DIRECT'] !== '1' &&
+  return direct !== true && envValue(env, 'SHELLPUPPET_DAEMON_DIRECT') !== '1' &&
     configured?.startWith !== undefined &&
     (condition === undefined || Object.values(env).some((value) => value?.includes(condition))) ? 'wrapped' : 'direct';
 }
@@ -431,7 +455,11 @@ export async function withDaemonStartLock<T>(options: ClientOptions, action: (lo
     if (lock !== null) break;
     await new Promise((resolve) => setTimeout(resolve, AUTO_START_POLL_MS));
   }
-  if (lock === null) throw new Error('A pending daemon start did not settle within its health bound.');
+  if (lock === null) {
+    const error = new DaemonStartError(pendingStartMessage);
+    logStartFailure(home, error);
+    throw error;
+  }
   try { return await action(lock); }
   finally { if (lock !== UNCOORDINATED_START) await releaseStartLock(lock); }
 }
@@ -487,7 +515,7 @@ export async function waitForPendingDaemon(options: ClientOptions = {}): Promise
     }
     await new Promise((resolve) => setTimeout(resolve, Math.min(AUTO_START_POLL_MS, Math.max(1, deadline - Date.now()))));
   }
-  throw new Error('A pending daemon start did not settle within its health bound.');
+  throw new Error(pendingStartMessage);
 }
 
 function versionWarnings(daemonVersion: string): string[] {
@@ -561,7 +589,12 @@ export async function discoverDaemon(options: ClientOptions = {}, deadline?: num
  */
 export async function ensureDaemon(options: ClientOptions = {}, heldLock?: Exclude<StartLockClaim, null>): Promise<DaemonConnection> {
   const home = options.home ?? shellpuppetHome();
-  return ensureDaemonUntil(options, heldLock, callDeadline(home, options.logger ?? NULL_LOGGER));
+  try {
+    return await ensureDaemonUntil(options, heldLock, callDeadline(home, options.logger ?? NULL_LOGGER));
+  } catch (error) {
+    logStartFailure(home, error);
+    throw error;
+  }
 }
 
 async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<StartLockClaim, null> | undefined, waitDeadline: number): Promise<DaemonConnection> {
@@ -601,7 +634,7 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
     }
     await new Promise((resolve) => setTimeout(resolve, Math.min(AUTO_START_POLL_MS, Math.max(1, waitDeadline - Date.now()))));
   }
-  if (lock === null) throw new Error('A pending daemon start did not settle within its health bound.');
+  if (lock === null) throw new DaemonStartError(pendingStartMessage);
   try {
     if (heldLock === undefined) {
       const hold = readRestartHold(home, logger);
@@ -619,11 +652,11 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
     if (wonWhileClaiming !== null) return wonWhileClaiming;
 
   if (heldLock === undefined && Date.now() >= waitDeadline) {
-    throw new Error('A pending daemon start did not settle within its health bound.');
+    throw new DaemonStartError(pendingStartMessage);
   }
   const entry = options.daemonEntry ?? defaultDaemonEntry();
   const cwd = daemonWorkingDirectory();
-  const env: NodeJS.ProcessEnv = { ...process.env, SHELLPUPPET_HOME: home };
+  const env = childEnv(process.platform, process.env, { SHELLPUPPET_HOME: home });
   removeClaimCredentials(env);
   const parsed = readDaemonConfig(home);
   for (const problem of parsed.problems) {
@@ -649,7 +682,7 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
       throw error;
     }
   }
-  env['SHELLPUPPET_DAEMON_STARTED_WRAPPED'] = wrapped ? '1' : '0';
+  setEnvValue(env, process.platform, 'SHELLPUPPET_DAEMON_STARTED_WRAPPED', wrapped ? '1' : '0');
   logger.info('auto-starting daemon', { wrapped });
   let startError = false;
   let childExitAt: number | null = null;
@@ -665,9 +698,9 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
     });
   } catch {
     if (programName !== undefined) {
-      throw new Error(`daemon.startWith program ${programName} could not be started.`);
+      throw new DaemonStartError(`daemon.startWith program ${programName} could not be started.`);
     }
-    throw new Error('The ShellPuppet daemon process could not be started.');
+    throw new DaemonStartError('The ShellPuppet daemon process could not be started.');
   }
   // A process that cannot start reports it as an 'error' event, which with no
   // listener would end this client. The poll below reports the failure.
@@ -707,15 +740,15 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
     // cleanup bound passes. A peer cannot start a second wrapper meanwhile.
     if (wrapped) await endSpawnedWrapper(child, logger);
     else if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
-    throw new Error('A pending daemon start did not settle within its health bound.');
+    throw new DaemonStartError(pendingStartMessage);
   }
   if (programName !== undefined) {
     await endSpawnedWrapper(child, logger);
-    throw new Error(`daemon.startWith program ${programName} ${startError ? 'could not be started' :
+    throw new DaemonStartError(`daemon.startWith program ${programName} ${startError ? 'could not be started' :
       childExitAt !== null && Date.now() < deadline ? 'exited before the daemon became healthy' :
       `did not produce a healthy daemon within ${String(timeoutMs / 1_000)} s`}. Check daemon.log.`);
   }
-  throw new Error(`The ShellPuppet daemon did not become healthy within ${String(timeoutMs / 1_000)} s. Check ${home}/daemon.log.`);
+  throw new DaemonStartError(`The ShellPuppet daemon did not become healthy within ${String(timeoutMs / 1_000)} s. Check daemon.log in the ShellPuppet home.`);
   } finally {
     if (heldLock === undefined && lock !== UNCOORDINATED_START) await releaseStartLock(lock);
   }

@@ -17,7 +17,7 @@ export function createFileLogger(filePath: string): Logger {
           message,
           ...(meta !== undefined ? { meta } : {}),
         }) + '\n';
-      fs.appendFileSync(filePath, line);
+      fs.appendFileSync(filePath, line, { mode: 0o600 });
     } catch {
       // Never let logging take the daemon down.
     }

@@ -11,6 +11,7 @@ import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { envValue } from '../core/environment.js';
 
 /** Restart evidence that may outlive the daemon that first verified it. */
 export interface RestartHandoff {
@@ -35,7 +36,7 @@ export interface DaemonState extends RestartHandoff {
 }
 
 export function shellpuppetHome(env: NodeJS.ProcessEnv = process.env): string {
-  return env['SHELLPUPPET_HOME'] ?? path.join(os.homedir(), '.shellpuppet');
+  return envValue(env, 'SHELLPUPPET_HOME') ?? path.join(os.homedir(), '.shellpuppet');
 }
 
 export function daemonStatePath(home: string): string {

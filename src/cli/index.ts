@@ -15,6 +15,7 @@ import { writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import process from 'node:process';
+import { createInterface } from 'node:readline';
 import { DaemonGoneError, daemonStartMode, discoverDaemon, ensureDaemon, request, waitForPendingDaemon, withDaemonStartLock } from '../client/http.js';
 import type { DaemonConnection } from '../client/http.js';
 import { assertNodeVersion, packageVersion } from '../daemon/meta.js';
@@ -1045,6 +1046,15 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
   }
 }
 
-main().catch((error: unknown) => {
-  fail(1, error instanceof Error ? error.message : String(error));
+await main().catch(async (error: unknown) => {
+  process.exitCode = 1;
+  console.error(error instanceof Error ? error.message : String(error));
+  if (process.argv[2] === 'desktop' && process.platform === 'win32' && process.stdout.isTTY && process.stdin.isTTY) {
+    const input = createInterface({ input: process.stdin });
+    console.log('See daemon.log in the ShellPuppet home. Press Enter to close.');
+    await new Promise<void>(resolve => {
+      input.once('close', resolve);
+      input.once('line', () => input.close());
+    });
+  }
 });
