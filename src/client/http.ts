@@ -205,13 +205,10 @@ class DaemonStartError extends Error {}
 
 const pendingStartMessage = 'A pending daemon start did not settle within its health bound.';
 
-function logStartFailure(home: string, error: unknown): void {
-  // A library or OS error can include argv, paths or environment values.
-  try {
-    ensureHome(home);
-    createFileLogger(daemonLogPath(home)).error(error instanceof DaemonStartError
-      ? error.message : 'ShellPuppet could not connect to or start its daemon.');
-  } catch { /* A home that cannot be secured cannot hold a private diagnostic. */ }
+/** Verify permissions within the start budget. Only the append runs on failure. */
+function prepareStartLog(home: string): Logger {
+  ensureHome(home);
+  return createFileLogger(daemonLogPath(home));
 }
 
 /** Resolve a configured wrapper without a shell or joined argument string. */
@@ -447,18 +444,18 @@ function callDeadline(home: string, logger: Logger): number {
 /** Hold the start endpoint while a daemon verb stops and replaces a daemon. */
 export async function withDaemonStartLock<T>(options: ClientOptions, action: (lock: Exclude<StartLockClaim, null>) => Promise<T>): Promise<T> {
   const home = options.home ?? shellpuppetHome();
-  if (!fs.existsSync(home)) ensureHome(home);
   const deadline = Date.now() + startWaitBound(home);
+  let startLog = fs.existsSync(home) ? undefined : prepareStartLog(home);
   let lock: StartLockClaim = null;
   while (Date.now() < deadline) {
     lock = await claimStartLock(home, options.logger ?? NULL_LOGGER);
     if (lock !== null) break;
+    startLog ??= prepareStartLog(home);
     await new Promise((resolve) => setTimeout(resolve, AUTO_START_POLL_MS));
   }
   if (lock === null) {
-    const error = new DaemonStartError(pendingStartMessage);
-    logStartFailure(home, error);
-    throw error;
+    startLog?.error(pendingStartMessage);
+    throw new DaemonStartError(pendingStartMessage);
   }
   try { return await action(lock); }
   finally { if (lock !== UNCOORDINATED_START) await releaseStartLock(lock); }
@@ -589,12 +586,7 @@ export async function discoverDaemon(options: ClientOptions = {}, deadline?: num
  */
 export async function ensureDaemon(options: ClientOptions = {}, heldLock?: Exclude<StartLockClaim, null>): Promise<DaemonConnection> {
   const home = options.home ?? shellpuppetHome();
-  try {
-    return await ensureDaemonUntil(options, heldLock, callDeadline(home, options.logger ?? NULL_LOGGER));
-  } catch (error) {
-    logStartFailure(home, error);
-    throw error;
-  }
+  return ensureDaemonUntil(options, heldLock, callDeadline(home, options.logger ?? NULL_LOGGER));
 }
 
 async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<StartLockClaim, null> | undefined, waitDeadline: number): Promise<DaemonConnection> {
@@ -606,7 +598,7 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
     warnedInvalidDirect = true;
   }
 
-  if (!fs.existsSync(home)) ensureHome(home);
+  let startLog = fs.existsSync(home) ? undefined : prepareStartLog(home);
   let lock: StartLockClaim = heldLock ?? null;
   while (heldLock === undefined && Date.now() < waitDeadline) {
     const hold = readRestartHold(home, logger);
@@ -632,9 +624,13 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
       lock = null;
       continue;
     }
+    startLog ??= prepareStartLog(home);
     await new Promise((resolve) => setTimeout(resolve, Math.min(AUTO_START_POLL_MS, Math.max(1, waitDeadline - Date.now()))));
   }
-  if (lock === null) throw new DaemonStartError(pendingStartMessage);
+  if (lock === null) {
+    startLog?.error(pendingStartMessage);
+    throw new DaemonStartError(pendingStartMessage);
+  }
   try {
     if (heldLock === undefined) {
       const hold = readRestartHold(home, logger);
@@ -650,6 +646,7 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
     }
     const wonWhileClaiming = await discoverDaemon(options, waitDeadline);
     if (wonWhileClaiming !== null) return wonWhileClaiming;
+    startLog ??= prepareStartLog(home);
 
   if (heldLock === undefined && Date.now() >= waitDeadline) {
     throw new DaemonStartError(pendingStartMessage);
@@ -749,6 +746,10 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
       `did not produce a healthy daemon within ${String(timeoutMs / 1_000)} s`}. Check daemon.log.`);
   }
   throw new DaemonStartError(`The ShellPuppet daemon did not become healthy within ${String(timeoutMs / 1_000)} s. Check daemon.log in the ShellPuppet home.`);
+  } catch (error) {
+    // A library or OS error can include argv, paths or environment values.
+    startLog?.error(error instanceof DaemonStartError ? error.message : 'ShellPuppet could not start its daemon.');
+    throw error;
   } finally {
     if (heldLock === undefined && lock !== UNCOORDINATED_START) await releaseStartLock(lock);
   }
