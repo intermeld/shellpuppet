@@ -23,23 +23,27 @@ export function restartHoldPath(home: string): string {
 
 export function clearRestartHold(home: string): void {
   try { fs.unlinkSync(restartHoldPath(home)); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
+      throw new Error('Could not clear the restart hold. SHELLPUPPET_HOME must name a writable private directory.', { cause: error });
+    }
+  }
 }
 
 export function writeRestartHold(home: string, seconds: number, replacing?: RestartHold['replacing']): void {
-  const cutoff = Date.now() - 3_600_000;
-  for (const name of fs.readdirSync(home)) {
-    if (!/^\.restart-hold-.+\.tmp$/.test(name)) continue;
-    const candidate = path.join(home, name);
-    try {
-      const stat = fs.lstatSync(candidate);
-      if (stat.isFile() && !stat.isSymbolicLink() && stat.mtimeMs < cutoff) fs.unlinkSync(candidate);
-    } catch { /* Another writer may have removed it. */ }
-  }
   const target = restartHoldPath(home);
   const temporary = path.join(home, `.restart-hold-${randomUUID()}.tmp`);
   let created = false;
   try {
+    const cutoff = Date.now() - 3_600_000;
+    for (const name of fs.readdirSync(home)) {
+      if (!/^\.restart-hold-.+\.tmp$/.test(name)) continue;
+      const candidate = path.join(home, name);
+      try {
+        const stat = fs.lstatSync(candidate);
+        if (stat.isFile() && !stat.isSymbolicLink() && stat.mtimeMs < cutoff) fs.unlinkSync(candidate);
+      } catch { /* Another writer may have removed it. */ }
+    }
     const descriptor = fs.openSync(temporary, 'wx', 0o600);
     created = true;
     try {
@@ -52,7 +56,7 @@ export function writeRestartHold(home: string, seconds: number, replacing?: Rest
       try { fs.unlinkSync(temporary); }
       catch { /* A failed rename may already have moved it. */ }
     }
-    throw error;
+    throw new Error('Could not write the restart hold in the ShellPuppet home.', { cause: error });
   }
 }
 

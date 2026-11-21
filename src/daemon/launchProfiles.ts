@@ -642,11 +642,15 @@ export function resolveLaunchCommand(
     };
   }
 
-  const searchDirs = (envValue(env, 'PATH', platform) ?? '')
-    .split(isWindows ? ';' : ':')
-    .filter((dir) => dir !== '');
+  const searchPath = envValue(env, 'PATH', platform) ?? '';
+  // A quoted Windows directory can itself contain a semicolon.
+  const searchDirs = isWindows
+    ? (searchPath.match(/(?:[^;"]|"[^"]*")+/g) ?? []).map(dir => dir.replaceAll('"', ''))
+    : searchPath.split(':');
   for (const dir of searchDirs) {
-    for (const candidate of candidatesFor(pathApi.join(dir, written))) {
+    if (dir === '') continue;
+    const base = isWindows ? pathApi.resolve(cwd, dir, written) : pathApi.join(dir, written);
+    for (const candidate of candidatesFor(base)) {
       if (usable(candidate)) return { file: pathApi.resolve(candidate) };
     }
   }
