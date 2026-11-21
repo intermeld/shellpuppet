@@ -490,6 +490,9 @@ ambiguous in clients that do not, so the prefix stays.
 | `terminal_snapshot` | Read the rendered screen as plain text | `session`, `lastLines`, `hideReasoning`, `wider`, `widerTimeout` |
 | `terminal_type` | Type text (optionally submit) | `session`, `text`, `submit`, `verify` |
 
+Typed text is checked against the composer only when the agent's own composer is
+readable on screen before the body is written. A launch line typed at a shell prompt
+before the agent starts is written with its Enter as for any other program.
 For a single typed line with Enter, the resolved agent module supplies a
 submit key and timing. The session writes the body first, then waits for a
 readable composer to paint the exact line or a recognised paste placeholder

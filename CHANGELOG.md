@@ -9,6 +9,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- A launch command typed into an agent session before the agent has started (at its shell prompt) is submitted with its Enter again.
 - Wait for a typed line or a new, matching paste placeholder to settle before Enter; do not send Enter without final composer proof, and honour the full length-based minimum before a single safe retry.
 
 ### Added
