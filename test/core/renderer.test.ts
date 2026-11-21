@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ScreenRenderer } from '../../src/core/renderer.js';
 import { detectPrompt } from '../../src/core/promptDetector.js';
 import { markFilteredSelectedOption } from '../../src/core/selection.js';
@@ -148,6 +148,31 @@ describe('ScreenRenderer.snapshot', () => {
     expect(snap.rows).toBe(10);
     expect(snap.screen).toContain('resize me');
   });
+
+  it.each([[220, 40], [96, 31], [81, 25]])(
+    'preserves an alternate-screen dialog when growing to %ix%i after a shrink',
+    async (cols, rows) => {
+      const onFault = vi.fn();
+      const r = new ScreenRenderer({ cols: 120, rows: 34, onFault });
+      renderers.push(r);
+      await r.write('shell prompt');
+      r.resize(80, 24);
+      // Scroll at the foot of the alternate screen, then draw the dialog with
+      // its cursor above the footer, as a full-screen program does.
+      await r.write('\x1b[?1049h\x1b[24;1H' + 'loading\r\n'.repeat(10) +
+        '\x1b[2J\x1b[HPermission required\x1b[24;1HAllow once?\x1b[12;1H');
+      const dialog = r.snapshot();
+      r.resize(cols, rows);
+      expect(onFault).not.toHaveBeenCalled();
+      expect(r.snapshot()).toMatchObject({ cols, rows, lines: dialog.lines, cursor: dialog.cursor });
+      await r.write(`\x1b[${String(rows)};${String(cols)}HX`);
+      expect(r.snapshot().lines[rows - 1]?.[cols - 1]).toBe('X');
+      r.resize(80, 24);
+      expect(onFault).not.toHaveBeenCalled();
+      await r.write('\x1b[?1049l');
+      expect(r.snapshot().screen).toBe('shell prompt');
+    },
+  );
 });
 
 describe('ScreenRenderer.lastLines', () => {

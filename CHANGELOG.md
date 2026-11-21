@@ -9,6 +9,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Keep full-screen sessions alive when a wider snapshot grows the grid after an earlier shrink. If the program ends during the read, report its exit code or rendering fault.
 - Wait for a typed line or a new, matching paste placeholder to settle before Enter; do not send Enter without final composer proof, and honour the full length-based minimum before a single safe retry.
 
 ### Added

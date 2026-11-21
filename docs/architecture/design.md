@@ -1613,8 +1613,10 @@ setting, never their values. Client-token starts do not use profiles.
     queued after restore applies to the restored grid. A controller's departure
     does not change the chosen grid;
     the original size is restored while control stays as the departure left it.
-    A cancelled or failed read and daemon shutdown also restore before the
-    request finishes. Viewers receive the two real grid changes and keep their
+    A cancelled or failed read and daemon shutdown also restore a live session
+    before the request finishes. If the program ends during the read, the
+    daemon leaves its last grid in place and returns HTTP 409 with the reason.
+    Viewers receive live grid changes and keep their
     controller. A wider read is audited with requested and original sizes,
     without screen text. `terminal_find` remains a search over the current
     viewport; callers widen a snapshot when they need to reveal clipped text.
