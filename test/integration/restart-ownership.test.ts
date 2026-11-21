@@ -6,11 +6,14 @@ import { syncBuiltinESMExports } from 'node:module';
 import { join } from 'node:path';
 import { expect, it, vi } from 'vitest';
 import { Daemon } from '../../src/daemon/server.js';
-import { readDaemonState } from '../../src/daemon/paths.js';
+import { readDaemonState, writePrivateRecord, type DaemonState } from '../../src/daemon/paths.js';
 import { parseDaemonConfig } from '../../src/daemon/config.js';
 import { NULL_LOGGER } from '../../src/core/types.js';
 import { api, makeTempHome, repoRoot, startTestDaemon } from './helpers.js';
 import { lockRecord } from './record-lock.js';
+
+// Each Windows takeover starts native ACL helpers and can drain a real ConPTY.
+if (process.platform === 'win32') vi.setConfig({ testTimeout: 180_000 });
 
 async function withLiveProfile(run: (ctx: {
   options: ConstructorParameters<typeof Daemon>[0];
@@ -104,7 +107,7 @@ it('preserves a verified snapshot across an ordinary stop before the supervisor 
   });
 });
 
-it.each(['missing', 'empty'])('preserves claim activity across a direct stop with discovery %s', async kind => {
+it.each(['missing', 'empty', 'truncated and held open', 'unreadable'])('preserves claim activity across a direct stop with discovery %s', async kind => {
   let time = Date.now();
   const options = { home: makeTempHome(), now: () => time, logger: NULL_LOGGER,
     launchProfiles: { sessionLaunch: ['chair'], profiles: [], problems: [] },
@@ -116,14 +119,18 @@ it.each(['missing', 'empty'])('preserves claim activity across a direct stop wit
     time += 50_000;
     expect((await api(current.port, current.token, '/messages/inbox', { headers })).status).toBe(200);
     const discovery = join(current.home, 'daemon.json');
+    let unlock;
     if (kind === 'missing') fs.unlinkSync(discovery);
-    else fs.truncateSync(discovery, 0);
-    await current.daemon.stop();
+    else if (kind === 'empty') fs.truncateSync(discovery, 0);
+    else unlock = await lockRecord(discovery, kind === 'unreadable' ? 'exclusive' : 'truncate');
+    try { await current.daemon.stop(); } finally { await unlock?.(); }
     const saved = JSON.parse(fs.readFileSync(join(current.home, 'launcher-claims.json'), 'utf8')) as { lastActivity: number }[];
     const activityLagMs = time - saved[0]!.lastActivity;
     time += 11_000;
     current = await startTestDaemon(options);
     const reply = await api(current.port, current.token, '/messages/inbox', { headers });
+    const restored: unknown = JSON.parse(fs.readFileSync(join(current.home, 'launcher-claims.json'), 'utf8'));
+    expect.soft(restored).toMatchObject([{ name: 'chair' }]);
     expect({ activityLagMs, status: reply.status }).toEqual({ activityLagMs: 0, status: 200 });
   } finally { await current.stop(); }
 });
@@ -263,7 +270,7 @@ it('returns an empty list only after recording a verified empty restart', async 
   } finally { await owner.stop(); }
 });
 
-it('keeps an older verified snapshot unavailable when both writes fail and discovery cannot be removed', async () => {
+it.each(['readable', 'locked through takeover'])('rejects older rows when the newer write-ahead source is %s', async kind => {
   await withLiveProfile(async ({ active, headers, replace }) => {
     await active.daemon.stop({ restart: true });
     const next = await replace();
@@ -299,10 +306,27 @@ it('keeps an older verified snapshot unavailable when both writes fail and disco
     }
     expect(fs.readFileSync(snapshot, 'utf8')).toBe(saved);
     expect(sourceAtSnapshotWrite).toEqual({ restartFrom: outgoing });
-    const later = await replace();
+    const unlock = kind === 'locked through takeover' ? await lockRecord(sourceFile, 'exclusive') : undefined;
+    let later;
+    try {
+      later = await replace();
+      expect((await api(later.port, later.token, '/launcher/previous', { headers })).status).toBe(409);
+      if (unlock) {
+        await later.daemon.stop();
+        later = await replace();
+      }
+    } finally { await unlock?.(); }
     expect((await api(later.port, later.token, '/launcher/previous', { headers })).status).toBe(409);
+    expect(JSON.parse(fs.readFileSync(sourceFile, 'utf8'))).toEqual({ restartFrom: outgoing });
+    if (unlock) {
+      expect(readDaemonState(later.home)?.restartFrom).toBe(outgoing);
+      fs.unlinkSync(sourceFile);
+      await later.daemon.stop({ removeState: false });
+      later = await replace();
+      expect((await api(later.port, later.token, '/launcher/previous', { headers })).status).toBe(409);
+    }
   });
-});
+}, 180_000);
 
 it('prevents takeover while the owner publishes a staged claim with discovery missing', async () => {
   const td = await startTestDaemon({ launchProfiles: { sessionLaunch: ['chair'], profiles: [], problems: [] },
@@ -334,26 +358,69 @@ it('prevents takeover while the owner publishes a staged claim with discovery mi
   } finally { fs.writeFileSync = write; syncBuiltinESMExports(); await td.stop(); }
 });
 
-it.each(['intact', 'missing'])('transfers the same predecessor to one of two starters after the successor process dies with discovery %s', async kind => {
-  await withLiveProfile(async ({ active, headers, options }) => {
-    await active.daemon.stop({ restart: true });
-    const saved = fs.readFileSync(join(active.home, 'previous-sessions.json'), 'utf8');
-    const child = spawn(process.execPath, ['--input-type=module', '-e', `
+async function crashSuccessor(home: string, beforeCrash: (state: DaemonState) => Promise<void> | void) {
+  const child = spawn(process.execPath, ['--input-type=module', '-e', `
       import { Daemon } from './dist/daemon/server.js';
       import { NULL_LOGGER } from './dist/core/types.js';
       const owner = new Daemon({ home: process.env.SHELLPUPPET_HOME, logger: NULL_LOGGER,
         launchProfiles: { sessionLaunch: ['chair'], profiles: [], problems: [] }, messaging: { enabled: true, allow: [] } });
       await owner.start();
       process.stdout.write('ready');
-    `], { cwd: repoRoot, env: { ...process.env, SHELLPUPPET_HOME: active.home }, windowsHide: true, stdio: ['ignore', 'pipe', 'inherit'] });
-    const exited = once(child, 'exit');
-    try {
-      expect(String((await Promise.race([once(child.stdout, 'data'), exited]))[0])).toBe('ready');
-      if (kind === 'missing') fs.unlinkSync(join(active.home, 'daemon.json'));
-    } finally {
-      child.kill('SIGKILL');
-      await exited;
+    `], { cwd: repoRoot, env: { ...process.env, SHELLPUPPET_HOME: home }, windowsHide: true, stdio: ['ignore', 'pipe', 'inherit'] });
+  const exited = once(child, 'exit');
+  try {
+    expect(String((await Promise.race([once(child.stdout, 'data'), exited]))[0])).toBe('ready');
+    await beforeCrash(readDaemonState(home)!);
+  } finally {
+    child.kill('SIGKILL');
+    await exited;
+  }
+}
+
+it.each(['missing', 'unreadable', 'missing with snapshot locked'])('keeps a verified predecessor across takeover with source %s', async fault => {
+  await withLiveProfile(async ({ active, headers, replace }) => {
+    const source = join(active.home, 'restart-source.json');
+    const snapshot = join(active.home, 'previous-sessions.json');
+    const outgoing = readDaemonState(active.home)!.instanceId;
+    let unlock;
+    if (fault === 'unreadable') {
+      writePrivateRecord(source, { restartFrom: randomUUID() });
+      unlock = await lockRecord(source, 'exclusive');
     }
+    let next;
+    let saved: string;
+    try {
+      await active.daemon.stop({ restart: true });
+      saved = fs.readFileSync(snapshot, 'utf8');
+      await crashSuccessor(active.home, async state => {
+        expect(await api(state.port, state.token, '/launcher/previous', { headers })).toMatchObject({
+          status: 200, body: { outgoingInstanceId: outgoing, sessions: [{ profile: 'worker' }] },
+        });
+        if (fault === 'unreadable') expect(state.restartSourcePending).toBe(true);
+        else fs.unlinkSync(source);
+      });
+      expect(readDaemonState(active.home)?.restartFrom).toBe(outgoing);
+      if (fault === 'missing with snapshot locked') unlock = await lockRecord(snapshot, 'exclusive');
+      next = await replace();
+    } finally { await unlock?.(); }
+    expect((await api(next.port, next.token, '/health')).status).toBe(200);
+    const expected: unknown = JSON.parse(saved);
+    expect.soft(await api(next.port, next.token, '/launcher/previous', { headers })).toEqual({ status: 200, body: expected });
+    expect.soft(JSON.parse(fs.readFileSync(source, 'utf8'))).toEqual({ restartFrom: outgoing });
+    await next.daemon.stop();
+    const later = await replace();
+    expect(fs.readFileSync(snapshot, 'utf8')).toBe(saved);
+    expect(await api(later.port, later.token, '/launcher/previous', { headers })).toEqual({ status: 200, body: expected });
+  });
+}, 180_000);
+
+it.each(['intact', 'missing'])('transfers the same predecessor to one of two starters after the successor process dies with discovery %s', async kind => {
+  await withLiveProfile(async ({ active, headers, options }) => {
+    await active.daemon.stop({ restart: true });
+    const saved = fs.readFileSync(join(active.home, 'previous-sessions.json'), 'utf8');
+    await crashSuccessor(active.home, () => {
+      if (kind === 'missing') fs.unlinkSync(join(active.home, 'daemon.json'));
+    });
     const starters = [new Daemon(options), new Daemon(options)];
     try {
       const results = await Promise.allSettled(starters.map(daemon => daemon.start()));

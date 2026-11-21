@@ -12,8 +12,17 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 
+/** Restart evidence that may outlive the daemon that first verified it. */
+export interface RestartHandoff {
+  restartFrom?: string | null;
+  /** This handoff supersedes an older independent source. */
+  restartSourcePending?: boolean;
+  /** Present while verification is pending. Lists possible writers, oldest first. */
+  restartCandidates?: string[];
+}
+
 /** Daemon discovery record: written atomically, read by every client. */
-export interface DaemonState {
+export interface DaemonState extends RestartHandoff {
   port: number;
   token: string;
   pid: number;
@@ -23,10 +32,6 @@ export interface DaemonState {
   instanceId?: string;
   /** Set by the daemon entry from the client's internal start marker. */
   startedWrapped?: boolean;
-  /** Last restart snapshot accepted when this owner acquired the home. */
-  restartFrom?: string | null;
-  /** The live record is carrying a handoff that could not be copied to restart-source.json. */
-  restartSourcePending?: boolean;
 }
 
 export function shellpuppetHome(env: NodeJS.ProcessEnv = process.env): string {
@@ -171,7 +176,7 @@ export function ensureHome(home: string): void {
  */
 export type DaemonStateFile =
   | { kind: 'record'; state: DaemonState }
-  | { kind: 'restart-handoff'; raw: string; instanceId: string }
+  | { kind: 'restart-handoff'; handoff: RestartHandoff }
   | { kind: 'not-a-record'; raw: string }
   | { kind: 'missing' }
   | { kind: 'unreadable' };
@@ -209,8 +214,11 @@ function parseDaemonState(raw: string): DaemonStateFile {
     ) {
       return { kind: 'record', state: parsed as DaemonState };
     }
-    const instanceId = restartSourceId(parsed);
-    if (instanceId !== null) return { kind: 'restart-handoff', raw, instanceId };
+    const handoff = parsed as RestartHandoff | null;
+    if (handoff && (restartSourceId(handoff) !== null || (handoff.restartFrom === null &&
+        Array.isArray(handoff.restartCandidates) && handoff.restartCandidates.every(isDaemonInstanceId)))) {
+      return { kind: 'restart-handoff', handoff };
+    }
   } catch { /* Incomplete or hand-edited discovery record. */ }
   return { kind: 'not-a-record', raw };
 }

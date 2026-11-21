@@ -149,7 +149,9 @@ slot or by atomic replacement of the observed stale record or restart handoff.
   names it, and publishes the file again if it is missing, holds no daemon record or
   names a daemon that has gone. A starter that arrives before then defers to the live home owner. If the file names another daemon that is running, the first
   leaves the file and says so in `daemon.log`; its sessions stay reachable through the
-  clients already connected to it.
+  clients already connected to it. While the daemon holds the exclusive home
+  marker, it can still save claim activity when discovery is unreadable or
+  damaged. A record naming a different owner prevents that save.
 - **Idle self-shutdown.** The daemon exits after **30 minutes** (configurable) with *no
   live sessions, no connected WebSocket clients and no API calls*. It must **never**
   exit while any session is running, even unwatched: an unattended agent run with no
@@ -183,7 +185,11 @@ was lost. If both metadata files were locked, the outgoing daemon's live
 discovery record can still confirm a new snapshot bearing its own instance id.
 A successor reuses a matching source. If it cannot copy a handoff into the
 source, it logs the failure and carries the id in its live discovery record
-so a later owner can retry. An ordinary stop preserves this id. The reader
+so a later owner can retry. After a crash, the next owner checks both the
+inherited id and the crashed owner's own id. If a lock hides the source or
+snapshot, discovery retains the ids through further takeovers and ordinary
+stops. A granted read retries verification after the lock clears. A source
+written by a newer owner rules out snapshots from an earlier one. The reader
 returns HTTP 409 for missing evidence, including before the first restart, or
 for a snapshot with a different or absent stamp. A successfully recorded empty
 snapshot returns HTTP 200 with an empty array. A granted caller reads
