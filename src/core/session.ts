@@ -202,6 +202,12 @@ function composerBlockKey(rows: readonly string[]): string {
 /** Let the program repaint its composer before deciding whether Enter landed. */
 const TYPED_SUBMIT_SETTLE_MS = 300;
 const TYPED_SUBMIT_WAIT_MS = 2_000;
+/** Shell prompts a launch command is typed at before an agent starts. */
+const SHELL_PROMPTS: readonly RegExp[] = [
+  /^PS [^>]+>$/u, // PowerShell: PS D:\work>
+  /^[A-Za-z]:\\[^>]*>$/u, // cmd.exe: D:\work>
+  /^\S*[@:~/]\S*[$#%]$/u, // POSIX: user@host:~/work$
+];
 /**
  * A paste placeholder proves this body only when no input was written and nothing
  * was painted for this long before it: an earlier paste cannot still be pending.
@@ -1432,10 +1438,19 @@ export class Session implements WaitTarget {
     });
   }
 
-  /** Whether the agent's own composer can be read on screen (not, say, a shell prompt before it starts). */
-  typedComposerOnScreen(): boolean {
+  /**
+   * Positive evidence that the agent has not started yet: its module cannot read a composer and the
+   * text before the cursor is a shell prompt (PowerShell, cmd.exe, or a POSIX `user@host:dir$`).
+   * An agent screen the module cannot read for a moment (a clipped frame, a status timeout) is
+   * not a shell prompt, so its typed text still waits for composer proof.
+   */
+  shellPromptBeforeAgent(): boolean {
     const verdict = this.pendingComposerVerdict();
-    return verdict.ready || verdict.reason !== 'unknown';
+    if (verdict.ready || verdict.reason !== 'unknown') return false;
+    const view = this.nudgeView();
+    const row = view.rows[view.cursor.y] ?? '';
+    const before = row.slice(0, view.cursor.x).replace(/\s+$/u, '');
+    return SHELL_PROMPTS.some((pattern) => pattern.test(before));
   }
 
   nudgeSubmit(): string {
@@ -1560,7 +1575,7 @@ export class Session implements WaitTarget {
       // agent has started (a shell prompt typing its launch command), the module cannot read a
       // composer, so the line and its Enter are written as for any other program.
       const readableComposer = !nudge && this.agentModule?.nudge !== undefined &&
-        this.typedComposerOnScreen();
+        !this.shellPromptBeforeAgent();
       // Without a settled screen before the body, no placeholder can prove this write:
       // only the exact typed line can.
       const placeholdersBefore = readableComposer && settledBefore
@@ -1630,6 +1645,10 @@ export class Session implements WaitTarget {
               message: 'The typed text was not seen in the composer; Enter was not sent.' });
             return screen;
           }
+        }
+        // On Windows the program can end before its exit event; never send Enter after it.
+        if (this.agentModule?.nudge !== undefined && this.programEnded) {
+          throw new Error(`Session ${this.id} exited while input was being written.`);
         }
         this.pty.write(key);
         if (!nudge) {

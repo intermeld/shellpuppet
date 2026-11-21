@@ -29,7 +29,7 @@ function recordingSession(agent: string): { session: Session; pty: RecordingPty 
 
 function draftWait(session: Session, seen: boolean, delayMs = 150): void {
   // These cases model a composer already on screen when the text is typed.
-  vi.spyOn(session, 'typedComposerOnScreen').mockReturnValue(true);
+  vi.spyOn(session, 'shellPromptBeforeAgent').mockReturnValue(false);
   vi.spyOn(session, 'waitForTypedDraft').mockImplementation(async () => {
     await new Promise((resolve) => setTimeout(resolve, delayMs));
     return seen;
@@ -214,10 +214,42 @@ describe('Muse input submission', () => {
     vi.spyOn(session['renderer'], 'styledLines').mockReturnValue({
       lines: [{ text: 'PS D:\\work> ', spans: [] }], firstVisible: 0,
     });
+    vi.spyOn(session['renderer'], 'cursor', 'get').mockReturnValue({ x: 12, y: 0 });
     const line = 'codex -m example --add-dir \'D:\\A & B\'';
     const result = await session.writeWithResult(`${line}\r`);
     expect(pty.writes.map((entry) => entry.data)).toEqual([line, '\r']);
     expect(result.submitRetried).toBe(false);
+  });
+
+  it('keeps composer proof when an agent frame is unreadable but no shell prompt is shown', async () => {
+    const { session, pty } = recordingSession('codex');
+    vi.spyOn(session['renderer'], 'styledLines').mockReturnValue({
+      lines: [{ text: '│ draft words not sent', spans: [] }], firstVisible: 0,
+    });
+    vi.spyOn(session['renderer'], 'cursor', 'get').mockReturnValue({ x: 22, y: 0 });
+    expect(session.shellPromptBeforeAgent()).toBe(false);
+    vi.spyOn(session, 'waitForTypedDraft').mockResolvedValue(false);
+    const result = await session.writeWithResult('hello\r');
+    expect(pty.writes.map((entry) => entry.data)).toEqual(['hello']);
+    expect(result.submitted).toBe(false);
+  });
+
+  it('does not treat a bare composer marker as a shell prompt', () => {
+    const { session } = recordingSession('qoder');
+    vi.spyOn(session['renderer'], 'styledLines').mockReturnValue({ lines: [{ text: ' >', spans: [] }], firstVisible: 0 });
+    vi.spyOn(session['renderer'], 'cursor', 'get').mockReturnValue({ x: 3, y: 0 });
+    expect(session.shellPromptBeforeAgent()).toBe(false);
+  });
+
+  it('never sends Enter at a shell prompt once the program has ended', async () => {
+    const { session, pty } = recordingSession('codex');
+    vi.spyOn(session['renderer'], 'styledLines').mockReturnValue({
+      lines: [{ text: 'PS D:\\work> ', spans: [] }], firstVisible: 0,
+    });
+    vi.spyOn(session['renderer'], 'cursor', 'get').mockReturnValue({ x: 12, y: 0 });
+    vi.spyOn(session, 'programEnded', 'get').mockReturnValue(true);
+    await expect(session.writeWithResult('codex\r')).rejects.toThrow('exited while input was being written');
+    expect(pty.writes.map((entry) => entry.data)).toEqual(['codex']);
   });
 
   it('rejects a paste placeholder that was visible before this body', async () => {
