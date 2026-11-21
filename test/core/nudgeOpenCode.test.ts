@@ -126,6 +126,8 @@ it('accepts the model cost OpenCode adds to the idle footer', async () => {
   const tail = '18.1K (14%) · $0.06  ctrl+p commands';
   rows[foot + 1] = footer.slice(0, start).padEnd(footer.length - tail.length) + tail;
   expect(nudgeVerdict(opencode, { ...screen, rows, styled: undefined })).toEqual({ ready: true });
+  const thousands = rows.map((row, i) => i === foot + 1 ? row.replace('18.1K (14%) · $0.06', '1.2M (90%) · $1,234.56') : row);
+  expect(nudgeVerdict(opencode, { ...screen, rows: thousands, styled: undefined })).toEqual({ ready: true });
   const noDollar = rows.map((row, i) => i === foot + 1 ? row.replace('$0.06', '0.06 ') : row);
   expect(nudgeVerdict(opencode, { ...screen, rows: noDollar, styled: undefined }).ready).toBe(false);
 });
