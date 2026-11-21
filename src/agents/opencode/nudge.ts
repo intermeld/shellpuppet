@@ -5,7 +5,7 @@ import { onlyBlankRowsAfter } from '../nudgeReading.js';
 import type { NudgeReadiness, NudgeView } from '../types.js';
 
 const FOLDER = String.raw`(?:[A-Za-z]:[\\/]|[\\/~]|…|\.\.?[\\/])`;
-const CONTROLS = String.raw`(shift\+tab agents|\d+(?:\.\d+)?[KMB]? \(\d+%\)(?: · \$\d+(?:\.\d+)?)?) {2}ctrl\+p commands`;
+const CONTROLS = String.raw`(shift\+tab agents|\d+(?:\.\d+)?[KMB]? \(\d+%\)(?: · \$\d{1,3}(?:,\d{3})*(?:\.\d+)?)?) {2}ctrl\+p commands`;
 const FOOTER = new RegExp(String.raw`^${FOLDER}.*? {2,}${CONTROLS}$`, 'u');
 const SIDEBAR_FOLDER = new RegExp(String.raw`^ {4}${FOLDER}`, 'u');
 const BUSY_FOOTER = new RegExp(String.raw`^[⬝■]{8} esc interrupt {2,}${CONTROLS}$`, 'u');
