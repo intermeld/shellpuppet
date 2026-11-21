@@ -139,6 +139,28 @@ describe('Muse input submission', () => {
     expect(result).toMatchObject({ submitted: false, submitRetried: true });
   });
 
+  it('never retries Enter once the program has ended', async () => {
+    const { session, pty } = recordingSession('codex');
+    vi.spyOn(session, 'nudgeReadyWithLine').mockReturnValue(true);
+    draftWait(session, true);
+    let ended = false;
+    const originalWrite = pty.write.bind(pty);
+    vi.spyOn(pty, 'write').mockImplementation((data) => { originalWrite(data); if (data === '\r') ended = true; });
+    vi.spyOn(session, 'programEnded', 'get').mockImplementation(() => ended);
+    await expect(session.writeWithResult('hello\r')).rejects.toThrow('exited while input was being written');
+    expect(pty.writes.map((entry) => entry.data)).toEqual(['hello', '\r']);
+  });
+
+  it('does not take a wrapped continuation row for a shell prompt', () => {
+    const { session } = recordingSession('codex');
+    vi.spyOn(session['renderer'], 'styledLines').mockReturnValue({ lines: [
+      { text: '› please quote this:', spans: [] },
+      { text: 'PS D:\\work>', spans: [], wrapped: true },
+    ], firstVisible: 0 });
+    vi.spyOn(session['renderer'], 'cursor', 'get').mockReturnValue({ x: 11, y: 1 });
+    expect(session.shellPromptBeforeAgent()).toBe(false);
+  });
+
   it('does not retry when the composer shows something else', async () => {
     const { session, pty } = recordingSession('codex');
     vi.spyOn(session, 'nudgeReadyWithLine').mockImplementation(() =>

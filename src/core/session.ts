@@ -1448,6 +1448,8 @@ export class Session implements WaitTarget {
     const verdict = this.pendingComposerVerdict();
     if (verdict.ready || verdict.reason !== 'unknown') return false;
     const view = this.nudgeView();
+    // A wrapped continuation belongs to whatever row above it began, such as an agent draft.
+    if (view.styled[view.cursor.y]?.wrapped === true) return false;
     const row = view.rows[view.cursor.y] ?? '';
     const before = row.slice(0, view.cursor.x).replace(/\s+$/u, '');
     return SHELL_PROMPTS.some((pattern) => pattern.test(before));
@@ -1798,7 +1800,10 @@ export class Session implements WaitTarget {
   }
 
   private refuseIfEnded(): void {
-    if (this.exitedFlag || this.isKilled) throw new Error(`Session ${this.id} exited while input was being written.`);
+    // On Windows the program can end before its exit event; an agent session never gets input after it.
+    if (this.exitedFlag || this.isKilled || (this.agentModule?.nudge !== undefined && this.programEnded)) {
+      throw new Error(`Session ${this.id} exited while input was being written.`);
+    }
   }
 
   /**
