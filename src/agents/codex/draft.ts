@@ -76,7 +76,10 @@ export function matchesDraft(rows: readonly StyledLine[], expected: string, view
       if (cursor.x > end) return false;
     } else if (!full || cursor.y !== last + 1 || cursor.x !== 2) return false;
   }
-  // A second prompt glyph could have been selected as the live composer.
+  // An identical block directly above (only blank rows between) leaves it unclear which
+  // copy is the live composer. An earlier copy in the transcript, separated by other
+  // output, is a past turn and does not count.
   return !view.rows.slice(0, at).some((text, i) => text === rows[0]!.text && i + count <= at &&
-    rows.slice(1, count).every((line, n) => line.text === view.rows[i + n + 1]));
+    rows.slice(1, count).every((line, n) => line.text === view.rows[i + n + 1]) &&
+    view.rows.slice(i + count, at).every((between) => between.trim() === ''));
 }

@@ -473,6 +473,14 @@ describe('nudge readiness', () => {
       }
     });
 
+    it('accepts a wrapped draft repeated after its earlier turn in the transcript', () => {
+      const expectedDraft = '1234567890 dir/ab/cdef';
+      const rows = ['› 1234567890 dir/', '  ab/cdef'];
+      const view = { ...fromRows([...rows, '', '■ Conversation interrupted', '', ...rows, '', '  ? for shortcuts']),
+        viewportCols: 20, expectedDraft };
+      expect(nudgeVerdict(codex, view).ready).toBe(true);
+    });
+
     it('uses the insertion point to detect a trailing space or newline trimmed from the screen', () => {
       const view = { ...fromRows(['› 1234567890 dir/', '  ab/cdef', '', '  ? for shortcuts']),
         viewportCols: 20, expectedDraft: '1234567890 dir/ab/cdef' };
