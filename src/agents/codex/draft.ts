@@ -1,24 +1,18 @@
-import { lineSegments } from '@rockorager/uucode/linebreak';
-import { graphemeWidths, stringWidth } from '@rockorager/uucode/width';
 import type { StyledLine } from '../../core/renderer.js';
+import { stringWidth } from '../../core/stringWidth.js';
 import type { NudgeView } from '../types.js';
 
-/** Codex uses Unicode line breaks, with textwrap's alphanumeric hyphen splitter. */
-function* words(text: string): Generator<string> {
-  let start = 0;
-  for (const { end } of lineSegments(text)) {
-    // textwrap delegates hyphen-minus to its splitter and ignores soft hyphens.
-    if (end < text.length && (text[end - 1] === '-' || text[end - 1] === '\u00ad')) continue;
-    yield* text.slice(start, end).split(/(?<=[\p{Alphabetic}\p{N}]-)(?=[\p{Alphabetic}\p{N}])/u);
-    start = end;
-  }
-}
+// Spaces stay with the preceding piece. A drive prefix can break before its
+// backslash, while the rest of the Windows path stays together. Forward slashes
+// and hyphens between letters or numbers stay at the end of their piece.
+const WORD_BREAK = /(?<= )(?! )|(?<=[A-Za-z]:)(?=\\)|(?<=\/)(?![ /])|(?<=[\p{Alphabetic}\p{N}]-)(?=[\p{Alphabetic}\p{N}])/u;
+const graphemes = new Intl.Segmenter(undefined, { granularity: 'grapheme' });
 
 /** Pack the next piece if it fits. Spaces at a soft break hang off the preceding row. */
 function* wrappedRows(text: string, width: number): Generator<string> {
   let row = '';
   let cells = 0;
-  for (const word of words(text)) {
+  for (const word of text.split(WORD_BREAK)) {
     const ink = word.replace(/ +$/u, '');
     const inkWidth = stringWidth(ink);
     if (row && cells + inkWidth > width) {
@@ -27,14 +21,15 @@ function* wrappedRows(text: string, width: number): Generator<string> {
       cells = 0;
     }
     if (inkWidth > width) {
-      for (const glyph of graphemeWidths(ink)) {
-        if (cells > 0 && cells + glyph.width > width) {
+      for (const { segment } of graphemes.segment(ink)) {
+        const glyphWidth = stringWidth(segment);
+        if (cells > 0 && cells + glyphWidth > width) {
           yield row;
           row = '';
           cells = 0;
         }
-        row += glyph.segment;
-        cells += glyph.width;
+        row += segment;
+        cells += glyphWidth;
       }
     } else {
       row += ink;
