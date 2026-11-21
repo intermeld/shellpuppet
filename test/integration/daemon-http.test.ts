@@ -1241,23 +1241,25 @@ describe('viewer assets and the WS frame protocol (§5)', () => {
     watcher.close();
   });
 
-  it('reads text a program only draws at a wider grid', async () => {
+  it('reads text an alternate-screen program only draws at a wider grid', async () => {
     const started = await api(td.port, td.token, '/sessions', { body: {
       command: process.execPath,
       args: [path.join(repoRoot, 'test', 'fixtures', 'wider-dialog.mjs')],
-      shell: false, openViewer: false, cols: 80, rows: 24,
+      shell: false, agent: 'opencode', openViewer: false, cols: 120, rows: 34,
     } });
     expect(started.status).toBe(200);
     const id = String(started.body['id']);
+    const fitted = await api(td.port, td.token, `/sessions/${id}/resize`, { body: { cols: 80, rows: 24 } });
+    expect(fitted.status).toBe(200);
     await eventually(async () => String((await api(td.port, td.token, `/sessions/${id}/snapshot`)).body['screen']).includes('Run command:'), 10_000);
     const before = await api(td.port, td.token, `/sessions/${id}/snapshot`);
     expect(String(before.body['screen'])).not.toContain('VISIBLE-ONLY-WHEN-WIDE');
-    const wide = await api(td.port, td.token, `/sessions/${id}/snapshot?wider=140x40&widerTimeout=3000`);
+    const wide = await api(td.port, td.token, `/sessions/${id}/snapshot?wider=220x40&widerTimeout=3000&hideReasoning=1`);
     expect(wide.status, JSON.stringify(wide.body)).toBe(200);
     expect(String(wide.body['screen'])).toContain('VISIBLE-ONLY-WHEN-WIDE');
-    expect(wide.body).toMatchObject({ cols: 140, rows: 40, restored: true });
+    expect(wide.body).toMatchObject({ cols: 220, rows: 40, restored: true });
     const after = await api(td.port, td.token, `/sessions/${id}/snapshot`);
-    expect(after.body).toMatchObject({ cols: 80, rows: 24 });
+    expect(after.body).toMatchObject({ cols: 80, rows: 24, exited: false });
   });
 
   it('filters reasoning and scrollback in a wider snapshot', async () => {

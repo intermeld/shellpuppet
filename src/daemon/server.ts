@@ -375,10 +375,10 @@ function offeredProtocols(req: http.IncomingMessage): string[] {
 }
 
 /** The 409 for input, a key or a resize sent to a session that has ended. */
-function endedRefusal(id: string, exitCode: number | null): string {
+function endedRefusal(id: string, exitCode: number | null, fault: string | null = null): string {
   return (
     `Session ${id} has ${exitCode === null ? 'ended' : 'exited'} ` +
-    `(${howSessionEnded(exitCode)}) and no longer accepts input or geometry changes.`
+    `(${fault ?? howSessionEnded(exitCode)}) and no longer accepts input or geometry changes.`
   );
 }
 
@@ -3399,12 +3399,12 @@ export class Daemon {
           json(res, 400, { error: 'widerTimeout must be an integer from 250 to 30000 ms.' });
           return;
         }
-        if (session.geometryHeld) {
-          json(res, 409, { error: 'The grid is held by its owner; a wider read cannot resize it.' });
+        if (session.exited) {
+          json(res, 409, { error: endedRefusal(id, session.exitCode, session.fault) });
           return;
         }
-        if (session.exited) {
-          json(res, 409, { error: endedRefusal(id, session.exitCode) });
+        if (session.geometryHeld) {
+          json(res, 409, { error: 'The grid is held by its owner; a wider read cannot resize it.' });
           return;
         }
         if (this.widerReads.has(id)) {
@@ -3420,6 +3420,7 @@ export class Daemon {
         const requested = { cols, rows };
         const target = { cols: Math.max(cols, original.cols), rows: Math.max(rows, original.rows) };
         const epoch = this.geometryEpoch.get(id) ?? 0;
+        const announce = (): void => { if (!session.exited) this.announceGeometry(id, session); };
         const isTemporary = () => (target.cols !== original.cols || target.rows !== original.rows) &&
           session.cols === target.cols && session.rows === target.rows && (this.geometryEpoch.get(id) ?? 0) === epoch;
         this.widerReads.set(id, { abort, done, isTemporary });
@@ -3430,7 +3431,7 @@ export class Daemon {
         try {
           if (target.cols !== original.cols || target.rows !== original.rows) {
             await session.resize(target.cols, target.rows);
-            this.announceGeometry(id, session);
+            announce();
           }
           const settled = await session.waitFor({ quiet: 250 }, {
             timeout,
@@ -3453,10 +3454,10 @@ export class Daemon {
               session.cols === target.cols && session.rows === target.rows;
             restored = target.cols === original.cols && target.rows === original.rows
               ? mayRestore()
-              : await session.resizeIfCurrent(original.cols, original.rows, mayRestore,
-                () => this.announceGeometry(id, session));
+              : await session.resizeIfCurrent(original.cols, original.rows, mayRestore, announce);
           } catch (error) {
-            if (!(error instanceof SessionProgramEndedError)) readError ??= error;
+            // node-pty can record the program's code before the exit event.
+            if (error instanceof SessionProgramEndedError || readError === undefined) readError = error;
             restored = false;
           } finally {
             res.off('close', onClose);
@@ -3464,9 +3465,10 @@ export class Daemon {
             finish();
           }
         }
-        if (abort.signal.aborted) return;
+        if (abort.signal.aborted || res.writableEnded) return;
         if (session.exited || readError instanceof SessionProgramEndedError) {
-          json(res, 409, { error: endedRefusal(id, session.exitCode) });
+          const code = readError instanceof SessionProgramEndedError ? readError.exitCode : session.exitCode;
+          json(res, 409, { error: endedRefusal(id, code, session.fault) });
         } else if (readError !== undefined) {
           throw readError instanceof Error ? readError : new Error('Wider read failed with a non-Error value.');
         } else if (payload !== null) {

@@ -1,7 +1,8 @@
 import type { IPty } from 'node-pty';
 import { readFileSync } from 'node:fs';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { SessionManager } from '../../src/core/manager.js';
+import { SessionProgramEndedError } from '../../src/core/session.js';
 import type { SessionDeps } from '../../src/core/session.js';
 import { startTestDaemon, connectWs, api } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
@@ -105,7 +106,7 @@ it('restores the original grid if its controlling socket closes during a wider r
   }
 });
 
-it('returns the ended refusal without a restore frame when the program exits during the read', async () => {
+it.each(['program exit', 'renderer fault'])('refuses a wider read without restoring after a %s', async cause => {
   const td = await startTestDaemon({ policy: { mode: 'allow-all' } });
   let exit: (event: { exitCode: number }) => void = () => {};
   const pty = {
@@ -122,12 +123,38 @@ it('returns the ended refusal without a restore frame when the program exits dur
     await watcher.waitForControl(c => c['type'] === 'geometry' && c['cols'] === 80);
     const pending = api(td.port, td.token, `/sessions/${session.id}/snapshot?wider=140x40&widerTimeout=1000`);
     await watcher.waitForControl(c => c['type'] === 'geometry' && c['cols'] === 140);
-    exit({ exitCode: 0 });
+    if (cause === 'program exit') exit({ exitCode: 0 });
+    else session['failRenderer'](new Error('broken viewport'));
     const result = await pending;
     expect(result.status).toBe(409);
-    expect(result.body['error']).toMatch(/exited/i);
+    expect(result.body['error']).toContain(cause === 'program exit' ? 'exited (code 0)' : 'terminal rendering failed');
+    expect([pty.cols, pty.rows]).toEqual([140, 40]);
     expect(watcher.controls().filter(c => c['type'] === 'geometry').map(c => c['cols'])).toEqual([80, 140]);
     watcher.close();
+  } finally {
+    await td.stop();
+  }
+});
+
+it.each(['growth', 'restore'])('reports the recorded exit code during wider %s before the exit event', async stage => {
+  const td = await startTestDaemon({ policy: { mode: 'allow-all' } });
+  const pty = {
+    pid: 0, cols: 80, rows: 24, process: 'synthetic', handleFlowControl: false,
+    onData: () => ({ dispose() {} }), onExit: () => ({ dispose() {} }),
+    resize(cols: number, rows: number) { Object.assign(this, { cols, rows }); },
+    write() {}, clear() {}, kill() {}, pause() {}, resume() {},
+  } satisfies IPty;
+  try {
+    const session = injectPty(td, pty).create({ command: process.execPath, cols: 80, rows: 24 });
+    // node-pty can record the code before it finishes delivering the output
+    // and exit event. At that point Session refuses the resize with the code.
+    vi.spyOn(session, stage === 'growth' ? 'resize' : 'resizeIfCurrent').mockImplementationOnce(() => {
+      throw new SessionProgramEndedError(session.id, 23);
+    });
+    const result = await api(td.port, td.token, `/sessions/${session.id}/snapshot?wider=220x40`);
+    expect(result.status).toBe(409);
+    expect(result.body['error']).toContain('exited (code 23)');
+    expect([pty.cols, pty.rows]).toEqual(stage === 'growth' ? [80, 24] : [220, 40]);
   } finally {
     await td.stop();
   }
