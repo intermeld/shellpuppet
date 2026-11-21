@@ -22,6 +22,7 @@ import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { childEnv, setEnvValue } from './environment.js';
 import type { IPty } from 'node-pty';
 import type { QueuedConsoleHost, SpawnWindow } from './windowsConsoleHost.js';
 import { ensureSpawnHelperExecutable, explainSpawnFailure, loadNodePty } from './nativePty.js';
@@ -538,6 +539,8 @@ export interface SessionDeps {
  */
 export const DEFAULT_SESSION_ENV: SessionEnvMode = 'clean';
 
+export { setEnvValue as setSessionEnvValue } from './environment.js';
+
 /**
  * The minimal functional variable set for `sessionEnv: "clean"`: enough for
  * shells and ordinary programs to work, without the daemon's secrets. Windows
@@ -707,27 +710,8 @@ export function buildSessionEnv(
       }
     }
   }
-  const setOnly = (name: string, value: string): void => setSessionEnvValue(env, platform, name, value);
-  for (const [name, value] of Object.entries(passed)) {
-    if (!isReserved(name)) setOnly(name, value);
-  }
-  // Always injected (§7): Windows sets no TERM, and TUIs then assume a dumb
-  // terminal and disable colour. On Windows any other casing goes first, or
-  // the child would see that copy's value instead of these.
-  setOnly('TERM', 'xterm-256color');
-  setOnly('COLORTERM', 'truecolor');
-  return env;
-}
-
-/** Assign a daemon-owned value with the same Windows name collapsing as buildSessionEnv. */
-export function setSessionEnvValue(env: Record<string, string>, platform: NodeJS.Platform,
-  name: string, value: string): void {
-  if (platform === 'win32') {
-    for (const key of Object.keys(env)) {
-      if (key.toUpperCase() === name.toUpperCase()) delete env[key];
-    }
-  }
-  env[name] = value;
+  const overrides = Object.fromEntries(Object.entries(passed).filter(([name]) => !isReserved(name)));
+  return childEnv(platform, env, overrides, { TERM: 'xterm-256color', COLORTERM: 'truecolor' });
 }
 
 export class Session implements WaitTarget {
@@ -946,10 +930,7 @@ export class Session implements WaitTarget {
     );
     if (deps.identity !== undefined) {
       if (options.launchProfile && this.agentModule?.resumeIdMarkers) {
-        const original = this.platform === 'win32'
-          ? Object.fromEntries(Object.entries(sessionEnv).map(([key, value]) => [key.toUpperCase(), value]))
-          : sessionEnv;
-        this.inheritedResumeIds = agentResumeIds(this.agentModule, original);
+        this.inheritedResumeIds = agentResumeIds(this.agentModule, sessionEnv, this.platform);
         sessionEnv['SHELLPUPPET_PROFILE_AGENT'] = this.agent;
       }
       sessionEnv['SHELLPUPPET_SESSION'] = id;
@@ -957,7 +938,7 @@ export class Session implements WaitTarget {
       sessionEnv['SHELLPUPPET_DAEMON_INSTANCE'] = deps.identity.instanceId;
       sessionEnv['SHELLPUPPET_CLI'] = deps.identity.cliPath;
       if (deps.identity.home !== undefined) {
-        setSessionEnvValue(sessionEnv, this.platform, 'SHELLPUPPET_HOME', deps.identity.home);
+        setEnvValue(sessionEnv, this.platform, 'SHELLPUPPET_HOME', deps.identity.home);
       }
     }
     const spawnOptions = {

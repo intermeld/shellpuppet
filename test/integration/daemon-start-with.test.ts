@@ -4,10 +4,12 @@ import * as fs from 'node:fs';
 import * as net from 'node:net';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { afterEach, describe, expect, it } from 'vitest';
+import { loadNodePty } from '../../src/core/nativePty.js';
 import { readDaemonState } from '../../src/daemon/paths.js';
 import { api, distDaemonEntry, eventually, makeTempHome, processAlive, removeTempHome, repoRoot } from './helpers.js';
 
@@ -18,6 +20,7 @@ const wrapper = path.join(repoRoot, 'test', 'fixtures', 'daemon-start-wrapper.mj
 const failureWrapper = path.join(repoRoot, 'test', 'fixtures', 'daemon-start-failure.mjs');
 const recordWrapper = path.join(repoRoot, 'test', 'fixtures', 'daemon-start-record.mjs');
 const parentWrapper = path.join(repoRoot, 'test', 'fixtures', 'daemon-start-parent.mjs');
+const consoleWrapper = path.join(repoRoot, 'test', 'fixtures', 'windows-console-wrapper.cs');
 const boundRunner = path.join(repoRoot, 'test', 'integration', 'fixtures', 'ensure-daemon-bound.mjs');
 const markerEntry = path.join(repoRoot, 'test', 'integration', 'fixtures', 'daemon-entry-marker.mjs');
 const socketHolder = path.join(repoRoot, 'test', 'integration', 'fixtures', 'start-socket-holder.mjs');
@@ -122,6 +125,47 @@ afterEach(async () => {
 });
 
 describe('configured daemon start wrapper', () => {
+  it.runIf(process.platform === 'win32')('survives its wrapper and runs the daemon without a console', async () => {
+    const { home } = homeWithWrapper();
+    const compiler = path.join(process.env['SystemRoot']!, 'Microsoft.NET', 'Framework', 'v4.0.30319', 'csc.exe');
+    const wrapperExe = path.join(home, 'wrapper.exe');
+    await execFileAsync(compiler, ['/nologo', '/out:' + wrapperExe, consoleWrapper], { windowsHide: true });
+    fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({
+      viewer: { launchMode: 'no-window' },
+      daemon: { startWith: [wrapperExe], startWithOnlyIfEnvContains: 'stand-in-reference' },
+    }));
+    const entry = path.join(home, 'daemon entry.mjs');
+    const check = path.join(home, 'inherited');
+    fs.writeFileSync(entry, [
+      "import { writeFileSync } from 'node:fs';",
+      `writeFileSync(${JSON.stringify(check)}, String(process.env.SP_WRAPPER_TEST === 'stand-in-resolved'));`,
+      `await import(${JSON.stringify(pathToFileURL(distDaemonEntry).href)});`,
+    ].join('\n'));
+    const client = pathToFileURL(path.join(repoRoot, 'dist', 'client', 'http.js')).href;
+    try {
+      const startCode = await execFileAsync(process.execPath, ['--input-type=module', '-e',
+        `import { ensureDaemon } from ${JSON.stringify(client)}; await ensureDaemon({ daemonEntry: process.argv[1] });`, entry], {
+        env: { ...process.env, SHELLPUPPET_HOME: home, SP_WRAPPER_TEST: 'stand-in-reference' }, windowsHide: true, timeout: 30_000,
+      }).then(() => 0, (error: { code: number }) => error.code);
+      const pids = path.join(home, 'wrapper-pids');
+      expect(fs.existsSync(pids), 'wrapper started its child').toBe(true);
+      expect(fs.existsSync(check), 'daemon entry ran').toBe(true);
+      expect(startCode).toBe(0);
+      const state = readDaemonState(home)!;
+      const [wrapperPid, childPid] = fs.readFileSync(pids, 'utf8').trim().split(/\r?\n/).map(Number);
+      expect(state.pid).not.toBe(childPid);
+      await eventually(() => !processAlive(wrapperPid!) && !processAlive(childPid!), 5_000);
+      const probeExit = await execFileAsync(wrapperExe, ['probe', String(state.pid)], { windowsHide: true })
+        .then(() => 0, (error: { code: number }) => error.code);
+      expect(probeExit).toBe(6);
+      expect(fs.readFileSync(check, 'utf8')).toBe('true');
+      const status = await runCli(home, ['daemon', 'status']);
+      expect(status.code).toBe(0);
+      expect(status.stdout).toContain('started wrapped: true');
+    } finally {
+      recordPid(home);
+    }
+  });
   it.runIf(process.platform !== 'win32')('coordinates two clients with a home beyond the POSIX socket limit', async () => {
     const { home, marker } = longPosixHome();
     expect(Buffer.byteLength(path.join(home, 'daemon-start.sock')) + 1).toBeGreaterThan(process.platform === 'darwin' ? 104 : 108);
@@ -331,7 +375,8 @@ describe('configured daemon start wrapper', () => {
     recordPid(home);
     expect(result.code).toBe(0);
     const recorded = JSON.parse(fs.readFileSync(marker, 'utf8')) as { argv: string[] };
-    expect(recorded.argv).toEqual([marker, literal, process.execPath, distDaemonEntry]);
+    const entry = process.platform === 'win32' ? path.join(path.dirname(distDaemonEntry), 'wrappedLaunch.js') : distDaemonEntry;
+    expect(recorded.argv).toEqual([marker, literal, process.execPath, entry]);
   });
 
   it('ends a hung wrapper tree after the injected bound', async () => {
@@ -487,6 +532,52 @@ describe('configured daemon start wrapper', () => {
     expect(result.stderr).toContain('daemon.startWith');
     expect(result.stderr).toContain('missing-wrapper-for-test');
     expect(readDaemonState(home)).toBeNull();
+  });
+
+  it('returns failure and appends one safe diagnostic per failed desktop or CLI start', async () => {
+    const { home } = homeWithWrapper();
+    const log = path.join(home, 'daemon.log');
+    fs.writeFileSync(log, 'previous entry\n');
+    fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({
+      daemon: { startWith: ['missing-wrapper-for-test', 'private-test-argument'] },
+    }));
+    for (const args of [['desktop'], ['list'], ['daemon', 'start']]) {
+      const result = await runCli(home, args, { SP_TEST_PRIVATE: 'private-test-value' });
+      expect(result.code).toBe(1);
+      expect(result.stderr).toMatch(/daemon\.startWith.*missing-wrapper-for-test.*program not found/);
+      expect(result.stdout).toBe('');
+      expect(/private-test-(argument|value)/.test(result.stderr)).toBe(false);
+    }
+    const [previous, ...entries] = fs.readFileSync(log, 'utf8').trimEnd().split('\n');
+    expect(previous).toBe('previous entry');
+    expect(entries).toHaveLength(3);
+    for (const line of entries) {
+      expect(line).toMatch(/daemon\.startWith.*missing-wrapper-for-test.*program not found/);
+      expect(/private-test-(argument|value)/.test(line)).toBe(false);
+    }
+    expect(readDaemonState(home)).toBeNull();
+  });
+
+  it.runIf(process.platform === 'win32')('keeps a failed interactive desktop console open until Enter', async () => {
+    const { home } = homeWithWrapper();
+    fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({ daemon: { startWith: ['missing-wrapper-for-test'] } }));
+    const terminal = loadNodePty().spawn(process.execPath, [cli, 'desktop'], {
+      cwd: home, cols: 140, rows: 25, env: { ...process.env, SHELLPUPPET_HOME: home },
+    });
+    let output = '';
+    let exitCode: number | undefined;
+    terminal.onData(data => { output += data; });
+    terminal.onExit(event => { exitCode = event.exitCode; });
+    try {
+      await eventually(() => output.includes('Press Enter to close.'));
+      expect(output).toContain('program not found');
+      expect(exitCode).toBeUndefined();
+      terminal.write('\r');
+      await eventually(() => exitCode !== undefined);
+      expect(exitCode).toBe(1);
+    } finally {
+      if (exitCode === undefined) terminal.kill();
+    }
   });
 
   it('allows more than ten seconds for a wrapped start', async () => {

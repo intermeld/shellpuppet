@@ -21,6 +21,7 @@
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { envValue } from '../core/environment.js';
 import { NAME_PATTERN } from '../core/mailbox.js';
 import { SESSION_MARKERS } from '../agents/index.js';
 import { ENV_NAME_PATTERN, RESERVED_FEATURE_CREDENTIALS, SESSION_IDENTITY_ENV_NAMES, SESSION_IDENTITY_ENV_RULE } from '../core/types.js';
@@ -543,8 +544,7 @@ export function copyDaemonEnv(
     if (process.platform === 'win32'
       ? [...reserved].some((entry) => entry.toUpperCase() === upperName)
       : reserved.has(name)) continue;
-    if (!Object.hasOwn(source, name)) continue;
-    const value = source[name];
+    const value = envValue(source, name);
     if (typeof value !== 'string') continue;
     env[name] = value;
     copied.push(name);
@@ -617,7 +617,7 @@ export function resolveLaunchCommand(
   };
 
   const extensions = isWindows
-    ? (env['PATHEXT'] ?? '.COM;.EXE;.BAT;.CMD').split(';').filter((entry) => entry !== '')
+    ? (envValue(env, 'PATHEXT', platform) ?? '.COM;.EXE;.BAT;.CMD').split(';').filter((entry) => entry !== '')
     : [];
   const candidatesFor = (base: string): string[] => {
     if (!isWindows) return [base];
@@ -642,7 +642,7 @@ export function resolveLaunchCommand(
     };
   }
 
-  const searchDirs = (env['PATH'] ?? '')
+  const searchDirs = (envValue(env, 'PATH', platform) ?? '')
     .split(isWindows ? ';' : ':')
     .filter((dir) => dir !== '');
   for (const dir of searchDirs) {

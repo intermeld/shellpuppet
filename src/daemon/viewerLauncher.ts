@@ -42,6 +42,7 @@ import type { ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import { createRequire } from 'node:module';
 import * as path from 'node:path';
+import { envValue } from '../core/environment.js';
 import { pathToFileURL } from 'node:url';
 import { NULL_LOGGER, type Logger } from '../core/types.js';
 
@@ -122,11 +123,11 @@ export function wellKnownChromePaths(
   platform: NodeJS.Platform = process.platform,
   env: NodeJS.ProcessEnv = process.env,
 ): string[] {
-  const overrides = [env['CHROME_PATH'], env['LIGHTHOUSE_CHROMIUM_PATH']].filter(
+  const overrides = ['CHROME_PATH', 'LIGHTHOUSE_CHROMIUM_PATH'].map(name => envValue(env, name, platform)).filter(
     (value): value is string => typeof value === 'string' && value !== '',
   );
   if (platform === 'win32') {
-    const roots = [env['LOCALAPPDATA'], env['PROGRAMFILES'], env['PROGRAMFILES(X86)']].filter(
+    const roots = ['LOCALAPPDATA', 'PROGRAMFILES', 'PROGRAMFILES(X86)'].map(name => envValue(env, name, platform)).filter(
       (value): value is string => typeof value === 'string' && value !== '',
     );
     const relative = [

@@ -11,6 +11,8 @@ version may change behaviour, and every such change is listed here.
 
 Several dashboard windows, messages between sessions, session names and
 roles, launches from sessions, and many reading and nudging fixes.
+- Resolve Windows Start menu wrapper and profile commands with mixed-case environment names, log daemon start failures, keep interactive desktop errors visible and detach the wrapped daemon from its console.
+- Wait for a typed line or a new, matching paste placeholder to settle before Enter; do not send Enter without final composer proof, and honour the full length-based minimum before a single safe retry.
 
 ### Added
 
