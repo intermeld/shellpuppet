@@ -10,15 +10,23 @@ export const WRAPPED_START_IPC = 'SHELLPUPPET_DAEMON_START_IPC';
 /** Called by the published daemon while its listener still refuses connections. */
 export function releaseWrappedDaemon(): Promise<void> {
   return new Promise((resolve, reject) => {
-    const disconnected = () => reject(new Error('Windows start helper disconnected before releasing the daemon.'));
+    function cleanup(): void {
+      process.off('message', released);
+      process.off('disconnect', disconnected);
+    }
+    function disconnected(): void {
+      cleanup();
+      reject(new Error('Windows start helper disconnected before releasing the daemon.'));
+    }
+    function released(message: unknown): void {
+      if (message !== 'serve') return;
+      cleanup();
+      resolve();
+    }
     if (!process.connected || !process.send) { disconnected(); return; }
     process.once('disconnect', disconnected);
-    process.once('message', message => {
-      process.off('disconnect', disconnected);
-      if (message === 'serve') resolve();
-      else reject(new Error('Unexpected Windows start helper response.'));
-    });
-    process.send('published', error => { if (error) reject(error); });
+    process.on('message', released);
+    process.send('published', error => { if (error) { cleanup(); reject(error); } });
   });
 }
 
@@ -28,7 +36,7 @@ export function handoffPipe(id: string): string {
 }
 
 /** Only the helper for this launch may start a process under this claim. */
-export async function openWrappedStart(home: string, entry: string, logger: Logger) {
+export async function openWrappedStart(home: string, entry: string, logger: Logger, launcher: string) {
   const proof = randomUUID();
   const permission = randomUUID();
   const id = `${proof}.${permission}`;
@@ -58,11 +66,12 @@ export async function openWrappedStart(home: string, entry: string, logger: Logg
   // Wrappers receive the same two trailing arguments even when they rebuild
   // their environment or import the script. The private script carries a
   // fallback proof without putting it in argv or reusing a later attempt.
-  const launcher = path.resolve(home, 'daemon-start-' + randomUUID() + '.mjs');
   try {
     const module = new URL('./wrappedLaunch.js', import.meta.url).href;
+    const absoluteHome = path.resolve(home);
+    const args = [absoluteHome, id, entry].map(value => JSON.stringify(value)).join(', ');
     fs.writeFileSync(launcher, `import { launchWrappedDaemon } from ${JSON.stringify(module)};\n` +
-      `launchWrappedDaemon(import.meta.filename, ${JSON.stringify(id)}, ${JSON.stringify(entry)});\n`, { flag: 'wx', mode: 0o600 });
+      `launchWrappedDaemon(import.meta.filename, ${args});\n`, { flag: 'r+' });
   } catch (error) { server.close(); throw error; }
   return {
     id,
@@ -78,11 +87,7 @@ export async function openWrappedStart(home: string, entry: string, logger: Logg
       }
       if (helper && !helper.destroyed) helper.end('cancel\n');
       const timer = setTimeout(() => helper?.destroy(), cleanupMs);
-      try { await closed; } finally {
-        clearTimeout(timer);
-        try { fs.rmSync(launcher, { force: true }); }
-        catch { logger.warn('Could not remove the expired private Windows daemon launcher.'); }
-      }
+      try { await closed; } finally { clearTimeout(timer); }
       return published;
     },
   };

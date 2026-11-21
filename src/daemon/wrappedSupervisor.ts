@@ -31,16 +31,18 @@ if (id && entry) {
       daemon.once('spawn', () => process.send?.('started', () => undefined));
       daemon.once('error', () => socket.end());
       daemon.once('exit', () => socket.end());
-      daemon.once('message', message => {
-        if (message !== 'published' || !daemon || cancelled) return;
+      const pending = daemon;
+      function published(message: unknown): void {
+        if (message !== 'published' || cancelled) return;
+        pending.off('message', published);
         // Drop cancellation authority before this daemon may serve its first
         // request. The client can disappear at either side of this decision.
-        const serving = daemon;
         daemon = undefined;
-        serving.send('serve', () => { if (serving.connected) serving.disconnect(); });
-        serving.unref();
+        pending.send('serve', () => { if (pending.connected) pending.disconnect(); });
+        pending.unref();
         socket.end(Buffer.from([1]));
-      });
+      }
+      pending.on('message', published);
     } else {
       cancel();
     }

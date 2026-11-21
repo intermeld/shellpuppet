@@ -208,9 +208,15 @@ an `.exe` or `.com` program. Point at the
 program itself. No shell interprets the wrapper arguments. The configured
 program runs with your user's permissions, so choose one you trust.
 
-On Windows the client creates a one-use start script in the private
-ShellPuppet home. If the wrapper filters the startup environment, the client
-reports this and the script supplies the home and the proof for this start.
+On Windows the client gives the wrapper a randomly named, owner-only start
+script, normally in the temporary folder under the account's local application
+data. The local application data, user profile and Windows temporary folders
+are fallback locations. The client keeps the private home out of the added
+arguments and checks that other ordinary users cannot replace the file
+through its directory.
+The script preserves the caller's absolute home path, including directory
+junctions. If the wrapper filters the startup environment, the client reports
+this and the script supplies the home and the proof for this start.
 The daemon still inherits the environment prepared by the wrapper. The script
 exits after a hidden helper spawns the daemon, so the wrapper's console can
 close. Once the daemon publishes its discovery record and the helper releases
