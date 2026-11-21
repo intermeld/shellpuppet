@@ -443,6 +443,12 @@ id, the daemon uses the new session id.
 | Grok | `GROK_SESSION_ID` when present, including in a hook that calls ShellPuppet |
 | Muse | Explicit resume id only. No verified conversation marker is known. |
 
-A client that never receives a marker cannot report it. Without an observed
-or supplied id the record contains `null`. The daemon does not select a
-transcript by directory or modification time.
+When writing a restart record, the daemon checks Claude Code's
+`~/.claude/sessions/<pid>.json` for the Claude process in the session's
+process tree. It uses the session's `CLAUDE_CONFIG_DIR` when set. A valid
+`sessionId` takes precedence over the child marker, including after a
+conversation switch with `/resume`. If the file is unavailable, its id is
+invalid or the daemon cannot verify the process within the shutdown time
+budget, the reported id takes precedence over the launch id. The lookup
+does not open transcripts. Without a live, reported or supplied id the record
+contains `null`.

@@ -114,6 +114,12 @@ export interface NudgeView {
   exactEmpty?: boolean;
 }
 
+/** Process metadata used only when writing a restart record. */
+export interface LiveResumeIdSource {
+  candidatePids(root: number, signal: AbortSignal): Promise<number[]>;
+  read(pid: number): Promise<unknown>;
+}
+
 /** Internal harness data and the few detector walks not yet expressed as data. */
 export interface AgentModule {
   name: string;
@@ -160,6 +166,8 @@ export interface AgentModule {
   };
   /** Conversation id exported to a child tool by this agent, when available. */
   resumeIdMarkers?: readonly string[];
+  /** Resolve the metadata directory in the launched program's environment. */
+  liveResumeId?: (env: NodeJS.ProcessEnv, cwd: string) => LiveResumeIdSource;
   env?: { sessionMarkers: string[] };
   safety?: SafetyAdapter;
   stalls?: StallSignature[];

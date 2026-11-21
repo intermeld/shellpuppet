@@ -230,3 +230,8 @@ An empty list means the daemon successfully recorded zero live profile sessions.
 An entry with a null resume id can be started fresh. Resume requires the
 current profile to declare a resume template. Changing the configured command
 or named folder changes the next launch.
+
+For Claude Code, the daemon checks the live conversation when it takes the
+record. After an in-session `/resume`, the saved id follows the selected
+conversation. If the lookup fails, the daemon uses the last valid id reported
+by the session, then the id supplied at launch.

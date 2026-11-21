@@ -244,3 +244,5 @@ Pass the saved `profile`, `name`, fields of `folderChoice` and a known
 `resumeId` to `terminal_start`. Omit a null name or resume id. An empty folder choice uses the current
 fixed directory. `folder` in the record is the resolved directory for
 inspection. `endedAt` is the time the daemon took its shutdown snapshot.
+For Claude Code, a verified live conversation id at that time takes
+precedence over the last reported id and the id supplied at launch.

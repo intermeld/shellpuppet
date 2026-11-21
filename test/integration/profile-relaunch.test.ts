@@ -1,12 +1,60 @@
 import { execFile } from 'node:child_process';
-import { existsSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
+import { NULL_LOGGER } from '../../src/core/types.js';
 import { parseDaemonConfig } from '../../src/daemon/config.js';
 import { api, eventually, makeTempHome, repoRoot, startTestDaemon } from './helpers.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
+
+it('records the conversation selected after the Claude child reported its launch id', async () => {
+  const home = makeTempHome();
+  const configDir = join(home, 'claude-config');
+  mkdirSync(join(configDir, 'sessions'), { recursive: true });
+  const wrapper = join(home, 'wrapper.cjs');
+  writeFileSync(wrapper, `
+    const { spawn, execFileSync } = require('node:child_process');
+    const { writeFileSync } = require('node:fs');
+    const { join } = require('node:path');
+    if (!process.argv[2]) {
+      spawn(process.execPath, [__filename, 'claude'], { stdio: 'inherit' });
+    } else {
+      execFileSync(process.execPath, [process.env.SHELLPUPPET_CLI, 'list', '--json'], {
+        env: { ...process.env, CLAUDE_CODE_SESSION_ID: 'launch-id' }
+      });
+      writeFileSync(join(__dirname, 'reported'), String(process.pid));
+      setInterval(() => {}, 1000);
+    }
+  `);
+  const claude = { agent: 'claude', command: process.execPath, shell: false, cwd: home, envFromDaemon: ['CLAUDE_CONFIG_DIR'] };
+  const { config } = parseDaemonConfig({ launcher: { sessionLaunch: ['chair'], profiles: [
+    { ...claude, name: 'worker', args: [wrapper] },
+    { ...claude, name: 'other', args: ['-e', 'setInterval(() => {}, 1000)', '--'], resume: ['{id}'] },
+  ] } });
+  const info = vi.fn();
+  const td = await startTestDaemon({ home, launchProfiles: config.launcher,
+    daemonEnv: { CLAUDE_CONFIG_DIR: configDir }, messaging: { enabled: true, allow: [] }, logger: { ...NULL_LOGGER, info } });
+  try {
+    const claim = (await api(td.port, td.token, '/messages/claims', { body: { name: 'chair' } })).body;
+    const headers = { 'x-shellpuppet-claim': String(claim['claimId']), 'x-shellpuppet-claim-secret': String(claim['secret']) };
+    expect((await api(td.port, td.token, '/launcher/launch', { headers, body: { profile: 'worker' } })).status).toBe(200);
+    expect((await api(td.port, td.token, '/launcher/launch', { headers, body: { profile: 'other', resumeId: 'other-id' } })).status).toBe(200);
+    const reported = join(home, 'reported');
+    await eventually(() => existsSync(reported), 30_000);
+    const pid = readFileSync(reported, 'utf8');
+    writeFileSync(join(configDir, 'sessions', pid + '.json'), JSON.stringify({ sessionId: 'after-resume' }));
+    const stopped = await api(td.port, td.token, '/daemon/shutdown', { body: { restart: true, force: true } });
+    expect(stopped.status).toBe(200);
+    const record = JSON.parse(readFileSync(join(home, 'previous-sessions.json'), 'utf8')) as { sessions: unknown[] };
+    expect(record.sessions).toEqual([
+      expect.objectContaining({ profile: 'worker', resumeId: 'after-resume' }),
+      expect.objectContaining({ profile: 'other', resumeId: 'other-id' }),
+    ]);
+    expect(JSON.stringify(info.mock.calls)).not.toMatch(/after-resume|other-id|launch-id/);
+  } finally { await td.stop(); }
+}, 120_000);
 
 it('records a live agent conversation before restart and relaunches it from the saved folder choice', async () => {
   const home = makeTempHome();

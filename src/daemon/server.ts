@@ -94,6 +94,7 @@ import { acquireHomeOwner, AlreadyRunningError, type HomeOwner } from './homeOwn
 import { daemonRunning } from './liveness.js';
 import type { DaemonState, DaemonStateFile } from './paths.js';
 import { restoreRestartSource, retryRestartSource, snapshotSourceId } from './restartSource.js';
+import { recordLiveResumeIds } from './liveResumeIds.js';
 import { packageVersion } from './meta.js';
 import { terminalReportKind } from './terminalReports.js';
 import { ViewerSync } from './viewerSync.js';
@@ -718,6 +719,7 @@ export class Daemon {
   private readonly promptGraceTimers = new Map<string, NodeJS.Timeout>();
   private promptScanRunning = false;
   private stopPromise: Promise<void> | null = null;
+  private shutdownRecords?: Promise<void>;
 
   private readonly audit: Auditor;
   private readonly callerContext = new AsyncLocalStorage<string | undefined>();
@@ -1155,25 +1157,27 @@ export class Daemon {
     // awaits the one real shutdown.
     if (this.stopPromise === null) {
       this.stopping = true;
-      if (opts.removeState !== false && this.publishedState && this.homeOwner) {
-        const state = this.publishedState;
-        this.writeShutdownRecord('launcher-claims.json', () => this.saveLauncherClaims());
-        if (opts.restart) {
-          this.writeShutdownRecord('restart-source.json', () => {
-            this.requireHomeOwner();
-            writePrivateRecord(path.join(this.options.home, 'restart-source.json'), { restartFrom: this.instanceId });
-          });
-          this.writeShutdownRecord('previous-sessions.json', () => {
-            this.requireHomeOwner();
-            this.savePreviousSessions();
-          });
-        }
-        this.writeShutdownRecord('daemon.json', () => this.finishDiscovery(state, opts.restart === true));
-      }
-      this.releaseOwnership();
+      this.shutdownRecords = this.saveShutdownRecords(opts);
       this.stopPromise = this.doStop();
     }
     return this.stopPromise;
+  }
+
+  private async saveShutdownRecords(opts: { removeState?: boolean; restart?: boolean }): Promise<void> {
+    if (opts.removeState !== false && this.publishedState && this.homeOwner) {
+      const state = this.publishedState;
+      this.writeShutdownRecord('launcher-claims.json', () => this.saveLauncherClaims());
+      if (opts.restart) {
+        this.writeShutdownRecord('restart-source.json', () => {
+          this.requireHomeOwner();
+          writePrivateRecord(path.join(this.options.home, 'restart-source.json'), { restartFrom: this.instanceId });
+        });
+        try { await this.savePreviousSessions(); }
+        catch (error) { this.shutdownRecordFailure('previous-sessions.json', 'save', error); }
+      }
+      this.writeShutdownRecord('daemon.json', () => this.finishDiscovery(state, opts.restart === true));
+    }
+    this.releaseOwnership();
   }
 
   private finishDiscovery(state: DaemonState, restart: boolean): void {
@@ -1195,11 +1199,13 @@ export class Daemon {
 
   private writeShutdownRecord(file: string, write: () => void, verb = 'save'): void {
     try { write(); }
-    catch (error) {
-      const message = `Could not ${verb} ${file} during shutdown.`;
-      this.shutdownWarnings.push(message);
-      this.logger.warn(message, { code: (error as NodeJS.ErrnoException).code });
-    }
+    catch (error) { this.shutdownRecordFailure(file, verb, error); }
+  }
+
+  private shutdownRecordFailure(file: string, verb: string, error: unknown): void {
+    const message = `Could not ${verb} ${file} during shutdown.`;
+    this.shutdownWarnings.push(message);
+    this.logger.warn(message, { code: (error as NodeJS.ErrnoException).code });
   }
 
   private releaseOwnership(): void {
@@ -1231,6 +1237,7 @@ export class Daemon {
     this.folderPickerAbort?.abort(new FolderPickerFailureError('The folder picker was stopped.'));
     for (const read of this.widerReads.values()) read.abort.abort();
     await Promise.allSettled([...this.widerReads.values()].map((read) => read.done));
+    await this.shutdownRecords;
 
     // Stop LISTENING first, before tearing down session trees. Killing process
     // trees is not fast (`taskkill /T` on a loaded machine can take seconds
@@ -2703,16 +2710,20 @@ export class Daemon {
     return state.restartFrom === snapshot;
   }
 
-  private savePreviousSessions(): void {
+  private async savePreviousSessions(): Promise<void> {
+    this.requireHomeOwner();
     const endedAt = new Date(this.now()).toISOString();
-    const sessions = this.manager.list().flatMap(summary => {
+    const live = this.manager.list().flatMap(summary => {
       const session = this.manager.get(summary.id);
       // A deferred start has no participant until the program has started and acquired its name.
       const participant = this.mailbox.participant(summary.id);
       if (!participant || !session || session.exited || session.isKilled || !session.launchProfile) return [];
-      return [{ ...session.launchProfile, name: participant.name === session.id ? null : participant.name,
-        agent: session.agent, resumeId: session.resumeId, endedAt }];
+      return [{ session, name: participant.name === session.id ? null : participant.name }];
     });
+    const ids = await recordLiveResumeIds(live.map(row => row.session));
+    const sessions = live.map(({ session, name }) => ({ ...session.launchProfile, name,
+      agent: session.agent, resumeId: ids.get(session) ?? session.resumeId, endedAt }));
+    this.requireHomeOwner();
     writePrivateRecord(path.join(this.options.home, 'previous-sessions.json'), { version: 1, outgoingInstanceId: this.instanceId, sessions });
   }
 
@@ -3059,7 +3070,11 @@ export class Daemon {
     try {
       if (segments[0] === 'daemon' && segments[1] === 'shutdown' && req.method === 'POST') {
         const body = await readBody(req);
-        if (this.stopping) { json(res, 200, { ok: true, stopping: true, warnings: this.shutdownWarnings }); return; }
+        if (this.stopping) {
+          await this.shutdownRecords;
+          json(res, 200, { ok: true, stopping: true, warnings: this.shutdownWarnings });
+          return;
+        }
         const force = asBoolean(body['force']) ?? false;
         const live = this.manager.liveCount();
         if (live > 0 && !force) {
@@ -3072,6 +3087,7 @@ export class Daemon {
         }
         const stopping = this.stop({ restart: body['restart'] === true });
         this.audit.record(actor, 'shutdown', undefined, { force, liveSessions: live });
+        await this.shutdownRecords;
         json(res, 200, { ok: true, stopping: true, warnings: this.shutdownWarnings });
         void stopping.then(() => {
           this.options.onSelfStop?.('shutdown-request');
@@ -3850,6 +3866,7 @@ export class Daemon {
     actor: string,
   ): Promise<void> {
     const body = await readBody(req);
+    if (this.stopping) { json(res, 503, { error: 'The daemon is stopping.' }); return; }
     const command = asString(body['command']);
     if (command === undefined || command === '') {
       json(res, 400, { error: 'command (string) is required.' });

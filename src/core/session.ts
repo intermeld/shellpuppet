@@ -16,7 +16,7 @@
 
 import { agentResumeIds, moduleFor } from '../agents/index.js';
 import { nudgeVerdict, NUDGE_QUIET_MS } from './nudge.js';
-import type { AgentModule, AgentSource } from '../agents/types.js';
+import type { AgentModule, AgentSource, LiveResumeIdSource } from '../agents/types.js';
 import { validateStall, possibleStall, resolveSessionAgent, signatureForSession, stallTranscriptContent, stallTurnVisible, StallScreenCache, StallTracker } from './reasoning.js';
 import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
@@ -746,6 +746,7 @@ export class Session implements WaitTarget {
   readonly launchProfile: SessionOptions['launchProfile'];
   private inheritedResumeIds: readonly string[] = [];
   private observedResumeId?: string;
+  readonly liveResumeId?: LiveResumeIdSource;
   readonly agent: string;
   readonly agentSource: AgentSource;
   private readonly agentModule: AgentModule | undefined;
@@ -917,7 +918,7 @@ export class Session implements WaitTarget {
     if (!deps.retryAttempt) this.logger.info('session spawn', {
       id,
       command: this.command,
-      args: this.args,
+      args: this.args.map(arg => arg === this.launchProfile?.resumeId ? '[redacted]' : arg),
       wrapped: file !== this.command,
       // Names only: the values are secrets more often than not.
       ...(options.env !== undefined ? { envNames: Object.keys(options.env) } : {}),
@@ -944,14 +945,17 @@ export class Session implements WaitTarget {
       process.env,
       options.env,
     );
-    if (deps.identity !== undefined) {
-      if (options.launchProfile && this.agentModule?.resumeIdMarkers) {
-        const original = this.platform === 'win32'
-          ? Object.fromEntries(Object.entries(sessionEnv).map(([key, value]) => [key.toUpperCase(), value]))
-          : sessionEnv;
+    if (this.launchProfile) {
+      const original = this.platform === 'win32'
+        ? Object.fromEntries(Object.entries(sessionEnv).map(([key, value]) => [key.toUpperCase(), value]))
+        : sessionEnv;
+      this.liveResumeId = this.agentModule?.liveResumeId?.(original, options.cwd ?? process.cwd());
+      if (deps.identity && this.agentModule?.resumeIdMarkers) {
         this.inheritedResumeIds = agentResumeIds(this.agentModule, original);
         sessionEnv['SHELLPUPPET_PROFILE_AGENT'] = this.agent;
       }
+    }
+    if (deps.identity !== undefined) {
       sessionEnv['SHELLPUPPET_SESSION'] = id;
       sessionEnv['SHELLPUPPET_SESSION_TOKEN'] = deps.identity.token;
       sessionEnv['SHELLPUPPET_DAEMON_INSTANCE'] = deps.identity.instanceId;

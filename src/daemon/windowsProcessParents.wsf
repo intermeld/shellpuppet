@@ -1,0 +1,45 @@
+<?xml version="1.0"?>
+<job>
+<script language="JScript">
+<![CDATA[
+// Query by process handle. Walking up from the candidate files avoids a
+// machine-wide Win32_Process scan on a busy Windows host.
+var service = GetObject("winmgmts:\\\\.\\root\\cimv2");
+var roots = "," + WScript.Arguments(0) + ",";
+var candidates = WScript.Arguments(1).split(",");
+var cache = {};
+var date = new ActiveXObject("WbemScripting.SWbemDateTime");
+
+// Fetch just the three fields for the candidates and roots in one round trip.
+// Further queries are needed only for intermediate wrapper processes.
+var needed = WScript.Arguments(0).split(",").concat(candidates);
+while (needed.length) {
+  var next = {};
+  while (needed.length) {
+    // Keep the WQL expression below the provider's complexity limit.
+    var batch = needed.splice(0, 32);
+    var query = "SELECT ProcessId,ParentProcessId,CreationDate FROM Win32_Process WHERE ProcessId=" +
+      batch.join(" OR ProcessId=");
+    var rows = new Enumerator(service.ExecQuery(query, "WQL", 48));
+    for (var j = 0; j < batch.length; j++) cache[batch[j]] = null;
+    for (; !rows.atEnd(); rows.moveNext()) {
+      var row = rows.item();
+      date.Value = row.CreationDate;
+      cache[row.ProcessId] = { parent: row.ParentProcessId, born: new Date(date.GetVarDate()).getTime() };
+      if (roots.indexOf("," + row.ProcessId + ",") < 0 && row.ParentProcessId) next[row.ParentProcessId] = true;
+    }
+  }
+  for (var pid in next) if (!(pid in cache)) needed.push(pid);
+}
+
+for (var pid in cache) {
+  var child = cache[pid];
+  var parent = child && cache[child.parent];
+  // Windows retains the original parent PID even after it has been reused.
+  if (parent && parent.born <= child.born) {
+    WScript.StdOut.WriteLine(pid + " " + child.parent);
+  }
+}
+]]>
+</script>
+</job>
