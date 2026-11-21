@@ -9,7 +9,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
-- Codex now recognises typed lines and nudges that wrap at spaces, path separators and punctuation. It keeps numeric dates together when checking the draft before Enter.
+- Codex now checks typed lines and nudges against its Unicode 15.0 wrap rules for ASCII and Latin-1. It recognises wrapped paths, quoted options and decimal amounts, and withholds Enter when a hard newline changes their layout.
 - A launch command typed into an agent session before the agent has started (at its shell prompt) is submitted with its Enter again.
 - Wait for a typed line or a new, matching paste placeholder to settle before Enter; do not send Enter without final composer proof, and honour the full length-based minimum before a single safe retry.
 

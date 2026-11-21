@@ -1,4 +1,5 @@
 import { readiness as nudgeReadiness } from './nudge.js';
+import { draftRepertoire } from './lineBreaks.js';
 import { prompts } from './prompts.js';
 import type { AgentModule } from '../types.js';
 import { reading } from './reading.js';
@@ -9,6 +10,7 @@ export const codex: AgentModule = {
   input: { submit: { key: '\r', delayMs: 150, perCharacterMs: 3,
     quietMs: 350, settleMs: 800, maxWaitMs: 5_000,
     pastePlaceholder: /^› (\[Pasted Content (?<chars>\d+(?:,\d{3})*) chars\])\s*$/u,
+    pastePlaceholderBody: draftRepertoire,
     matches: submittingText } },
   readiness: { readyText: ['Ask Codex'] },
   nudge: { readiness: nudgeReadiness },

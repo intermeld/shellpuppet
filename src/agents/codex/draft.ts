@@ -39,7 +39,9 @@ function* wrappedRows(words: readonly string[], width: number): Generator<string
 }
 
 export function matchesDraft(rows: readonly StyledLine[], expected: string, view: NudgeView, at: number): boolean {
-  if (!expected || /[\p{Cc}\p{Zl}\p{Zp}]/u.test(expected)) return false;
+  if (!expected) return false;
+  const words = draftWords(expected);
+  if (!words) return false;
   let count = rows.length;
   while (count > 1 && rows[count - 1]!.text.trim() === '') count--;
   // Two cells for the prompt or continuation indent, one for the right margin.
@@ -48,8 +50,6 @@ export function matchesDraft(rows: readonly StyledLine[], expected: string, view
     if (rows[0]?.text !== '› ' + expected || (width > 0 && stringWidth(expected) > width)) return false;
   } else {
     if (width < 1) return false;
-    const words = draftWords(expected);
-    if (!words) return false;
     let i = 0;
     for (const piece of wrappedRows(words, width)) {
       if (i >= count || rows[i]?.text !== (i === 0 ? '› ' : '  ') + piece) return false;

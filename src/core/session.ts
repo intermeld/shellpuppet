@@ -1485,10 +1485,11 @@ export class Session implements WaitTarget {
 
   /** The exact draft or a new, length-matched paste placeholder. */
   private typedDraftVisible(body: string, placeholdersBefore: ReadonlySet<string> | null): boolean {
-    const placeholder = this.agentModule?.input?.submit?.pastePlaceholder;
-    if (placeholder !== undefined && placeholdersBefore !== null) {
+    const submit = this.agentModule?.input?.submit;
+    if (submit?.pastePlaceholder !== undefined && placeholdersBefore !== null &&
+      submit.pastePlaceholderBody?.test(body) !== false) {
       for (const line of this.renderer.styledLines().lines) {
-        const match = placeholder.exec(line.text);
+        const match = submit.pastePlaceholder.exec(line.text);
         if (match?.[1] === undefined || !this.nudgeReadyWithLine(match[1])) continue;
         const shownChars = match.groups?.['chars'];
         return !placeholdersBefore.has(match[1]) &&

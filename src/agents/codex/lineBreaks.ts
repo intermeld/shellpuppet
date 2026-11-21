@@ -1,95 +1,98 @@
-// UAX #14 revision 55, restricted to characters we can classify and measure.
-// The names are Unicode Line_Break properties. AI resolves to AL here (LB1).
-type BreakClass = 'AL' | 'BA' | 'B2' | 'CL' | 'CP' | 'EX' | 'GL' | 'HH' | 'HY' | 'ID' |
-  'IN' | 'IS' | 'NU' | 'OP' | 'PO' | 'PR' | 'QU' | 'SP' | 'SY';
+// Codex 0.171.0 uses unicode-linebreak 0.1.5: Unicode 15.0.0, UAX #14 revision 49.
+// https://www.unicode.org/reports/tr14/tr14-49.html#Algorithm
+type BreakClass = 'AL' | 'BA' | 'BB' | 'BK' | 'CL' | 'CM' | 'CP' | 'CR' | 'EX' | 'GL' | 'HY' |
+  'IS' | 'LF' | 'NL' | 'NU' | 'OP' | 'PO' | 'PR' | 'QU' | 'SP' | 'SY';
 
-const punctuation: Record<string, BreakClass | undefined> = {};
-const groups: Partial<Record<BreakClass, string>> = {
-  AL: '#&*<=>@^_`~©®·', BA: '|', B2: '\u2014', CL: '}', CP: ')]', EX: '!?',
-  GL: '\u00a0\u2011', HH: '\u2010\u2012\u2013', HY: '-', IN: '…', IS: ',.:;',
-  OP: '([{¡¿', PO: '%¢°', PR: '$+\\£¥€±', QU: '"\'«»‘’“”', SP: ' ', SY: '/',
-};
-for (const [name, chars] of Object.entries(groups)) {
-  for (const char of chars) punctuation[char] = name as BreakClass;
+// LineBreak-15.0.0.txt, U+0000 through U+00FF. After LB1 resolves AI to AL,
+// every code point outside the groups below is AL within this range.
+const latin1 = Array<BreakClass>(256).fill('AL');
+latin1.fill('CM', 0x00, 0x20);
+latin1.fill('CM', 0x7f, 0xa0);
+const groups = {
+  BA: '\t|\u00ad', BB: '´', BK: '\v\f', CL: '}', CP: ')]', CR: '\r', EX: '!?', GL: '\u00a0',
+  HY: '-', IS: ',.:;', LF: '\n', NL: '\u0085', NU: '0123456789', OP: '([{¡¿', PO: '%¢°',
+  PR: '$+\\£¤¥±', QU: '"\'«»', SP: ' ', SY: '/',
+} satisfies Partial<Record<BreakClass, string>>;
+for (const name of Object.keys(groups) as (keyof typeof groups)[]) {
+  for (const ch of groups[name]) latin1[ch.charCodeAt(0)] = name;
 }
 
-function classify(char: string): BreakClass | undefined {
-  if (/[A-Za-z\u00c0-\u00ff]/u.test(char)) return 'AL';
-  if (/[0-9]/u.test(char)) return 'NU';
-  if (/[\u4e00-\u9fff]/u.test(char)) return 'ID';
-  return punctuation[char];
+function hard(cls: BreakClass): boolean {
+  return cls === 'BK' || cls === 'CR' || cls === 'LF' || cls === 'NL';
 }
 
-// Unconditional pairs kept together by LB23, LB23a, LB24, LB25, LB28, LB29
-// and LB30, after the punctuation and space rules have taken precedence.
+// Pairs kept together by LB23 to LB30 amongst Latin-1 classes. All OP and CP
+// here have ordinary width for LB30. LB23a, LB26/27 and LB30a/b need classes
+// outside this range.
 const joined: Partial<Record<BreakClass, readonly BreakClass[]>> = {
-  AL: ['AL', 'NU', 'OP', 'PR', 'PO'], NU: ['AL', 'NU', 'OP', 'PR', 'PO'],
-  PR: ['AL', 'NU', 'ID'], PO: ['AL', 'NU'], ID: ['PO'],
-  IS: ['AL', 'NU'], CP: ['AL', 'NU'],
+  AL: ['AL', 'NU', 'OP', 'PO', 'PR'],
+  CL: ['PO', 'PR'],
+  CP: ['AL', 'NU', 'PO', 'PR'],
+  HY: ['NU'],
+  IS: ['AL', 'NU'],
+  NU: ['AL', 'NU', 'OP', 'PO', 'PR'],
+  PO: ['AL', 'NU', 'OP'],
+  PR: ['AL', 'NU', 'OP'],
+  SY: ['NU'],
 };
 
-function canBreak(text: string, classes: BreakClass[], at: number): boolean {
-  const left = classes[at - 1]!;
-  const right = classes[at]!;
-  const next = classes[at + 1];
-  // Codex's textwrap splitter handles ASCII hyphens between alphanumerics.
-  if (left === 'HY') return /[\p{Alphabetic}\p{N}]/u.test(text.charAt(at - 2)) &&
-    /[\p{Alphabetic}\p{N}]/u.test(text[at]!);
-  if (right === 'SP' || left === 'GL') return false; // LB7, LB12
-  if (right === 'GL' && left !== 'SP' && left !== 'BA' && left !== 'HH') return false; // LB12a
-  if (right === 'CL' || right === 'CP' || right === 'EX' || right === 'SY') return false; // LB13
-
-  let beforeSpaces = at - 1;
-  while (classes[beforeSpaces] === 'SP') beforeSpaces--;
-  const previous = classes[beforeSpaces];
-  if (previous === 'OP') return false; // LB14
-  const initialQuote = '«‘“';
-  const finalQuote = '»’”';
-  if (previous === 'QU' && initialQuote.includes(text[beforeSpaces]!) &&
-      [undefined, 'SP', 'OP', 'QU', 'GL'].includes(classes[beforeSpaces - 1])) return false; // LB15a
-  if (right === 'QU' && finalQuote.includes(text[at]!) &&
-      [undefined, 'SP', 'GL', 'CL', 'QU', 'CP', 'EX', 'IS', 'SY'].includes(next)) return false; // LB15b
-  if (right === 'IS') return left === 'SP' && next === 'NU'; // LB15c/d
-  if (previous === 'B2' && right === 'B2') return false; // LB17
+function canBreak(left: BreakClass, right: BreakClass, lastNonSpace: BreakClass | undefined): boolean {
+  if (hard(left)) return !(left === 'CR' && right === 'LF'); // LB4/5
+  if (hard(right) || right === 'SP') return false; // LB6/7
+  // LB8/8a/11 concern ZW, ZWJ and WJ, all outside Latin-1.
+  if (left === 'GL') return false; // LB12
+  if (right === 'GL' && left !== 'SP' && left !== 'BA' && left !== 'HY') return false; // LB12a
+  if (right === 'CL' || right === 'CP' || right === 'EX' || right === 'IS' || right === 'SY') return false; // LB13
+  if (lastNonSpace === 'OP' || (lastNonSpace === 'QU' && right === 'OP')) return false; // LB14/15
+  // LB16/17 need NS or B2.
   if (left === 'SP') return true; // LB18
-
-  // Only ID is East Asian in the supported set. Between two ideographs an
-  // opening quote can start a row and a closing quote can end one (LB19/a).
-  if (right === 'QU') return left === 'ID' && next === 'ID' && initialQuote.includes(text[at]!);
-  if (left === 'QU') return classes[at - 2] === 'ID' && right === 'ID' && finalQuote.includes(text[at - 1]!);
-  if (left === 'HH' && right === 'AL' && [undefined, 'SP', 'GL'].includes(classes[at - 2])) return false; // LB20a
-  if (right === 'BA' || right === 'HH' || right === 'HY' || right === 'IN') return false; // LB21/22
-
-  // LB25: a run of separators belongs to a number only when it follows a
-  // digit. A closing bracket can intervene before a currency or percent sign.
-  if (right === 'NU' || right === 'PR' || right === 'PO') {
-    let i = at - 1;
-    if (right !== 'NU' && (left === 'CP' || left === 'CL')) i--;
-    while (classes[i] === 'IS' || classes[i] === 'SY') i--;
-    if (classes[i] === 'NU') return false;
-  }
-  if ((left === 'PR' || left === 'PO') && right === 'OP' &&
-      (next === 'NU' || (next === 'IS' && classes[at + 2] === 'NU'))) return false;
+  if (left === 'QU' || right === 'QU') return false; // LB19
+  // LB20, LB21a/b and LB22 need CB, HL or IN.
+  if (left === 'BB' || right === 'BA' || right === 'HY') return false; // LB21
   return !joined[left]?.includes(right); // LB31
 }
 
-/** Codex wrap pieces, including hanging spaces. An unknown class makes the layout unprovable. */
-export function draftWords(text: string): string[] | undefined {
-  const classes: BreakClass[] = [];
-  for (const char of text) {
-    const cls = classify(char);
-    if (!cls) return undefined;
-    classes.push(cls);
+/** UAX #14 end offsets, including mandatory breaks. Undefined means an unknown layout. */
+export function lineBreaks(text: string): number[] | undefined {
+  const ends: number[] = [];
+  let left: BreakClass | undefined;
+  let lastNonSpace: BreakClass | undefined;
+  for (let i = 0; i < text.length; i++) {
+    let right = latin1[text.charCodeAt(i)];
+    if (right === undefined) return undefined;
+    if (right === 'CM') {
+      if (left !== undefined && left !== 'SP' && !hard(left)) continue; // LB9: retain the base
+      right = 'AL'; // LB10
+    }
+    if (left !== undefined && canBreak(left, right, lastNonSpace)) ends.push(i); // LB2
+    left = right;
+    if (right !== 'SP') lastNonSpace = right;
   }
-  // All supported characters are in the BMP, so class and string indices agree.
+  if (text.length) ends.push(text.length); // LB3
+  return ends;
+}
+
+/** Printable ASCII and Latin-1, the single-line repertoire this reader can verify. */
+export const draftRepertoire = /^[\x20-\x7e\xa0-\xff]*$/u;
+
+/** Codex's textwrap 0.16.2 word separator and hyphen splitter, with hanging spaces included. */
+export function draftWords(text: string): string[] | undefined {
+  if (!draftRepertoire.test(text)) return undefined;
+  const breaks = lineBreaks(text);
+  if (!breaks) return undefined;
+  // The separator filters hyphens first, then replaces its last opportunity
+  // with end of text. A final hyphen can therefore absorb the preceding break.
+  const ends = breaks.filter(end => text[end - 1] !== '-' && text[end - 1] !== '\u00ad');
+  ends.pop();
+  if (text.length) ends.push(text.length);
+
   const words: string[] = [];
   let start = 0;
-  for (let at = 1; at < classes.length; at++) {
-    if (canBreak(text, classes, at)) {
-      words.push(text.slice(start, at));
-      start = at;
+  for (const end of ends) {
+    for (const piece of text.slice(start, end).split(/(?<=[\p{Alphabetic}\p{N}]-)(?=[\p{Alphabetic}\p{N}])/u)) {
+      words.push(piece);
     }
+    start = end;
   }
-  words.push(text.slice(start));
   return words;
 }

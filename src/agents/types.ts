@@ -137,6 +137,8 @@ export interface AgentModule {
       maxWaitMs?: number;
       /** A composer replacement: group 1 is the placeholder; named group chars is its length, if shown. */
       pastePlaceholder?: RegExp;
+      /** Input for which this module accepts a paste placeholder as proof. */
+      pastePlaceholderBody?: RegExp;
     };
     resizeBehindSubmit?: boolean;
     verifyMs?: VerifyTiming;

@@ -454,7 +454,7 @@ describe('nudge readiness', () => {
       expect(check('123456789 longword more', '123456789 long', 'word more')).toBe(false);
       expect(check('a'.repeat(23), 'a'.repeat(17), 'a'.repeat(6))).toBe(true);
       expect(check('a'.repeat(23), 'a'.repeat(16), 'a'.repeat(7))).toBe(false);
-      expect(check('界界界界界界 nextword', '界界界界界界', 'nextword')).toBe(true);
+      expect(check('界界界界界界 nextword', '界界界界界界', 'nextword')).toBe(false);
       expect(check('a\u0301'.repeat(8) + ' nextword', 'a\u0301'.repeat(8), 'nextword')).toBe(false);
     });
 
