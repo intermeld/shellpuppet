@@ -281,26 +281,37 @@ export class ScreenRenderer {
    * than failing inside its parser callback.
    */
   private trimNarrowedRows(cols: number): void {
-    type Line = { length?: unknown; resize?: unknown; getWidth?: unknown; setCell?: unknown };
-    type Buffer = { lines?: { length?: unknown; get?: unknown }; getNullCell?: unknown };
+    type Buffer = { lines?: { length?: unknown; get?: unknown } | null; getNullCell?: unknown };
     const buffers = (this.term as unknown as { _core?: { buffers?: { normal?: Buffer; alt?: Buffer } } })._core?.buffers;
     for (const buffer of [buffers?.normal, buffers?.alt]) {
-      const lines = buffer?.lines;
-      if (lines === undefined || typeof lines.length !== 'number' || typeof lines.get !== 'function' ||
-          typeof buffer?.getNullCell !== 'function') continue;
-      const blank: unknown = (buffer.getNullCell as () => unknown).call(buffer);
-      for (let i = 0; i < lines.length; i++) {
-        const line = (lines.get as (index: number) => Line | undefined).call(lines, i);
-        // Cut a row only with every method the cut needs, so a split wide
-        // character is never left behind.
-        if (line === undefined || typeof line.length !== 'number' || line.length <= cols ||
-            typeof line.resize !== 'function' || typeof line.getWidth !== 'function' ||
-            typeof line.setCell !== 'function') continue;
-        if (cols > 0 && (line.getWidth as (index: number) => number).call(line, cols - 1) === 2) {
-          (line.setCell as (index: number, cell: unknown) => void).call(line, cols - 1, blank);
-        }
-        (line.resize as (cols: number, fill: unknown) => boolean).call(line, cols, blank);
+      // This reads xterm's private interface. A buffer whose line list cannot be read is
+      // left as it is rather than ending the session; the public viewport repair still runs.
+      try {
+        this.trimBuffer(buffer, cols);
+      } catch {
+        continue;
       }
+    }
+  }
+
+  private trimBuffer(buffer: { lines?: { length?: unknown; get?: unknown } | null; getNullCell?: unknown } | undefined,
+    cols: number): void {
+    type Line = { length?: unknown; resize?: unknown; getWidth?: unknown; setCell?: unknown };
+    const lines = buffer?.lines;
+    if (lines === undefined || lines === null || typeof lines.length !== 'number' || typeof lines.get !== 'function' ||
+        typeof buffer?.getNullCell !== 'function') return;
+    const blank: unknown = (buffer.getNullCell as () => unknown).call(buffer);
+    for (let i = 0; i < lines.length; i++) {
+      const line = (lines.get as (index: number) => Line | undefined).call(lines, i);
+      // Cut a row only with every method the cut needs, so a split wide
+      // character is never left behind.
+      if (line === undefined || typeof line.length !== 'number' || line.length <= cols ||
+          typeof line.resize !== 'function' || typeof line.getWidth !== 'function' ||
+          typeof line.setCell !== 'function') continue;
+      if (cols > 0 && (line.getWidth as (index: number) => number).call(line, cols - 1) === 2) {
+        (line.setCell as (index: number, cell: unknown) => void).call(line, cols - 1, blank);
+      }
+      (line.resize as (cols: number, fill: unknown) => boolean).call(line, cols, blank);
     }
   }
 
