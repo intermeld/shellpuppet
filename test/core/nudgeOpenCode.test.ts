@@ -116,6 +116,20 @@ it('uses the live key and caption colours for a themed busy footer', async () =>
   expect(nudgeVerdict(opencode, { ...screen, styled: monochrome }).ready).toBe(false);
 });
 
+it('accepts the model cost OpenCode adds to the idle footer', async () => {
+  const screen = await replay('idle', '\x1b[29;6H');
+  const rows = [...screen.rows];
+  const foot = rows.findIndex(row => row.startsWith('  ╹'));
+  const footer = rows[foot + 1]!;
+  const start = footer.search(/\d+(?:\.\d+)?[KMB]? \(\d+%\)/u);
+  expect(start).toBeGreaterThan(0);
+  const tail = '18.1K (14%) · $0.06  ctrl+p commands';
+  rows[foot + 1] = footer.slice(0, start).padEnd(footer.length - tail.length) + tail;
+  expect(nudgeVerdict(opencode, { ...screen, rows, styled: undefined })).toEqual({ ready: true });
+  const noDollar = rows.map((row, i) => i === foot + 1 ? row.replace('$0.06', '0.06 ') : row);
+  expect(nudgeVerdict(opencode, { ...screen, rows: noDollar, styled: undefined }).ready).toBe(false);
+});
+
 it('recognises the idle Plan composer', async () => {
   // A full repaint at 80 columns extended the hint ink across its right padding.
   const screen = await replay('welcome', '\x1b[20;59H\x1b[38;2;128;128;128m     \x1b[22;27HPlan · Example\x1b[K', true);
