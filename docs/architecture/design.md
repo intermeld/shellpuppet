@@ -93,14 +93,17 @@ not inherit the daemon's folder either (§3.1).
 
 If `daemon.startWith` is configured, every client that must start a missing daemon runs
 the configured program and leading arguments before Node and its start script. On
-Windows the client writes a one-use script in the verified private home. It
-carries the per-attempt proof across wrappers that rebuild their environment.
-The filename is random and the pipe name contains only a digest. A hidden helper
+Windows the client reserves an owner-only, randomly named script during its
+home permission check. The script records the caller's absolute home spelling,
+daemon entry and per-attempt proof. Its location keeps the wrapper's script argument
+independent of the configured home, including when a wrapper rebuilds its
+environment. The pipe name contains only a digest. A hidden helper
 authenticates to that pipe and spawns the daemon with the wrapper's environment.
 The script and wrapper can then exit. The helper can kill its pending child
 if the start is cancelled or the starting client disappears. After publishing
 discovery, the daemon waits for the helper to relinquish that authority over
-their child-process IPC channel before accepting connections. The first
+their child-process IPC channel before accepting connections. Each side waits
+for its acknowledgement even if instrumentation sends other messages first. The first
 client's health poll plays no part in that transfer.
 The client still detaches the process, ignores its stdio and polls `/health`. A healthy
 daemon wins even if the spawned wrapper exits. Wrapped starts allow two minutes for

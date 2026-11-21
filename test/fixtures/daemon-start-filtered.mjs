@@ -7,7 +7,6 @@ const [program, ...args] = process.argv.slice(2);
 if (program) {
   const env = {
     SystemRoot: process.env.SystemRoot,
-    SHELLPUPPET_HOME: process.env.SHELLPUPPET_HOME,
     SHELLPUPPET_DAEMON_STARTED_WRAPPED: '1',
     SP_FILTER_TEST: 'from-wrapper',
   };
