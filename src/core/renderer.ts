@@ -167,6 +167,7 @@ export class ScreenRenderer {
       try {
         const narrowed = cols < this.term.cols;
         this.term.resize(cols, rows);
+        this.fitEmptyAlternateBuffer();
         this.repairViewport();
         if (narrowed) this.trimNarrowedRows(cols);
         for (const reflow of this.foregroundReflows) reflow();
@@ -234,24 +235,30 @@ export class ScreenRenderer {
     };
   }
 
-  /** Work around resize defects in xterm 6.0.0. The public buffer API is read-only. */
-  private repairViewport(): void {
-    const core = (this.term as unknown as { _core: {
-      buffers: { alt: { lines: { length: number; maxLength: number } } };
-      buffer: { lines: { length: number; push: (line: unknown) => void };
-        ybase: number; getBlankLine: () => unknown };
-    } })._core;
-    // xterm skips the capacity reduction when the alternate screen is empty.
-    // Once activated, it can then scroll into that spare space and acquire a
-    // positive baseY. The next growth would need more rows than it can hold.
-    const alt = core.buffers.alt.lines;
-    if (alt.length === 0 && alt.maxLength > this.term.rows) alt.maxLength = this.term.rows;
+  /** xterm 6.0.0 can scroll into spare rows left by shrinking an empty alternate screen. */
+  private fitEmptyAlternateBuffer(): void {
+    type Lines = { length?: unknown; maxLength?: unknown };
+    const term = this.term as unknown as { _core?: { buffers?: { alt?: { lines?: Lines } } } };
+    try {
+      const lines = term._core?.buffers?.alt?.lines;
+      if (lines?.length === 0 && typeof lines.maxLength === 'number' && lines.maxLength > this.term.rows) {
+        lines.maxLength = this.term.rows;
+      }
+    } catch {
+      // A different xterm may expose a read-only capacity or reject private access.
+      // The public viewport check still runs after this optional adjustment.
+    }
+  }
 
+  /** xterm 6.0.0 may recycle visible rows without allocating their backing lines. */
+  private repairViewport(): void {
     const active = this.term.buffer.active;
     if (active.length >= active.baseY + this.term.rows &&
         active.length > active.baseY + active.cursorY) return;
-    // xterm may also recycle visible rows without allocating their lines.
-    const buffer = core.buffer;
+    const buffer = (this.term as unknown as { _core: {
+      buffer: { lines: { length: number; push: (line: unknown) => void };
+        ybase: number; getBlankLine: () => unknown };
+    } })._core.buffer;
     const missing = Math.max(0, buffer.ybase + this.term.rows - buffer.lines.length);
     for (let i = 0; i < missing; i++) {
       const before = buffer.lines.length;

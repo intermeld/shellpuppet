@@ -149,6 +149,31 @@ describe('ScreenRenderer.snapshot', () => {
     expect(snap.screen).toContain('resize me');
   });
 
+  it.each([
+    { name: 'missing buffer set', buffers: undefined },
+    { name: 'read-only capacity', buffers: { alt: { lines: Object.freeze({ length: 0, maxLength: 34 }) } } },
+  ])('keeps a healthy viewport usable with a $name in xterm', async ({ buffers }) => {
+    const onFault = vi.fn();
+    const r = new ScreenRenderer({ cols: 80, rows: 34, onFault });
+    renderers.push(r);
+    await r.write('shell prompt');
+    const term = r['term'];
+    const core = (term as unknown as { _core: { buffer: unknown } })._core;
+    // xterm itself keeps its real buffers. Only the private interface seen by the renderer changes.
+    r['term'] = new Proxy(term, {
+      get(target, key): unknown {
+        if (key === '_core') return { buffer: core.buffer, buffers };
+        const value: unknown = Reflect.get(target, key);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    r.resize(80, 24);
+    r.resize(100, 30);
+    expect(onFault).not.toHaveBeenCalled();
+    await r.write('\r\nstill live');
+    expect(r.snapshot()).toMatchObject({ cols: 100, rows: 30, lines: ['shell prompt', 'still live'] });
+  });
+
   it.each([[220, 40], [96, 31], [81, 25]])(
     'preserves an alternate-screen dialog when growing to %ix%i after a shrink',
     async (cols, rows) => {
