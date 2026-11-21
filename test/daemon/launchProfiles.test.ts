@@ -9,6 +9,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { parseDaemonConfig } from '../../src/daemon/config.js';
+import { planDaemonStart } from '../../src/client/http.js';
 import {
   ALL_PROFILE_ENV_EXCLUSIONS,
   compileProfilePolicy,
@@ -623,6 +624,23 @@ describe('a launch command is resolved to the file that runs', () => {
     const real = makeProgram(sub, 'tool');
     expect(resolveLaunchCommand(path.join('sub', 'tool'), work, { PATH: '' }, host)).toEqual({ file: real });
   });
+
+  it.runIf(process.platform === 'win32').each(['relative', 'quoted'])(
+    'keeps the first %s Windows search directory for profiles and wrappers', (kind) => {
+      const cwd = makeDir('launch-work-');
+      const first = path.join(cwd, 'first bin');
+      const later = makeDir('launch-later-');
+      fs.mkdirSync(first);
+      const search = kind === 'relative' ? 'first bin' : `"${first}"`;
+      const env = { Path: `${search};${later}`, PathExt: '.cmd;.exe' };
+      for (const dir of [first, later]) {
+        makeProgram(dir, 'profile.cmd');
+        makeProgram(dir, 'wrapper.exe');
+      }
+      expect(resolveLaunchCommand('profile', cwd, env)).toEqual({ file: path.join(first, 'profile.cmd') });
+      expect(planDaemonStart(['wrapper'], 'entry', cwd, env).command).toBe(path.join(first, 'wrapper.exe'));
+    },
+  );
 
   it('resolves a quoted command without its quotes', () => {
     const work = makeDir('launch-quoted-');

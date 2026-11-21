@@ -19,6 +19,7 @@ const markerEntry = path.join(repoRoot, 'test', 'integration', 'fixtures', 'daem
 const failureWrapper = path.join(repoRoot, 'test', 'fixtures', 'daemon-start-failure.mjs');
 const homes: string[] = [];
 const started = new Map<string, number>();
+const slowAcl = vi.hoisted(() => ({ enabled: false }));
 
 const spawnReports = vi.hoisted(() => [] as { pid?: number; command: string; args: readonly string[];
   code?: number | null; signal?: string | null; stderrPath: string }[]);
@@ -26,7 +27,13 @@ vi.mock('node:child_process', async (original) => {
   const actual = await original<typeof import('node:child_process')>();
   const fs = await import('node:fs');
   const path = await import('node:path');
-  return { ...actual, spawn: (command: string, args: readonly string[], options: import('node:child_process').SpawnOptions) => {
+  return { ...actual, execFileSync(command: string, args: string[], options: import('node:child_process').ExecFileSyncOptions) {
+    if (slowAcl.enabled && options.env?.['SP_PRIVATE_HOME'] && args.at(-2) === '-EncodedCommand') {
+      const script = Buffer.from(args.at(-1)!, 'base64').toString('utf16le');
+      args = [...args.slice(0, -1), Buffer.from('Start-Sleep -Seconds 6\n' + script, 'utf16le').toString('base64')];
+    }
+    return actual.execFileSync(command, args, options);
+  }, spawn: (command: string, args: readonly string[], options: import('node:child_process').SpawnOptions) => {
     const home = options.env?.['SHELLPUPPET_HOME'];
     if (home === undefined) return actual.spawn(command, args, options);
     // A file keeps detached children independent of the test's stdio handles.
@@ -329,6 +336,21 @@ describe('planned daemon restart hold', () => {
     expect(Date.now() - began).toBeLessThan(12_000);
     expect(readDaemonState(value)).toBeNull();
   }, 30_000);
+
+  it.runIf(process.platform === 'win32')('bounds slow failure-log permission checks after a hold', async () => {
+    const value = home();
+    writeRestartHold(value, 8);
+    fs.writeFileSync(daemonLogPath(value), 'previous entry\n');
+    slowAcl.enabled = true;
+    try {
+      const began = Date.now();
+      await expect(ensureDaemon({ home: value, daemonEntry: path.join(value, 'missing.mjs') })).rejects.toThrow();
+      expect(Date.now() - began).toBeLessThan(12_000);
+      expect(spawnReports).toHaveLength(0);
+      expect(readLog(daemonLogPath(value))).toBe('previous entry\n');
+      expect(await startEndpointOccupied(value)).toBe(false);
+    } finally { slowAcl.enabled = false; }
+  }, 25_000);
 
   it('keeps busy discovery inside the deadline when state appears late in a hold', async () => {
     const value = home();

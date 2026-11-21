@@ -99,13 +99,15 @@ function systemTool(...parts: string[]): string {
   return path.join(process.env['SystemRoot'] ?? 'C:\\Windows', 'System32', ...parts);
 }
 
-function secureWindowsHome(home: string): WindowsHome {
+function secureWindowsHome(home: string, deadline = Infinity): WindowsHome {
   const powershell = systemTool('WindowsPowerShell', 'v1.0', 'powershell.exe');
   const files = ['daemon.json', 'launcher-claims.json', 'previous-sessions.json', 'restart-source.json', 'config.json', 'daemon.log', 'audit.log'];
   try {
+    const timeout = Math.min(15_000, deadline - Date.now());
+    if (timeout <= 0) throw new Error('Home permission check deadline expired.');
     const identity = execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand',
       Buffer.from(windowsAclScript, 'utf16le').toString('base64')], {
-      windowsHide: true, stdio: 'pipe', timeout: 15_000, encoding: 'utf8',
+      windowsHide: true, stdio: 'pipe', timeout, encoding: 'utf8',
       env: { SystemRoot: process.env['SystemRoot'] ?? 'C:\\Windows', SP_PRIVATE_HOME: path.resolve(home),
         SP_PRIVATE_FILES: files.join('|') },
     }).trim();
@@ -159,10 +161,10 @@ export function configPath(home: string): string {
 }
 
 /** Repair existing homes too, before reading a credential or publishing one. */
-export function ensureHome(home: string): void {
+export function ensureHome(home: string, deadline?: number): void {
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
   if (process.platform === 'win32') {
-    privateWindowsHome = secureWindowsHome(fs.realpathSync.native(home));
+    privateWindowsHome = secureWindowsHome(fs.realpathSync.native(home), deadline);
   } else {
     fs.chmodSync(home, 0o700);
   }

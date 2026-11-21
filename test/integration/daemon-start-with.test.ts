@@ -61,6 +61,23 @@ function homeWithFailure(mode: 'hang' | 'exit'): { home: string; marker: string 
   return { home, marker };
 }
 
+function handoffHome(): string {
+  const { home } = homeWithWrapper();
+  fs.writeFileSync(path.join(home, 'config.json'), JSON.stringify({
+    viewer: { launchMode: 'no-window' },
+    daemon: { startWith: [process.execPath, path.join(repoRoot, 'test', 'fixtures', 'daemon-start-handoff.mjs')] },
+  }));
+  return home;
+}
+
+function cleanUpHandoff(home: string): void {
+  recordPid(home);
+  const marker = path.join(home, 'starting-pid');
+  if (!fs.existsSync(marker)) return;
+  const pid = Number(fs.readFileSync(marker, 'utf8'));
+  if (readDaemonState(home)?.pid !== pid && processAlive(pid)) process.kill(pid, 'SIGKILL');
+}
+
 async function runBound(home: string, bound: number): Promise<{ code: number | string; stderr: string; elapsedMs: number }> {
   const started = Date.now();
   try {
@@ -125,6 +142,48 @@ afterEach(async () => {
 });
 
 describe('configured daemon start wrapper', () => {
+  it.runIf(process.platform === 'win32')('keeps a direct client behind a slow wrapped restart after hand-off', async () => {
+    const home = handoffHome();
+    try {
+      expect((await runCli(home, ['daemon', 'start', '--direct'])).code).toBe(0);
+      const restart = runCli(home, ['daemon', 'restart', '--json']);
+      await eventually(() => fs.existsSync(path.join(home, 'launcher-exited')) && fs.existsSync(path.join(home, 'starting-pid')), 20_000);
+      const peer = runCli(home, ['daemon', 'start', '--direct', '--json']);
+      // Keep the detached entry alive beyond the grace for a wrapper that never launched it.
+      await new Promise(resolve => setTimeout(resolve, 12_000));
+      fs.writeFileSync(path.join(home, 'allow-health'), '');
+      const [replacement, direct] = await Promise.all([restart, peer]);
+      expect(replacement.code).toBe(0);
+      expect(direct.code).toBe(0);
+      const state = readDaemonState(home)!;
+      expect(state.pid).toBe(Number(fs.readFileSync(path.join(home, 'starting-pid'), 'utf8')));
+      for (const result of [replacement, direct]) {
+        expect(JSON.parse(result.stdout)).toMatchObject({ port: state.port, startedWrapped: true });
+      }
+    } finally { cleanUpHandoff(home); }
+  });
+
+  it.runIf(process.platform === 'win32')('ends a handed-off daemon on a health timeout', async () => {
+    const home = handoffHome();
+    try {
+      const result = await runBound(home, 4_000);
+      expect(result.code).toBe(1);
+      const pid = Number(fs.readFileSync(path.join(home, 'starting-pid'), 'utf8'));
+      expect(processAlive(pid)).toBe(false);
+    } finally { cleanUpHandoff(home); }
+  });
+
+  it('reports an unusable home without disclosing its value', async () => {
+    const { home } = homeWithWrapper();
+    const invalid = path.join(home, 'private-home-value');
+    fs.writeFileSync(invalid, '');
+    for (const args of [['list'], ['daemon', 'start'], ['desktop']]) {
+      const result = await runCli(invalid, args);
+      expect(result.code).toBe(1);
+      expect((result.stdout + result.stderr).includes(invalid)).toBe(false);
+      expect(result.stderr).toMatch(/private directory/i);
+    }
+  });
   it.runIf(process.platform === 'win32')('survives its wrapper and runs the daemon without a console', async () => {
     const { home } = homeWithWrapper();
     const compiler = path.join(process.env['SystemRoot']!, 'Microsoft.NET', 'Framework', 'v4.0.30319', 'csc.exe');
