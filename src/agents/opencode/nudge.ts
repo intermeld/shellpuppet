@@ -157,8 +157,9 @@ export function readiness(view: NudgeView): NudgeReadiness {
     if (row.length > end || (row !== gutter && !row.startsWith(inset))) return 'unknown';
     pieces.push(inputText(view, i, row, inset.length, end));
   }
-  const occupied = busy ? 'busy' : 'draft';
+  const occupied = busy && view.whenBusy === undefined ? 'busy' : 'draft';
   if (view.expectedDraft !== undefined) {
+    if (busy && view.whenBusy === 'skip') return 'busy';
     const cursor = view.cursor;
     if (cursor && (cursor.y <= top || cursor.y >= foot - 2 || cursor.x < inset.length || cursor.x >= end)) return occupied;
     return matchesDraft(pieces, view.expectedDraft, end - inset.length - 2) ? 'ready' : occupied;

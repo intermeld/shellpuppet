@@ -18,6 +18,7 @@ The commitments they add up to are collected in [VISION.md](../../VISION.md).
 | [ADR-009](ADR-009-dashboard-and-sessions-you-start-yourself.md) | The dashboard and sessions you start yourself |
 | [ADR-010](ADR-010-messages-between-sessions.md) | Messages between sessions, read from a mailbox (proposed) |
 | [ADR-011](ADR-011-session-launch-permission.md) | Session permission to launch profiles |
+| [ADR-012](ADR-012-scheduled-prompts.md) | Owner-configured scheduled prompts for named sessions |
 
 ## Conventions
 

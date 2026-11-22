@@ -22,6 +22,9 @@ import { Mailbox, MailboxError, NAME_PATTERN, buildNudge } from '../core/mailbox
 import type { MailboxEntry } from '../core/mailbox.js';
 import { buildMessagingPolicy, DEFAULT_NUDGE_INTERVAL_MS, DEFAULT_NUDGES_PER_MINUTE } from './config.js';
 import { NudgeScheduler } from './nudgeScheduler.js';
+import { ScheduleStore, PromptScheduler, watchSchedules } from './schedules.js';
+import type { Schedule, ScheduleOutcome } from './schedules.js';
+import type { NudgeAbortReason } from '../core/session.js';
 import type { MessagingConfig } from './config.js';
 import {
   CommandNotFoundError,
@@ -620,6 +623,10 @@ export class Daemon {
   private readonly manager: SessionManager;
   private readonly mailbox: Mailbox;
   private readonly nudges: NudgeScheduler;
+  private readonly schedules = new ScheduleStore();
+  private readonly pendingSchedules = new Map<string, string>();
+  private readonly promptScheduler: PromptScheduler;
+  private stopScheduleWatch?: () => void;
   private readonly server: http.Server;
   private readonly wss = new WebSocketServer({
     noServer: true,
@@ -799,6 +806,11 @@ export class Daemon {
       perMinute: options.messaging?.nudgesPerMinute ?? DEFAULT_NUDGES_PER_MINUTE,
       deliver: (id) => this.deliverNudge(id),
     });
+    this.promptScheduler = new PromptScheduler(this.schedules, () => this.now(),
+      (schedule, current) => this.deliverScheduled(schedule, current),
+      (schedule, { sessionId, outcome, reason }) => this.audit.record('daemon', 'input', sessionId, {
+        source: 'schedule', name: schedule.name, session: schedule.session, outcome, reason,
+      }));
     this.mailbox.on('message', (event) => {
       const entry = this.mailbox.log().find((item) => item.id === event.id);
       if (entry !== undefined) this.messageAudit('msg-send', entry);
@@ -1049,6 +1061,8 @@ export class Daemon {
         });
     }, this.options.promptScanIntervalMs ?? PROMPT_SCAN_INTERVAL_MS);
     this.promptScanTimer.unref();
+    this.stopScheduleWatch = watchSchedules(home, this.schedules, this.logger);
+    this.promptScheduler.start();
 
     this.logger.info('daemon started', {
       port: this.portValue,
@@ -1163,6 +1177,8 @@ export class Daemon {
     // awaits the one real shutdown.
     if (this.stopPromise === null) {
       this.stopping = true;
+      this.promptScheduler.stop();
+      this.stopScheduleWatch?.();
       this.shutdownRecords = this.saveShutdownRecords(opts);
       this.stopPromise = this.doStop();
     }
@@ -2766,6 +2782,7 @@ export class Daemon {
   }
 
   private endMailboxParticipant(id: string): void {
+    for (const [name, pendingId] of this.pendingSchedules) if (pendingId === id) this.pendingSchedules.delete(name);
     this.nudges.remove(id);
     // Audit before end can trim old tombstones from retained history.
     for (const entry of this.mailbox.log({ participantId: id })) {
@@ -2791,6 +2808,10 @@ export class Daemon {
     const session = this.manager.get(id);
     if (session === undefined || session.exited || this.mailbox.participant(id)?.kind !== 'session') return 'done';
     const pendingIds = session.nudgePendingLine() !== null ? [...session.nudgePendingIds()] : [];
+    // A scheduled body has no mailbox ids. It can clear on proof of consumption,
+    // but a later inbox message can never authorise its submit key.
+    if (session.nudgePendingLine() !== null && pendingIds.length === 0 &&
+        !await this.clearScheduledBody(session)) return 'wait';
     const clearedIds = pendingIds.length > 0 && await session.clearConsumedNudge() ? pendingIds : [];
     const unread = this.mailbox.inbox(id, { markRead: false });
     if (clearedIds.length > 0) {
@@ -2799,6 +2820,7 @@ export class Daemon {
     }
     const pending = session.nudgePendingLine();
     if (pending !== null) {
+      if (session.nudgePendingIds().length === 0) return 'wait';
       const ids = unread.filter((entry) => entry.state === 'waiting').map((entry) => entry.id);
       if (ids.length === 0) return 'done';
       const covered = session.nudgePendingIds();
@@ -2821,7 +2843,7 @@ export class Daemon {
           session.nudgeInputVersion() === inputVersion &&
           session.nudgeQueuedInputVersion() === queuedInputVersion &&
           session.nudgeScreenRevision() === screenRevision &&
-          session.answerablePrompt(screen) === null &&
+          session.answerablePrompt(screen) === null && session.nudgePendingIds().length > 0 &&
           waitingIds.length === ids.length &&
           ids.every((messageId) => waitingIds.includes(messageId));
       });
@@ -2844,28 +2866,77 @@ export class Daemon {
     // in the line again when a later message arrives, so delivery never stops.
     const ids = unread.filter((entry) => entry.state === 'waiting').map((entry) => entry.id);
     if (ids.length === 0) return 'done';
-    const line = buildNudge(unread);
     if (!session.hasPainted() || !session.nudgeReady(this.now())) return 'wait';
+    const line = buildNudge(unread);
+    const result = await this.deliverLine(session, line, undefined, ids, () => {
+      const current = this.mailbox.inbox(id, { markRead: false });
+      return ids.every(messageId => current.some(entry => entry.id === messageId && entry.state === 'waiting'));
+    });
+    if (result.outcome === 'aborted') {
+      this.audit.record('daemon', 'nudge-aborted', id, { messageIds: ids, count: ids.length, reason: result.reason });
+    }
+    if (result.outcome !== 'sent' && result.outcome !== 'queued') return 'wait';
+    this.mailbox.markNudged(ids);
+    this.audit.record('daemon', 'nudge', id, { messageIds: ids, count: ids.length,
+      ...(result.outcome === 'queued' ? { queued: true } : {}) });
+    return 'sent';
+  }
+
+  private async clearScheduledBody(session: Session): Promise<boolean> {
+    const name = session.pendingSchedule();
+    if (name === undefined || !await session.clearConsumedNudge()) return false;
+    if (this.pendingSchedules.get(name) === session.id) this.pendingSchedules.delete(name);
+    return true;
+  }
+
+  private async deliverScheduled(schedule: Schedule, current: () => boolean): Promise<ScheduleOutcome> {
+    const id = this.mailbox.sessionIdByName(schedule.session);
+    const session = id === undefined ? undefined : this.manager.get(id);
+    if (!session || session.exited) return { outcome: 'skipped', reason: 'no-session' };
+    if (session.recentInput) return { sessionId: id, outcome: 'skipped', reason: 'recent-input' };
+    const pendingId = this.pendingSchedules.get(schedule.name);
+    if (pendingId !== undefined) {
+      const previous = this.manager.get(pendingId);
+      if (previous?.pendingSchedule() === schedule.name && !await this.clearScheduledBody(previous)) {
+        return { sessionId: id, outcome: 'skipped', reason: 'pending' };
+      }
+      this.pendingSchedules.delete(schedule.name);
+    }
+    if (session.nudgePendingLine() !== null && !await this.clearScheduledBody(session)) {
+      return { sessionId: id, outcome: 'skipped', reason: 'pending' };
+    }
+    try {
+      const result = await this.deliverLine(session, schedule.message, schedule.whenBusy, [],
+        () => current() && this.mailbox.sessionIdByName(schedule.session) === id, schedule.name);
+      // Ordinary input can also arrive while the scheduled write waits in the input queue.
+      if (result.outcome === 'skipped' && session.recentInput) result.reason = 'recent-input';
+      return { ...result, sessionId: id };
+    } finally {
+      if (!session.exited && session.pendingSchedule() === schedule.name) this.pendingSchedules.set(schedule.name, session.id);
+    }
+  }
+
+  private async deliverLine(session: Session, line: string, whenBusy: Schedule['whenBusy'] | undefined,
+    ids: string[], currentDelivery: () => boolean, schedule?: string): Promise<ScheduleOutcome> {
+    if (!session.hasPainted()) return { outcome: 'skipped', reason: 'unknown' };
+    const inputVersion = session.nudgeInputVersion();
+    const queuedInputVersion = session.nudgeQueuedInputVersion();
     const snapshot = await session.snapshot();
-    const state = session.nudgeState(this.now());
-    if (snapshot.exited || session.answerablePrompt(snapshot.screen) !== null || !state.ready) return 'wait';
+    const state = session.nudgeState(this.now(), whenBusy);
+    if (snapshot.exited) return { outcome: 'skipped', reason: 'session-ended' };
+    if (session.answerablePrompt(snapshot.screen) !== null) return { outcome: 'skipped', reason: 'prompt' };
+    if (!state.ready) return { outcome: 'skipped',
+      reason: state.reason === 'busy' && whenBusy === 'queue' ? 'cannot-queue' : state.reason ?? 'unknown' };
     // Check the same region again before typing. A running turn can repaint
     // its transcript, and a separate sidebar can repaint beside an idle pane.
     const queued = state.queued;
     const outputAt = session.lastChangeAt();
-    const inputVersion = session.nudgeInputVersion();
-    const queuedInputVersion = session.nudgeQueuedInputVersion();
     const screenRevision = session.nudgeScreenRevision();
-    const stillWaiting = (): boolean => {
-      const current = this.mailbox.inbox(id, { markRead: false });
-      return ids.every((messageId) => current.some((entry) => entry.id === messageId && entry.state === 'waiting'));
-    };
-    let failedCheck: 'line-not-seen' | 'other-input-arrived' | 'screen-changed' |
-      'prompt-showing' | 'stalled' | 'messages-changed' | 'session-ended' = 'line-not-seen';
+    let failedCheck: NudgeAbortReason = 'line-not-seen';
     const ready = (screen: string, phase: 'before' | 'submit'): boolean => {
       if (session.exited) { failedCheck = 'session-ended'; return false; }
       if (session.getStalled()) { failedCheck = 'stalled'; return false; }
-      const current = phase === 'before' ? session.nudgeState(this.now()) : undefined;
+      const current = phase === 'before' ? session.nudgeState(this.now(), whenBusy) : undefined;
       if (session.nudgeScreenRevision() !== screenRevision ||
         (phase === 'before' && (queued || state.paneQuiet ? current?.regionKey !== state.regionKey
           : session.lastChangeAt() !== outputAt || screen !== snapshot.screen))) {
@@ -2876,27 +2947,25 @@ export class Daemon {
         failedCheck = 'other-input-arrived'; return false;
       }
       if (session.answerablePrompt(screen) !== null) { failedCheck = 'prompt-showing'; return false; }
-      if (!stillWaiting()) { failedCheck = 'messages-changed'; return false; }
-      if (phase === 'before' ? !current?.ready : !session.nudgeReadyWithLine(line)) {
+      if (!currentDelivery()) { failedCheck = ids.length ? 'messages-changed' : 'schedule-changed'; return false; }
+      if (phase === 'before' ? !current?.ready : !session.nudgeReadyWithLine(line, whenBusy)) {
         failedCheck = 'line-not-seen'; return false;
       }
       return true;
     };
     try {
-      const result = await session.writeNudgeWithReason(line + session.nudgeSubmit(), ready, ids, () => failedCheck);
-      if (result === 'wait') return 'wait';
+      const result = await session.writeNudgeWithReason(line + session.nudgeSubmit(), ready, ids, () => failedCheck, schedule);
+      if (result === 'wait') return { outcome: 'skipped', reason: session.nudgePendingLine() !== null ? 'pending' : failedCheck };
       if (result.startsWith('aborted-')) {
         const reason = result.slice('aborted-'.length);
-        this.audit.record('daemon', 'nudge-aborted', id, { messageIds: ids, count: ids.length, reason });
-        return 'wait';
+        return { outcome: 'aborted', reason };
       }
     } catch (error) {
-      if (error instanceof SessionInputFailedError || error instanceof SessionProgramEndedError) return 'wait';
+      if (error instanceof SessionInputFailedError) return { outcome: 'skipped', reason: 'input-failed' };
+      if (error instanceof SessionProgramEndedError) return { outcome: 'skipped', reason: 'session-ended' };
       throw error;
     }
-    this.mailbox.markNudged(ids);
-    this.audit.record('daemon', 'nudge', id, { messageIds: ids, count: ids.length, ...(queued ? { queued: true } : {}) });
-    return 'sent';
+    return { outcome: queued ? 'queued' : 'sent' };
   }
 
   private registerMailboxSession(session: Session, profileName?: string): void {
@@ -3070,6 +3139,10 @@ export class Daemon {
     actor: string,
   ): Promise<void> {
     try {
+      if (url.pathname === '/schedules' && req.method === 'GET') {
+        json(res, 200, { schedules: this.promptScheduler.list() });
+        return;
+      }
       if (segments[0] === 'daemon' && segments[1] === 'shutdown' && req.method === 'POST') {
         const body = await readBody(req);
         if (this.stopping) {
@@ -4360,6 +4433,7 @@ export class Daemon {
   private async scanForPromptStalls(): Promise<void> {
     const stallMs = this.options.promptStallMs ?? PROMPT_STALL_MS;
     const seen = new Set<string>();
+    const scheduled = new Set(this.schedules.read().filter(s => s.enabled).map(s => this.mailbox.sessionIdByName(s.session)));
     for (const summary of this.manager.list()) {
       const session = this.manager.get(summary.id);
       if (session === undefined || session.exited) continue;
@@ -4368,6 +4442,7 @@ export class Daemon {
       let detected: DetectedPrompt | null;
       try {
         const snapshot = await session.snapshot();
+        if (scheduled.has(session.id)) session.nudgeState(this.now());
         detected = session.answerablePrompt(snapshot.screen);
       } catch (error) {
         // One session's render fault must not blind the scan for every

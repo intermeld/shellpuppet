@@ -252,6 +252,11 @@ export class Mailbox extends EventEmitter {
 
   nameTaken(name: string): boolean { return this.byName.has(name) || this.reservedNames.has(name); }
 
+  sessionIdByName(name: string): string | undefined {
+    const id = this.byName.get(name);
+    return id !== undefined && this.participants.get(id)?.kind === 'session' ? id : undefined;
+  }
+
   participant(id: string): ParticipantRef | undefined {
     const record = this.participants.get(id);
     return record === undefined ? undefined : { kind: record.kind, id: record.id, name: record.name, ...(record.role === 'chair' ? { role: record.role } : {}) };
