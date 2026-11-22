@@ -180,6 +180,10 @@ export class SessionManager {
     return [...this.sessions.values()].map((s) => s.summary());
   }
 
+  liveProfileSessions(): Session[] {
+    return [...this.sessions.values()].filter(s => s.launchProfile && !s.exited && !s.isKilled);
+  }
+
   /** Live sessions, including an exited first attempt holding a retry slot. */
   liveCount(): number {
     return [...this.sessions.values()].filter((s) => !s.exited || this.starting.has(s.id)).length;

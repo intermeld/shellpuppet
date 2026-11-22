@@ -121,6 +121,8 @@ export interface ClientOptions {
    * resolved per request (the MCP client name is only known post-handshake).
    */
   actor?: string | (() => string);
+  /** A newly observed live conversation id from this authenticated client. */
+  observedResumeId?: string;
   /**
    * Whether a request whose daemon has gone may start another and send the
    * request there, as every ordinary call does (design §2.2). False makes
@@ -833,6 +835,9 @@ export async function request(
       && sessionInstance !== undefined && sessionInstance === conn.instanceId;
     const agent = process.env['SHELLPUPPET_PROFILE_AGENT'];
     const resumeIds = presentIdentity && agent ? agentResumeIds(moduleFor(agent), process.env).filter(validResumeId) : [];
+    if (presentIdentity && agent === 'claude' && validResumeId(options.observedResumeId)) {
+      resumeIds.unshift(options.observedResumeId);
+    }
     const claim = options.claim ?? process.env['SHELLPUPPET_CLAIM'];
     const claimParts = claim?.match(/^(claim_[a-f0-9]{32}):(.+)$/);
     const response = await fetch(`http://127.0.0.1:${String(conn.port)}${path}`, {

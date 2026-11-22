@@ -9,6 +9,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- `shellpuppet previous` records a Claude Code conversation switched with `/resume` when its direct child MCP client reports the changed id from Claude's session file; a missing or invalid file keeps the last reported id.
 - Windows daemon starts from the Start menu shortcut and through a start wrapper: program lookup works whatever the case of the PATH variable, a failed start is logged and shown, the wrapped daemon no longer opens a console window, and wrapped restarts stay under the start lock and survive their starting client closing.
 
 ## [0.3.0] - 2026-11-21

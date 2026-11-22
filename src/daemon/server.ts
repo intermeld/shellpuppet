@@ -720,6 +720,7 @@ export class Daemon {
   private readonly promptGraceTimers = new Map<string, NodeJS.Timeout>();
   private promptScanRunning = false;
   private stopPromise: Promise<void> | null = null;
+  private shutdownRecords?: Promise<void>;
 
   private readonly audit: Auditor;
   private readonly callerContext = new AsyncLocalStorage<string | undefined>();
@@ -1148,7 +1149,6 @@ export class Daemon {
   private closeServerOnly(): Promise<void> {
     return new Promise((resolve) => {
       this.server.close(() => resolve());
-      // close() waits for idle connections; nothing is connected this early.
     });
   }
 
@@ -1163,25 +1163,29 @@ export class Daemon {
     // awaits the one real shutdown.
     if (this.stopPromise === null) {
       this.stopping = true;
-      if (opts.removeState !== false && this.publishedState && this.homeOwner) {
-        const state = this.publishedState;
+      this.shutdownRecords = this.saveShutdownRecords(opts);
+      this.stopPromise = this.doStop();
+    }
+    return this.stopPromise;
+  }
+
+  private saveShutdownRecords(opts: { removeState?: boolean; restart?: boolean }): Promise<void> {
+    return Promise.resolve().then(() => {
+      const state = opts.removeState !== false && this.homeOwner ? this.publishedState : null;
+      if (state) {
+        // Publish the final claims, source, snapshot and handoff in one turn.
         this.writeShutdownRecord('launcher-claims.json', () => this.saveLauncherClaims());
         if (opts.restart) {
           this.writeShutdownRecord('restart-source.json', () => {
             this.requireHomeOwner();
             writePrivateRecord(path.join(this.options.home, 'restart-source.json'), { restartFrom: this.instanceId });
           });
-          this.writeShutdownRecord('previous-sessions.json', () => {
-            this.requireHomeOwner();
-            this.savePreviousSessions();
-          });
+          this.writeShutdownRecord('previous-sessions.json', () => this.savePreviousSessions());
         }
         this.writeShutdownRecord('daemon.json', () => this.finishDiscovery(state, opts.restart === true));
       }
       this.releaseOwnership();
-      this.stopPromise = this.doStop();
-    }
-    return this.stopPromise;
+    });
   }
 
   private finishDiscovery(state: DaemonState, restart: boolean): void {
@@ -1203,11 +1207,13 @@ export class Daemon {
 
   private writeShutdownRecord(file: string, write: () => void, verb = 'save'): void {
     try { write(); }
-    catch (error) {
-      const message = `Could not ${verb} ${file} during shutdown.`;
-      this.shutdownWarnings.push(message);
-      this.logger.warn(message, { code: (error as NodeJS.ErrnoException).code });
-    }
+    catch (error) { this.shutdownRecordFailure(file, verb, error); }
+  }
+
+  private shutdownRecordFailure(file: string, verb: string, error: unknown): void {
+    const message = `Could not ${verb} ${file} during shutdown.`;
+    this.shutdownWarnings.push(message);
+    this.logger.warn(message, { code: (error as NodeJS.ErrnoException).code });
   }
 
   private releaseOwnership(): void {
@@ -1238,17 +1244,12 @@ export class Daemon {
     this.promptGraceTimers.clear();
     this.folderPickerAbort?.abort(new FolderPickerFailureError('The folder picker was stopped.'));
     for (const read of this.widerReads.values()) read.abort.abort();
-    await Promise.allSettled([...this.widerReads.values()].map((read) => read.done));
-
-    // Stop LISTENING first, before tearing down session trees. Killing process
-    // trees is not fast (`taskkill /T` on a loaded machine can take seconds
-    // per session), and a daemon that still answers on its port while shutting
-    // down looks alive to every client polling /health. `close()` refuses new
-    // connections immediately while letting in-flight responses drain on
-    // their existing socket, notably the reply to this very shutdown request.
-    const listenerClosed = new Promise<void>((resolve) => {
-      this.server.close(() => resolve());
-    });
+    const readsDone = Promise.allSettled([...this.widerReads.values()].map((read) => read.done));
+    await this.shutdownRecords;
+    // A free port lets a successor retire the ownership marker. Keep it
+    // bound through publication, then close without waiting for PTY teardown.
+    const listenerClosed = this.closeServerOnly();
+    await readsDone;
     for (const socket of this.sockets) {
       try {
         socket.close();
@@ -2712,12 +2713,12 @@ export class Daemon {
   }
 
   private savePreviousSessions(): void {
+    this.requireHomeOwner();
     const endedAt = new Date(this.now()).toISOString();
-    const sessions = this.manager.list().flatMap(summary => {
-      const session = this.manager.get(summary.id);
+    const sessions = this.manager.liveProfileSessions().flatMap(session => {
       // A deferred start has no participant until the program has started and acquired its name.
-      const participant = this.mailbox.participant(summary.id);
-      if (!participant || !session || session.exited || session.isKilled || !session.launchProfile) return [];
+      const participant = this.mailbox.participant(session.id);
+      if (!participant) return [];
       return [{ ...session.launchProfile, name: participant.name === session.id ? null : participant.name,
         agent: session.agent, resumeId: session.resumeId, endedAt }];
     });
@@ -3067,7 +3068,11 @@ export class Daemon {
     try {
       if (segments[0] === 'daemon' && segments[1] === 'shutdown' && req.method === 'POST') {
         const body = await readBody(req);
-        if (this.stopping) { json(res, 200, { ok: true, stopping: true, warnings: this.shutdownWarnings }); return; }
+        if (this.stopping) {
+          await this.shutdownRecords;
+          json(res, 200, { ok: true, stopping: true, warnings: this.shutdownWarnings });
+          return;
+        }
         const force = asBoolean(body['force']) ?? false;
         const live = this.manager.liveCount();
         if (live > 0 && !force) {
@@ -3080,6 +3085,7 @@ export class Daemon {
         }
         const stopping = this.stop({ restart: body['restart'] === true });
         this.audit.record(actor, 'shutdown', undefined, { force, liveSessions: live });
+        await this.shutdownRecords;
         json(res, 200, { ok: true, stopping: true, warnings: this.shutdownWarnings });
         void stopping.then(() => {
           this.options.onSelfStop?.('shutdown-request');
@@ -3858,6 +3864,7 @@ export class Daemon {
     actor: string,
   ): Promise<void> {
     const body = await readBody(req);
+    if (this.stopping) { json(res, 503, { error: 'The daemon is stopping.' }); return; }
     const command = asString(body['command']);
     if (command === undefined || command === '') {
       json(res, 400, { error: 'command (string) is required.' });

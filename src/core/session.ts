@@ -901,7 +901,7 @@ export class Session implements WaitTarget {
     if (!deps.retryAttempt) this.logger.info('session spawn', {
       id,
       command: this.command,
-      args: this.args,
+      args: this.args.map(arg => arg === this.launchProfile?.resumeId ? '[redacted]' : arg),
       wrapped: file !== this.command,
       // Names only: the values are secrets more often than not.
       ...(options.env !== undefined ? { envNames: Object.keys(options.env) } : {}),
@@ -928,11 +928,13 @@ export class Session implements WaitTarget {
       process.env,
       options.env,
     );
-    if (deps.identity !== undefined) {
-      if (options.launchProfile && this.agentModule?.resumeIdMarkers) {
+    if (this.launchProfile) {
+      if (deps.identity && this.agentModule?.resumeIdMarkers) {
         this.inheritedResumeIds = agentResumeIds(this.agentModule, sessionEnv, this.platform);
         sessionEnv['SHELLPUPPET_PROFILE_AGENT'] = this.agent;
       }
+    }
+    if (deps.identity !== undefined) {
       sessionEnv['SHELLPUPPET_SESSION'] = id;
       sessionEnv['SHELLPUPPET_SESSION_TOKEN'] = deps.identity.token;
       sessionEnv['SHELLPUPPET_DAEMON_INSTANCE'] = deps.identity.instanceId;
