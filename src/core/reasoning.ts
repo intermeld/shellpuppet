@@ -630,6 +630,8 @@ function reasoningRanges(
   limit: number,
   claimed?: ReadonlySet<number> | null,
 ): [number, number][] {
+  const framed = signature.builtIn && moduleFor(signature.name)?.readingRules?.hiddenRanges;
+  if (framed) return framed(lines, limit);
   const ranges: [number, number][] = [];
   let i = 0;
   // The parent may have left the retained scrollback. There is no safe way
@@ -805,8 +807,10 @@ export function latestResult(lines: readonly StyledLine[], signature: CompiledSi
     }
     const ranges = reasoningRanges(lines, signature, composer.chrome);
     const inReasoning = (i: number): boolean => ranges.some(([from, to]) => i >= from && i < to);
+    const floor = signature.builtIn ? moduleFor(signature.name)?.readingRules?.answerFloor?.(lines, composer.chrome) : undefined;
+    const answerFloor = Math.max(turnStart, floor ?? turnStart);
     let start = -1;
-    for (let i = composer.chrome - 1; i >= turnStart; i--) {
+    for (let i = composer.chrome - 1; i >= answerFloor; i--) {
       if (!inReasoning(i) && lineFits(lines[i]!, signature.answer.start)) {
         start = i;
         break;
@@ -817,8 +821,11 @@ export function latestResult(lines: readonly StyledLine[], signature: CompiledSi
     if (signature.answer.upward) {
       for (;;) {
         let above = start - 1;
-        while (above >= turnStart && blank(lines[above], signature.tidy)) above--;
-        if (above < turnStart || inReasoning(above) || !lineFits(lines[above]!, signature.answer.start)) break;
+        while (above >= answerFloor && blank(lines[above], signature.tidy)) above--;
+        // Judge the previous paragraph at its first physical row. Its last
+        // wrapped row cannot independently identify an answer.
+        while (above >= answerFloor && lines[above]!.wrapped && !inReasoning(above)) above--;
+        if (above < answerFloor || inReasoning(above) || !lineFits(lines[above]!, signature.answer.start)) break;
         start = above;
       }
     }

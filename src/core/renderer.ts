@@ -25,6 +25,7 @@ import { markSelectedOption } from './selection.js';
 import { detectPrompt } from './promptDetector.js';
 import { promptShapesFor } from '../agents/index.js';
 import { hasClippedQuestionShape } from '../agents/opencode/prompts.js';
+import { hasPromptFooter } from '../agents/hermes/prompts.js';
 import { hasActionBoxFooter } from '../agents/grok/actionBox.js';
 
 const { Terminal } = xterm;
@@ -484,7 +485,8 @@ export class ScreenRenderer {
 
   /** Cell styles and soft wraps for menus whose text alone is ambiguous. */
   promptStyles(lines: readonly string[]): StyledLine[] | undefined {
-    return hasClippedQuestionShape(lines, this.rows) || hasActionBoxFooter(lines) ? this.styledLines().lines : undefined;
+    return hasClippedQuestionShape(lines, this.rows) || hasActionBoxFooter(lines) || hasPromptFooter(lines)
+      ? this.styledLines().lines : undefined;
   }
 
   /** Render the visible viewport (the bottom page when scrolled fully down). */

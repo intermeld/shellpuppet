@@ -2948,13 +2948,14 @@ export class Daemon {
       }
       if (session.answerablePrompt(screen) !== null) { failedCheck = 'prompt-showing'; return false; }
       if (!currentDelivery()) { failedCheck = ids.length ? 'messages-changed' : 'schedule-changed'; return false; }
-      if (phase === 'before' ? !current?.ready : !session.nudgeReadyWithLine(line, whenBusy)) {
+      if (phase === 'before' ? !current?.ready || current.queued !== queued : !session.nudgeReadyWithLine(line, queued)) {
         failedCheck = 'line-not-seen'; return false;
       }
       return true;
     };
     try {
-      const result = await session.writeNudgeWithReason(line + session.nudgeSubmit(), ready, ids, () => failedCheck, schedule);
+      const result = await session.writeNudgeWithReason(line + session.nudgeSubmit(queued), ready, ids,
+        () => failedCheck, schedule, queued);
       if (result === 'wait') return { outcome: 'skipped', reason: session.nudgePendingLine() !== null ? 'pending' : failedCheck };
       if (result.startsWith('aborted-')) {
         const reason = result.slice('aborted-'.length);
