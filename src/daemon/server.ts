@@ -2948,7 +2948,7 @@ export class Daemon {
       }
       if (session.answerablePrompt(screen) !== null) { failedCheck = 'prompt-showing'; return false; }
       if (!currentDelivery()) { failedCheck = ids.length ? 'messages-changed' : 'schedule-changed'; return false; }
-      if (phase === 'before' ? !current?.ready || current.queued !== queued : !session.nudgeReadyWithLine(line, queued)) {
+      if (phase === 'before' ? !current?.ready || current.queued !== queued : !session.nudgeReadyWithLine(line, queued, whenBusy)) {
         failedCheck = 'line-not-seen'; return false;
       }
       return true;
