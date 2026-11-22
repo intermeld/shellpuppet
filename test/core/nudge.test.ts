@@ -394,7 +394,7 @@ describe('nudge readiness', () => {
         ...footer,
       ]);
       const check = (screen: NudgeObservation, expectedDraft: string) =>
-        nudgeVerdict(codex, { ...screen, unchangedMs: 0, expectedDraft });
+        nudgeVerdict(codex, { ...screen, viewportCols: 83, unchangedMs: 0, expectedDraft });
       expect(check(wrapped, line)).toEqual({ ready: true });
       expect(readinessOf(codex, wrapped)).toBe('unknown');
       expect(check(wrapped, line + ' more')).toEqual({ ready: false, reason: 'draft' });
@@ -432,6 +432,63 @@ describe('nudge readiness', () => {
         ...footer,
       ]);
       expect(check(blankBetween, line)).toEqual({ ready: false, reason: 'draft' });
+    });
+
+    it('accepts only the breaks that overflow the Codex input width', () => {
+      // At 20 columns there are 17 cells for the body, on every row.
+      const check = (expectedDraft: string, ...pieces: string[]) => nudgeVerdict(codex, {
+        ...fromRows(pieces.map((piece, i) => (i === 0 ? '› ' : '  ') + piece).concat('', '  ? for shortcuts')),
+        viewportCols: 20, expectedDraft,
+      }).ready;
+      expect(check('123456789 C:\\Windows', '123456789 C:', '\\Windows')).toBe(true);
+      expect(check('1234 C:\\Windows', '1234 C:', '\\Windows')).toBe(false);
+      expect(check('1234567890 dir/ab/cdef', '1234567890 dir/', 'ab/cdef')).toBe(true);
+      expect(check('123456789 dir/ab/cdef', '123456789 dir/', 'ab/cdef')).toBe(false);
+      expect(check('123456789 dir/ab/cdef', '123456789 dir/ab/', 'cdef')).toBe(true);
+      expect(check('123456789 abc-defghi', '123456789 abc-', 'defghi')).toBe(true);
+      expect(check('123456789 abc-defghi', '123456789 abc', '-defghi')).toBe(false);
+      expect(check('1234567890  hello', '1234567890', 'hello')).toBe(false);
+      expect(check('1234567890  longer', '1234567890', 'longer')).toBe(true);
+      expect(check('1234567890\nlonger', '1234567890', 'longer')).toBe(false);
+      expect(check('1234567890\r\nlonger', '1234567890', 'longer')).toBe(false);
+      expect(check('123456789 longword more', '123456789 long', 'word more')).toBe(false);
+      expect(check('a'.repeat(23), 'a'.repeat(17), 'a'.repeat(6))).toBe(true);
+      expect(check('a'.repeat(23), 'a'.repeat(16), 'a'.repeat(7))).toBe(false);
+      expect(check('界界界界界界 nextword', '界界界界界界', 'nextword')).toBe(false);
+      expect(check('a\u0301'.repeat(8) + ' nextword', 'a\u0301'.repeat(8), 'nextword')).toBe(false);
+    });
+
+    it('refuses a suffix or another copy of a wrapped Codex draft', () => {
+      const expectedDraft = '1234567890 dir/ab/cdef';
+      const rows = ['› 1234567890 dir/', '  ab/cdef'];
+      for (const draft of [
+        [rows[0]!, '  ab/cdef!'],
+        [...rows, '  1234567890 dir/', '  ab/cdef'],
+        [...rows, ...rows],
+        [rows[0]!, '', rows[1]!],
+        [...rows, ''],
+      ]) {
+        expect(nudgeVerdict(codex, { ...fromRows([...draft, '', '  ? for shortcuts']),
+          viewportCols: 20, expectedDraft }).ready).toBe(false);
+      }
+    });
+
+    it('accepts a wrapped draft repeated after its earlier turn in the transcript', () => {
+      const expectedDraft = '1234567890 dir/ab/cdef';
+      const rows = ['› 1234567890 dir/', '  ab/cdef'];
+      const view = { ...fromRows([...rows, '', '■ Conversation interrupted', '', ...rows, '', '  ? for shortcuts']),
+        viewportCols: 20, expectedDraft };
+      expect(nudgeVerdict(codex, view).ready).toBe(true);
+    });
+
+    it('uses the insertion point to detect a trailing space or newline trimmed from the screen', () => {
+      const view = { ...fromRows(['› 1234567890 dir/', '  ab/cdef', '', '  ? for shortcuts']),
+        viewportCols: 20, expectedDraft: '1234567890 dir/ab/cdef' };
+      expect(nudgeVerdict(codex, { ...view, cursor: { x: 9, y: 1 } }).ready).toBe(true);
+      expect(nudgeVerdict(codex, { ...view, cursor: { x: 10, y: 1 } }).ready).toBe(false);
+      expect(nudgeVerdict(codex, { ...view, cursor: { x: 2, y: 2 } }).ready).toBe(false);
+      expect(nudgeVerdict(codex, { ...view, viewportCols: 30 }).ready).toBe(false);
+      expect(nudgeVerdict(codex, { ...view, viewportCols: undefined }).ready).toBe(false);
     });
 
     it('reads a captured draft as a draft', async () => {
