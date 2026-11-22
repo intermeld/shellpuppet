@@ -907,6 +907,6 @@ does not see what you, or an agent, type after the shell is up.
 | `~/.shellpuppet/daemon.log` | Daemon log (JSONL) |
 | `~/.shellpuppet/daemon-owner/` | Exclusive record publisher, identified by pid, listening port and instance id |
 | `~/.shellpuppet/restart-source.json` | Credential-free predecessor id used to verify restart recovery after a crash |
-| `~/.shellpuppet/previous-sessions.json` | Latest restart record for live profile sessions, written before shutdown |
+| `~/.shellpuppet/previous-sessions.json` | Latest restart record for live profile sessions, written before shutdown from their latest reported conversation ids |
 | `~/.shellpuppet/launcher-claims.json` | Granted outside claim names, ids, last activity and proof digests |
 | `~/.shellpuppet/audit.log` | Action audit (JSONL, append-only) |
