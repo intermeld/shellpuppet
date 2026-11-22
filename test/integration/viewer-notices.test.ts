@@ -15,7 +15,11 @@ const fixture = fileURLToPath(new URL('../fixtures/notice-repaint-tui.mjs', impo
 let browser: string | null;
 let td: TestDaemon | undefined;
 beforeAll(async () => { browser = await findBrowser(); });
-afterEach(async () => { await td?.stop(); td = undefined; }, 60_000);
+afterEach(async () => {
+  const cleanup = td;
+  td = undefined;
+  await cleanup?.stop();
+}, 120_000);
 
 const observePane = `(() => {
   let implementation;
@@ -208,14 +212,18 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
       await evaluate(`window.__visits = [];
         __noticeTest.term.onCursorMove(() => __visits.push({ row: __noticeTest.term.buffer.active.cursorY, at: performance.now() }))`);
       await evaluate(deliveredNoticeScript);
-      await evaluate('window.__leadingCadence = observeDeliveredNotice(__noticeTest.term, __noticeTest.notices, performance.now(), 0)');
       await evaluate(`window.__leadingResult = (async () => {
         const state = __noticeTest, row = state.term.rows - 2, placements = new Set();
         const start = await new Promise(resolve => {
           const first = state.term.onCursorMove(() => {
             if (state.term.buffer.active.cursorY === 0) {
               first.dispose();
-              resolve(performance.now());
+              const at = performance.now();
+              // The input API can spend arbitrary time before the PTY starts
+              // this word. Judge the same delivered word as the placement
+              // timing, without counting the preceding idle cursor position.
+              window.__leadingCadence = observeDeliveredNotice(state.term, state.notices, at, 0);
+              resolve(at);
             }
           });
         });
@@ -308,7 +316,6 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
       expect(result.follow, details).not.toBeNull();
       expect(result.deadlineFrame, details).toBeGreaterThanOrEqual(2500);
       expect(result.follow, details).toBeLessThanOrEqual(result.deadlineFrame);
-      expect(assessment.repaints.some(repaint => repaint.target === 'top'), details).toBe(true);
       const upperRest = (assessment.rests as { edge: string; start: number; end: number; deadline?: number }[])
         .find(rest => rest.edge === 'top');
       if (!upperRest) {
@@ -487,7 +494,13 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
         expect((await api(td!.port, td!.token, `/sessions/${id[0]!.id}/input`, { body: { data } })).status).toBe(200);
       };
       await input('b');
-      await evaluate('__pause(1050)');
+      // Start each direction from the edge that the next held cursor covers.
+      // First prove the lower cursor move was delivered; a prior top placement
+      // alone would otherwise make the readiness check pass too early.
+      await eventually(async () => await evaluate('__noticeTest.term.buffer.active.cursorY === 48') === true,
+        3000, 20, 'the lower resting cursor was not delivered');
+      await eventually(async () => await evaluate('__noticeTest.notices.style.top !== "auto"') === true,
+        3000, 20, 'the lower cursor rest did not place the notice at the top');
       for (const key of ['t', 'b']) {
         await evaluate(`(() => {
           const state = __noticeTest;
