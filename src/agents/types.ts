@@ -126,8 +126,8 @@ export interface AgentModule {
   programs: ProgramMatch[];
   reading: AgentSignature;
   prompts: PromptShape[];
-  /** A text menu can occur in this agent's transcript. Only its painted menus prove a live choice. */
-  requirePaintedMenu?: boolean;
+  /** A recognisable but incomplete menu whose text could fool the shared row heuristics. */
+  incompleteMenu?: (rows: readonly string[]) => boolean;
   input?: {
     submit?: {
       key: string;

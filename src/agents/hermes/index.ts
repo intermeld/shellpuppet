@@ -2,11 +2,11 @@ import { submittingText } from '../input.js';
 import type { AgentModule } from '../types.js';
 import { composer, readyScreen } from './frame.js';
 import { composerBlock, readiness } from './nudge.js';
-import { prompts } from './prompts.js';
+import { incompleteMenu, prompts } from './prompts.js';
 import { answerFloor, hiddenRanges, reading } from './reading.js';
 
 export const hermes: AgentModule = {
-  name: reading.name, programs: reading.programs, reading, prompts, requirePaintedMenu: true,
+  name: reading.name, programs: reading.programs, reading, prompts, incompleteMenu,
   readingRules: {
     composer: (lines, i, signature, context) => context.matches(lines[i]!, signature.composer) &&
       (!signature.builtIn || composer(lines)?.first === i),

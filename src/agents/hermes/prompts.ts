@@ -11,6 +11,14 @@ export function hasPromptFooter(rows: readonly string[]): boolean {
   return rows.at(-1)?.trimEnd() === consentFooter || /^(?:⚠|\?) ❯$/u.test(rows.at(-3)?.trimEnd() ?? '');
 }
 
+export function incompleteMenu(rows: readonly string[]): boolean {
+  if (hasPromptFooter(rows)) return true;
+  const last = rows.at(-1)?.trimEnd() ?? '';
+  if (!/^(?:╰─+╯|│.*│)$/u.test(last)) return false;
+  return rows.slice(-12).some(row => /^╭─ Hermes Agent needs your input ─+╮\s*$/u.test(row) ||
+    /^│ ⚠️ {2}Dangerous Command +│\s*$/u.test(row));
+}
+
 function consent(rows: string[], styled: readonly StyledLine[]): DetectedPrompt | null {
   const end = rows.length - 1;
   const first = end - 6;
