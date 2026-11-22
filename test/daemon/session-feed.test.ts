@@ -5,7 +5,7 @@ import { NULL_LOGGER } from '../../src/core/types.js';
 
 const base: FeedSummary = {
   id: 's1', label: 'one', purpose: '', startedBy: 'client', agent: null,
-  command: 'node', args: [], cols: 80, rows: 24, ready: false,
+  command: 'node', args: [], cwd: process.cwd(), cols: 80, rows: 24, ready: false,
   readyReason: 'pending', geometryHeld: false, exited: false, exitCode: null,
   watchers: 0, createdAt: '2026-01-01T00:00:00.000Z',
 };

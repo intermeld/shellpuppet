@@ -128,6 +128,11 @@ the existing failure response.
 
 ## Listing and waiting for stalled sessions
 
+`terminal_list` shows `cwd` for each session, including in the
+`waitingOnly` view. It is the absolute folder where the session started.
+For a `terminal_start` call without `cwd`, this is the MCP server's working
+directory at launch.
+
 `terminal_list` includes a `STALLED` state with the reason code, fixed product
 description and ISO since time. `waitingOnly: true` selects answerable permission
 prompts only. A settled `server-lost` banner hides any prompt beneath it from
