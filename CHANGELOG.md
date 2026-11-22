@@ -9,6 +9,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- `shellpuppet previous` records the conversation a Claude Code session switched to with `/resume`: the ShellPuppet MCP server reads its Claude process's own session record and reports the live id; when it cannot, the launch id is kept.
 - Codex: a typed line or message nudge that Codex wraps at spaces, path separators or punctuation is recognised (using the same Unicode 15.0 line-break rules Codex uses), so Enter is sent once the complete draft is visible; text outside Latin-1 still has Enter withheld.
 - Windows daemon starts from the Start menu shortcut and through a start wrapper: program lookup works whatever the case of the PATH variable, a failed start is logged and shown, the wrapped daemon no longer opens a console window, and wrapped restarts stay under the start lock and survive their starting client closing.
 

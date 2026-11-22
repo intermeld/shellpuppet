@@ -447,6 +447,18 @@ id, the daemon uses the new session id.
 | Grok | `GROK_SESSION_ID` when present, including in a hook that calls ShellPuppet |
 | Muse | Explicit resume id only. No verified conversation marker is known. |
 
-A client that never receives a marker cannot report it. Without an observed
-or supplied id the record contains `null`. The daemon does not select a
-transcript by directory or modification time.
+When ShellPuppet's MCP server runs directly under Claude Code, it reads
+`sessionId` from `<config dir>/sessions/<process.ppid>.json` at start and
+watches that one file for changes. The config directory is `CLAUDE_CONFIG_DIR`
+or `~/.claude`. A 30-second poll recovers missed changes and replaced files.
+The configured directory, its `sessions` child and the PID file must be
+ordinary paths without links or junctions; the file must have one hard link
+and be no larger than 64 KiB. Only a validated `sessionId` is reported over
+the authenticated client request. No process listing or command line is read.
+Links above the configured directory are part of the user's own filesystem
+layout and are followed.
+
+A valid live id, including one equal to an inherited environment marker,
+records the conversation selected with `/resume`. If the file
+is missing or invalid, the daemon keeps the last reported id, then the launch
+id, then `null`. It never opens transcripts or looks up an id at shutdown.

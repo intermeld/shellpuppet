@@ -42,5 +42,14 @@ it.each([
     }
     session.observeResumeId(...read({ [marker]: 'child-id' }));
     expect(session.resumeId).toBe(agent === 'muse' ? 'supplied' : 'child-id');
+    if (agent === 'claude') {
+      expect(session.observeClaudeFileResumeId('bad id')).toBe(false);
+      expect(session.observeClaudeFileResumeId('parent-id')).toBe(true);
+      expect(session.resumeId).toBe('parent-id');
+      session.observeResumeId('later-environment-id');
+      expect(session.resumeId).toBe('parent-id');
+    } else {
+      expect(session.observeClaudeFileResumeId('file-id')).toBe(false);
+    }
   } finally { await session.kill(); }
 });

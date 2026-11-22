@@ -15,3 +15,13 @@ fs.mkdirSync(target, { recursive: true });
 for (const name of fs.readdirSync(source)) {
   fs.copyFileSync(path.join(source, name), path.join(target, name));
 }
+// An incremental build must not package the retired runtime-compiled helper.
+for (const name of ['windowsLiveMetadata.cs', 'windowsLiveMetadata.js', 'windowsLiveMetadata.js.map',
+  'windowsLiveMetadata.d.ts']) {
+  fs.rmSync(path.join(root, 'dist', 'core', name), { force: true });
+}
+for (const base of ['liveResumeIds', 'posixProcesses']) {
+  for (const extension of ['.js', '.js.map', '.d.ts']) {
+    fs.rmSync(path.join(root, 'dist', 'daemon', base + extension), { force: true });
+  }
+}

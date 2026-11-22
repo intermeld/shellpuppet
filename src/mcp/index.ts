@@ -17,6 +17,8 @@ import { registerTools } from './tools.js';
 import type { PassLists } from './tools.js';
 import { assertNodeVersion, packageVersion } from '../daemon/meta.js';
 import { shellpuppetHome } from '../daemon/paths.js';
+import { discoverDaemon, request } from '../client/http.js';
+import { claudeSessionFile, watchClaudeResumeId } from '../agents/claude/liveResumeId.js';
 import type { Logger } from '../core/types.js';
 
 const stderrLogger: Logger = {
@@ -82,9 +84,24 @@ async function main(): Promise<void> {
   });
   const transport = new StdioServerTransport();
   await server.connect(transport);
+  const stopResumeWatch = process.env['SHELLPUPPET_PROFILE_AGENT'] === 'claude' &&
+    process.env['SHELLPUPPET_SESSION'] && process.env['SHELLPUPPET_SESSION_TOKEN'] &&
+    process.env['SHELLPUPPET_DAEMON_INSTANCE']
+    ? watchClaudeResumeId(claudeSessionFile(process.env, process.cwd()), async id => {
+      const connection = await discoverDaemon({ home });
+      if (!connection || connection.instanceId !== process.env['SHELLPUPPET_DAEMON_INSTANCE']) {
+        throw new Error('The parent session daemon is unavailable.');
+      }
+      const response = await request(connection, 'GET', '/sessions', undefined,
+        { home, autoStart: false, observedResumeId: id });
+      if (response.status !== 200 || response.recordedResumeId !== id) {
+        throw new Error('The parent session did not record the conversation id.');
+      }
+    }) : undefined;
   const previousClose = transport.onclose;
   transport.onclose = () => {
     previousClose?.();
+    stopResumeWatch?.();
     void releaseClaim();
   };
 }

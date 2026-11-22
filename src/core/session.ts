@@ -730,6 +730,7 @@ export class Session implements WaitTarget {
   readonly launchProfile: SessionOptions['launchProfile'];
   private inheritedResumeIds: readonly string[] = [];
   private observedResumeId?: string;
+  private observedFileResumeId?: string;
   readonly agent: string;
   readonly agentSource: AgentSource;
   private readonly agentModule: AgentModule | undefined;
@@ -901,7 +902,7 @@ export class Session implements WaitTarget {
     if (!deps.retryAttempt) this.logger.info('session spawn', {
       id,
       command: this.command,
-      args: this.args,
+      args: this.args.map(arg => arg === this.launchProfile?.resumeId ? '[redacted]' : arg),
       wrapped: file !== this.command,
       // Names only: the values are secrets more often than not.
       ...(options.env !== undefined ? { envNames: Object.keys(options.env) } : {}),
@@ -928,11 +929,13 @@ export class Session implements WaitTarget {
       process.env,
       options.env,
     );
-    if (deps.identity !== undefined) {
-      if (options.launchProfile && this.agentModule?.resumeIdMarkers) {
+    if (this.launchProfile) {
+      if (deps.identity && this.agentModule?.resumeIdMarkers) {
         this.inheritedResumeIds = agentResumeIds(this.agentModule, sessionEnv, this.platform);
         sessionEnv['SHELLPUPPET_PROFILE_AGENT'] = this.agent;
       }
+    }
+    if (deps.identity !== undefined) {
       sessionEnv['SHELLPUPPET_SESSION'] = id;
       sessionEnv['SHELLPUPPET_SESSION_TOKEN'] = deps.identity.token;
       sessionEnv['SHELLPUPPET_DAEMON_INSTANCE'] = deps.identity.instanceId;
@@ -1895,8 +1898,15 @@ export class Session implements WaitTarget {
     if (own !== undefined) this.observedResumeId = own;
   }
 
+  /** Claude's validated live session file takes precedence over environment markers. */
+  observeClaudeFileResumeId(id: unknown): boolean {
+    if (this.agent !== 'claude' || !this.launchProfile || !validResumeId(id)) return false;
+    this.observedFileResumeId = id;
+    return true;
+  }
+
   get resumeId(): string | null {
-    return this.observedResumeId ?? this.launchProfile?.resumeId ?? null;
+    return this.observedFileResumeId ?? this.observedResumeId ?? this.launchProfile?.resumeId ?? null;
   }
 
   getStalled(): StallState | undefined { return this.stallState; }

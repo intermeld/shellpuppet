@@ -8,6 +8,33 @@ import { api, eventually, makeTempHome, repoRoot, startTestDaemon } from './help
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
+it('writes current claims and snapshot before publishing the restart handoff', async () => {
+  const home = makeTempHome();
+  let now = Date.now();
+  const td = await startTestDaemon({ home, now: () => now,
+    launchProfiles: { profiles: [], problems: [], sessionLaunch: ['chair'] },
+    messaging: { enabled: true, allow: [] } });
+  const instanceId = td.daemon['publishedState']!.instanceId;
+  try {
+    const claim = (await api(td.port, td.token, '/messages/claims', { body: { name: 'chair' } })).body;
+    const headers = { 'x-shellpuppet-claim': String(claim['claimId']),
+      'x-shellpuppet-claim-secret': String(claim['secret']) };
+    now += 1000;
+    expect((await api(td.port, td.token, '/messages/inbox', { headers })).status).toBe(200);
+    expect((await api(td.port, td.token, '/daemon/shutdown', { body: { restart: true } })).status).toBe(200);
+    const savedClaims = JSON.parse(readFileSync(join(home, 'launcher-claims.json'), 'utf8')) as { lastActivity: number }[];
+    expect(savedClaims[0]?.lastActivity).toBe(now);
+    const snapshot = JSON.parse(readFileSync(join(home, 'previous-sessions.json'), 'utf8')) as {
+      outgoingInstanceId: string; sessions: unknown[];
+    };
+    expect(snapshot).toEqual({ version: 1, outgoingInstanceId: instanceId,
+      sessions: [] });
+    expect(JSON.parse(readFileSync(join(home, 'restart-source.json'), 'utf8'))).toEqual({
+      restartFrom: snapshot.outgoingInstanceId,
+    });
+  } finally { await td.stop(); }
+});
+
 it('records a live agent conversation before restart and relaunches it from the saved folder choice', async () => {
   const home = makeTempHome();
   const file = join(home, 'child.cjs');
