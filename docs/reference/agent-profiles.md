@@ -258,6 +258,34 @@ holds only once something is on screen and output has then stopped for the
 given time. A `quiet` wait on a CLI that is still loading keeps waiting, and
 if it times out the result says the program has not painted anything yet.
 
+### Hermes Agent
+
+Hermes Agent v0.23.3 was measured on Windows on 21 and 22 November 2026,
+at 105 columns by 37 rows. The first-use confirmation was also captured at
+105 by 34. The executable selects `hermes` automatically. Use that label
+when starting it through a wrapper.
+
+Gold rules enclose the echoed question and the cream reply headed `☤ Hermes`.
+The filtered reader keeps both, along with labelled memory, search, terminal
+and clarification output. It hides the dim reasoning blocks, the spinner
+caption and transcript rows whose source is unclear. A result needs a
+completed turn and the idle composer.
+
+The grey input rules, usage footer and cursor identify the composer. A
+known suggestion appears in italic dark gold on the welcome screen and
+after a completed turn. Typed input uses the default foreground. Enter
+requires the exact draft through its final cursor position, including
+wrapped rows. During a turn, Enter redirects it. ShellPuppet queues a nudge
+with Tab after the empty redirect hint settles and the typed line appears.
+A populated queue or a change of input state holds delivery.
+
+The first-use confirmation, four-choice command approval and single-question
+clarification each have a measured selection and footer. The approval can
+also show a compact usage footer ending in the shortened working directory.
+All three prompts hold nudges. The captures established no stall signature.
+Chat help documents the id printed on exit and the `--resume SESSION_ID`
+argument. A child environment variable for that id remains unverified.
+
 ## Long waits: know your client's own timeout
 
 `terminal_wait` accepts up to 300,000 ms, and this page tells you to budget
@@ -308,6 +336,7 @@ their returned text; a filtered list omits waiting prompt questions.
 | Codex | 0.165.0 | None; its commentary before tool calls is a message, kept | Nothing |
 | Muse Code | 1.4.14 | A live reasoning summary line | The summary; answers, tool status and questions stay visible |
 | Qoder | 1.1.80 | A Thinking block behind a `│` bar, in italics, kept after the answer | Every Thinking block |
+| Hermes Agent | 0.23.3, Windows classic interface | Dim reasoning blocks and a live spinner caption | Reasoning, the spinner caption and unclassified transcript rows |
 | OpenCode | 2.0.26 | None: `Thinking` while it thinks, then a collapsed `+ Thought · Ns` | Nothing |
 | MiMo Code | 0.1.16 | None: a collapsed `+ Thought: Ns` before each tool group and the answer | Nothing |
 | Grok | 1.0.70 | A Thinking block behind a `│` bar while it thinks, collapsed to `♦ Thought for Ns` | The live block and the spinner's label |

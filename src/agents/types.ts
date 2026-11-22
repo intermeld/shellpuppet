@@ -40,6 +40,10 @@ export interface ReadingContext {
   ranges: (lines: readonly StyledLine[], signature: CompiledSignature, limit: number) => [number, number][];
 }
 export interface ReadingRules {
+  /** Hidden row ranges for a reader that can positively identify only framed output. */
+  hiddenRanges?: (lines: readonly StyledLine[], limit: number) => [number, number][];
+  /** Earliest possible answer row for a completed turn with a distinct closing frame. */
+  answerFloor?: (lines: readonly StyledLine[], limit: number) => number;
   /** Crop only independently framed adjacent UI, before any reading walk. */
   contentRegion?: (lines: readonly StyledLine[]) => readonly StyledLine[];
   /** Rows owned by a live frame, even if its controls were painted on physical wraps. */
@@ -112,6 +116,8 @@ export interface NudgeView {
   styled?: readonly StyledLine[];
   /** Exact daemon line allowed in the composer during a delayed submission. */
   expectedDraft?: string;
+  /** Prove a draft for the distinct key that queues it during a running turn. */
+  queueDraft?: boolean;
   /** Require a blank composer or the module's exact known placeholder. */
   exactEmpty?: boolean;
 }
@@ -122,6 +128,8 @@ export interface AgentModule {
   programs: ProgramMatch[];
   reading: AgentSignature;
   prompts: PromptShape[];
+  /** A recognisable but incomplete menu whose text could fool the shared row heuristics. */
+  incompleteMenu?: (rows: readonly string[]) => boolean;
   input?: {
     submit?: {
       key: string;
@@ -157,6 +165,7 @@ export interface AgentModule {
    */
   nudge?: {
     readiness(view: NudgeView): NudgeReadiness;
+    queueKey?: string;
     /** The composer and footer text to compare across paints while a turn runs. */
     composerBlock?: (rows: readonly string[], cursor?: CursorPosition) => string;
     /** A separately framed idle pane whose neighbours can repaint without holding up input. */

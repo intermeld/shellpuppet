@@ -2877,13 +2877,13 @@ export class Daemon {
       }
       if (session.answerablePrompt(screen) !== null) { failedCheck = 'prompt-showing'; return false; }
       if (!stillWaiting()) { failedCheck = 'messages-changed'; return false; }
-      if (phase === 'before' ? !current?.ready : !session.nudgeReadyWithLine(line)) {
+      if (phase === 'before' ? !current?.ready || current.queued !== queued : !session.nudgeReadyWithLine(line, queued)) {
         failedCheck = 'line-not-seen'; return false;
       }
       return true;
     };
     try {
-      const result = await session.writeNudgeWithReason(line + session.nudgeSubmit(), ready, ids, () => failedCheck);
+      const result = await session.writeNudgeWithReason(line + session.nudgeSubmit(queued), ready, ids, () => failedCheck, queued);
       if (result === 'wait') return 'wait';
       if (result.startsWith('aborted-')) {
         const reason = result.slice('aborted-'.length);

@@ -7,6 +7,10 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+### Added
+
+- Hermes Agent: a module for Hermes sessions (agent label `hermes`): reasoning hidden from filtered reads, its replies, menus and command approvals recognised, idle and draft composers proven before typed Enter or a message nudge, and a message queued with Tab while Hermes is busy.
+
 ### Fixed
 
 - `shellpuppet previous` records the conversation a Claude Code session switched to with `/resume`: the ShellPuppet MCP server reads its Claude process's own session record and reports the live id; when it cannot, the launch id is kept.

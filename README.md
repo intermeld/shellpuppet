@@ -8,7 +8,7 @@
 **Supervised terminal sessions for AI agents.** An agent drives a real terminal
 while a human watches, and types into, the same live session from a
 browser. The terminal runs whatever you point it at: an agent CLI such as
-Claude Code, Codex, Antigravity, OpenCode, MiMo Code, Qoder, Goose or Grok,
+Claude Code, Codex, Antigravity, Hermes, OpenCode, MiMo Code, Qoder, Goose or Grok,
 or any other TUI.
 
 ShellPuppet is to the terminal what Playwright is to the browser. Playwright
@@ -291,7 +291,7 @@ that ended its latest turn and nothing else, and `terminal_snapshot`,
 to leave out the reasoning it draws. A filtered `terminal_list` omits every
 waiting prompt's question and options, whether or not the session has a
 signature. Each CLI's screen is read by a signature: Claude Code,
-Codex, Qoder, OpenCode, MiMo Code, Grok and Antigravity are built in. A
+Codex, Qoder, Hermes, OpenCode, MiMo Code, Grok and Antigravity are built in. A
 session started through a shell or a launcher script says which CLI it runs
 with `terminal_start`'s `agent`. Snapshot, find, wait, screenshot and
 `terminal_result` refuse a session with no signature rather than show it

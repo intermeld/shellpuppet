@@ -1,0 +1,20 @@
+import { appendFileSync, readFileSync } from 'node:fs';
+
+const [input, state] = process.argv.slice(2);
+const busy = state === 'busy';
+const screen = readFileSync(new URL(busy ? 'busy.ansi' : 'welcome.ansi', import.meta.url), 'utf8');
+const column = busy ? 4 : 2;
+let body = '';
+
+process.stdin.setRawMode(true);
+process.stdin.on('data', bytes => {
+  appendFileSync(input, bytes);
+  if (bytes.toString() === '\t' || bytes.toString() === '\r') {
+    body = '';
+    process.stdout.write('\x1b[H' + screen);
+    return;
+  }
+  body += bytes.toString();
+  process.stdout.write('\x1b[35;' + (column + 1) + 'H\x1b[0m\x1b[K' + body);
+});
+process.stdout.write('\x1b[H' + screen);
