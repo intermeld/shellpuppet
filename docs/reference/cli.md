@@ -17,6 +17,16 @@ not confirmed. If the draft remains after the retry, JSON reports
 typed twice. `--verify` checks for visible text, which may have cleared after
 submission.
 
+## Scheduled prompts
+
+`shellpuppet schedule list [--json]` shows each valid schedule's name, target
+session, cron expression, busy policy, enabled flag, next UTC run and last
+outcome. A paused schedule or an impossible calendar date has no next run.
+The last outcome includes the time and any skip or abort reason. It starts
+empty when the daemon starts or the entry changes. JSON returns a `schedules`
+array with `nextRunUtc` and `lastOutcome` set to `null` where appropriate.
+Edit the `schedules` section of `config.json` to change a schedule.
+
 ## Session messages
 
 `shellpuppet msg send <to> <text|->` sends a message; `-` reads the text from

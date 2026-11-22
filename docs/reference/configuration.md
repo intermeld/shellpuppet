@@ -32,8 +32,9 @@ reserved for outside claims. A session name never grants messaging rights.
 
 All configuration lives in one optional file: `~/.shellpuppet/config.json`
 (override the directory with the `SHELLPUPPET_HOME` environment variable).
-No file means all defaults. The **daemon** reads it at startup, so run
-`shellpuppet daemon restart` after editing. The MCP adapter reads its own
+No file means all defaults. The daemon reloads `schedules` when the file
+changes. Run `shellpuppet daemon restart` for every other daemon setting.
+The MCP adapter reads its own
 `mcp` section at launch.
 
 Dashboard launch profiles (`launcher.profiles`, decided in
@@ -42,7 +43,53 @@ are the only programs the dashboard may start. They are optional: no
 `launcher` section means a watch-only dashboard. They are described below,
 with worked examples.
 
-Full example, everything optional:
+## Scheduled prompts
+
+Add a schedule to send your own prompt to the live session holding a name.
+Messaging can be off. For example, this runs on weekdays at 09:00 UTC.
+
+```json
+{
+  "schedules": [{
+    "name": "morning-check",
+    "session": "hermes-watcher",
+    "cron": "0 9 * * 1-5",
+    "message": "Run the morning check.",
+    "whenBusy": "skip",
+    "enabled": true
+  }]
+}
+```
+
+| Field | Accepted values |
+|---|---|
+| `name` | A unique lower-case kebab-case name starting with a letter. Digits may follow. |
+| `session` | The current messaging name, from 1 to 40 ASCII letters, digits, dots, underscores or hyphens. |
+| `cron` | Five numeric fields in UTC for minute (0 to 59), hour (0 to 23), day of month (1 to 31), month (1 to 12) and weekday (0 to 7, Sunday is 0 or 7). |
+| `message` | One line of plain text, from 1 to 2,000 characters, without control characters. |
+| `whenBusy` | Required. `skip` misses the run. `queue` submits during a turn only when the agent can take a line and its composer is visibly empty. |
+| `enabled` | Optional boolean, defaults to `true`. Set to `false` to pause the schedule. |
+
+Cron accepts numbers, `*`, inclusive ranges, comma-separated lists and
+positive steps (such as `*/15` or `9-17/2`). A step on a single number
+continues to the field maximum. When both day fields start with a number,
+either day can match. When either starts with `*`, both must match.
+Checks start at the next UTC minute. Missed minutes are discarded.
+
+Typing into a session starts a 10-second wait for both scheduled prompts
+and mailbox nudges. Each further input restarts the wait. A confirmed typed
+submission ends it early. During the wait a scheduled run skips with reason
+`recent-input`, including when `whenBusy` is `queue`.
+
+Save the file to apply an edit. Removing the section or file removes all
+schedules. An unreadable file, invalid JSON, or a section of the wrong type
+keeps the previous schedules. An invalid entry is named in `daemon.log`
+and its valid siblings run. Duplicate names exclude every entry with that name.
+The log lists added, changed and removed names. Use `shellpuppet schedule list`
+to see the next run and the last outcome. The audit records the schedule name,
+target and outcome, including a reason for a skipped or aborted run.
+
+## Full configuration example
 
 ```jsonc
 {

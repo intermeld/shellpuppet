@@ -7,6 +7,10 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+### Added
+
+- Scheduled prompts for named sessions with UTC cron, live configuration reload and a read-only `schedule list` command.
+
 ### Fixed
 
 - `shellpuppet previous` records the conversation a Claude Code session switched to with `/resume`: the ShellPuppet MCP server reads its Claude process's own session record and reports the live id; when it cannot, the launch id is kept.

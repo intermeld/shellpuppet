@@ -11,7 +11,7 @@ import type { StallState } from './types.js';
 /** How long a ready screen must stay unchanged before it can be nudged. */
 export const NUDGE_QUIET_MS = 1_500;
 
-export type NudgeBlock = 'busy' | 'draft' | 'unknown' | 'prompt' | 'stalled' | 'quiet';
+export type NudgeBlock = 'busy' | 'draft' | 'unknown' | 'prompt' | 'stalled' | 'quiet' | 'recent-input';
 
 export type NudgeVerdict = { ready: true; queued?: true } | { ready: false; reason: NudgeBlock };
 
@@ -58,8 +58,9 @@ export function nudgeVerdict(module: AgentModule | undefined, observation: Nudge
   if (observation.stall !== undefined) return { ready: false, reason: 'stalled' };
   const reading = module.nudge.readiness({ rows: screen.rows, styled: screen.styled,
     cursor: observation.cursor, untrimmedRow: observation.untrimmedRow, viewportCols: observation.viewportCols,
-    expectedDraft: observation.expectedDraft, exactEmpty: observation.exactEmpty });
+    expectedDraft: observation.expectedDraft, exactEmpty: observation.exactEmpty, whenBusy: observation.whenBusy });
   if (reading === 'queue') {
+    if (observation.whenBusy === 'skip') return { ready: false, reason: 'busy' };
     if (observation.expectedDraft !== undefined) return { ready: false, reason: 'busy' };
     const quiet = observation.composerUnchangedMs;
     if (quiet === undefined || !Number.isFinite(quiet) || quiet < NUDGE_QUIET_MS) return { ready: false, reason: 'quiet' };
