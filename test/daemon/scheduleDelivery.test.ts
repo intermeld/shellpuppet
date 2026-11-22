@@ -81,3 +81,35 @@ it('keeps an aborted body pending across a target change and an unrelated mailbo
   expect(await daemon['deliverScheduled']({ name: 'check', session: 'after', message: 'Another check.',
     enabled: true, cron: '* * * * *', whenBusy: 'queue' }, () => true)).toMatchObject({ outcome: 'skipped', reason: 'pending' });
 });
+
+it('passes the schedule busy policy to the submit-phase check', async () => {
+  const schedule = { name: 'check', session: 'worker', whenBusy: 'skip', enabled: true, message: 'Run my check.', cron: '* * * * *' } as const;
+  const base = path.join(__dirname, '..', 'fixtures', 'reasoning', 'claude-answered');
+  const size = JSON.parse(fs.readFileSync(base + '.json', 'utf8')) as { cols: number; rows: number };
+  const renderer = new ScreenRenderer(size);
+  try {
+    await renderer.write(fs.readFileSync(base + '.ansi', 'utf8'));
+    const session = Object.create(Session.prototype) as Session;
+    const submitCheck = vi.fn(() => false);
+    let inputVersion = 0;
+    const write = vi.fn((_data: string, ready: (screen: string, phase: 'before' | 'submit') => boolean) => {
+      if (!ready(renderer.snapshot().screen, 'before')) return Promise.resolve('wait');
+      inputVersion = 1; // the body was written
+      return Promise.resolve(ready(renderer.snapshot().screen, 'submit') ? 'sent' : 'aborted-line-not-seen');
+    });
+    Object.assign(session, { renderer, id: 's1', recentInputUntil: 0, agentModule: claude, agent: 'claude',
+      snapshot: () => Promise.resolve(renderer.snapshot()), hasPainted: () => true, lastChangeAt: () => 500,
+      getStalled: () => undefined, nudgeInputVersion: () => inputVersion, nudgeQueuedInputVersion: () => 0, nudgeScreenRevision: () => 0,
+      nudgePendingLine: () => null, clearConsumedNudge: () => Promise.resolve(false), answerablePrompt: () => null,
+      writeNudgeWithReason: write, nudgeReadyWithLine: submitCheck });
+    session.nudgeState(1000);
+    const mailbox = new Mailbox({ enabled: false, policy: () => false });
+    mailbox.register({ id: 's1', name: 'worker', kind: 'session' });
+    const daemon = Object.create(Daemon.prototype) as Daemon;
+    Object.assign(daemon, { mailbox, pendingSchedules: new Map(), manager: { get: () => session }, now: () => 10_000,
+      audit: { record: vi.fn() } });
+    const result = await daemon['deliverScheduled'](schedule, () => true);
+    expect(submitCheck).toHaveBeenCalledWith(schedule.message, false, 'skip');
+    expect(result).not.toMatchObject({ outcome: 'sent' });
+  } finally { await renderer.dispose(); }
+});

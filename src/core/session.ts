@@ -1471,10 +1471,11 @@ export class Session implements WaitTarget {
   nudgeQueuedInputVersion(): number { return this.inputQueueVersion; }
   nudgeScreenRevision(): number { return this.screenRevision; }
 
-  nudgeReadyWithLine(line: string, queued = false): boolean {
+  nudgeReadyWithLine(line: string, queued = false, whenBusy?: 'skip' | 'queue'): boolean {
     return nudgeVerdict(this.agentModule, {
       ...this.nudgeView(),
-      stall: this.getStalled(), unchangedMs: 0, expectedDraft: line, queueDraft: queued && this.agentModule?.nudge?.queueKey !== undefined,
+      stall: this.getStalled(), unchangedMs: 0, expectedDraft: line, whenBusy,
+      queueDraft: queued && this.agentModule?.nudge?.queueKey !== undefined,
     }).ready;
   }
 
