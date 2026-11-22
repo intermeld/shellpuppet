@@ -451,7 +451,10 @@ The configured directory, its `sessions` child and the PID file must be
 ordinary paths without links or junctions; the file must have one hard link
 and be no larger than 64 KiB. Only a validated `sessionId` is reported over
 the authenticated client request. No process listing or command line is read.
+Links above the configured directory are part of the user's own filesystem
+layout and are followed.
 
-A valid live id records the conversation selected with `/resume`. If the file
+A valid live id, including one equal to an inherited environment marker,
+records the conversation selected with `/resume`. If the file
 is missing or invalid, the daemon keeps the last reported id, then the launch
 id, then `null`. It never opens transcripts or looks up an id at shutdown.

@@ -2667,6 +2667,10 @@ export class Daemon {
       const session = this.manager.get(caller.session);
       const candidates = headerOne(req, 'x-shellpuppet-resume-ids') ?? headerOne(req, 'x-shellpuppet-resume-id');
       if (candidates) session?.observeResumeId(...candidates.split(','));
+      const fileResumeId = headerOne(req, 'x-shellpuppet-claude-file-resume-id');
+      if (fileResumeId !== undefined && session?.observeClaudeFileResumeId(fileResumeId)) {
+        res.setHeader('x-shellpuppet-resume-id-recorded', fileResumeId);
+      }
     }
     return this.callerContext.run(caller.session, () =>
       this.handleClientRequest(req, res, url, segments, actor));

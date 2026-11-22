@@ -121,7 +121,7 @@ export interface ClientOptions {
    * resolved per request (the MCP client name is only known post-handshake).
    */
   actor?: string | (() => string);
-  /** A newly observed live conversation id from this authenticated client. */
+  /** A validated Claude session-file id from this authenticated client. */
   observedResumeId?: string;
   /**
    * Whether a request whose daemon has gone may start another and send the
@@ -805,6 +805,7 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
 export interface ApiResponse {
   status: number;
   body: unknown;
+  recordedResumeId?: string;
 }
 
 /**
@@ -835,9 +836,8 @@ export async function request(
       && sessionInstance !== undefined && sessionInstance === conn.instanceId;
     const agent = process.env['SHELLPUPPET_PROFILE_AGENT'];
     const resumeIds = presentIdentity && agent ? agentResumeIds(moduleFor(agent), process.env).filter(validResumeId) : [];
-    if (presentIdentity && agent === 'claude' && validResumeId(options.observedResumeId)) {
-      resumeIds.unshift(options.observedResumeId);
-    }
+    const fileResumeId = presentIdentity && agent === 'claude' && validResumeId(options.observedResumeId)
+      ? options.observedResumeId : undefined;
     const claim = options.claim ?? process.env['SHELLPUPPET_CLAIM'];
     const claimParts = claim?.match(/^(claim_[a-f0-9]{32}):(.+)$/);
     const response = await fetch(`http://127.0.0.1:${String(conn.port)}${path}`, {
@@ -850,6 +850,7 @@ export async function request(
         ...(actor !== undefined ? { 'x-shellpuppet-actor': actor } : {}),
         ...(presentIdentity ? {
           ...(resumeIds[0] ? { 'x-shellpuppet-resume-id': resumeIds[0], 'x-shellpuppet-resume-ids': resumeIds.join(',') } : {}),
+          ...(fileResumeId ? { 'x-shellpuppet-claude-file-resume-id': fileResumeId } : {}),
           'x-shellpuppet-session': session,
           'x-shellpuppet-session-token': sessionToken,
         } : {}),
@@ -861,7 +862,8 @@ export async function request(
       },
       ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
     });
-    return { status: response.status, body: await response.json() };
+    return { status: response.status, body: await response.json(),
+      recordedResumeId: response.headers.get('x-shellpuppet-resume-id-recorded') ?? undefined };
   };
 
   try {

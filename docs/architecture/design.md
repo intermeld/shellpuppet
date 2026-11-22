@@ -190,7 +190,8 @@ contributes its profile, current participant name, resolved folder, original
 folder selection, agent, conversation id if known, and shutdown timestamp.
 For Claude Code, its direct child MCP server reports changes in the validated
 `sessionId` from `<config dir>/sessions/<parent pid>.json` during the session.
-The daemon saves the latest reported id without a shutdown-time lookup.
+The daemon saves the latest file-reported id ahead of inherited environment
+markers, without a shutdown-time lookup.
 A system-assigned name is saved as null. Omit it when relaunching.
 The version 1 file includes the outgoing daemon's `outgoingInstanceId`.
 The owner writes its instance id to `restart-source.json` before replacing

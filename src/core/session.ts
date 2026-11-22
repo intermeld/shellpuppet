@@ -730,6 +730,7 @@ export class Session implements WaitTarget {
   readonly launchProfile: SessionOptions['launchProfile'];
   private inheritedResumeIds: readonly string[] = [];
   private observedResumeId?: string;
+  private observedFileResumeId?: string;
   readonly agent: string;
   readonly agentSource: AgentSource;
   private readonly agentModule: AgentModule | undefined;
@@ -1895,8 +1896,15 @@ export class Session implements WaitTarget {
     if (own !== undefined) this.observedResumeId = own;
   }
 
+  /** Claude's validated live session file takes precedence over environment markers. */
+  observeClaudeFileResumeId(id: unknown): boolean {
+    if (this.agent !== 'claude' || !this.launchProfile || !validResumeId(id)) return false;
+    this.observedFileResumeId = id;
+    return true;
+  }
+
   get resumeId(): string | null {
-    return this.observedResumeId ?? this.launchProfile?.resumeId ?? null;
+    return this.observedFileResumeId ?? this.observedResumeId ?? this.launchProfile?.resumeId ?? null;
   }
 
   getStalled(): StallState | undefined { return this.stallState; }

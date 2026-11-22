@@ -94,7 +94,9 @@ async function main(): Promise<void> {
       }
       const response = await request(connection, 'GET', '/sessions', undefined,
         { home, autoStart: false, observedResumeId: id });
-      if (response.status !== 200) throw new Error('The parent session did not accept the conversation id.');
+      if (response.status !== 200 || response.recordedResumeId !== id) {
+        throw new Error('The parent session did not record the conversation id.');
+      }
     }) : undefined;
   const previousClose = transport.onclose;
   transport.onclose = () => {
