@@ -443,14 +443,24 @@ id, the daemon uses the new session id.
 | Grok | `GROK_SESSION_ID` when present, including in a hook that calls ShellPuppet |
 | Muse | Explicit resume id only. No verified conversation marker is known. |
 
-When writing a restart record, the daemon checks Claude Code's
-`~/.claude/sessions/<pid>.json` for the outermost Claude process in the
-session's tree. It uses the session's `CLAUDE_CONFIG_DIR` when set. A valid
-`sessionId` takes precedence over the child marker, including after a
-conversation switch with `/resume`. If the file is unavailable, its id is
-invalid or the outer process is ambiguous, the reported id takes precedence
-over the launch id. The same fallback applies to linked metadata, files older
-than the process, and a recorded process start time that does not match.
-All sessions share a 450 ms lookup budget before shutdown saves the records. The lookup
-does not open transcripts. Without a live, reported or supplied id the record
-contains `null`.
+When writing a restart record, the daemon looks for a Claude Code image named
+`claude`, `claude.exe` or `claude-code`. It starts at the session's root
+process and searches up to three generations of children. It stops at the
+first depth with a match. A single match identifies the process to check.
+Multiple matches at that depth leave the reported id in effect. A Node-hosted
+Claude appears as `node` or `node.exe`. Its PID file is ineligible because the
+lookup reads no command lines. If the chain contains no recognised image,
+the daemon keeps the reported id.
+
+For the selected PID, the daemon reads `sessionId` from
+`~/.claude/sessions/<pid>.json`, using the session's `CLAUDE_CONFIG_DIR` when
+set. A link above the configured directory is part of the user's filesystem
+layout and is followed. The configured directory, its `sessions` child and
+the PID file must be free of links, junctions and reparse points. The file
+must have a single hard link. Its modification time must be at or after the
+process's OS birth time minus a two-second clock tolerance. An unknown birth
+time prevents use of the file. Only the `sessionId` field is used.
+
+A valid live id records the conversation selected with `/resume`. If the
+lookup fails or the shared 450 ms budget expires, the daemon uses the last
+reported id, then the launch id, then `null`. It never opens transcripts.

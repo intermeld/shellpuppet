@@ -9,7 +9,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
-- Record the outer Claude Code conversation for `shellpuppet previous` after an in-session `/resume`, preserving the reported id when the live metadata cannot be verified within the shutdown budget.
+- Record the conversation selected with `/resume` for a recognised Claude Code process in `shellpuppet previous`. Keep the reported id when the daemon cannot verify the live id within the shutdown budget.
 - A launch command typed into an agent session before the agent has started (at its shell prompt) is submitted with its Enter again.
 - Show the Windows folder picker in front of the dashboard when Browse is clicked.
 - Keep full-screen sessions alive when a wider snapshot grows the grid after an earlier shrink. If the program ends during the read, report its exit code or rendering fault.

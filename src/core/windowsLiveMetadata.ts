@@ -1,3 +1,4 @@
+import type { LiveResumeProcess, ProcessImage } from '../agents/types.js';
 import { spawn } from 'node:child_process';
 import { join } from 'node:path';
 import { createInterface } from 'node:readline';
@@ -52,4 +53,27 @@ let helper: ReturnType<typeof startHelper> | undefined;
 
 export function windowsLiveMetadata() {
   return helper ??= startHelper();
+}
+
+export async function windowsImages(signal: AbortSignal): Promise<ProcessImage[]> {
+  const rows = await windowsLiveMetadata().request(['images'], signal);
+  return rows.trim().split('\n').flatMap(line => {
+    const [pid, parent, image] = line.split('\t');
+    return image ? [{ pid: Number(pid), parent: Number(parent), name: Buffer.from(image, 'base64').toString('utf8') }] : [];
+  });
+}
+
+export async function windowsBirths(images: ProcessImage[], signal: AbortSignal): Promise<LiveResumeProcess[]> {
+  const rows = await windowsLiveMetadata().request(['births', images.map(p => p.pid).join(',')], signal);
+  const byPid = new Map(images.map(row => [row.pid, row]));
+  return rows.trim().split('\n').flatMap(line => {
+    const [pid, ticks, name] = line.split('\t');
+    const row = byPid.get(Number(pid));
+    if (!row || !name || !ticks) return [];
+    const stem = Buffer.from(name, 'base64').toString('utf8').toLowerCase();
+    const image = row.name.toLowerCase();
+    if (image !== stem && image !== stem + '.exe') return [];
+    const instance = BigInt(ticks);
+    return [{ ...row, startedAt: Number(instance / 10000n), instance }];
+  });
 }

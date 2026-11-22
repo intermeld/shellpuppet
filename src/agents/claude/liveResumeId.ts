@@ -6,6 +6,7 @@ import type { LiveResumeIdSource } from '../types.js';
 import { windowsLiveMetadata } from '../../core/windowsLiveMetadata.js';
 
 const MAX_METADATA_BYTES = 64 * 1024;
+const CLOCK_TOLERANCE_MS = 2000;
 
 async function posixMetadata(config: string, pid: number, earliestMtime: number, signal: AbortSignal) {
   const directories: FileHandle[] = [];
@@ -49,20 +50,17 @@ export function liveResumeId(env: NodeJS.ProcessEnv, cwd: string): LiveResumeIdS
   }
   return {
     matchesProcess(name) {
-      const program = windows ? name.toLowerCase().replaceAll('\\', '/') : name;
-      return program === 'claude' || (windows && program === 'claude.exe') ||
-        /(?:^|\/)@anthropic-ai\/claude-code\/cli\.js$/.test(program);
+      const image = windows ? name.toLowerCase() : name;
+      return image === 'claude' || image === 'claude.exe' || image === 'claude-code';
     },
-    async read({ pid, startedAt, latestStart = startedAt }, signal) {
+    async read({ pid, startedAt }, signal) {
+      if (!Number.isFinite(startedAt) || startedAt <= 0) return;
+      const earliestMtime = startedAt - CLOCK_TOLERANCE_MS;
       const raw = windows ? await windowsLiveMetadata().request(['read', Buffer.from(config).toString('base64'),
-        String(pid), String(latestStart)], signal) : await posixMetadata(config, pid, latestStart, signal);
+        String(pid), String(earliestMtime)], signal) : await posixMetadata(config, pid, earliestMtime, signal);
       if (!raw || signal.aborted) return;
-      const data = JSON.parse(raw) as { pid?: unknown; startedAt?: unknown; startTime?: unknown; sessionId?: unknown } | null;
-      if (!data || (data.pid !== undefined && data.pid !== pid)) return;
-      for (const stamp of [data.startedAt, data.startTime]) {
-        if (stamp !== undefined && (typeof stamp === 'string' ? Date.parse(stamp) : stamp) !== startedAt) return;
-      }
-      return data.sessionId;
+      const data = JSON.parse(raw) as { sessionId?: unknown } | null;
+      return data?.sessionId;
     },
   };
 }

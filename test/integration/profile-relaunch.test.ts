@@ -1,5 +1,5 @@
 import { execFile } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
 import { expect, it, vi } from 'vitest';
@@ -20,24 +20,27 @@ it('records the conversation selected after the Claude child reported its launch
   mkdirSync(packageDir, { recursive: true });
   const script = join(packageDir, 'cli.js');
   const wrapper = join(home, 'wrapper.cjs');
+  const native = join(home, process.platform === 'win32' ? 'claude.exe' : 'claude-code');
+  copyFileSync(process.execPath, native);
   writeFileSync(wrapper, `
-    require('node:child_process').spawn(process.execPath, [${JSON.stringify(script)}], { stdio: 'inherit' });
+    require('node:child_process').spawn(${JSON.stringify(native)}, [${JSON.stringify(script)}], { stdio: 'inherit' });
   `);
   writeFileSync(script, `
     const { execFileSync } = require('node:child_process');
     const { writeFileSync } = require('node:fs');
     const { join } = require('node:path');
-    const other = process.argv[2] === 'other';
+    const marker = process.argv[2] || 'worker';
     execFileSync(process.execPath, [process.env.SHELLPUPPET_CLI, 'list', '--json'], {
-      env: { ...process.env, CLAUDE_CODE_SESSION_ID: other ? 'other-reported' : 'launch-id' }
+      env: { ...process.env, CLAUDE_CODE_SESSION_ID: marker + '-reported' }
     });
-    writeFileSync(join(${JSON.stringify(home)}, other ? 'other-reported' : 'reported'), String(process.pid));
+    writeFileSync(join(${JSON.stringify(home)}, marker + '-pid'), String(process.pid));
     setInterval(() => {}, 1000);
   `);
   const claude = { agent: 'claude', command: process.execPath, shell: false, cwd: home, envFromDaemon: ['CLAUDE_CONFIG_DIR'] };
   const { config } = parseDaemonConfig({ launcher: { sessionLaunch: ['chair'], profiles: [
     { ...claude, name: 'worker', args: [wrapper] },
-    { ...claude, name: 'other', args: [script, 'other'], resume: ['{id}'] },
+    { ...claude, name: 'other', command: native, args: [script, 'other'], resume: ['{id}'] },
+    { ...claude, name: 'node', args: [script, 'node'], resume: ['{id}'] },
   ] } });
   const info = vi.fn();
   const td = await startTestDaemon({ home, launchProfiles: config.launcher,
@@ -47,24 +50,28 @@ it('records the conversation selected after the Claude child reported its launch
     const headers = { 'x-shellpuppet-claim': String(claim['claimId']), 'x-shellpuppet-claim-secret': String(claim['secret']) };
     expect((await api(td.port, td.token, '/launcher/launch', { headers, body: { profile: 'worker' } })).status).toBe(200);
     expect((await api(td.port, td.token, '/launcher/launch', { headers, body: { profile: 'other', resumeId: 'other-id' } })).status).toBe(200);
-    const reported = join(home, 'reported');
-    await eventually(() => existsSync(reported), 30_000);
-    await eventually(() => existsSync(join(home, 'other-reported')), 30_000);
-    const other = readFileSync(join(home, 'other-reported'), 'utf8');
-    writeFileSync(join(configDir, 'sessions', other + '.json'), JSON.stringify({ sessionId: 'stale-file', startedAt: 1 }));
-    const pid = readFileSync(reported, 'utf8');
+    expect((await api(td.port, td.token, '/launcher/launch', { headers, body: { profile: 'node', resumeId: 'node-id' } })).status).toBe(200);
+    const profiles = ['worker', 'other', 'node'];
+    await eventually(() => profiles.every(name => existsSync(join(home, name + '-pid'))), 30_000);
+    const pidOf = (name: string) => readFileSync(join(home, name + '-pid'), 'utf8');
+    const stale = join(configDir, 'sessions', pidOf('other') + '.json');
+    writeFileSync(stale, '{"sessionId":"stale-file"}');
+    utimesSync(stale, 1, 1);
+    writeFileSync(join(configDir, 'sessions', pidOf('node') + '.json'), '{"sessionId":"node-file"}');
+    const pid = pidOf('worker');
     if (process.platform === 'win32') {
-      await windowsLiveMetadata().request(['tree', pid], AbortSignal.timeout(30_000));
+      await windowsLiveMetadata().request(['images'], AbortSignal.timeout(30_000));
     }
     writeFileSync(join(configDir, 'sessions', pid + '.json'), JSON.stringify({ sessionId: 'after-resume' }));
     const stopped = await api(td.port, td.token, '/daemon/shutdown', { body: { restart: true, force: true } });
     expect(stopped.status).toBe(200);
-    const record = JSON.parse(readFileSync(join(home, 'previous-sessions.json'), 'utf8')) as { sessions: unknown[] };
-    expect(record.sessions).toEqual([
-      expect.objectContaining({ profile: 'worker', resumeId: 'after-resume' }),
-      expect.objectContaining({ profile: 'other', resumeId: 'other-reported' }),
-    ]);
-    expect(JSON.stringify(info.mock.calls)).not.toMatch(/after-resume|other-id|launch-id/);
+    const record = JSON.parse(readFileSync(join(home, 'previous-sessions.json'), 'utf8')) as {
+      sessions: { profile: string; resumeId: string }[];
+    };
+    expect(Object.fromEntries(record.sessions.map(s => [s.profile, s.resumeId]))).toEqual({
+      worker: 'after-resume', other: 'other-reported', node: 'node-reported',
+    });
+    expect(JSON.stringify(info.mock.calls)).not.toMatch(/after-resume|other-id|node-id|worker-reported/);
   } finally { await td.stop(); }
 }, 120_000);
 

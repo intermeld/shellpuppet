@@ -115,13 +115,14 @@ export interface NudgeView {
 }
 
 /** Process metadata used only when writing a restart record. */
-export interface LiveResumeProcess {
+export interface ProcessImage {
   pid: number;
   parent: number;
   name: string;
+}
+
+export interface LiveResumeProcess extends ProcessImage {
   startedAt: number;
-  /** Upper bound in epoch milliseconds when the OS clock has coarser resolution. */
-  latestStart?: number;
   /** Native birth time, retaining all the precision the OS reports. */
   instance?: bigint;
 }

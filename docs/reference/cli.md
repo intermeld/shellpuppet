@@ -231,7 +231,7 @@ An entry with a null resume id can be started fresh. Resume requires the
 current profile to declare a resume template. Changing the configured command
 or named folder changes the next launch.
 
-For Claude Code, the daemon checks the live conversation when it takes the
-record. After an in-session `/resume`, the saved id follows the selected
-conversation. If the lookup fails, the daemon uses the last valid id reported
-by the session, then the id supplied at launch.
+For a recognised Claude Code process, the saved id follows the conversation
+selected with `/resume`. If the daemon cannot verify the live id, including
+for a Node-hosted Claude, it uses the last valid id reported by the session,
+then the id supplied at launch. See the [agent profile reference](agent-profiles.md).
