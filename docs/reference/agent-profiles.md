@@ -257,8 +257,9 @@ if it times out the result says the program has not painted anything yet.
 ### Hermes Agent
 
 Hermes Agent v0.23.3 was measured on Windows on 21 and 22 November 2026,
-at 105 columns by 37 rows. The executable selects `hermes` automatically.
-Use that label when starting it through a wrapper.
+at 105 columns by 37 rows. The first-use confirmation was also captured at
+105 by 34. The executable selects `hermes` automatically. Use that label
+when starting it through a wrapper.
 
 Gold rules enclose the echoed question and the cream reply headed `☤ Hermes`.
 The filtered reader keeps both, along with labelled memory, search, terminal
