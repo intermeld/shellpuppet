@@ -211,6 +211,7 @@ src/
     mimo/             # shared OpenCode shapes and its clack trust message
     qoder/
     muse/             # reading, menus, settling, submission and composer rules
+    hermes/           # framed replies, confirmation prompts and composer rules
     generic/          # shared prompt shapes for every session
   core/
     session.ts        # one PTY + its VT renderer + lifecycle

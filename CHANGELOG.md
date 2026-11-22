@@ -7,6 +7,10 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+### Added
+
+- Recognise Hermes Agent sessions, read their framed replies and detect the first-use confirmation.
+
 ## [0.3.0] - 2026-11-21
 
 Several dashboard windows, messages between sessions, session names and

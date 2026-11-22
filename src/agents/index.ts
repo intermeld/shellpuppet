@@ -8,13 +8,14 @@ import { opencode } from './opencode/index.js';
 import { mimo } from './mimo/index.js';
 import { qoder } from './qoder/index.js';
 import { muse } from './muse/index.js';
+import { hermes } from './hermes/index.js';
 import { generic } from './generic/index.js';
 
 // Compatibility exports for callers of the former core entry points.
 export { MusePromptSettler as MuseMenuSettler, MUSE_MENU_SETTLE_MS } from './muse/prompts.js';
 export { MUSE_SUBMIT_DELAY_MS } from './muse/input.js';
 
-export const AGENT_MODULES: readonly AgentModule[] = [claude, codex, agy, grok, opencode, mimo, qoder, muse, generic];
+export const AGENT_MODULES: readonly AgentModule[] = [claude, codex, agy, grok, opencode, mimo, qoder, muse, hermes, generic];
 export const BUILT_IN_SIGNATURES: readonly AgentSignature[] = AGENT_MODULES.filter(module => module !== generic).map(module => module.reading);
 
 /** Parent-session markers from every module, excluded from every "all" launch profile. */

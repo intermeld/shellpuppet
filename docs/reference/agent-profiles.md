@@ -254,6 +254,22 @@ holds only once something is on screen and output has then stopped for the
 given time. A `quiet` wait on a CLI that is still loading keeps waiting, and
 if it times out the result says the program has not painted anything yet.
 
+### Hermes Agent
+
+The Windows captures from 21 November 2026 show the classic interface. Use
+`hermes` as the agent label through a wrapper. The executable selects it
+automatically. A completed reply sits under the gold `☤ Hermes` heading,
+between two gold rules. Cream prose outside that frame is ambiguous and is
+hidden. The reader retains the framed user message and the labelled memory
+tool output, including their physical wraps.
+
+The grey rules enclose the live composer. After a completed turn its
+suggestion appears in italic dark gold, above the usage footer. The first-use
+confirmation offers two numbered choices. A submitted line needs an exact
+match across the composer, including any physical wraps and the cursor at
+the end. Busy delivery is disabled. Chat help documents the id printed on
+exit and the `--resume SESSION_ID` argument. An exported id is unverified.
+
 ## Long waits: know your client's own timeout
 
 `terminal_wait` accepts up to 300,000 ms, and this page tells you to budget
@@ -304,6 +320,7 @@ their returned text; a filtered list omits waiting prompt questions.
 | Codex | 0.165.0 | None; its commentary before tool calls is a message, kept | Nothing |
 | Muse Code | 1.4.14 | A live reasoning summary line | The summary; answers, tool status and questions stay visible |
 | Qoder | 1.1.80 | A Thinking block behind a `│` bar, in italics, kept after the answer | Every Thinking block |
+| Hermes Agent | Windows classic interface, November 2026 | A completed turn has a distinct reply frame | Transcript rows whose ownership cannot be established |
 | OpenCode | 2.0.26 | None: `Thinking` while it thinks, then a collapsed `+ Thought · Ns` | Nothing |
 | MiMo Code | 0.1.16 | None: a collapsed `+ Thought: Ns` before each tool group and the answer | Nothing |
 | Grok | 1.0.70 | A Thinking block behind a `│` bar while it thinks, collapsed to `♦ Thought for Ns` | The live block and the spinner's label |

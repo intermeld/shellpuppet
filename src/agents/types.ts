@@ -40,6 +40,8 @@ export interface ReadingContext {
   ranges: (lines: readonly StyledLine[], signature: CompiledSignature, limit: number) => [number, number][];
 }
 export interface ReadingRules {
+  /** Hidden row ranges for a reader that can positively identify only framed output. */
+  hiddenRanges?: (lines: readonly StyledLine[], limit: number) => [number, number][];
   /** Crop only independently framed adjacent UI, before any reading walk. */
   contentRegion?: (lines: readonly StyledLine[]) => readonly StyledLine[];
   /** Rows owned by a live frame, even if its controls were painted on physical wraps. */

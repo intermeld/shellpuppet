@@ -76,6 +76,19 @@ async function longWrappedLine(name: string, line: string): Promise<string> {
   return id;
 }
 
+it('reads a wrapped Hermes reply through a labelled launcher session', async () => {
+  const id = await replay('../hermes/answered', 'hermes', /☤ Hermes/u);
+  const result = await api(td.port, td.token, `/sessions/${id}/result`);
+  expect(result.status).toBe(200);
+  expect(result.body['answer']).toEqual([
+    'xxxxx x xxx xxxxxx xxxx xxx xxxxxx xx xx xxxxxxx xxxxxxxxxxxx xxxxxxx xxxx xxxxxxxx xxx xxxxxxxxxx xxxxxx',
+    'xxx xxx xxxxxx',
+  ]);
+  const snapshot = await api(td.port, td.token, `/sessions/${id}/snapshot?hideReasoning=1`);
+  expect(snapshot.status).toBe(200);
+  expect(snapshot.body['screen']).toContain('🧠 Memory ~memory:');
+});
+
 describe('Grok permission box with an edit pattern action', () => {
   let id: string;
   beforeAll(async () => {

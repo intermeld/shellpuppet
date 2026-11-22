@@ -293,7 +293,7 @@ decides which start succeeds.
 `terminal_screenshot` with `hideReasoning`,
 and `terminal_result`, read an agent CLI's screen by a **signature**: how that
 program draws its reasoning, its answer, its busy line, its composer and the
-chrome around it. Claude Code, Codex, Qoder, OpenCode, MiMo Code, Grok and
+chrome around it. Claude Code, Codex, Qoder, Hermes, OpenCode, MiMo Code, Grok and
 Antigravity are built in, each measured on the version `agent-profiles.md`
 names. A
 session uses the signature named by `terminal_start`'s `agent` (CLI

@@ -630,6 +630,8 @@ function reasoningRanges(
   limit: number,
   claimed?: ReadonlySet<number> | null,
 ): [number, number][] {
+  const framed = signature.builtIn && moduleFor(signature.name)?.readingRules?.hiddenRanges;
+  if (framed) return framed(lines, limit);
   const ranges: [number, number][] = [];
   let i = 0;
   // The parent may have left the retained scrollback. There is no safe way
