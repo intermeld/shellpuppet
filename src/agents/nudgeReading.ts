@@ -33,10 +33,10 @@ export interface ReadingNudgeRule {
    */
   status?: (line: StyledLine, below: readonly StyledLine[]) => boolean;
   /**
-   * A non-blank row before the status is not a proven continuation.
-   * It is unknown, never ready.
+   * Non-blank continuations are unknown unless this matcher proves the exact
+   * line that was typed, using the module's own layout.
    */
-  unprovenContinuations?: boolean;
+  matchesDraft?: (rows: readonly StyledLine[], expected: string, view: NudgeView, at: number) => boolean;
   /**
    * Full-width rule rows the program paints directly above its composer, such
    * as a labelled rule. When exactly one row on the screen matches, the row
@@ -182,7 +182,7 @@ function composerRegion(
     if (frame !== null && frame.test(line.text) &&
       (line.wrapped !== true || (matchingExpected && rule.ruleInk?.(line) === true))) break;
     if (rule.status?.(line, lines.slice(i + 1)) === true) break;
-    if (rule.unprovenContinuations === true && !matchingExpected && line.text.trim() !== '') {
+    if (rule.matchesDraft && !matchingExpected && line.text.trim() !== '') {
       return { rows, unproven: true };
     }
     rows.push(line);
@@ -199,21 +199,6 @@ function rowClear(line: StyledLine, rule: ReadingNudgeRule, exactEmpty = false):
   if (text === '') return true;
   if (!rule.placeholderInk(line)) return false;
   return text === rule.placeholder || (!exactEmpty && rule.anyHintInPlaceholderInk === true);
-}
-
-/**
- * For a composer whose continuation rows are otherwise unproven: one space
- * after the prompt glyph, then rows each indented by exactly two spaces with
- * no blank row between them. Extra spaces or a blank row are not a plain
- * wrap of one line. A typed line break looks the same as a wrap on screen;
- * the input checks before Enter are what exclude it.
- */
-function plainWrapRows(rows: readonly StyledLine[]): boolean {
-  let end = rows.length;
-  while (end > 1 && rows[end - 1]!.text.trim() === '') end--;
-  const [first, ...rest] = rows.slice(0, end);
-  if (first === undefined || !/^\s*[❯›>] \S/u.test(first.text)) return false;
-  return rest.every((line) => /^ {2}\S/u.test(line.text));
 }
 
 /** Rejoin only visual composer wraps, allowing a space lost at a wrap edge. */
@@ -303,7 +288,7 @@ export function readingReadiness(view: NudgeView, reading: AgentSignature, rule:
     // prompt glyph and forget the earlier copy still waiting above it.
     if (lines.slice(0, at).some((line) =>
       composer.test(line.text) && stripGlyph(line.text) === view.expectedDraft)) return 'draft';
-    if (rule.unprovenContinuations === true && !plainWrapRows(region.rows)) return 'draft';
+    if (rule.matchesDraft) return rule.matchesDraft(region.rows, view.expectedDraft, view, at) ? 'ready' : 'draft';
     const [first, ...rest] = region.rows;
     const pieces = [stripGlyph(first?.text ?? ''), ...rest.map(line => line.text.trim())].filter(Boolean);
     return matchesWrappedDraft(pieces, view.expectedDraft) ? 'ready' : 'draft';

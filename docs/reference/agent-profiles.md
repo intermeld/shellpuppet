@@ -206,8 +206,12 @@ draft that continues on later rows and stop at the frame, so the status line
 under that frame is not part of the draft. Codex has no captured frame around
 a second composer row. Its `? for shortcuts` row and the model line under the
 composer (the captured model, context and weekly line) are status, not a
-draft. Any other text on a row under the Codex composer is left unknown, not
-ready. A running turn is busy even when the composer is empty or still shows
+draft. Before sending Enter for a known line, ShellPuppet checks that every
+Codex composer row spells that line at the current input width. Codex 0.171.0
+leaves two cells for the prompt and one at the right edge. A Windows drive
+prefix or a directory ending in a slash can finish a row when the next piece
+would overflow. Without an expected line, continuation text leaves the reader
+waiting. A running turn is busy even when the composer is empty or still shows
 its placeholder. The screen must also have no prompt waiting, no settled
 stall, and no change for 1,500 ms before that empty composer counts as ready
 to nudge.

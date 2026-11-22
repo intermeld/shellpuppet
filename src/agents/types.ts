@@ -103,6 +103,8 @@ export type NudgeReadiness = 'ready' | 'busy' | 'queue' | 'draft' | 'unknown';
  * the recorded placeholder from a draft. A difference is not judged.
  */
 export interface NudgeView {
+  /** Terminal width in cells, when known. */
+  viewportCols?: number;
   /** Cursor and optional physical cells from the same viewport as the text. */
   cursor?: CursorPosition;
   untrimmedRow?: (y: number) => StyledLine | undefined;
@@ -135,6 +137,8 @@ export interface AgentModule {
       maxWaitMs?: number;
       /** A composer replacement: group 1 is the placeholder; named group chars is its length, if shown. */
       pastePlaceholder?: RegExp;
+      /** Input for which this module accepts a paste placeholder as proof. */
+      pastePlaceholderBody?: RegExp;
     };
     resizeBehindSubmit?: boolean;
     verifyMs?: VerifyTiming;

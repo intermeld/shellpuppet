@@ -1,0 +1,24 @@
+[?1049h[H
+  [38;2;99;168;248m>_ [39;1mOpenAI Codex[22;2m (v0.171.0)
+[0m     [2mD:\work\example
+
+  To get started, describe a task or try one of these commands:
+
+[2C[0m/init[2m - create an AGENTS.md file with instructions for Codex
+[2C[0m/status[2m - show current session configuration
+[2C[0m/permissions[2m - choose what Codex is allowed to do
+[2C[0m/model[2m - choose what model and reasoning effort to use
+[2C[0m/review[2m - review any changes and find issues
+
+
+
+
+[0m›[1CPlease[1Crun[1Cthis[1Ccheck:[1Cset[1CPATH[1Cso[1Cthat[1CC:\Windows\System32\bash.exe[1Cis[1Cfound
+[2Cfirst,[1Cthen[1Crun[1C"D:/dev-sandbox/draft-notes/archive4/test-stubs:$PATH"[1Cwith
+[2Cthe[1Cquoted[1Cargument[1C'a\b\c'[1Cand[1Creport[1Cback[1Cexactly[1Cwhat[1Cit[1Cprinted,
+[2Cincluding[1Cany[1Cerror[1Ctext,[1Cwithout[1Cchanging[1Cany[1Cfiles[1Cin[1Cthis[1Cfolder[1Cor
+[2Canywhere[1Celse[1Con[1Cthe[1Cmachine.[1CRepeat[1Cthe[1Ccheck[1Ctwice[1Cand[1Ccompare[1Cthe[1Ctwo
+ [1Coutputs carefully before[1Creplying[1Cwith[1Ca[1Cshort[1Csummary[1Conly.
+
+[2C[38;2;246;226;183mGPT-6.2-Astra xhigh[1C[0m·[1C[38;2;242;181;144mContext 100% left[1C[0m·[1C[38;2;233;144;169mweekly 31% left[1C[0m·[1C[38;2;200;169;238mDaybreak off
+[0m [3A[61C[?2004h[?1004h[?1003h

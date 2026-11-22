@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { IPty } from 'node-pty';
 import { describe, expect, it, vi } from 'vitest';
 import { MUSE_SUBMIT_DELAY_MS, NUDGE_SUBMIT_DELAY_MS, NUDGE_SUBMIT_WAIT_MS, Session } from '../../src/core/session.js';
@@ -19,9 +21,9 @@ class RecordingPty implements IPty {
   resume(): void {}
 }
 
-function recordingSession(agent: string): { session: Session; pty: RecordingPty } {
+function recordingSession(agent: string, size?: { cols: number; rows: number }): { session: Session; pty: RecordingPty } {
   const pty = new RecordingPty();
-  const session = new Session('input-order', { command: process.execPath, shell: false, agent }, {
+  const session = new Session('input-order', { command: process.execPath, shell: false, agent, ...size }, {
     platform: 'linux', spawn: () => pty,
   });
   return { session, pty };
@@ -37,6 +39,59 @@ function draftWait(session: Session, seen: boolean, delayMs = 150): void {
 }
 
 describe('Muse input submission', () => {
+  const releaseNotes = 'Review the release plan and supporting notes for the next deployment step. ' +
+    'Include the outstanding items reported at the readiness meeting this morning. ' +
+    'Compare the agreed dates against the last copy of the engineering checklist. ' +
+    'Highlight any open questions about the changes in the pending release notes. ';
+  const datedEntry = releaseNotes + 'Please add a dated entry to the project release notes for the build on 2026/11/21';
+  const fraction = releaseNotes + 'Please check the quantity on the latest order and enter the balance due as .50 each';
+  const quotedOption = releaseNotes + "Please check that the final report marks the default option as 'fast' (recommended) today";
+  const versionPath = releaseNotes + 'Please include the following folder in the release notes for today: archive/2026/build';
+  it.each([
+    ['codex-wrapped-draft', 'Please run this check: set PATH so that C:\\Windows\\System32\\bash.exe is found ' +
+      'first, then run "D:/dev-sandbox/draft-notes/archive4/test-stubs:$PATH" with the quoted argument ' +
+      "'a\\b\\c' and report back exactly what it printed, including any error text, without changing any files " +
+      'in this folder or anywhere else on the machine. Repeat the check twice and compare the two outputs ' +
+      'carefully before replying with a short summary only.', 24, true],
+    ['codex-midtoken-draft', 'Check that the path a bb ccc dd eee ffff gg hhh iii jjjj kk ' +
+      'C:\\Windows\\System32\\bash.exe exists, then list D:/dev-sandbox/draft-notes/archive4/test-stubs:$PATH ' +
+      'entries, and report.', 24, true],
+    ['codex-date-10', datedEntry, 10, true],
+    // A newline and a space after the first slash gave byte-identical screens.
+    ['codex-newline-10', datedEntry, 10, false],
+    ['codex-pipe-10', releaseNotes + 'Please proofread the release note and check the final heading reads Ready|steady',
+      10, true],
+    ['codex-fraction', fraction, 10, true],
+    ['codex-fraction-newline', fraction, 10, false],
+    ['codex-quoted-option', quotedOption, 10, true],
+    ['codex-quoted-option-newline', quotedOption, 10, false],
+    ['codex-version-path', versionPath, 10, true],
+    ['codex-version-path-newline', versionPath, 10, false],
+  ] as const)('checks Enter against the captured Codex composer in %s', async (name, body, rows, submit) => {
+    const { session, pty } = recordingSession('codex', { cols: 80, rows });
+    const capture = readFileSync(join(__dirname, '../fixtures/nudge', name + '.ansi'), 'utf8');
+    const idle = '\x1b[2J\x1b[H› \x1b[2mAsk Codex to do anything\x1b[0m';
+    const renderer = session['renderer'];
+    const record = pty.write.bind(pty);
+    vi.spyOn(pty, 'write').mockImplementation(data => {
+      record(data);
+      if (data === '\r') void renderer.write(idle);
+      else if (submit) void renderer.write(capture);
+    });
+    try {
+      // A delayed redraw leaves an existing, altered draft visible after the write.
+      await renderer.write(submit ? idle : capture);
+      const result = await session.writeWithResult(body + '\r');
+      expect(pty.writes.map(entry => entry.data)).toEqual(submit ? [body, '\r'] : [body]);
+      expect(result).toMatchObject({ submitted: submit, submitRetried: false });
+      await renderer.write(capture);
+      expect(session.nudgeReadyWithLine(body)).toBe(submit);
+      expect(session.nudgeReadyWithLine(body + ' more')).toBe(false);
+    } finally {
+      await renderer.dispose();
+    }
+  }, 12_000);
+
   it('submits a Codex nudge after a separate delay', async () => {
     const { session, pty } = recordingSession('codex');
     const phases: string[] = [];
@@ -310,9 +365,12 @@ describe('Muse input submission', () => {
     expect(result).toMatchObject({ submitted: false, submitRetried: false });
   });
 
-  it('takes a matching placeholder painted after a settled screen as this body', async () => {
+  it.each([
+    ['hello', true],
+    ['café!', true],
+    ['testλ', false],
+  ] as const)('checks a new five-character paste placeholder for %s', async (body, submit) => {
     const { session, pty } = recordingSession('codex');
-    const body = 'hello';
     let bodyWritten = false;
     let entered = false;
     const originalWrite = pty.write.bind(pty);
@@ -328,9 +386,10 @@ describe('Muse input submission', () => {
     }));
     vi.spyOn(session, 'nudgeReadyWithLine').mockImplementation((line) => !entered && line === '[Pasted Content 5 chars]');
     const result = await session.writeWithResult(`${body}\r`);
-    expect(pty.writes.map((entry) => entry.data)).toEqual([body, '\r']);
+    expect(pty.writes.map((entry) => entry.data)).toEqual(submit ? [body, '\r'] : [body]);
     expect(result.submitRetried).toBe(false);
-  });
+    if (!submit) expect(result.submitted).toBe(false);
+  }, 10_000);
 
   it('rejects a new paste placeholder with a different character count', async () => {
     const { session, pty } = recordingSession('codex');
@@ -383,6 +442,7 @@ describe('Muse input submission', () => {
     });
     vi.spyOn(session, 'nudgeReadyWithLine').mockImplementation((line) => line === '[Pasted Content 1200 chars]');
     expect(session['typedDraftVisible']('a'.repeat(1200), new Set())).toBe(true);
+    expect(session['typedDraftVisible']('a'.repeat(1199) + 'λ', new Set())).toBe(false);
     expect(session['typedDraftVisible']('a'.repeat(1199), new Set())).toBe(false);
     expect(session['typedDraftVisible']('a'.repeat(1200), new Set(['[Pasted Content 1200 chars]']))).toBe(false);
     expect(session['typedDraftVisible']('[Pasted Content 1200 chars]',

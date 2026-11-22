@@ -9,6 +9,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Codex: a typed line or message nudge that Codex wraps at spaces, path separators or punctuation is recognised (using the same Unicode 15.0 line-break rules Codex uses), so Enter is sent once the complete draft is visible; text outside Latin-1 still has Enter withheld.
 - Windows daemon starts from the Start menu shortcut and through a start wrapper: program lookup works whatever the case of the PATH variable, a failed start is logged and shown, the wrapped daemon no longer opens a console window, and wrapped restarts stay under the start lock and survive their starting client closing.
 
 ## [0.3.0] - 2026-11-21
