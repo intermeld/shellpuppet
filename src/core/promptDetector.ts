@@ -216,7 +216,8 @@ function detectPlainPrompt(screen: string, agent: string, viewportRows?: number,
   const tail = lines.slice(-TAIL_WINDOW);
   const composerSpans = qoderComposerSpans(raw);
 
-  const shapes = promptShapesFor(agent);
+  const module = moduleFor(agent);
+  const shapes = module?.requirePaintedMenu ? module.prompts : promptShapesFor(agent);
   const rows = shapes.filter((shape): shape is PromptRows => shape.kind === 'rows');
   const busy = (text: string): boolean => rows.some(shape => shape.busy?.test(text));
   for (const shape of shapes) {
@@ -224,6 +225,7 @@ function detectPlainPrompt(screen: string, agent: string, viewportRows?: number,
     const prompt = shape.detect(raw, lines, tail, busy, viewportRows, styled);
     if (prompt !== null) return prompt;
   }
+  if (module?.requirePaintedMenu) return null;
 
   // A dialog a program draws on its own screen, recognised by its signature
   // (`dialogs.ts`): the most specific test there is, so it goes first.

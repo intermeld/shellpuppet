@@ -58,7 +58,7 @@ export function nudgeVerdict(module: AgentModule | undefined, observation: Nudge
   if (observation.stall !== undefined) return { ready: false, reason: 'stalled' };
   const reading = module.nudge.readiness({ rows: screen.rows, styled: screen.styled,
     cursor: observation.cursor, untrimmedRow: observation.untrimmedRow,
-    expectedDraft: observation.expectedDraft, exactEmpty: observation.exactEmpty });
+    expectedDraft: observation.expectedDraft, queueDraft: observation.queueDraft, exactEmpty: observation.exactEmpty });
   if (reading === 'queue') {
     if (observation.expectedDraft !== undefined) return { ready: false, reason: 'busy' };
     const quiet = observation.composerUnchangedMs;

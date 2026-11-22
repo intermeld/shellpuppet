@@ -9,7 +9,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Added
 
-- Recognise Hermes Agent sessions, read their framed replies and detect the first-use confirmation.
+- Read Hermes Agent replies and tool output, detect its prompts and queue busy nudges with Tab.
 
 ## [0.3.0] - 2026-11-21
 

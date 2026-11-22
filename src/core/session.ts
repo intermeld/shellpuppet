@@ -1305,7 +1305,7 @@ export class Session implements WaitTarget {
     const queued = this.writeChain.then(async () => {
       const result: TypedWriteResult = { before: '', submitRetried: false };
       result.before = (await this.writeInput(data, options.terminalReport === true,
-        undefined, undefined, false, [], () => 'line-not-seen',
+        undefined, undefined, undefined, [], () => 'line-not-seen',
         (outcome) => Object.assign(result, outcome))) ?? '';
       return result;
     });
@@ -1327,13 +1327,13 @@ export class Session implements WaitTarget {
 
   /** Queue a daemon nudge, reporting why a typed body could not be submitted. */
   writeNudgeWithReason(data: string, ready: (screen: string, phase: 'before' | 'submit') => boolean,
-    messageIds: string[] = [], failedCheck: () => NudgeAbortReason = () => 'line-not-seen'):
+    messageIds: string[] = [], failedCheck: () => NudgeAbortReason = () => 'line-not-seen', queuedDelivery = false):
     Promise<'sent' | 'wait' | `aborted-${NudgeAbortReason}`> {
     let abortReason: NudgeAbortReason | null = null;
     const queued = this.writeChain.then(async () => {
       try {
         if (this.pendingNudgeLine !== null) return 'wait' as const;
-        const result = await this.writeInput(data, false, ready, (reason) => { abortReason = reason; }, true,
+        const result = await this.writeInput(data, false, ready, (reason) => { abortReason = reason; }, this.nudgeSubmit(queuedDelivery),
           messageIds, failedCheck);
         return abortReason !== null ? `aborted-${abortReason}` as const
           : result === null ? 'wait' as const : 'sent' as const;
@@ -1455,7 +1455,8 @@ export class Session implements WaitTarget {
     return SHELL_PROMPTS.some((pattern) => pattern.test(before));
   }
 
-  nudgeSubmit(): string {
+  nudgeSubmit(queued = false): string {
+    if (queued && this.agentModule?.nudge?.queueKey !== undefined) return this.agentModule.nudge.queueKey;
     return this.agentModule?.input?.submit?.key ?? '\r';
   }
 
@@ -1463,10 +1464,10 @@ export class Session implements WaitTarget {
   nudgeQueuedInputVersion(): number { return this.inputQueueVersion; }
   nudgeScreenRevision(): number { return this.screenRevision; }
 
-  nudgeReadyWithLine(line: string): boolean {
+  nudgeReadyWithLine(line: string, queued = false): boolean {
     return nudgeVerdict(this.agentModule, {
       ...this.nudgeView(),
-      stall: this.getStalled(), unchangedMs: 0, expectedDraft: line,
+      stall: this.getStalled(), unchangedMs: 0, expectedDraft: line, queueDraft: queued && this.agentModule?.nudge?.queueKey !== undefined,
     }).ready;
   }
 
@@ -1524,9 +1525,10 @@ export class Session implements WaitTarget {
   private async writeInput(data: string, terminalReport: boolean,
     ready?: (screen: string, phase: 'before' | 'submit') => boolean,
     onNudgeAbort?: (reason: NudgeAbortReason) => void,
-    nudge = false, messageIds: string[] = [],
+    nudgeKey?: string, messageIds: string[] = [],
     failedCheck: () => NudgeAbortReason = () => 'line-not-seen',
     onTypedSubmit?: (result: Omit<TypedWriteResult, 'before'>) => void): Promise<string | null> {
+    const nudge = nudgeKey !== undefined;
     this.refuseIfInputFailed();
     if (ready !== undefined) await this.renderer.flush();
     if (!terminalReport && data.length > 0 &&
@@ -1567,7 +1569,7 @@ export class Session implements WaitTarget {
 
     if (nudge || this.delayedSubmission(data)) {
       const submit = this.agentModule?.input?.submit;
-      const key = nudge ? this.nudgeSubmit() : submit!.key;
+      const key = nudgeKey ?? submit!.key;
       const body = data.slice(0, -key.length);
       const delayMs = nudge ? Math.max(NUDGE_SUBMIT_DELAY_MS, submit?.delayMs ?? 0)
         : Math.max(submit!.delayMs!, Math.ceil(Array.from(body).length * (submit?.perCharacterMs ?? 0)));

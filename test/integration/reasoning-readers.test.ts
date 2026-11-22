@@ -89,6 +89,17 @@ it('reads a wrapped Hermes reply through a labelled launcher session', async () 
   expect(snapshot.body['screen']).toContain('🧠 Memory ~memory:');
 });
 
+it('returns the selected Hermes approval after hiding the spinner and reasoning', async () => {
+  const id = await replay('../hermes/approval', 'hermes', /Dangerous Command/u);
+  for (const hide of [0, 1]) {
+    const wait = await api(td.port, td.token, `/sessions/${id}/wait?prompt=1&hideReasoning=${hide}&timeout=3000`);
+    expect(wait.body).toMatchObject({ reason: 'prompt', prompt: {
+      options: ['Allow once', 'Allow for this session', 'Add to permanent allowlist', 'Deny'], selectedOption: 3,
+    } });
+    if (hide) expect(wait.body['screen']).toContain('[reasoning hidden:');
+  }
+});
+
 describe('Grok permission box with an edit pattern action', () => {
   let id: string;
   beforeAll(async () => {

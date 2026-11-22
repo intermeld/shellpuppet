@@ -55,7 +55,10 @@ it('hides ambiguous text, including a clipped answer body and a copy of the head
 });
 
 it('recognises the idle suggestion only inside the painted composer', async () => {
-  const { lines, cursor } = await paint();
+  const { lines } = await paint();
+  // The serialised viewport parks the cursor at the start of the row.
+  // The live idle composer reports column two after the prompt glyph.
+  const cursor = { x: 2, y: 34 };
   const verdict = (styled: StyledLine[]) => nudgeVerdict(moduleFor('hermes'), {
     styled, rows: styled.map(l => l.text), cursor, viewportRows: 37, unchangedMs: 2000,
   });
@@ -89,7 +92,7 @@ it.each([12, 135])('requires the exact %i-character draft before Enter', async l
   const capture = readFileSync(new URL('../fixtures/hermes/answered.ansi', import.meta.url), 'utf8');
   const body = 'a'.repeat(length);
   const suffix = capture.slice(capture.lastIndexOf('─ 0.0s'));
-  const paint = '\x1b[2m' + suffix.replace('\x1b[38;2;184;134;11;3mSet a reminder or schedule a recurring task', body);
+  const paint = '\x1b[2m' + suffix.replace('\x1b[38;2;184;134;11;3mSet a reminder or schedule a recurring task', '\x1b[0m' + body);
   const renderer = new ScreenRenderer({ cols: 105, rows: 10 });
   try {
     await renderer.write(paint);

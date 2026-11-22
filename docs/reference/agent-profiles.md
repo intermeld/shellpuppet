@@ -256,19 +256,29 @@ if it times out the result says the program has not painted anything yet.
 
 ### Hermes Agent
 
-The Windows captures from 21 November 2026 show the classic interface. Use
-`hermes` as the agent label through a wrapper. The executable selects it
-automatically. A completed reply sits under the gold `☤ Hermes` heading,
-between two gold rules. Cream prose outside that frame is ambiguous and is
-hidden. The reader retains the framed user message and the labelled memory
-tool output, including their physical wraps.
+Hermes Agent v0.23.3 was measured on Windows on 21 and 22 November 2026,
+at 105 columns by 37 rows. The executable selects `hermes` automatically.
+Use that label when starting it through a wrapper.
 
-The grey rules enclose the live composer. After a completed turn its
-suggestion appears in italic dark gold, above the usage footer. The first-use
-confirmation offers two numbered choices. A submitted line needs an exact
-match across the composer, including any physical wraps and the cursor at
-the end. Busy delivery is disabled. Chat help documents the id printed on
-exit and the `--resume SESSION_ID` argument. An exported id is unverified.
+Gold rules enclose the echoed question and the cream reply headed `☤ Hermes`.
+The filtered reader keeps both, along with labelled memory, search, terminal
+and clarification output. It hides the dim reasoning blocks, the spinner
+caption and transcript rows whose source is unclear. A result needs a
+completed turn and the idle composer.
+
+The grey input rules, usage footer and cursor identify the composer. A
+known suggestion appears in italic dark gold on the welcome screen and
+after a completed turn. Typed input uses the default foreground. Enter
+requires the exact draft through its final cursor position, including
+wrapped rows. During a turn, Enter redirects it. ShellPuppet queues a nudge
+with Tab after the empty redirect hint settles and the typed line appears.
+A populated queue or a change of input state holds delivery.
+
+The first-use confirmation, four-choice command approval and single-question
+clarification each have a measured selection and footer. All three hold
+nudges. The captures established no stall signature. Chat help documents
+the id printed on exit and the `--resume SESSION_ID` argument. A child
+environment variable for that id remains unverified.
 
 ## Long waits: know your client's own timeout
 
@@ -320,7 +330,7 @@ their returned text; a filtered list omits waiting prompt questions.
 | Codex | 0.165.0 | None; its commentary before tool calls is a message, kept | Nothing |
 | Muse Code | 1.4.14 | A live reasoning summary line | The summary; answers, tool status and questions stay visible |
 | Qoder | 1.1.80 | A Thinking block behind a `│` bar, in italics, kept after the answer | Every Thinking block |
-| Hermes Agent | Windows classic interface, November 2026 | A completed turn has a distinct reply frame | Transcript rows whose ownership cannot be established |
+| Hermes Agent | 0.23.3, Windows classic interface | Dim reasoning blocks and a live spinner caption | Reasoning, the spinner caption and unclassified transcript rows |
 | OpenCode | 2.0.26 | None: `Thinking` while it thinks, then a collapsed `+ Thought · Ns` | Nothing |
 | MiMo Code | 0.1.16 | None: a collapsed `+ Thought: Ns` before each tool group and the answer | Nothing |
 | Grok | 1.0.70 | A Thinking block behind a `│` bar while it thinks, collapsed to `♦ Thought for Ns` | The live block and the spinner's label |
