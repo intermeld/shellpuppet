@@ -501,6 +501,8 @@ describe.each(['viewer', 'dashboard'])('%s notice placement', mode => {
         3000, 20, 'the lower resting cursor was not delivered');
       await eventually(async () => await evaluate('__noticeTest.notices.style.top !== "auto"') === true,
         3000, 20, 'the lower cursor rest did not place the notice at the top');
+      // Let any timer from that rest settle before timing the next move.
+      await evaluate('__pause(1050)');
       for (const key of ['t', 'b']) {
         await evaluate(`(() => {
           const state = __noticeTest;
