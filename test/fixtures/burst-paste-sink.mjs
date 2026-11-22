@@ -1,7 +1,8 @@
 // A composer that paints a paste late and needs more time for longer bodies.
 process.stdin.setRawMode?.(true);
 process.stdin.resume();
-const redraw = (rows) => process.stdout.write(`\x1b[2J\x1b[H${rows.join('\r\n')}\r\n`);
+// The cursor rests after the last row's text, where Codex keeps its insertion point.
+const redraw = (rows) => process.stdout.write(`\x1b[2J\x1b[H${rows.join('\r\n')}`);
 const empty = '› \x1b[2mAsk Codex to do anything\x1b[0m';
 redraw(['BURST READY', empty]);
 let draft = '';
