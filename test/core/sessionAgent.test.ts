@@ -32,7 +32,7 @@ afterEach(async () => {
 describe('agent resolved from the start program', () => {
   it('registers every existing harness and the generic fallback', () => {
     expect(AGENT_MODULES.map((module) => module.name)).toEqual([
-      'claude', 'codex', 'agy', 'grok', 'opencode', 'mimo', 'qoder', 'muse', 'generic',
+      'claude', 'codex', 'agy', 'grok', 'opencode', 'mimo', 'qoder', 'muse', 'hermes', 'generic',
     ]);
     expect(resolveAgent(undefined, 'C:\\tools\\MuSe-Bin-1.4.14.EXE')).toEqual({ agent: 'muse', agentSource: 'program' });
     expect(resolveAgent(undefined, 'muse-bin-unrelated')).toEqual({ agent: 'generic', agentSource: 'fallback' });

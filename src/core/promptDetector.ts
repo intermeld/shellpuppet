@@ -229,6 +229,7 @@ function detectPlainPrompt(screen: string, agent: string, viewportRows?: number,
   // (`dialogs.ts`): the most specific test there is, so it goes first.
   const dialog = dialogPrompt(raw, undefined, undefined, agent);
   if (dialog !== null) return dialog;
+  if (moduleFor(agent)?.incompleteMenu?.(raw)) return null;
 
   // A clack step draws its own frame, and the frame alone says whether the
   // step is waiting.
