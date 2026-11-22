@@ -128,7 +128,7 @@ it('clears a touched body after the quiet period, then types and submits one fre
     await td.daemon['nudges'].tick();
     expect(session.nudgePendingLine()).toBe(line);
     expect(fs.readFileSync(input, 'utf8')).toBe(`${line}x\x15`);
-    await eventually(() => session.nudgeReady(Date.now()), 5_000);
+    await eventually(() => session.nudgeReady(Date.now()), 15_000);
     await new Promise((resolve) => setTimeout(resolve, 1_100));
     await td.daemon['nudges'].tick();
     await eventually(() => fs.readFileSync(input, 'utf8') === `${line}x\x15${line}\r`, 15_000);

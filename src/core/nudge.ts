@@ -11,7 +11,7 @@ import type { StallState } from './types.js';
 /** How long a ready screen must stay unchanged before it can be nudged. */
 export const NUDGE_QUIET_MS = 1_500;
 
-export type NudgeBlock = 'busy' | 'draft' | 'unknown' | 'prompt' | 'stalled' | 'quiet';
+export type NudgeBlock = 'busy' | 'draft' | 'unknown' | 'prompt' | 'stalled' | 'quiet' | 'recent-input';
 
 export type NudgeVerdict = { ready: true; queued?: true } | { ready: false; reason: NudgeBlock };
 

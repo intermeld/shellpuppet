@@ -180,6 +180,8 @@ export const NUDGE_SUBMIT_DELAY_MS = 150;
 /** How long a nudge may wait after that pause for the program to paint its line. */
 export const NUDGE_SUBMIT_WAIT_MS = 2000;
 const NUDGE_SUBMIT_POLL_MS = 50;
+/** How long ordinary input may still be buffered behind an empty composer. */
+const RECENT_INPUT_MS = 10_000;
 /** Rows at the foot of the screen that hold a composer, its frame and its footer. */
 const COMPOSER_BLOCK_ROWS = 5;
 /** A horizontal rule or frame edge drawn around a composer. */
@@ -812,8 +814,7 @@ export class Session implements WaitTarget {
   private lastChange = Date.now();
   /** When input was last written to the PTY. */
   private lastInputAt = 0;
-  private lastOrdinaryInputAt = 0;
-  private awaitingInputPaint = false;
+  private recentInputUntil = 0;
   /** Sticky: the rendered screen has shown something at least once. */
   private painted = false;
   /**
@@ -1005,7 +1006,6 @@ export class Session implements WaitTarget {
     this.stallPtyRows = this.pty.rows;
     this.pty.onData((data) => {
       if (this.exitedFlag || this.isKilled) return;
-      this.awaitingInputPaint = false;
       if (this.pendingNudgeLine !== null) this.pendingQuietSince = Date.now();
       // node-pty can apply a requested resize later, after its first output.
       // Observe the dimensions it reports as well as our explicit requests.
@@ -1294,6 +1294,7 @@ export class Session implements WaitTarget {
       result.before = (await this.writeInput(data, options.terminalReport === true,
         undefined, undefined, false, [], () => 'line-not-seen',
         (outcome) => Object.assign(result, outcome))) ?? '';
+      if (result.submitted === true) this.recentInputUntil = 0;
       return result;
     });
     // The chain must survive a failed write, or one rejection would wedge every
@@ -1395,6 +1396,8 @@ export class Session implements WaitTarget {
     return this.nudgeState(now).ready;
   }
 
+  get recentInput(): boolean { return Date.now() < this.recentInputUntil; }
+
   /**
    * Whether a nudge may be typed now, and whether it would be queued behind a
    * running turn. Each call also measures how long the composer block (the
@@ -1410,6 +1413,9 @@ export class Session implements WaitTarget {
       this.nudgeComposerKey = key;
       this.nudgeComposerSince = now;
     }
+    if (this.recentInput) {
+      return { ready: false, reason: 'recent-input', queued: false, paneQuiet: pane !== undefined, regionKey: key };
+    }
     const verdict = nudgeVerdict(this.agentModule, {
       ...view,
       whenBusy,
@@ -1418,9 +1424,6 @@ export class Session implements WaitTarget {
       composerUnchangedMs: now - this.nudgeComposerSince,
     });
     const queued = verdict.ready && verdict.queued === true;
-    if (whenBusy && verdict.ready && (this.awaitingInputPaint || now - this.lastOrdinaryInputAt < NUDGE_QUIET_MS)) {
-      return { ready: false, reason: 'quiet', queued: false, paneQuiet: pane !== undefined, regionKey: key };
-    }
     return { ...verdict, queued, paneQuiet: pane !== undefined, regionKey: key };
   }
 
@@ -1545,8 +1548,7 @@ export class Session implements WaitTarget {
     // and its echo guard needs the input itself.
     this.lastInputData = data;
     if (!nudge && !terminalReport && data.length > 0) {
-      this.awaitingInputPaint = true;
-      this.lastOrdinaryInputAt = Date.now();
+      this.recentInputUntil = Date.now() + RECENT_INPUT_MS;
     }
     if (!terminalReport && data.length > 0) {
       // Discovery may still be queued. Capture the screen this input answers

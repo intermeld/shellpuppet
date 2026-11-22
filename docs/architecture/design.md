@@ -410,6 +410,9 @@ message whom, and a clock.
   and limits nudges to one per message (a later message brings a new nudge that lists every
   unread one), one per session in 30 seconds and
   20 across the daemon in a rolling minute. The two rate limits are configurable.
+  After ordinary viewer, CLI or MCP input, the daemon waits 10 seconds before
+  typing a nudge, including during a running turn. Each new input restarts the
+  wait. A confirmed typed submission ends it early. A repaint leaves it in place.
   The fixed line names only the `session_inbox` MCP tool, never a command to
   run, so a session that messages needs the ShellPuppet MCP server.
   Every check is repeated inside the queued write and, after a pause of at least
@@ -499,8 +502,9 @@ A timer aligns to UTC minute boundaries. Each tick considers the current
 minute once and resolves the target's current session name. A missed turn
 expires. An idle, empty composer receives the owner's line through the
 normal input queue. For `whenBusy: "queue"`, the same agent-specific proof
-as a mailbox nudge permits delivery during a turn. A draft, a prompt, a
-stall, an unknown screen or a pending body blocks delivery.
+as a mailbox nudge permits delivery during a turn. During the 10-second wait
+after ordinary input, the schedule skips with reason `recent-input`. A draft,
+a prompt, a stall, an unknown screen or a pending body blocks delivery.
 
 The daemon checks the input generation, screen, current name and schedule
 before typing and before the separate submit key. An unconfirmed body stays

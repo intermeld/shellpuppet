@@ -76,6 +76,11 @@ continues to the field maximum. When both day fields start with a number,
 either day can match. When either starts with `*`, both must match.
 Checks start at the next UTC minute. Missed minutes are discarded.
 
+Typing into a session starts a 10-second wait for both scheduled prompts
+and mailbox nudges. Each further input restarts the wait. A confirmed typed
+submission ends it early. During the wait a scheduled run skips with reason
+`recent-input`, including when `whenBusy` is `queue`.
+
 Save the file to apply an edit. Removing the section or file removes all
 schedules. An unreadable file, invalid JSON, or a section of the wrong type
 keeps the previous schedules. An invalid entry is named in `daemon.log`

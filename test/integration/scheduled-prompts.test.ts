@@ -79,7 +79,7 @@ it('sends once per due minute to the current holder of the name and records a te
     const draft = 'My unfinished reply.';
     await session.write(draft, { humanInput: true });
     await eventually(() => fs.readFileSync(input, 'utf8') === schedule.message + '\r' + draft &&
-      session.nudgeReadyWithLine(draft) && session.nudgeState(now).reason === 'draft');
+      session.nudgeReadyWithLine(draft));
     now += 60_000;
     await td.daemon['promptScheduler'].tick();
     expect(fs.readFileSync(input, 'utf8')).toBe(schedule.message + '\r' + draft);
@@ -102,7 +102,7 @@ it('sends once per due minute to the current holder of the name and records a te
     expect(events).toMatchObject([{ actor: 'daemon', action: 'input', session: started.body['id'],
       meta: { name: schedule.name, session: 'worker', outcome: 'sent' } },
     { actor: 'daemon', action: 'input', session: started.body['id'],
-      meta: { name: schedule.name, session: 'worker', outcome: 'skipped', reason: 'draft' } },
+      meta: { name: schedule.name, session: 'worker', outcome: 'skipped', reason: 'recent-input' } },
     { actor: 'daemon', meta: { name: schedule.name, session: 'worker', outcome: 'skipped', reason: 'no-session' } },
     { actor: 'daemon', session: relaunched.body['id'], meta: { name: schedule.name, outcome: 'sent' } }]);
     expect([audit, JSON.stringify(list), fs.readFileSync(log, 'utf8')].join('\n')).not.toContain(schedule.message);

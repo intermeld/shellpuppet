@@ -2888,6 +2888,7 @@ export class Daemon {
     const id = this.mailbox.sessionIdByName(schedule.session);
     const session = id === undefined ? undefined : this.manager.get(id);
     if (!session || session.exited) return { outcome: 'skipped', reason: 'no-session' };
+    if (session.recentInput) return { sessionId: id, outcome: 'skipped', reason: 'recent-input' };
     const pendingId = this.pendingSchedules.get(schedule.name);
     if (pendingId !== undefined) {
       const previous = this.manager.get(pendingId);
@@ -2902,6 +2903,8 @@ export class Daemon {
     try {
       const result = await this.deliverLine(session, schedule.message, schedule.whenBusy, [],
         () => current() && this.mailbox.sessionIdByName(schedule.session) === id, schedule.name);
+      // Ordinary input can also arrive while the scheduled write waits in the input queue.
+      if (result.outcome === 'skipped' && session.recentInput) result.reason = 'recent-input';
       return { ...result, sessionId: id };
     } finally {
       if (!session.exited && session.pendingSchedule() === schedule.name) this.pendingSchedules.set(schedule.name, session.id);

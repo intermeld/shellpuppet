@@ -16,7 +16,8 @@ it.each([
   ['codex-working', 'queue', 'skipped', 'cannot-queue'],
   ['claude-prompt-typed', 'queue', 'skipped', 'draft'],
   ['busy-draft', 'queue', 'skipped', 'draft'],
-  ['unpainted-input', 'skip', 'skipped', 'quiet'],
+  ['unpainted-input', 'skip', 'skipped', 'recent-input'],
+  ['input-before-write', 'queue', 'skipped', 'recent-input'],
   ['muse-approval', 'queue', 'skipped', 'prompt'],
   ['stalled', 'skip', 'skipped', 'stalled'],
   ['unknown', 'skip', 'skipped', 'unknown'],
@@ -24,7 +25,7 @@ it.each([
   ['absent', 'queue', 'skipped', 'no-session'],
 ] as const)('%s with %s gives %s %s', async (fixture, whenBusy, outcome, reason) => {
   const schedule = { name: 'check', session: 'worker', whenBusy, enabled: true, message: 'Run my check.', cron: '* * * * *' };
-  const capture = fixture === 'busy-draft' ? 'claude-thinking' :
+  const capture = fixture === 'busy-draft' || fixture === 'input-before-write' ? 'claude-thinking' :
     ['pending', 'absent', 'stalled', 'unknown', 'unpainted-input'].includes(fixture) ? 'claude-answered' : fixture;
   const base = path.join(__dirname, '..', 'fixtures', 'reasoning', capture);
   const size = JSON.parse(fs.readFileSync(base + '.json', 'utf8')) as { cols: number; rows: number };
@@ -35,10 +36,12 @@ it.each([
       const row = renderer.styledLines().lines.map(line => line.text.startsWith('❯')).lastIndexOf(true);
       await renderer.write(`\x1b[${String(row + 1)};3HMy unfinished reply`);
     }
-    const write = vi.fn((_data: string, ready: (screen: string, phase: 'before') => boolean) =>
-      Promise.resolve(ready(renderer.snapshot().screen, 'before') ? 'sent' : 'wait'));
     const session = Object.create(Session.prototype) as Session;
-    Object.assign(session, { renderer, id: 's1', awaitingInputPaint: fixture === 'unpainted-input',
+    const write = vi.fn((_data: string, ready: (screen: string, phase: 'before') => boolean) => {
+      if (fixture === 'input-before-write') Object.assign(session, { recentInputUntil: Date.now() + 10_000 });
+      return Promise.resolve(ready(renderer.snapshot().screen, 'before') ? 'sent' : 'wait');
+    });
+    Object.assign(session, { renderer, id: 's1', recentInputUntil: fixture === 'unpainted-input' ? Date.now() + 10_000 : 0,
       agentModule: fixture === 'unknown' ? undefined : fixture.startsWith('muse') ? muse : fixture.startsWith('codex') ? codex : claude,
       agent: fixture.startsWith('muse') ? 'muse' : fixture.startsWith('codex') ? 'codex' : 'claude',
       snapshot: () => Promise.resolve(renderer.snapshot()), hasPainted: () => true,
@@ -53,7 +56,7 @@ it.each([
     Object.assign(daemon, { mailbox, pendingSchedules: new Map(), manager: { get: () => session }, now: () => 10_000 });
     expect(await daemon['deliverScheduled'](schedule, () => true)).toMatchObject({
       outcome, ...(reason ? { reason } : {}) });
-    expect(write).toHaveBeenCalledTimes(reason ? 0 : 1);
+    expect(write).toHaveBeenCalledTimes(!reason || fixture === 'input-before-write' ? 1 : 0);
     if (!reason) expect(write.mock.calls[0]?.[0]).toBe(schedule.message + '\r');
   } finally { await renderer.dispose(); }
 });
