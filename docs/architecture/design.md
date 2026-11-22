@@ -504,7 +504,10 @@ expires. An idle, empty composer receives the owner's line through the
 normal input queue. For `whenBusy: "queue"`, the same agent-specific proof
 as a mailbox nudge permits delivery during a turn. During the 10-second wait
 after ordinary input, the schedule skips with reason `recent-input`. A draft,
-a prompt, a stall, an unknown screen or a pending body blocks delivery.
+a prompt, a stall, an unknown screen or a pending body blocks delivery. The
+wait covers input a program has received but not yet painted; a program that
+keeps typed text invisible for longer than that is outside what the check can
+see, and message nudges share the same limit.
 
 The daemon checks the input generation, screen, current name and schedule
 before typing and before the separate submit key. An unconfirmed body stays
