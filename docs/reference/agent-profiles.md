@@ -276,10 +276,11 @@ with Tab after the empty redirect hint settles and the typed line appears.
 A populated queue or a change of input state holds delivery.
 
 The first-use confirmation, four-choice command approval and single-question
-clarification each have a measured selection and footer. All three hold
-nudges. The captures established no stall signature. Chat help documents
-the id printed on exit and the `--resume SESSION_ID` argument. A child
-environment variable for that id remains unverified.
+clarification each have a measured selection and footer. The approval can
+also show a compact usage footer ending in the shortened working directory.
+All three prompts hold nudges. The captures established no stall signature.
+Chat help documents the id printed on exit and the `--resume SESSION_ID`
+argument. A child environment variable for that id remains unverified.
 
 ## Long waits: know your client's own timeout
 

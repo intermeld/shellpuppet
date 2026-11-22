@@ -52,6 +52,25 @@ it('opens on the welcome banner with an empty suggestion and the cursor at the p
   expect(hermes?.input?.submit?.matches?.('\r')).toBe(false);
 });
 
+it('recognises the planning suggestion after a queued reply', async () => {
+  const view = await frame('queued-answer');
+  expect(hermes?.readiness?.readyScreen?.(view.rows.join('\n'))).toBe(true);
+  expect(nudgeVerdict(hermes, view)).toEqual({ ready: true });
+  const styled = view.styled.map(row => ({ ...row, text: row.text.replace('Plan a feature', 'Read a feature') }));
+  expect(nudgeVerdict(hermes, { ...view, styled, rows: styled.map(row => row.text) }))
+    .toEqual({ ready: false, reason: 'unknown' });
+});
+
+it('reads the selected denial above the compact busy footer', async () => {
+  const view = await frame('compact-approval');
+  expect(detectPrompt(view.rows.join('\n'), 'hermes', 37, view.styled)).toMatchObject({
+    options: ['Allow once', 'Allow for this session', 'Add to permanent allowlist', 'Deny'], selectedOption: 3,
+  });
+  expect(nudgeVerdict(hermes, view)).toEqual({ ready: false, reason: 'prompt' });
+  const styled = view.styled.map(row => ({ ...row, text: row.text.replace(' · …', ' · ?') }));
+  expect(detectPrompt(styled.map(row => row.text).join('\n'), 'hermes', 37, styled)).toBeNull();
+});
+
 it('proves the full idle draft across the physical break before the right margin', async () => {
   const view = await frame('draft');
   expect(view.styled[34]!.wrapped).toBeFalsy();

@@ -1,0 +1,37 @@
+
+[2m────────────────────────────────────────
+xxx xxxx xx xxxxxx xx xx xxx xxx xxxxx xxxx xxxxxxx xxxx xxx xxxx xxxxxxxx xxxxx xxx
+xxxxx x xxxxxxxxxx xxxxxxxxxx xxxxxxxx xxx
+[0m                                                                                                         
+[2mxxxxxxx xx xxx xxxxxxxx xxxxx xxxxxxxx xxx xxx xxxxx xxxx xxxxxxxx xx xxx xxxxxxxx
+ xxx xxx xx xxx xxxxxxx xxx xxxx xxxxxxx xxx x xxxxxxxxx xxxxxxxx xxxx xxx xxxxxxx
+ xxxxxxxx xxx xxxx xxx xxx xxxx xx xxxxxxx xxxxxx xxxxxx xxx xxxxxxx xxxxxxxxxxx xx
+ xxxxxxxxxxxx xxxxxxxx
+[0m                                                                                                         
+[2mxxxxxxxx xxx xxxx xxx xxx xxxxxxxxx xxx xx xxxxxxxxxx xxxxxx xx xxxxx xx xxx xxx xxx
+ xxxxxx xxxxxxxx xxx xxxxxxx xxxxxxxxx xxx xxxxxxx xxxxx x xxx xxxxx xxxx xx xxxx
+ xxx xxx xxxx xx xxxxxxxx xxx xxxx xxxx xxxxxxxxx xxxx x xxx xxxxxxxx xxxxxxxxxxx
+x xxx xxxx xx xxx xxxxxxxxx xx xxxxxxxxxxx xxxxx
+[0m                                                                                                         
+[2mxxx xxxxxxxxxxx xxxx xxxx xxx xxxxxxxx xxxxx x xx x xxxxxx xxx xx xxxxx xx xxxxxx
+ xxxxxx x xxxxx xxxx xxx
+[3m∴ Thought for 2s[0m                                                                                         
+[2m────────────────────────────────────────[0m                                                                 
+[38;2;205;127;50m╭──────────────────────────────────────────────────────╮
+│ [38;2;255;167;38;1m⚠️  Dangerous Command                                [38;2;205;127;50;22m │
+│                                                      │
+│ [38;2;184;134;11;3mxxxx xxxxxxxx x xxxxxxxxxx xxxxxxxxxx xxxxxxxx x    [38;2;205;127;50;23m │
+│                                                      │
+│ [38;2;184;134;11m  1. Allow once[37C[38;2;205;127;50m │
+│ [38;2;184;134;11m  2. Allow for this session[26C[38;2;205;127;50m│
+│ [38;2;184;134;11m  3. Add to permanent allowlist[22C[38;2;205;127;50m│
+│ [38;2;255;215;0;1m❯ 4. Deny                                           [1C[38;2;205;127;50;22m│
+│                                                      │
+│ [38;2;255;248;220;1mscript execution via -e/-c flag                     [38;2;205;127;50;22m │
+╰──────────────────────────────────────────────────────╯
+
+[38;2;184;134;11;3m  ↑/↓ to select, Enter to confirm[38;2;205;127;50;23m  (281s)
+[38;2;139;134;130m── [38;2;255;191;0;1m⠹ [0m💻 xxxx xxxxxxxx x xxxxxxxxxx xxxxxxxxxx xxxxxxxx x [38;2;138;122;74m· xxx · ↓ 210 tok [38;2;139;134;130m─────────────── [38;2;218;165;32mxxxxxxxxxxx [38;2;139;134;130m─ 
+[38;2;184;134;11;3m⚠ ❯ 
+[38;2;139;134;130;23m──────────────────────────────────────────────────────────────────────────────────────────────────────── 
+[38;2;192;192;192m ☤ [38;2;255;215;0;1mxxxxxxx[38;2;138;122;74;22m · 6.84K/1M pinned · [38;2;143;188;143;1m[░░░░░░░░░░][38;2;138;122;74;22m [38;2;143;188;143;1m1%[38;2;138;122;74;22m · ◷ 6.5s · ↑ 32 t/s · 4m · ⏱ 31s · …xxxxxxxxxxxxxxxxxx    [2A[102D[0m[?2004h[?1004h[35;5H

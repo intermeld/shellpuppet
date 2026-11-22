@@ -3,7 +3,11 @@ import type { CellStyle, StyledLine } from '../../core/renderer.js';
 export const GOLD = '#ffbf00';
 export const CREAM = '#fff8dc';
 const GREY = '#8b8682';
-export const hints = new Set(['Set a reminder or schedule a recurring task', 'Draft a reply to the last email in my inbox']);
+export const hints = new Set([
+  'Set a reminder or schedule a recurring task',
+  'Draft a reply to the last email in my inbox',
+  'Plan a feature, then build it step by step',
+]);
 export const busyHint = '☤ ❯ type to redirect this turn · Tab queues it for after';
 const welcome = 'Welcome to Hermes Agent! Type your message or /help for commands.';
 const activity = String.raw`(?:updated \d+ memor(?:y|ies)|ran \d+ commands?|called \d+ tools?|(?:edited|read) \d+ files?|searched \d+ paths?)`;
@@ -13,11 +17,13 @@ const labelledRule = /^(─{4,} )(\S.*?) (─)$/u;
 const spinner = /^── [⠀-⣿] .+ ─{3,}/u;
 const gauge = /\[[█░]{10}\]/u;
 const initialFooter = /^ ☤ \S+ · ctx -- · \[░{10}\] -- · \d+[smh] · ⏲ \d+s · .+ {2}\/ commands · @ files · ! shell$/u;
-const usage = /^ ☤ \S+ · ~?\d+(?:\.\d+)?[KM]?\/\d+(?:\.\d+)?[KM]? pinned · \[[░█]{10}\] ~?\d+% · ◎ \d+(?:\.\d+)?% · ◷ \d+(?:\.\d+)?s · ↑ \d+ t\/s · /u;
+const usage = /^ ☤ \S+ · ~?\d+(?:\.\d+)?[KM]?\/\d+(?:\.\d+)?[KM]? pinned · \[[░█]{10}\] ~?\d+% · (?<detail>◎ \d+(?:\.\d+)?% · )?◷ \d+(?:\.\d+)?s · ↑ \d+ t\/s · /u;
 const duration = String.raw`(?:\d+h(?: \d+m)?|\d+m(?: \d+s)?|\d+(?:\.\d+)?s)`;
 const idleTime = new RegExp('^' + duration + ' · ⏲ ' + duration + ' · ✓ ' + duration + '$', 'u');
 const clippedIdleTime = new RegExp('^' + duration + ' · ⏲ ' + duration + ' ·\\.\\.\\.$', 'u');
-const busyTime = new RegExp('^' + duration + ' · ⏱ ' + duration + '(?: +enter interrupt · tab queue · ctrl\\+c stop)?$', 'u');
+const busyClock = '^' + duration + ' · ⏱ ' + duration;
+const busyTime = new RegExp(busyClock + '(?: +enter interrupt · tab queue · ctrl\\+c stop)?$', 'u');
+const compactBusyTime = new RegExp(busyClock + '(?: · …[^\\s·]+)?$', 'u');
 
 /** Every character in the slice must have a measured style. */
 export function ink(line: StyledLine, from: number, to: number, match: (style: CellStyle) => boolean): boolean {
@@ -48,6 +54,7 @@ function footerKind(text: string): 'welcome' | 'idle' | 'busy' | undefined {
   const prefix = usage.exec(text);
   if (prefix) {
     const time = text.slice(prefix[0].length);
+    if (!prefix.groups?.detail) return compactBusyTime.test(time) ? 'busy' : undefined;
     if (idleTime.test(time) || clippedIdleTime.test(time)) return 'idle';
     if (busyTime.test(time)) return 'busy';
   }
