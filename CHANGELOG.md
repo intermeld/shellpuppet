@@ -9,6 +9,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Added
 
+- `terminal_list` and `shellpuppet list --json` show each session's absolute start folder in `cwd`.
 - Scheduled prompts for named sessions with UTC cron, live configuration reload and a read-only `schedule list` command.
 - Hermes Agent: a module for Hermes sessions (agent label `hermes`): reasoning hidden from filtered reads, its replies, menus and command approvals recognised, idle and draft composers proven before typed Enter or a message nudge, and a message queued with Tab while Hermes is busy.
 

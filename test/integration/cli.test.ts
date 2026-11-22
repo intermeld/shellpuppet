@@ -147,7 +147,8 @@ describe('shellpuppet CLI', () => {
       const all = await cli('wait', '--prompt', '--now', '--json');
       expect((JSON.parse(all.stdout) as { sessions: { id: string }[] }).sessions.map((s) => s.id)).toContain(dialogId);
       const listed = await cli('list', '--waiting', '--json');
-      expect((JSON.parse(listed.stdout) as { sessions: { id: string }[] }).sessions.map((s) => s.id)).toContain(dialogId);
+      expect((JSON.parse(listed.stdout) as { sessions: unknown[] }).sessions)
+        .toContainEqual(expect.objectContaining({ id: dialogId, cwd: process.cwd() }));
       const single = await cli('wait', dialogId, '--prompt', '--json');
       expect(JSON.parse(single.stdout)).toHaveProperty('screen');
     } finally {
@@ -215,6 +216,10 @@ describe('shellpuppet CLI', () => {
     expect(list.code, whatHappened(list)).toBe(0);
     expect(list.stdout).toContain(id);
     expect(list.stdout).toContain('live');
+    expect(list.stdout).not.toContain(process.cwd());
+    const listJson = await cli('list', '--json');
+    expect((JSON.parse(listJson.stdout) as { sessions: unknown[] }).sessions)
+      .toContainEqual(expect.objectContaining({ id, cwd: process.cwd() }));
 
     const snap = await cli('snap', id);
     expect(snap.code, whatHappened(snap)).toBe(0);

@@ -105,7 +105,7 @@ describe('the auto-started daemon', () => {
   }, 30_000);
 });
 
-describe('a session started without cwd over the HTTP API', () => {
+describe('a session started over the HTTP API', () => {
   let td: TestDaemon;
   beforeAll(async () => {
     td = await startTestDaemon();
@@ -114,21 +114,26 @@ describe('a session started without cwd over the HTTP API', () => {
     await td.stop();
   });
 
-  it("starts in the user's home directory, and takes a relative cwd from there", async () => {
-    for (const cwd of [undefined, '.']) {
-      const started = await api(td.port, td.token, '/sessions', {
-        body: {
-          command: process.execPath,
-          args: ['-e', PRINT_CWD],
-          shell: false,
-          cols: 200,
-          ...(cwd !== undefined ? { cwd } : {}),
-        },
-      });
-      expect(started.status).toBe(200);
-      const printed = await printedCwd(td.port, td.token, String(started.body['id']));
-      expect(place(printed), String(cwd)).toBe(place(os.homedir()));
-    }
+  it.each([
+    ['default', undefined, os.homedir()],
+    ['absolute', os.tmpdir(), os.tmpdir()],
+    ['relative', '..', path.dirname(os.homedir())],
+  ] as const)('starts in and lists the resolved folder (%s cwd)', async (_kind, cwd, expected) => {
+    const started = await api(td.port, td.token, '/sessions', {
+      body: {
+        command: process.execPath,
+        args: ['-e', PRINT_CWD],
+        shell: false,
+        cols: 200,
+        ...(cwd !== undefined ? { cwd } : {}),
+      },
+    });
+    expect(started.status).toBe(200);
+    const id = String(started.body['id']);
+    const printed = await printedCwd(td.port, td.token, id);
+    expect(place(printed)).toBe(place(expected));
+    const listed = await api(td.port, td.token, '/sessions');
+    expect(listed.body['sessions']).toContainEqual(expect.objectContaining({ id, cwd: expected }));
   });
 });
 

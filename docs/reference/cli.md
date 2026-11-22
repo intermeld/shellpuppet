@@ -139,6 +139,10 @@ continue to work. JSON reports `cols`, `rows` and `restored`; plain output
 warns on stderr when a later geometry act prevents restoration.
 
 
+`shellpuppet list --json` includes a `cwd` field for each session, including
+when filtered with `--waiting`. It is the absolute folder where the session
+started. For a CLI start without `--cwd`, this is the caller's working directory.
+
 `shellpuppet list` shows `STALLED <reason> since <ISO time>: <description>`
 where readiness normally appears when a supported error has left the session idle
 or a connection banner remains visible. JSON lists include

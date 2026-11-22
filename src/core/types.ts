@@ -144,6 +144,8 @@ export interface SessionSummary {
   agent: string | null;
   command: string;
   args: string[];
+  /** Absolute working directory passed to the PTY at start. */
+  cwd: string;
   cols: number;
   rows: number;
   ready: boolean;

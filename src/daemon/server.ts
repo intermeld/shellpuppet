@@ -1597,18 +1597,18 @@ export class Daemon {
       json(res, 400, { error: hide === null ? BAD_HIDE_REASONING : 'waitingOnly must be true or false.' });
       return;
     }
-    json(res, 200, { sessions: waitingOnly ? this.waitingSessions(hide) : this.listWithPrompts(hide), version: this.version });
+    const sessions = waitingOnly ? this.waitingSessions(hide, { includeCwd: true }) : this.listWithPrompts(hide);
+    json(res, 200, { sessions, version: this.version });
   }
 
-  private waitingSessions(hideReasoning: boolean, ids?: ReadonlySet<string>): {
-    id: string; label: string; question?: string; options?: string[]; selectedOption?: number; waitingMs: number;
-  }[] {
+  private waitingSessions(hideReasoning: boolean, { includeCwd, ids }: { includeCwd?: boolean; ids?: ReadonlySet<string> }) {
     return this.listWithPrompts(hideReasoning).flatMap((session) => {
       const waiting = session.waitingOnPrompt;
       if (session.exited || waiting === undefined || (ids !== undefined && !ids.has(session.id))) return [];
       return [{
         id: session.id,
         label: session.label,
+        ...(includeCwd ? { cwd: session.cwd } : {}),
         ...(waiting.question === undefined ? {} : { question: waiting.question }),
         ...(waiting.options === undefined ? {} : { options: waiting.options }),
         ...(waiting.selectedOption === undefined ? {} : { selectedOption: waiting.selectedOption }),
@@ -1640,7 +1640,7 @@ export class Daemon {
     this.waitsInFlight += 1;
     try {
       while (!res.destroyed) {
-        const waiting = prompt ? this.waitingSessions(hide, ids) : [];
+        const waiting = prompt ? this.waitingSessions(hide, { ids }) : [];
         const stalledSessions = stalled ? this.listWithPrompts(hide).flatMap(session =>
           session.exited || session.stalled === undefined || (ids !== undefined && !ids.has(session.id)) ? [] :
             [{ id: session.id, label: session.label, reason: 'stalled' as const, stalled: session.stalled }]) : [];

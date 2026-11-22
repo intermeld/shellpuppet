@@ -729,6 +729,7 @@ export class Session implements WaitTarget {
   /** The pre-wrap command as given by the caller. */
   readonly command: string;
   readonly args: string[];
+  private readonly cwd: string;
   /** The agent it was started as, which chooses how its screen is read. */
   readonly launchProfile: SessionOptions['launchProfile'];
   private inheritedResumeIds: readonly string[] = [];
@@ -851,6 +852,7 @@ export class Session implements WaitTarget {
     this.id = id;
     this.command = options.command;
     this.args = options.args ?? [];
+    this.cwd = path.resolve(options.cwd ?? '.');
     this.label = options.label ?? options.command;
     this.launchProfile = options.launchProfile;
     this.role = (options.parent === undefined || options.launchProfile !== undefined) && options.role === 'chair' ? 'chair' : 'delegate';
@@ -954,7 +956,7 @@ export class Session implements WaitTarget {
       name: 'xterm-256color',
       cols,
       rows,
-      cwd: options.cwd ?? process.cwd(),
+      cwd: this.cwd,
       // The daemon always passes the mode it resolved and reports; this
       // default serves code that uses SessionManager or Session directly.
       env: sessionEnv,
@@ -1118,11 +1120,7 @@ export class Session implements WaitTarget {
     if (!wantShell) {
       return {
         // The same absolute path is checked and started. See `shell` on SessionOptions.
-        file: resolveExecutable(
-          options.command,
-          this.platform,
-          path.resolve(options.cwd ?? process.cwd()),
-        ),
+        file: resolveExecutable(options.command, this.platform, this.cwd),
         // node-pty's array serialiser skips outer quoting for an argument
         // which itself begins and ends with quotes. A quoted value containing
         // a space then splits in the child. Its string form is passed through
@@ -2288,6 +2286,7 @@ export class Session implements WaitTarget {
       agent: this.agent,
       command: this.command,
       args: this.args,
+      cwd: this.cwd,
       cols: this.cols,
       rows: this.rows,
       ready: this.readyFlag,

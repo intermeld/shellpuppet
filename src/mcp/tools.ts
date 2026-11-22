@@ -805,10 +805,11 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
         if (waitingOnly === true) query.set('waitingOnly', '1');
         const { payload, warnings } = await call('GET', `/sessions${query.size > 0 ? `?${query.toString()}` : ''}`);
         if (waitingOnly === true) {
-          const waiting = payload['sessions'] as { id: string; label: string; question?: string; options?: string[]; selectedOption?: number; waitingMs: number }[];
+          const waiting = payload['sessions'] as { id: string; label: string; cwd?: string; question?: string; options?: string[]; selectedOption?: number; waitingMs: number }[];
           if (waiting.length === 0) return text(withWarnings(warnings, 'No waiting prompts.'));
           const lines = waiting.map((s) =>
-            `${s.id}  ${s.label}  WAITING ${String(Math.round(s.waitingMs / 1000))}s` +
+            `${s.id}  ${s.label}` + (s.cwd === undefined ? '' : `  cwd:${s.cwd}`) +
+            `  WAITING ${String(Math.round(s.waitingMs / 1000))}s` +
             (s.question === undefined ? '' : `: ${JSON.stringify(s.question)}`) +
             (s.options ?? []).map((option, index) => `\n    ${index === s.selectedOption ? '* ' : '  '}${JSON.stringify(option)}`).join('')
           ).join('\n');
@@ -817,6 +818,7 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
         const sessions = payload['sessions'] as {
           id: string;
           label: string;
+          cwd?: string;
           cols: number;
           rows: number;
           ready: boolean;
@@ -836,7 +838,8 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
               `${String(s.cols)}x${String(s.rows)}  watchers:${String(s.watchers)}  ` +
               `${s.stalled !== undefined ? stallLine(s.stalled) : s.ready ? 'ready' : 'NOT-READY'}  ${s.label}` +
               (s.agent !== null && s.agent !== undefined ? `  agent:${s.agent}` : '') +
-              (s.parent !== undefined ? `  parent:${s.parent}` : '');
+              (s.parent !== undefined ? `  parent:${s.parent}` : '') +
+              (s.cwd === undefined ? '' : `  cwd:${s.cwd}`);
             if (s.waitingOnPrompt === undefined) return base;
             // Seconds, not milliseconds: this number exists to be judged at a
             // glance ("blocked 4 minutes"), and ms buries that in digits.

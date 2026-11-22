@@ -103,6 +103,7 @@ describe('MCP adapter', () => {
         args: [path.join(fixture, 'dialog-sink.mjs'),
           path.join(fixture, 'dialogs', 'opencode-permission-dialog.txt'),
           path.join(fixture, 'dialogs', 'opencode-permission-answered.txt')],
+        cwd: fixture,
         shell: false, cols: 80, rows: 40,
       },
     });
@@ -121,6 +122,7 @@ describe('MCP adapter', () => {
       for (const [index, result] of results.entries()) {
         const body = resultText(result);
         expectSingleFrame(body, index < 3 ? ['Permission required', 'Allow once'] : ['Permission required']);
+        if (index >= 2) expect(body).toContain(`cwd:${fixture}`);
       }
     } finally {
       await client.callTool({ name: 'terminal_kill', arguments: { session: id } });
@@ -397,6 +399,7 @@ describe('MCP adapter', () => {
 
     const listed = await client.callTool({ name: 'terminal_list', arguments: {} });
     expect(resultText(listed)).toContain(id);
+    expect(resultText(listed)).toContain(`cwd:${process.cwd()}`);
 
     const resized = await client.callTool({
       name: 'terminal_resize',
