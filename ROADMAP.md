@@ -37,12 +37,14 @@ Releases carry npm provenance through trusted publishing from the first.
 - **A module per agent CLI** (0.3.0), internal: what is specific to one program
   lives in its own module in this repository
   ([ADR-006](docs/decisions/ADR-006-per-agent-modules.md)).
+- **Scheduled prompts** (0.4.0). Set a UTC schedule for a named session in your
+  configuration; changes apply without a restart. Choose whether to skip a busy
+  turn or queue the prompt when the agent supports it. The audit records the
+  daemon's own input.
+- **A Hermes module** (0.4.0). Reading, prompt detection and nudges for Hermes,
+  an agent meant to run for a long time.
 
 ## Now
-
-- **Scheduled prompts.** Set a UTC schedule for a named session in your
-  configuration. Choose whether to skip a busy turn or queue the prompt
-  when the agent supports it. The audit records the daemon's own input.
 
 - **Prompt detection that covers more shapes.** Each new agent CLI brings a
   shape of its own, and each gets a fixture from a real screen. More provider
@@ -56,8 +58,6 @@ Releases carry npm provenance through trusted publishing from the first.
 - **Parent and child sessions in the dashboard.** Sessions already know their
   parent; the dashboard groups and tags children and jumps to a parent's
   waiting children, whichever agent supervises.
-- **A Hermes module.** Reading, prompt detection and nudges for Hermes, an agent
-  meant to run for a long time.
 - **Named hosts for a tunnel you run.** The daemon stays on loopback. A tunnel
   that ends there and presents its own hostname, such as Tailscale Serve or a
   Cloudflare Tunnel, gets in once you name that host in your configuration:
