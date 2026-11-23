@@ -13,6 +13,10 @@ import type { DeliveredCadence } from './noticeCadence.js';
 
 const fixture = fileURLToPath(new URL('../fixtures/notice-nested-tui.mjs', import.meta.url));
 const cycleFixture = fileURLToPath(new URL('../fixtures/notice-r-cycle-tui.mjs', import.meta.url));
+const setupTimeoutMs = 120_000;
+const interactionTimeoutMs = 90_000;
+// Include PTY creation and browser cleanup outside the two capture budgets.
+const pageTestTimeout = setupTimeoutMs + interactionTimeoutMs + 60_000;
 let browser: string | null;
 let daemon: TestDaemon;
 let retireDaemon = false;
@@ -152,7 +156,7 @@ async function withPage(mode: string, rows: number,
   }
   await captureViewer({ browser: browser!, viewerUrl, width: 1000, height: 900,
     cpuThrottlingRate: Number(process.env['NOTICE_CPU_RATE'] ?? 1),
-    drive: true, probeOnly: true, timeoutMs: 90_000,
+    drive: true, probeOnly: true, setupTimeoutMs, timeoutMs: interactionTimeoutMs,
     beforeNavigateScript: noticeFrameLimitScript + ';' + observe + ';window.open = url => { window.__openedURL = url; return window.__openedHandle = { closed: false }; };',
     probe: ['long', 'staged', 'spinner', 'equal', 'rword', 'rlong', 'rrest', 'rchange'].includes(cadence) ?
       'window.__notice && window.__noticeSnapshotParsed && !__notice.alert.hidden' :
@@ -240,7 +244,7 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
           && rest.deadline !== undefined && cadence.samples.some(sample => sample.time > rest.deadline! && sample.time < rest.end)),
         JSON.stringify(rests)).toBe(true);
       }, kind);
-    }, 120_000);
+    }, pageTestTimeout);
   }
   it('follows a real PTY rest across two lower notice rows', async context => {
     if (!browser) { context.skip(); return; }
@@ -265,7 +269,7 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
         throw new Error(`runner stalled before a complete lower rest was observed: ${details}`);
       }
     }, 'rword');
-  }, 240_000);
+  }, pageTestTimeout);
   for (const cadence of ['staged', 'spinner', 'equal']) for (const rows of [24, 150])
   it(`respects repaint evidence during ${cadence} updates at 80x${String(rows)}`, async context => {
     if (!browser) { context.skip(); return; }
@@ -327,7 +331,7 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
         throw new Error(`runner stalled before a horizontal spinner update was delivered: ${details}`);
       }
     }, cadence);
-  }, 240_000);
+  }, pageTestTimeout);
   for (const rows of [24, 150]) it(`uncovers the prompt in a 1.3 s staged repaint at 80x${String(rows)}`, async context => {
     if (!browser) { context.skip(); return; }
     await withPage(mode, rows, async ({ evaluate }, input) => {
@@ -366,7 +370,7 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
       // rest. Its mandatory clear has its own deadline and move count.
       expect(assessment.repaintChanges.map(change => change.side), details).toEqual(['top']);
     }, 'long');
-  }, 120_000);
+  }, pageTestTimeout);
   for (const cadence of ['short', 'extended']) for (const rows of [24, 150])
   it(`keeps the lower resting prompt clear during ${cadence} repaints at 80x${String(rows)}`, async context => {
     if (!browser) { context.skip(); return; }
@@ -445,7 +449,7 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
         expect.soft(result.phaseMismatches, details).toBe(0);
       }
     }, cadence);
-  }, 120_000);
+  }, pageTestTimeout);
 });
 
 describe('notice placement on Pop out and reattachment', () => {
@@ -489,6 +493,6 @@ describe('notice placement on Pop out and reattachment', () => {
         if (ended) await evaluate('__showEndBanner()');
         checkPlacement(await evaluate('__measure()') as Placement, rows);
       });
-    }, 120_000);
+    }, pageTestTimeout);
   }
 });

@@ -278,61 +278,71 @@ it('keeps a remembered text size as the ceiling for an owned grid with Auto fit 
   });
 }, 180_000);
 
-it('fits equal grids after a local font loads while respecting Auto fit, hidden, held and following panes', async context => {
+for (const autoFit of [true, false]) it(`fits equal grids after the font loads with Auto fit ${autoFit ? 'on' : 'off'}`, async context => {
   if (!browser) { context.skip(); return; }
   const open = await setup();
   const sessions = [await start(), await start()];
-  // Separate documents load a real local font in each mode, without network fonts.
-  for (const autoFit of [true, false]) {
-    await captureDashboard({ browser, viewerUrl: await open(), width: 1800, height: 700,
-      drive: true, probeOnly: true, timeoutMs: 120_000, beforeNavigateScript: fontInstrument,
-      probe: 'window.__clients?.size === 2', interact: async ({ evaluate }) => {
+  await captureDashboard({ browser, viewerUrl: await open(), width: 1800, height: 700,
+    drive: true, probeOnly: true, setupTimeoutMs: 45_000, timeoutMs: 120_000, beforeNavigateScript: fontInstrument,
+    probe: 'window.__clients?.size === 2 && __dashboardDiagnostics.streams.filter(s => s.geometry.at(-1)?.control === "yours").length === 2',
+    interact: async ({ evaluate }) => {
+      if (!autoFit) await evaluate("document.getElementById('auto-fit').click()");
+      // Initial fits can be acknowledged at different sizes. Give both panes
+      // the same owned grid before measuring the effect of the font change.
+      expect(await evaluate('[...__clients.values()].map(pane => pane.takeGrid(96, 30))')).toEqual([true, true]);
+      await eventually(async () => {
+        const panes = await evaluate('__views()') as PaneView[];
+        return panes.length === 2 && panes.every(pane => pane.grid.cols === 96 && pane.grid.rows === 30)
+          && sessions.every(({ session }) => session.cols === 96 && session.rows === 30);
+      }, 10_000, 50, 'two acknowledged 96 by 30 grids', () => evaluate('__views()'));
+      const before = await evaluate('__views()') as PaneView[];
+      expect(before.every(pane => !pane.below)).toBe(true);
+      expect(before[0]!.grid).toEqual(before[1]!.grid);
+      for (const session of sessions) { session.resize.mockClear(); session.nativeResize.mockClear(); }
+      await evaluate('__reset()');
+      const loaded = await loadFont(evaluate);
+      let settled = { panes: loaded.panes, frames: loaded.frames };
+      await eventually(async () => {
+        settled = { panes: await evaluate('__views()') as PaneView[], frames: await evaluate('__frames()') as unknown[] };
+        return settled.panes.length === 2 && settled.panes.every(pane => pane.below && pane.whole);
+      }, 10_000, 100, 'font-loaded floor fit', () => ({ ...loaded, ...settled }));
+      loaded.panes = settled.panes;
+      loaded.frames = settled.frames;
+      expect(loaded.panes.every(pane => pane.below && pane.whole), JSON.stringify(loaded)).toBe(true);
+      expect.soft(loaded.panes.map(pane => pane.grid)).toEqual(autoFit ?
+        [{ cols: 80, rows: 24 }, { cols: 80, rows: 24 }] : before.map(pane => pane.grid));
+      expect(loaded.panes[0]!.font).toBe(loaded.panes[1]!.font);
+      expect.soft(loaded.frames).toHaveLength(autoFit ? 2 : 0);
+      for (const session of sessions) {
+        expect.soft(session.resize).toHaveBeenCalledTimes(autoFit ? 1 : 0);
+        expect.soft(session.nativeResize).toHaveBeenCalledTimes(autoFit ? 1 : 0);
+        expect.soft({ cols: session.session.cols, rows: session.session.rows })
+          .toEqual(autoFit ? { cols: 80, rows: 24 } : before[0]!.grid);
+      }
+      if (autoFit) {
+        await evaluate("document.querySelector('button[aria-label=Fit]').click()");
         await evaluate('__pause()');
-        if (!autoFit) await evaluate("document.getElementById('auto-fit').click()");
-        const before = await evaluate('__views()') as PaneView[];
-        expect(before.every(pane => !pane.below)).toBe(true);
-        expect(before[0]!.grid).toEqual(before[1]!.grid);
-        for (const session of sessions) { session.resize.mockClear(); session.nativeResize.mockClear(); }
-        await evaluate('__reset()');
-        const loaded = await loadFont(evaluate);
-        let settled = { panes: loaded.panes, frames: loaded.frames };
-        await eventually(async () => {
-          settled = { panes: await evaluate('__views()') as PaneView[], frames: await evaluate('__frames()') as unknown[] };
-          return settled.panes.length === 2 && settled.panes.every(pane => pane.below && pane.whole);
-        }, 10_000, 100, 'font-loaded floor fit', () => ({ ...loaded, ...settled }));
-        loaded.panes = settled.panes;
-        loaded.frames = settled.frames;
-        expect(loaded.panes.every(pane => pane.below && pane.whole), JSON.stringify(loaded)).toBe(true);
-        expect.soft(loaded.panes.map(pane => pane.grid)).toEqual(autoFit ?
-          [{ cols: 80, rows: 24 }, { cols: 80, rows: 24 }] : before.map(pane => pane.grid));
-        expect(loaded.panes[0]!.font).toBe(loaded.panes[1]!.font);
-        expect.soft(loaded.frames).toHaveLength(autoFit ? 2 : 0);
-        for (const session of sessions) {
-          expect.soft(session.resize).toHaveBeenCalledTimes(autoFit ? 1 : 0);
-          expect.soft(session.nativeResize).toHaveBeenCalledTimes(autoFit ? 1 : 0);
-          expect.soft({ cols: session.session.cols, rows: session.session.rows })
-            .toEqual(autoFit ? { cols: 80, rows: 24 } : before[0]!.grid);
-        }
-        if (autoFit) {
-          await evaluate("document.querySelector('button[aria-label=Fit]').click()");
-          await evaluate('__pause()');
-          const fitted = await evaluate('__views()') as PaneView[];
-          expect(fitted.map(pane => pane.grid)).toEqual([{ cols: 80, rows: 24 }, { cols: 80, rows: 24 }]);
-          expect.soft(fitted[0]!.font).toBe(fitted[1]!.font);
-          expect.soft(fitted[0]!.font).toBe(loaded.panes[0]!.font);
-          for (const session of sessions) expect.soft(session.nativeResize).toHaveBeenCalledTimes(1);
-        }
-      },
-    });
-  }
-  // A held pane and an outside owner must stay protected on the same notification.
+        const fitted = await evaluate('__views()') as PaneView[];
+        expect(fitted.map(pane => pane.grid)).toEqual([{ cols: 80, rows: 24 }, { cols: 80, rows: 24 }]);
+        expect.soft(fitted[0]!.font).toBe(fitted[1]!.font);
+        expect.soft(fitted[0]!.font).toBe(loaded.panes[0]!.font);
+        for (const session of sessions) expect.soft(session.nativeResize).toHaveBeenCalledTimes(1);
+      }
+    },
+  });
+}, 180_000);
+
+it('preserves held, following and hidden grids when the font loads', async context => {
+  if (!browser) { context.skip(); return; }
+  const open = await setup();
+  const sessions = [await start(), await start()];
   const held = await start(220, 115, true);
   const external = await connectWs(daemon!.port, sessions[1]!.id, daemon!.token);
   try {
     external.ws.send(JSON.stringify({ type: 'resize', cols: 140, rows: 45 }));
     await vi.waitFor(() => expect(sessions[1]!.session.cols).toBe(140));
     await captureDashboard({ browser, viewerUrl: await open(), width: 1800, height: 700,
-      drive: true, probeOnly: true, timeoutMs: 120_000, beforeNavigateScript: fontInstrument,
+      drive: true, probeOnly: true, setupTimeoutMs: 45_000, timeoutMs: 120_000, beforeNavigateScript: fontInstrument,
       probe: 'window.__clients?.size === 3', interact: async ({ evaluate }) => {
         await evaluate('__pause()');
         expect((await evaluate('__views()') as PaneView[]).find(pane => pane.id === sessions[1]!.id)!.size).toContain('following');
@@ -358,4 +368,4 @@ it('fits equal grids after a local font loads while respecting Auto fit, hidden,
       },
     });
   } finally { external.ws.close(); }
-}, 300_000);
+}, 180_000);
