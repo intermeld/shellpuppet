@@ -37,7 +37,8 @@ async function load(name: string): Promise<NudgeObservation> {
   await renderer.write(fs.readFileSync(path.join(FIXTURES, `${name}.ansi`), 'utf8'));
   const styled = renderer.styledLines({ last: 2000 }).lines;
   await renderer.dispose();
-  return { rows: styled.map((line) => line.text), styled, viewportRows: meta.rows, unchangedMs: NUDGE_QUIET_MS };
+  return { rows: styled.map((line) => line.text), styled, viewportRows: meta.rows,
+    viewportCols: meta.cols, unchangedMs: NUDGE_QUIET_MS };
 }
 
 function plain(screen: string): NudgeObservation {
@@ -396,6 +397,7 @@ describe('nudge readiness', () => {
       const check = (screen: NudgeObservation, expectedDraft: string) =>
         nudgeVerdict(codex, { ...screen, viewportCols: 83, unchangedMs: 0, expectedDraft });
       expect(check(wrapped, line)).toEqual({ ready: true });
+      expect(check({ ...wrapped, recoveringDraft: true }, line).ready).toBe(false);
       expect(readinessOf(codex, wrapped)).toBe('unknown');
       expect(check(wrapped, line + ' more')).toEqual({ ready: false, reason: 'draft' });
       expect(check(wrapped, line.replace('m1', 'm2'))).toEqual({ ready: false, reason: 'draft' });
@@ -565,7 +567,7 @@ describe('nudge readiness', () => {
         .toEqual({ ready: false, reason: 'draft' });
       const wrapped = fromRows(['❯ [ShellPuppet] Message m1', '  is waiting.',
         '────────────────────────────────────────────────────────────────────────────────']);
-      expect(nudgeVerdict(muse, { ...wrapped, unchangedMs: 0, expectedDraft: line })).toEqual({ ready: true });
+      expect(nudgeVerdict(muse, { ...wrapped, unchangedMs: 0, expectedDraft: line })).toEqual({ ready: false, reason: 'draft' });
     });
     it('before Enter, accepts a captured daemon line wrapped above a frame row marked as a wrap', async () => {
       const line = '[ShellPuppet] Message m1 from chair-mute is waiting. Read it with the session_inbox tool, ' +
@@ -577,6 +579,7 @@ describe('nudge readiness', () => {
       const check = (view: NudgeObservation, expectedDraft: string) =>
         nudgeVerdict(muse, { ...view, unchangedMs: 0, expectedDraft });
       expect(check(screen, line)).toEqual({ ready: true });
+      expect(check({ ...screen, recoveringDraft: true }, line)).toEqual({ ready: false, reason: 'draft' });
       expect(check(screen, line.replace('m1', 'm2'))).toEqual({ ready: false, reason: 'draft' });
       expect(check(screen, line + ' more')).toEqual({ ready: false, reason: 'draft' });
       // The same row in typed ink is text in the draft, not the frame.
@@ -585,6 +588,16 @@ describe('nudge readiness', () => {
         : row));
       expect(check({ ...screen, rows: styled.map((row) => row.text), styled }, line))
         .toEqual({ ready: false, reason: 'draft' });
+    });
+    it('preserves spaces across a physical wrap when recovering a retained line', () => {
+      const styled: StyledLine[] = [
+        { text: '❯ a message', spans: [], wrapPadding: 1 },
+        { text: 'is waiting', spans: [], wrapped: true },
+        { text: '────────────', spans: [] },
+      ];
+      const view = { ...fromRows(styled.map(row => row.text)), styled, viewportCols: 12, recoveringDraft: true };
+      expect(nudgeVerdict(muse, { ...view, expectedDraft: 'a message is waiting' }).ready).toBe(true);
+      expect(nudgeVerdict(muse, { ...view, expectedDraft: 'a messageis waiting' }).ready).toBe(false);
     });
     it('finds an idle composer when every row after a reply is marked as a wrap', async () => {
       // Muse pads its rows to the full width once the transcript has text, so

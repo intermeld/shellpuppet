@@ -116,6 +116,8 @@ export interface NudgeView {
   styled?: readonly StyledLine[];
   /** Exact daemon line allowed in the composer during a delayed submission. */
   expectedDraft?: string;
+  /** A retained line needs proof that separate composer rows are physical continuations. */
+  recoveringDraft?: boolean;
   /** A scheduled write needs the reason a busy composer blocks this particular run. */
   whenBusy?: 'skip' | 'queue';
   /** Prove a draft for the distinct key that queues it during a running turn. */

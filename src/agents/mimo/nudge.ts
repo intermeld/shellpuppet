@@ -26,6 +26,7 @@ export function readiness(view: NudgeView): NudgeReadiness {
   if (input !== prefix && !input.startsWith(`${prefix}  `)) return 'unknown';
   const body = input === prefix ? '' : input.slice(bodyStart, bodyLimit).trimEnd();
   const bodyEnd = bodyStart + body.length;
+  if (view.recoveringDraft && (view.cursor?.y !== frame - 3 || view.cursor.x !== bodyEnd)) return 'draft';
   const changed = [...view.rows];
   changed[frame - 3] = `> ${body}`;
   const styled = view.styled?.map((line, index): StyledLine => {

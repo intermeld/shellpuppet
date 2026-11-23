@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { IPty } from 'node-pty';
 import { expect, it, vi } from 'vitest';
 import { Session } from '../../src/core/session.js';
@@ -11,7 +13,11 @@ class InputPty implements IPty {
   readonly process = 'stand-in';
   handleFlowControl = false;
   readonly writes: string[] = [];
-  onData(): { dispose(): void } { return { dispose(): void {} }; }
+  paint: (data: string) => void = () => {};
+  onData(listener: (data: string) => void): { dispose(): void } {
+    this.paint = listener;
+    return { dispose(): void {} };
+  }
   onExit(): { dispose(): void } { return { dispose(): void {} }; }
   resize(): void {}
   clear(): void {}
@@ -104,3 +110,105 @@ it('treats a terminal report as untouched but the same bytes on the ordinary pat
   expect(session.nudgePendingLine()).toBe('fixed body');
   expect(session.nudgePendingUntouched()).toBe(false);
 }, 10_000);
+
+const body = 'A message is waiting.';
+const clear = '\x1b[2J\x1b[H';
+const composer = (draft: string) => clear + '❯ ' + draft + '\r\n────────────────────';
+
+function recipient(agent = 'muse') {
+  const pty = new InputPty();
+  const session = new Session('submit-check', { command: process.execPath, shell: false, agent, cols: 120, rows: 34 }, {
+    platform: 'linux', spawn: () => pty,
+  });
+  return { session, pty };
+}
+
+it.each(['A message is wait\r\ning.', 'A message is wait\r\n ing.', ' A message is waiting.'])(
+  'refuses a retained line with a hard break or extra space (%j)', async edited => {
+    const { session, pty } = recipient();
+    try {
+      expect(await session.writeNudgeWithReason(body + '\r', (_s, phase) => phase === 'before', ['m1']))
+        .toBe('aborted-line-not-seen');
+      pty.paint(composer(edited));
+      expect(await session.submitPendingNudge(body, () => true)).toBe('wait');
+      expect(pty.writes).toEqual([body]);
+    } finally { await session['renderer'].dispose(); }
+  });
+
+it.each(['prompt', 'output'])('cancels the retry after temporary %s during settle', async change => {
+  const { session, pty } = recipient();
+  const trust = readFileSync(join(__dirname, '../fixtures/reasoning/muse-trust.ansi'), 'utf8');
+  let observed: Promise<void> | undefined;
+  const record = pty.write.bind(pty);
+  vi.spyOn(pty, 'write').mockImplementation(data => {
+    record(data);
+    if (data !== '\r') pty.paint(composer(body));
+    else if (!observed) {
+      pty.paint(change === 'prompt' ? clear + trust : composer(body) + '\r\nnew output');
+      observed = session['renderer'].flush().then(() => {
+        if (change === 'prompt') expect(session.answerablePrompt(session['renderer'].snapshot().screen)).toBeTruthy();
+        pty.paint(composer(body));
+      });
+    }
+  });
+  try {
+    const outcome = await session.writeNudgeWithReason(body + '\r', () => true, ['m1']);
+    await observed;
+    expect(pty.writes).toEqual([body, '\r']);
+    expect(outcome).toBe('aborted-not-submitted');
+    expect(await session.submitPendingNudge(body, () => true)).toBe('wait');
+    expect(pty.writes).toEqual([body, '\r']);
+  } finally { await session['renderer'].dispose(); }
+});
+
+it.each([false, true])('uses the one remaining key on a later visit (accepted: %s)', async accepted => {
+  const { session, pty } = recipient();
+  let checks = 0;
+  const record = pty.write.bind(pty);
+  vi.spyOn(pty, 'write').mockImplementation(data => {
+    record(data);
+    if (data !== '\r') pty.paint(composer(body));
+    else if (accepted && pty.writes.length === 3) pty.paint(composer(''));
+  });
+  try {
+    expect(await session.writeNudgeWithReason(body + '\r', (_s, phase) => phase === 'before' || ++checks === 1, ['m1']))
+      .toBe('aborted-not-submitted');
+    expect(pty.writes).toEqual([body, '\r']);
+    expect(await session.submitPendingNudge(body, () => true)).toBe(accepted ? 'sent' : 'not-submitted');
+    expect(await session.submitPendingNudge(body, () => true)).toBe('wait');
+    expect(pty.writes).toEqual([body, '\r', '\r']);
+  } finally { await session['renderer'].dispose(); }
+});
+
+it('retains ownership if an ignored key briefly paints an empty composer', async () => {
+  const { session, pty } = recipient();
+  let repaint: ReturnType<typeof setTimeout> | undefined;
+  const record = pty.write.bind(pty);
+  vi.spyOn(pty, 'write').mockImplementation(data => {
+    record(data);
+    if (data === '\r') {
+      pty.paint(composer(''));
+      repaint = setTimeout(() => pty.paint(composer(body)), 450);
+    } else pty.paint(composer(body));
+  });
+  try {
+    expect(await session.writeNudgeWithReason(body + '\r', () => true, ['m1'])).toBe('aborted-not-submitted');
+    expect(session.nudgePendingLine()).toBe(body);
+    expect(pty.writes).toEqual([body, '\r']);
+  } finally { clearTimeout(repaint); await session['renderer'].dispose(); }
+});
+
+it('retains the draft when ordinary output in a running turn quotes it', async () => {
+  const { session, pty } = recipient('codex');
+  const record = pty.write.bind(pty);
+  vi.spyOn(pty, 'write').mockImplementation(data => {
+    record(data);
+    const above = data === '\r' ? 'Output mentions ' + body + '\r\nWorking (1s · esc to interrupt)\r\n' : '';
+    pty.paint(clear + above + '› ' + body + (data === '\r' ? '\r\nstatus updating' : ''));
+  });
+  try {
+    expect(await session.writeNudgeWithReason(body + '\r', () => true, ['m1'])).toBe('aborted-not-submitted');
+    expect(session.nudgePendingLine()).toBe(body);
+    expect(pty.writes).toEqual([body, '\r']);
+  } finally { await session['renderer'].dispose(); }
+});

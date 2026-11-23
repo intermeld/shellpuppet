@@ -135,9 +135,9 @@ export class ScreenRenderer {
    * returned promise resolves once this chunk has been applied. Streaming
    * callers may ignore it, but anything about to read the screen must `flush()`.
    */
-  write(data: string): Promise<void> {
+  write(data: string, applied?: () => void): Promise<void> {
     if (this.closed) return Promise.resolve();
-    return this.enqueue(data);
+    return this.enqueue(data, applied);
   }
 
   /** Include markers and resizes in the drain, not just PTY bytes. */

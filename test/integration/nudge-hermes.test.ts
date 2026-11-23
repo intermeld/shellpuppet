@@ -5,7 +5,9 @@ import { buildNudge } from '../../src/core/mailbox.js';
 import { auditLogPath, createAuditor } from '../../src/daemon/audit.js';
 import { api, eventually, makeTempHome, repoRoot, startTestDaemon } from './helpers.js';
 
-it.each(['idle', 'busy'])('submits the fixed line once with the measured key on the %s Hermes PTY', async state => {
+it.each([
+  ['idle', 'plain'], ['busy', 'panel'], ['busy', 'plain'],
+])('submits once on the %s PTY and checks ordinary input on its %s composer', async (state, afterTab) => {
   const home = makeTempHome('nudge-hermes-');
   const td = await startTestDaemon({ home, audit: createAuditor(home),
     messaging: { enabled: true, allow: ['parent-child'] } });
@@ -20,7 +22,7 @@ it.each(['idle', 'busy'])('submits the fixed line once with the measured key on 
       'setInterval(() => {}, 1000);',
     ].join('\n');
     const sender = await api(td.port, td.token, '/sessions', { body: { command: process.execPath,
-      args: ['-e', parent, receiver, input, state], label: 'sender', shell: false, openViewer: false } });
+      args: ['-e', parent, receiver, input, state, afterTab], label: 'sender', shell: false, openViewer: false } });
     expect(sender.status).toBe(200);
     const manager = td.daemon['manager'];
     await eventually(() => manager.list().some(s => s.label === 'recipient'), 10_000);
@@ -35,6 +37,7 @@ it.each(['idle', 'busy'])('submits the fixed line once with the measured key on 
     const line = buildNudge([{ id: meta.messageIds[0]!, from: { name: 'sender', id: String(sender.body['id']) } }]);
     const expected = line + (state === 'busy' ? '\t' : '\r');
     await eventually(() => existsSync(input) && readFileSync(input, 'utf8') === expected);
+    expect((await session.snapshot()).screen.includes('Ctrl+R collapse')).toBe(afterTab === 'panel');
     const typed = await session.writeWithResult('sample\r');
     expect(typed.submitted).toBe(state === 'idle');
     expect(typed.submitRetried).toBe(false);

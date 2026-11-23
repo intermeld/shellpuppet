@@ -33,6 +33,7 @@ function exactDraft(view: NudgeView, lines: readonly StyledLine[], frame: Compos
   let text = '';
   for (let i = frame.first; i <= last; i++) {
     const row = lines[i]!;
+    if (view.recoveringDraft && i > frame.first && !row.wrapped) return false;
     const from = i === frame.first ? (frame.busy ? 4 : 2) : 0;
     if (row.text.length > from && !ink(row, from, row.text.length, s =>
       s.fg === null && !s.bold && !s.dim && !s.italic && !s.inverse)) return false;

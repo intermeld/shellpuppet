@@ -800,6 +800,10 @@ export class Session implements WaitTarget {
   private nudgeSchedule?: string;
   private writingNudge = false;
   private pendingNudgeIds: string[] = [];
+  private pendingSubmitKeys = 0;
+  private pendingRetryBlocked = false;
+  private lastAttemptedNudgeLine?: string;
+  private observeNudgePaint?: () => void;
   /** Any input from outside the daemon permanently claims this pending composer. */
   private pendingNudgeTouched = false;
   private pendingTouchRefusalAudited = false;
@@ -1011,10 +1015,13 @@ export class Session implements WaitTarget {
     this.stallPtyRows = this.pty.rows;
     this.pty.onData((data) => {
       if (this.exitedFlag || this.isKilled) return;
+      // Output can briefly replace the composer and restore it in one parser batch.
+      if (this.pendingSubmitKeys > 0) this.pendingRetryBlocked = true;
       if (this.pendingNudgeLine !== null) this.pendingQuietSince = Date.now();
       // node-pty can apply a requested resize later, after its first output.
       // Observe the dimensions it reports as well as our explicit requests.
       if (this.pty.cols !== this.stallPtyCols || this.pty.rows !== this.stallPtyRows) {
+        this.screenRevision++;
         this.stallPtyCols = this.pty.cols; this.stallPtyRows = this.pty.rows;
         this.noteStallResize(true);
       }
@@ -1033,7 +1040,7 @@ export class Session implements WaitTarget {
       this.bracketedPaste = bracketedPasteAfter(scan, this.bracketedPaste);
       this.cursorHidden = cursorHiddenAfter(scan, this.cursorHidden);
       this.modeScanTail = scan.slice(-MODE_SCAN_TAIL_CHARS);
-      const rendered = this.renderer.write(data);
+      const rendered = this.renderer.write(data, this.observeNudgePaint);
       if (this.agentModule?.stalls !== undefined) {
         void rendered.then(() => {
           if (this.stallTracker.tracking || this.stallInk?.possible) this.deferStall();
@@ -1323,9 +1330,11 @@ export class Session implements WaitTarget {
     const queued = this.writeChain.then(async () => {
       try {
         if (this.pendingNudgeLine !== null) return 'wait' as const;
+        const key = this.nudgeSubmit(queuedDelivery);
+        if (messageIds.length && this.lastAttemptedNudgeLine === data.slice(0, -key.length)) return 'wait' as const;
         this.nudgeSchedule = schedule;
         this.writingNudge = true;
-        const result = await this.writeInput(data, false, ready, (reason) => { abortReason = reason; }, this.nudgeSubmit(queuedDelivery),
+        const result = await this.writeInput(data, false, ready, (reason) => { abortReason = reason; }, key,
           messageIds, failedCheck);
         return abortReason !== null ? `aborted-${abortReason}` as const
           : result === null ? 'wait' as const : 'sent' as const;
@@ -1341,6 +1350,7 @@ export class Session implements WaitTarget {
   }
 
   nudgePendingLine(): string | null { return this.pendingNudgeLine; }
+  get lastAttemptedMessageNudge(): string | undefined { return this.lastAttemptedNudgeLine; }
   pendingSchedule(): string | undefined { return this.pendingNudgeLine === null ? undefined : this.nudgeSchedule; }
   nudgePendingIds(): readonly string[] { return this.pendingNudgeIds; }
   nudgePendingUntouched(): boolean { return !this.pendingNudgeTouched; }
@@ -1369,6 +1379,8 @@ export class Session implements WaitTarget {
   private clearPendingNudge(): void {
     this.pendingNudgeLine = null;
     this.pendingNudgeIds = [];
+    this.pendingSubmitKeys = 0;
+    this.pendingRetryBlocked = false;
     this.pendingNudgeTouched = false;
     this.pendingTouchRefusalAudited = false;
     this.pendingTurnSubmitted = false;
@@ -1382,8 +1394,8 @@ export class Session implements WaitTarget {
       await this.renderer.flush();
       this.refuseIfEnded();
       const maySubmit = () => this.pendingNudgeLine === line && !this.pendingNudgeTouched &&
-        ready(this.renderer.snapshot().screen) && this.nudgeReadyWithLine(line, queueKey);
-      if (!maySubmit()) return 'wait';
+        ready(this.renderer.snapshot().screen) && this.nudgeReadyWithLine(line, queueKey, undefined, true);
+      if (this.pendingSubmitKeys >= 2 || this.pendingRetryBlocked || !maySubmit()) return 'wait';
       this.writingNudge = true;
       try {
         const confirmed = await this.submitMessageNudge(line, this.nudgeSubmit(queueKey), maySubmit);
@@ -1472,48 +1484,98 @@ export class Session implements WaitTarget {
   nudgeQueuedInputVersion(): number { return this.inputQueueVersion; }
   nudgeScreenRevision(): number { return this.screenRevision; }
 
-  nudgeReadyWithLine(line: string, queued = false, whenBusy?: 'skip' | 'queue'): boolean {
+  nudgeReadyWithLine(line: string, queued = false, whenBusy?: 'skip' | 'queue', recoveringDraft = false): boolean {
     return nudgeVerdict(this.agentModule, {
       ...this.nudgeView(),
-      stall: this.getStalled(), unchangedMs: 0, expectedDraft: line, whenBusy,
+      stall: this.getStalled(), unchangedMs: 0, expectedDraft: line, whenBusy, recoveringDraft,
       queueDraft: queued && this.agentModule?.nudge?.queueKey !== undefined,
     }).ready;
+  }
+
+  /** Each reading returns the remaining wait in ms, or undefined without evidence of an empty input. */
+  private trackEmptyComposer(settleMs: number): () => number | undefined {
+    let emptySince: number | undefined;
+    let erasedAt: number | undefined;
+    // A busy transcript or sidebar may animate throughout a genuinely empty input.
+    // Observe each parsed frame so even a temporary draft restarts the quiet period.
+    return () => {
+      const now = Date.now();
+      const view = this.nudgeView();
+      // A full repaint can deliver its erase and its replacement in separate
+      // PTY reads. A blank viewport supplies no evidence in either direction.
+      if (view.rows.length === 0) {
+        erasedAt ??= now;
+        if (now - erasedAt >= settleMs) emptySince = undefined;
+        return emptySince === undefined ? undefined : NUDGE_SUBMIT_POLL_MS;
+      }
+      if (erasedAt !== undefined && emptySince !== undefined) {
+        const gap = now - erasedAt;
+        emptySince = gap >= settleMs ? undefined : emptySince + gap;
+      }
+      erasedAt = undefined;
+      const quiet = emptySince === undefined ? 0 : now - emptySince;
+      const verdict = nudgeVerdict(this.agentModule, {
+        ...view, unchangedMs: quiet, composerUnchangedMs: quiet,
+        exactEmpty: true, whenBusy: 'queue', afterSubmit: true, stall: this.getStalled(),
+      });
+      if (verdict.ready) return 0;
+      if (verdict.reason === 'quiet') {
+        emptySince ??= now;
+        return NUDGE_QUIET_MS - quiet;
+      }
+      emptySince = undefined;
+      return undefined;
+    };
   }
 
   /** Both a fresh body and a recovered one need proof after the key reaches the PTY. */
   private async submitMessageNudge(line: string, key: string, mayRetry: () => boolean): Promise<boolean> {
     const queuedInput = this.inputQueueVersion;
     const revision = this.screenRevision;
-    const before = this.renderer.snapshot().screen;
     const settleMs = this.agentModule?.input?.submit?.settleMs ?? TYPED_SUBMIT_SETTLE_MS;
-    this.refuseIfInputFailed();
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      this.pty.write(key);
-      this.pendingQuietSince = Date.now();
-      this.pendingTurnSubmitted = true;
-      await new Promise(resolve => setTimeout(resolve, settleMs));
+    const interrupted = () => this.inputQueueVersion !== queuedInput || this.screenRevision !== revision ||
+      this.pendingNudgeTouched || this.getStalled() !== undefined ||
+      this.answerablePrompt(this.renderer.snapshot().screen) !== null;
+    const settle = async (ms: number) => {
+      await new Promise(resolve => setTimeout(resolve, ms));
       await this.renderer.flush();
       this.refuseIfInputFailed();
       this.refuseIfEnded();
-      if (this.inputQueueVersion !== queuedInput || this.screenRevision !== revision || this.pendingNudgeTouched) return false;
-      const screen = this.renderer.snapshot().screen;
-      if (this.answerablePrompt(screen) !== null || this.getStalled()) return false;
-      if (this.nudgeReadyWithLine(line, key !== this.nudgeSubmit())) {
-        if (attempt === 1 && mayRetry()) continue;
-        break;
+    };
+    const observe = this.trackEmptyComposer(settleMs);
+    this.observeNudgePaint = observe;
+    try {
+      while (this.pendingSubmitKeys < 2 && !this.pendingRetryBlocked) {
+        this.refuseIfInputFailed();
+        // Charge before writing. A pipe error can leave delivery uncertain.
+        this.pendingSubmitKeys++;
+        if (this.pendingNudgeIds.length) this.lastAttemptedNudgeLine = line;
+        this.pendingQuietSince = Date.now();
+        this.pendingTurnSubmitted = true;
+        this.pty.write(key);
+        await settle(settleMs);
+        if (interrupted()) return false;
+        let remaining = observe();
+        if (remaining !== undefined) {
+          const deadline = Date.now() + NUDGE_QUIET_MS + settleMs;
+          while (remaining > 0) {
+            const budget = deadline - Date.now();
+            if (budget <= 0) return false;
+            await settle(Math.min(budget, remaining));
+            if (interrupted()) return false;
+            remaining = observe();
+            if (remaining === undefined) return false;
+          }
+          this.clearPendingNudge();
+          return true;
+        }
+        if (this.pendingSubmitKeys >= 2 || this.pendingRetryBlocked ||
+            !this.nudgeReadyWithLine(line, key !== this.nudgeSubmit(), undefined, true) || !mayRetry()) return false;
       }
-      const verdict = nudgeVerdict(this.agentModule, {
-        ...this.nudgeView(), unchangedMs: NUDGE_QUIET_MS, composerUnchangedMs: NUDGE_QUIET_MS,
-        exactEmpty: true, whenBusy: 'queue', afterSubmit: true,
-      });
-      // A turn already running above a stuck draft cannot confirm this key.
-      if (verdict.ready || (verdict.reason === 'busy' && this.typedLineInTranscript(line, before))) {
-        this.clearPendingNudge();
-        return true;
-      }
-      break;
+      return false;
+    } finally {
+      this.observeNudgePaint = undefined;
     }
-    return false;
   }
 
   /** Paste placeholders on the viewport before this body is written. */
@@ -1725,7 +1787,7 @@ export class Session implements WaitTarget {
           }
         }
       } catch (error) {
-        onNudgeAbort?.(failedCheck());
+        onNudgeAbort?.(this.pendingSubmitKeys > 0 ? 'not-submitted' : failedCheck());
         throw error;
       }
       return screen;
@@ -1914,6 +1976,7 @@ export class Session implements WaitTarget {
     this.pty.resize(cols, rows);
     if (this.pendingNudgeLine !== null) this.pendingQuietSince = Date.now();
     this.screenRevision++;
+    if (this.pendingSubmitKeys > 0) this.pendingRetryBlocked = true;
     this.stallPtyCols = this.pty.cols; this.stallPtyRows = this.pty.rows;
     this.noteStallResize(cols !== this.renderer.cols || rows !== this.renderer.rows);
     this.renderer.resize(cols, rows);
@@ -2019,6 +2082,10 @@ export class Session implements WaitTarget {
     if (state === undefined) this.stallResizeUntil = 0;
     if (this.stallState === state) return;
     this.stallState = state;
+    if (state !== undefined && this.pendingSubmitKeys > 0) {
+      this.pendingRetryBlocked = true;
+      this.observeNudgePaint?.();
+    }
     for (const listener of this.stallListeners) listener(state);
   }
 

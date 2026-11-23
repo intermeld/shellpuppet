@@ -303,6 +303,14 @@ describe('the line before Enter', () => {
         .toEqual({ ready: false, reason: 'draft' });
       expect(nudgeVerdict(module, { ...draft, unchangedMs: 0, expectedDraft: 'draft words not sent' }))
         .toEqual({ ready: true });
+      if (module === grok || module === mimo) {
+        const expectedDraft = 'draft words not sent';
+        const y = draft.rows.findIndex(row => row.includes(expectedDraft));
+        const x = draft.rows[y]!.indexOf(expectedDraft) + expectedDraft.length;
+        const view = { ...draft, expectedDraft, recoveringDraft: true };
+        expect(nudgeVerdict(module, { ...view, cursor: { x, y } }).ready).toBe(true);
+        expect(nudgeVerdict(module, { ...view, cursor: { x: x + 1, y } }).ready).toBe(false);
+      }
     });
   }
 });

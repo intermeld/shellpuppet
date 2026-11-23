@@ -6,6 +6,7 @@
  */
 import type { AgentSignature } from '../core/reasoning.js';
 import type { CellStyle, StyledLine } from '../core/renderer.js';
+import { stringWidth } from '../core/stringWidth.js';
 import type { NudgeReadiness, NudgeView } from './types.js';
 
 /** How one module treats the composer its signature already names. */
@@ -14,6 +15,8 @@ export interface ReadingNudgeRule {
   placeholder: string;
   /** Keep rows after the composer until the signature's frame or status row. */
   continuations: boolean;
+  /** Word-wrapped rows drawn with two cells of indent and a reserved right margin. */
+  indentedWordWrap?: boolean;
   /**
    * The recorded placeholder's own ink. Both the exact words and this ink
    * are required. A row with no spans does not match.
@@ -201,20 +204,33 @@ function rowClear(line: StyledLine, rule: ReadingNudgeRule, exactEmpty = false):
   return text === rule.placeholder || (!exactEmpty && rule.anyHintInPlaceholderInk === true);
 }
 
-/** Rejoin only visual composer wraps, allowing a space lost at a wrap edge. */
-export function matchesWrappedDraft(pieces: readonly string[], expected: string): boolean {
-  let positions = new Set([0]);
-  for (const piece of pieces) {
-    const next = new Set<number>();
-    for (const position of positions) {
-      if (expected.startsWith(piece, position)) next.add(position + piece.length);
-      const spaces = /^\s+/u.exec(expected.slice(position))?.[0].length ?? 0;
-      if (spaces > 0 && expected.startsWith(piece, position + spaces)) next.add(position + spaces + piece.length);
+/** Physical continuations retain every cell, including spaces at the margin. */
+function matchesComposerRows(rows: readonly StyledLine[], expected: string, view: NudgeView, at: number,
+  indentedWordWrap: boolean): boolean {
+  const first = rows[0]!;
+  let text = first.text.replace(/^\s*[❯›>][\u00a0 ]?/u, '');
+  let last = 0;
+  for (let i = 1; i < rows.length; i++) {
+    const row = rows[i]!;
+    if (row.text === '') continue;
+    if (i !== last + 1) return false;
+    const previous = rows[last]!;
+    if (row.wrapped) {
+      text += ' '.repeat(previous.wrapPadding ?? 0) + row.text;
+    } else {
+      const word = /^ {2}(\S+)/u.exec(row.text)?.[1];
+      if (view.recoveringDraft || !indentedWordWrap || !word || !view.viewportCols ||
+          stringWidth(previous.text + ' ' + word) < view.viewportCols) return false;
+      text += ' ' + row.text.slice(2);
     }
-    positions = next;
-    if (positions.size === 0) return false;
+    last = i;
   }
-  return positions.has(expected.length);
+  const cursor = view.cursor;
+  if (view.recoveringDraft && rows.length > last + 1 &&
+      (cursor?.y !== at + last || cursor.x !== stringWidth(rows[last]!.text))) return false;
+  if (cursor && cursor.y >= at && cursor.y < at + rows.length &&
+      (cursor.y > at + last || (cursor.y === at + last && cursor.x > stringWidth(rows[last]!.text)))) return false;
+  return text === expected;
 }
 
 /**
@@ -297,9 +313,7 @@ export function readingReadiness(view: NudgeView, reading: AgentSignature, rule:
     if (lines.slice(0, at).some((line) =>
       composer.test(line.text) && stripGlyph(line.text) === view.expectedDraft)) return 'draft';
     if (rule.matchesDraft) return rule.matchesDraft(region.rows, view.expectedDraft, view, at) ? 'ready' : 'draft';
-    const [first, ...rest] = region.rows;
-    const pieces = [stripGlyph(first?.text ?? ''), ...rest.map(line => line.text.trim())].filter(Boolean);
-    return matchesWrappedDraft(pieces, view.expectedDraft) ? 'ready' : 'draft';
+    return matchesComposerRows(region.rows, view.expectedDraft, view, at, rule.indentedWordWrap === true) ? 'ready' : 'draft';
   }
   const clear = region.rows.every((line) => rowClear(line, rule, view.exactEmpty));
   // A draft during a running turn waits: the person may be typing a reply.

@@ -1,9 +1,9 @@
 import { appendFileSync, readFileSync } from 'node:fs';
 
-const [input, state] = process.argv.slice(2);
+const [input, state, afterTab] = process.argv.slice(2);
 const busy = state === 'busy';
 const screen = readFileSync(new URL(busy ? 'busy.ansi' : 'welcome.ansi', import.meta.url), 'utf8');
-const submitted = busy ? readFileSync(new URL('queued.ansi', import.meta.url), 'utf8') : screen;
+const submitted = busy && afterTab !== 'plain' ? readFileSync(new URL('queued.ansi', import.meta.url), 'utf8') : screen;
 const column = busy ? 4 : 2;
 let body = '';
 

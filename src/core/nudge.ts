@@ -58,7 +58,8 @@ export function nudgeVerdict(module: AgentModule | undefined, observation: Nudge
   if (observation.stall !== undefined) return { ready: false, reason: 'stalled' };
   const reading = module.nudge.readiness({ rows: screen.rows, styled: screen.styled,
     cursor: observation.cursor, untrimmedRow: observation.untrimmedRow, viewportCols: observation.viewportCols,
-    expectedDraft: observation.expectedDraft, exactEmpty: observation.exactEmpty, afterSubmit: observation.afterSubmit,
+    expectedDraft: observation.expectedDraft, recoveringDraft: observation.recoveringDraft,
+    exactEmpty: observation.exactEmpty, afterSubmit: observation.afterSubmit,
     whenBusy: observation.whenBusy, queueDraft: observation.queueDraft });
   if (reading === 'queue') {
     if (observation.whenBusy === 'skip') return { ready: false, reason: 'busy' };

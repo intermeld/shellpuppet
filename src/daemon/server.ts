@@ -2864,6 +2864,7 @@ export class Daemon {
       }
       this.mailbox.markNudged(ids);
       this.audit.record('daemon', 'nudge', id, { messageIds: [...covered], count: covered.length,
+        ...(queueKey ? { queued: true } : {}),
         waitingMessageIds: ids.filter((messageId) => !covered.includes(messageId)),
         staleMessageIds: covered.filter((messageId) => !unread.some((entry) => entry.id === messageId)) });
       return 'sent';
@@ -2873,8 +2874,11 @@ export class Daemon {
     // in the line again when a later message arrives, so delivery never stops.
     const ids = unread.filter((entry) => entry.state === 'waiting').map((entry) => entry.id);
     if (ids.length === 0) return 'done';
-    if (!session.hasPainted() || !session.nudgeReady(this.now())) return 'wait';
     const line = buildNudge(unread);
+    // Reads remove the oldest unread id and arrivals increase the count. Either
+    // changes the fixed line permanently, even when the visible list is capped.
+    if (line === session.lastAttemptedMessageNudge) return 'done';
+    if (!session.hasPainted() || !session.nudgeReady(this.now())) return 'wait';
     const result = await this.deliverLine(session, line, undefined, ids, () => {
       const current = this.mailbox.inbox(id, { markRead: false });
       return ids.every(messageId => current.some(entry => entry.id === messageId && entry.state === 'waiting'));

@@ -51,6 +51,7 @@ export function readiness(view: NudgeView): NudgeReadiness {
   const close = original.lastIndexOf('│');
   if (close <= 6) return 'unknown';
   const body = original.slice(6, close).trimEnd();
+  if (view.recoveringDraft && (view.cursor?.y !== at || view.cursor.x !== 6 + body.length)) return 'draft';
   const rows = [...view.rows];
   rows[at] = `> ${body}`;
   // Grok paints its frame and footer rows to the full width, so xterm marks

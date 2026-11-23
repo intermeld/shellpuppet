@@ -49,7 +49,8 @@ export function matchesDraft(rows: readonly StyledLine[], expected: string, view
   if (count === 1) {
     if (rows[0]?.text !== '› ' + expected || (width > 0 && stringWidth(expected) > width)) return false;
   } else {
-    if (width < 1) return false;
+    // The widget draws indented rows itself. A break at the margin can look identical.
+    if (view.recoveringDraft || width < 1) return false;
     let i = 0;
     for (const piece of wrappedRows(words, width)) {
       if (i >= count || rows[i]?.text !== (i === 0 ? '› ' : '  ') + piece) return false;

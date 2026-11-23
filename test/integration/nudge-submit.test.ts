@@ -9,14 +9,15 @@ import type { TestDaemon } from './helpers.js';
 let running: TestDaemon | undefined;
 afterEach(async () => { await running?.stop(); running = undefined; });
 
-async function recipient(ignoredKeys: number) {
+async function recipient(ignoredKeys: number, repaint = false) {
   const home = makeTempHome('nudge-submit-');
   const input = join(home, 'received.input');
   let now = Date.now();
   const td = running = await startTestDaemon({ home, audit: createAuditor(home), promptScanIntervalMs: 60_000,
     messaging: { enabled: true, allow: ['parent-child'] }, now: () => now });
   const session = td.daemon['manager'].create({
-    command: process.execPath, args: [join(repoRoot, 'test/fixtures/nudge-submit.mjs'), input, String(ignoredKeys)],
+    command: process.execPath, args: [join(repoRoot, 'test/fixtures/nudge-submit.mjs'), input, String(ignoredKeys),
+      ...(repaint ? ['repaint'] : [])],
     shell: false, cols: 120, rows: 34, agent: 'muse', parent: 'sender',
   });
   td.daemon['registerMailboxSession'](session);
@@ -29,6 +30,7 @@ async function recipient(ignoredKeys: number) {
   const line = buildNudge(mailbox.inbox(id, { markRead: false }));
   await eventually(() => session.nudgeReady(Date.now()));
   return { session, first, line, send, read: () => mailbox.inbox(id),
+    unreadLine: () => buildNudge(mailbox.inbox(id, { markRead: false })),
     states: () => mailbox.outbox('sender').map(entry => entry.state),
     tick: () => { now += 30_000; return td.daemon['nudges'].tick(); },
     bytes: () => existsSync(input) ? readFileSync(input, 'utf8') : '',
@@ -69,24 +71,56 @@ it.each(['input', 'resize'] as const)('leaves the line pending when %s arrives a
   expect(r.audit().some(e => e.action === 'nudge')).toBe(false);
 });
 
-it.each([false, true])('recovers the same stuck line for a later message (original read: %s)', async read => {
-  const r = await recipient(3);
+it('keeps the draft waiting after an ignored Enter repaints the background task status', async () => {
+  const r = await recipient(1, true);
   await r.tick();
-  const afterFirst = r.states();
+  await r.tick();
+  expect(r.bytes()).toBe(r.line + '\r');
+  expect(r.states()).toEqual(['waiting']);
+  expect(r.session.nudgePendingLine()).toBe(r.line);
+});
+
+it.each([false, true])('keeps the two-key limit across later scans and arrivals (original read: %s)', async read => {
+  const r = await recipient(20);
+  await r.tick();
+  expect(r.states()).toEqual(['waiting']);
+  await r.tick();
   if (read) {
     r.read();
     await r.tick();
   }
-  const beforeSecond = r.bytes();
-  const second = r.send();
+  r.send();
   await r.tick();
-  expect(r.states()).toEqual([read ? 'read' : 'nudged', 'nudged']);
-  expect(afterFirst).toEqual(['waiting']);
-  expect(beforeSecond).toBe(r.line + '\r\r');
-  expect(r.bytes()).toBe(r.line + '\r\r\r\r');
+  expect(r.bytes()).toBe(r.line + '\r\r');
+  expect(r.states()).toEqual([read ? 'read' : 'waiting', 'waiting']);
   expect(r.audit().find(entry => entry.action === 'nudge-aborted')?.meta)
     .toMatchObject({ reason: 'not-submitted', messageIds: [r.first.id] });
-  expect(r.audit().filter(e => e.action === 'nudge').map(e => e.meta)).toEqual([{
-    messageIds: [r.first.id], count: 1, waitingMessageIds: [second.id], staleMessageIds: read ? [r.first.id] : [],
-  }]);
+  expect(r.audit().filter(e => e.action === 'nudge')).toHaveLength(0);
+});
+
+it('never retypes an accepted line after a resize interrupted its confirmation', async () => {
+  const r = await recipient(0);
+  Object.assign(r.session, { pendingNudgeSettleMs: 25 });
+  const pty = r.session['pty'];
+  const write = pty.write.bind(pty);
+  let resized: Promise<void> | undefined;
+  const spy = vi.spyOn(pty, 'write').mockImplementation(data => {
+    write(data);
+    if (data === '\r') resized = Promise.resolve(r.session.resize(120, 34));
+  });
+  await r.tick();
+  await resized;
+  spy.mockRestore();
+  expect(r.states()).toEqual(['waiting']);
+  await eventually(() => r.session.nudgeReady(Date.now()));
+  await r.tick();
+  await r.tick();
+  expect(r.bytes()).toBe(r.line + '\r');
+  expect(r.states()).toEqual(['waiting']);
+  expect(r.audit().some(entry => entry.action === 'nudge')).toBe(false);
+  r.send();
+  const nextLine = r.unreadLine();
+  await r.tick();
+  expect(r.states()).toEqual(['nudged', 'nudged']);
+  expect(r.bytes()).toBe(r.line + '\r' + nextLine + '\r');
 });

@@ -178,6 +178,7 @@ it('submits the complete wrapped line once and rejects a suffix or an extra copy
   const screen = await replay('wrapped');
   const verdict = (expectedDraft: string) => nudgeVerdict(opencode, { ...screen, expectedDraft });
   expect(verdict(draft)).toEqual({ ready: true });
+  expect(nudgeVerdict(opencode, { ...screen, expectedDraft: draft, recoveringDraft: true }).ready).toBe(false);
   expect(nudgeVerdict(opencode, screen)).toEqual({ ready: false, reason: 'draft' });
   expect(verdict('can see how continuation rows are drawn')).toEqual({ ready: false, reason: 'draft' });
   const at = screen.rows.findIndex(row => row.includes('This is a long'));

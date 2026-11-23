@@ -78,6 +78,7 @@ it('proves the full idle draft across the physical break before the right margin
   const expectedDraft = view.rows[33]!.slice(2) + view.rows[34]!;
   expect(nudgeVerdict(hermes, view)).toEqual({ ready: false, reason: 'draft' });
   expect(nudgeVerdict(hermes, { ...view, expectedDraft })).toEqual({ ready: true });
+  expect(nudgeVerdict(hermes, { ...view, expectedDraft, recoveringDraft: true }).ready).toBe(false);
   for (const wrong of [expectedDraft + ' ', expectedDraft.slice(1), view.rows[34], expectedDraft + '\n']) {
     expect(nudgeVerdict(hermes, { ...view, expectedDraft: wrong }).ready).toBe(false);
   }

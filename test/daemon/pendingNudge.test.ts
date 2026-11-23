@@ -2,7 +2,7 @@ import { expect, it } from 'vitest';
 import { buildNudge, Mailbox } from '../../src/core/mailbox.js';
 import { Daemon } from '../../src/daemon/server.js';
 
-it('submits the original visible body after another message arrives', async () => {
+it.each([false, true])('submits the original body after another arrival (queue key: %s)', async queued => {
   const mailbox = new Mailbox({ enabled: true, policy: () => true });
   mailbox.register({ kind: 'session', id: 'recipient', name: 'recipient' });
   const sender = mailbox.claim('sender');
@@ -19,7 +19,7 @@ it('submits the original visible body after another message arrives', async () =
     nudgePendingUntouched: () => true,
     nudgePendingTouchRefusal: () => false,
     clearConsumedNudge: () => Promise.resolve(false),
-    nudgeReadyWithLine: (line: string) => visible && line === pendingLine,
+    nudgeReadyWithLine: (line: string, queueKey = false) => visible && line === pendingLine && queueKey === queued,
     nudgeInputVersion: () => 1,
     nudgeQueuedInputVersion: () => 0,
     nudgeScreenRevision: () => 0,
@@ -43,6 +43,7 @@ it('submits the original visible body after another message arrives', async () =
   expect(submits).toBe(1);
   expect(audit).toContainEqual({ action: 'nudge', meta: {
     messageIds: [first.id], count: 1, waitingMessageIds: [second.id], staleMessageIds: [],
+    ...(queued ? { queued: true } : {}),
   } });
 });
 

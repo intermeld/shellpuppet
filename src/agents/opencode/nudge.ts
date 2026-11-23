@@ -159,6 +159,7 @@ export function readiness(view: NudgeView): NudgeReadiness {
   }
   const occupied = busy && view.whenBusy === undefined ? 'busy' : 'draft';
   if (view.expectedDraft !== undefined) {
+    if (view.recoveringDraft && pieces.length > 1) return occupied;
     if (busy && view.whenBusy === 'skip') return 'busy';
     const cursor = view.cursor;
     if (cursor && (cursor.y <= top || cursor.y >= foot - 2 || cursor.x < inset.length || cursor.x >= end)) return occupied;

@@ -19,6 +19,7 @@ export function readiness(view: NudgeView): NudgeReadiness {
   return readingReadiness(view, reading, {
     placeholder: PLACEHOLDER,
     continuations: true,
+    indentedWordWrap: true,
     placeholderInk,
     // Muse Code 1.4.23 rotates grey tips in the empty composer (for example a
     // /resume tip); typed text is always drawn in TYPED_INK, never in this grey.
