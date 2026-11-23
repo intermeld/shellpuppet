@@ -1,7 +1,7 @@
 /** Real snapshot ordering, Pop out/reattachment and nested PTY repaints. */
 import * as path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { captureViewer } from './browserCapture.js';
 import type { CaptureOptions } from '../../src/daemon/screenshot.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
@@ -14,13 +14,44 @@ import type { DeliveredCadence } from './noticeCadence.js';
 const fixture = fileURLToPath(new URL('../fixtures/notice-nested-tui.mjs', import.meta.url));
 const cycleFixture = fileURLToPath(new URL('../fixtures/notice-r-cycle-tui.mjs', import.meta.url));
 let browser: string | null;
-let td: TestDaemon | undefined;
-beforeAll(async () => { browser = await findBrowser(); });
-afterEach(async () => {
-  const cleanup = td;
-  td = undefined;
-  await cleanup?.stop();
+let daemon: TestDaemon;
+let retireDaemon = false;
+let sessionId: string | undefined;
+let dashboardUrl: string | undefined;
+
+beforeAll(async () => {
+  browser = await findBrowser();
+});
+
+beforeEach(async () => {
+  if (!browser || (daemon && !retireDaemon)) return;
+  if (retireDaemon) await daemon.stop();
+  daemon = await startTestDaemon({ promptScanIntervalMs: 100, promptStallMs: 300,
+    launcher: url => {
+      dashboardUrl = url;
+      return Promise.resolve({ launched: true, mode: 'isolated-app', browser: 'mock' });
+    },
+  });
+  retireDaemon = false;
 }, 120_000);
+
+afterEach(async () => {
+  dashboardUrl = undefined;
+  if (!sessionId) return;
+  const id = sessionId;
+  sessionId = undefined;
+  // Only a verified empty daemon can host the next case. If either request
+  // fails, its assertion reaches this case and file teardown or setup stops it.
+  retireDaemon = true;
+  const removed = await api(daemon.port, daemon.token, `/sessions/${id}`, { method: 'DELETE' });
+  expect(removed.status, JSON.stringify(removed.body)).toBe(200);
+  const remaining = await api(daemon.port, daemon.token, '/sessions');
+  expect(remaining.status).toBe(200);
+  expect(remaining.body['sessions']).toEqual([]);
+  retireDaemon = false;
+}, 120_000);
+
+afterAll(async () => { await daemon?.stop(); }, 120_000);
 
 const observe = `(() => {
   let implementation;
@@ -100,14 +131,7 @@ const observe = `(() => {
 async function withPage(mode: string, rows: number,
   interact: (page: Parameters<NonNullable<CaptureOptions['interact']>>[0], input: (data: string) => Promise<void>) => Promise<unknown>,
   cadence = 'short'): Promise<void> {
-  await td?.stop();
-  td = undefined;
-  const urls: string[] = [];
   const cycleCadence: Record<string, string> = { rword: 'R', rlong: 'long', rrest: 'rest', rchange: 'change' };
-  const daemon = await startTestDaemon({ promptScanIntervalMs: 100, promptStallMs: 300,
-    launcher: url => { urls.push(url); return Promise.resolve({ launched: true, mode: 'isolated-app', browser: 'mock' }); },
-  });
-  td = daemon;
   const started = await api(daemon.port, daemon.token, '/sessions', { body: {
     command: process.execPath, args: [cycleCadence[cadence] ? cycleFixture : fixture, String(rows), cycleCadence[cadence] ?? cadence],
     cwd: path.dirname(fixture), shell: false,
@@ -115,10 +139,12 @@ async function withPage(mode: string, rows: number,
   } });
   expect(started.status, JSON.stringify(started.body)).toBe(200);
   const id = String(started.body['id']);
+  sessionId = id;
   let viewerUrl: string;
   if (mode === 'dashboard') {
     expect((await api(daemon.port, daemon.token, '/dashboard/open', { body: {} })).status).toBe(200);
-    viewerUrl = urls.at(-1)!;
+    if (!dashboardUrl) throw new Error('No dashboard URL was issued for the session.');
+    viewerUrl = dashboardUrl;
   } else {
     const minted = await api(daemon.port, daemon.token, `/sessions/${id}/viewer`, { body: {} });
     expect(minted.status).toBe(200);
@@ -151,62 +177,68 @@ function checkPlacement(result: Placement, rows: number): void {
   expect.soft(result.capError, details).toBeLessThan(0.1);
 }
 
+// Expected [row, hold in ms] at 80x24. The first phase of the next word
+// closes the final measured hold. Only the changed word repeats in rchange.
+const expectedWords = {
+  rlong: [
+    [0, 900], [1, 900], [2, 900],
+    [8, 800], [9, 800], [10, 800], [11, 800], [12, 800], [13, 800], [14, 800], [15, 800],
+    [22, 900], [23, 900], [22, 900], [23, 900], [22, 900], [23, 900],
+    [0, 900],
+  ],
+  rchange: [
+    [0, 850], [22, 450], [0, 850], [22, 450], [23, 900], [22, 900], [23, 100], [0, 400],
+    [8, 820], [9, 820], [10, 820], [11, 820], [12, 820],
+    [0, 250], [22, 850], [0, 250], [22, 850], [23, 900], [22, 900], [23, 100], [0, 200],
+    [8, 820], [9, 820], [10, 820], [11, 820], [12, 820],
+    [0, 250],
+  ],
+} as const;
+
 describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
-  for (const kind of ['rlong', 'rrest', 'rchange']) {
-    it(`assesses the real PTY ${kind} word from delivered visits`, async context => {
+  for (const kind of ['rlong', 'rrest', 'rchange'] as const) {
+    const word = kind === 'rrest' ? undefined : expectedWords[kind];
+    it(word ? `delivers the real PTY ${kind} word` : 'assesses the inserted real PTY rest', async context => {
       if (!browser) { context.skip(); return; }
       await withPage(mode, 24, async ({ evaluate }, input) => {
         await evaluate(deliveredNoticeScript);
-        // A parsed snapshot and an alert can precede Chromium's first rendered
-        // frame. Arm the cursor observer before releasing the real PTY word.
         await evaluate(`(async () => {
           window.__delivered = observeDeliveredNotice(__notice.term, __notice.notices, performance.now(), 0);
           await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
         })()`);
         await input('r');
-        // Row 8 starts the neutral section of each word. The fourth arrival in
-        // the long word closes the fourth top rest. The third in the rest word
-        // follows the extra held prompt and the repaint that resumes after it.
-        const neutralVisits = kind === 'rlong' ? 4 : 3;
-        const cadence = await evaluate(kind === 'rchange'
-          ? '(async () => { await __pause(24500); return __delivered.stop(); })()'
-          : `(async () => {
-              let visits = 0, lastDelivery = performance.now();
-              while (performance.now() - lastDelivery < 60000) {
-                const legs = __delivered.peek().legs;
-                if (legs.filter(leg => leg.row === 8).length >= ${String(neutralVisits)}) break;
-                if (legs.length !== visits) { visits = legs.length; lastDelivery = performance.now(); }
-                await __pause(100);
-              }
-              return __delivered.stop();
-            })()`) as DeliveredCadence;
-        const assessment = assessDeliveredCadence(cadence);
+        const delivered = word
+          ? `__noticePhases.length >= ${String(word.length)} && __delivered.peek().legs.length >= ${String(word.length)}`
+          : '__delivered.peek().legs.filter(leg => leg.row === 8).length >= 3';
+        await eventually(async () => await evaluate(delivered) === true, 60_000, 100,
+          `delivery of ${kind}`, () => evaluate('__delivered.peek().legs.map(leg => leg.row)'));
+        const cadence = await evaluate('__delivered.stop()') as DeliveredCadence;
         recordDeliveredCadence(`${mode}-24-${kind}`, cadence);
-        const details = JSON.stringify({ ...assessment, timing: await evaluate(`__noticeFrameSummary(${String(cadence.epoch)})`) });
-        expect(assessment.violations, details).toEqual([]);
-        if (kind === 'rchange') {
-          expect(cadence.legs.length, details).toBeGreaterThan(20);
+        if (word) {
+          expect(cadence.legs.slice(0, word.length).map(leg => leg.row)).toEqual(word.map(([row]) => row));
+          const phases = await evaluate('__noticePhases') as { at: number; duration: number; observedRow: number }[];
+          expect(phases.slice(0, word.length).map(phase => [phase.observedRow, phase.duration])).toEqual(word);
+          for (const [i, [row, duration]] of word.slice(0, -1).entries()) {
+            // Allow for transport and clock resolution between browser observations.
+            const elapsed = phases[i + 1]!.at - phases[i]!.at;
+            expect(elapsed, JSON.stringify({ i, row, duration, elapsed })).toBeGreaterThanOrEqual(duration - 20);
+          }
+          const deadlines = cadence.samples.filter(sample => sample.deadline);
+          expect(deadlines.length).toBeGreaterThan(0);
+          for (const sample of [...deadlines, ...deliveredChanges(cadence)]) {
+            expect(sample.covered, JSON.stringify(sample)).toBe(false);
+          }
           return;
         }
-        if (cadence.legs.filter(leg => leg.row === 8).length < neutralVisits) {
-          throw new Error(`runner stalled before the final neutral visit: ${details}`);
-        }
-        // A completed frame and a later observation during the same stay make
-        // its placement testable under the delivered-cadence rules.
-        const rests = (assessment.rests as { edge: string; start: number; end: number; deadline?: number }[])
-          .filter(({ deadline, end }) => deadline !== undefined && cadence.samples.some(sample =>
-            sample.time > deadline && sample.time < end));
-        if (kind === 'rlong') {
-          if (rests.filter(rest => rest.edge === 'top').length < 4 || rests.filter(rest => rest.edge === 'bottom').length < 3) {
-            throw new Error(`runner stalled before the alternating rectangle rests were observed: ${details}`);
-          }
-        } else {
-          const hold = cadence.legs.find((leg, i, legs) =>
-            leg.row === 22 && legs[i - 1]?.row === 12 && legs[i + 1]?.row === 0);
-          if (!hold || !rests.some(rest => rest.edge === 'bottom' && rest.start === hold.start && rest.end === hold.end)) {
-            throw new Error(`runner stalled before the inserted lower rest and return were observed: ${details}`);
-          }
-        }
+        const assessment = assessDeliveredCadence(cadence);
+        expect(assessment.violations, JSON.stringify(assessment)).toEqual([]);
+        const hold = cadence.legs.find((leg, i, legs) =>
+          leg.row === 22 && legs[i - 1]?.row === 12 && legs[i + 1]?.row === 0);
+        expect(hold, JSON.stringify(cadence.legs)).toBeDefined();
+        const rests = assessment.rests as { edge: string; start: number; end: number; deadline?: number }[];
+        expect(rests.some(rest => rest.edge === 'bottom' && rest.start === hold!.start && rest.end === hold!.end
+          && rest.deadline !== undefined && cadence.samples.some(sample => sample.time > rest.deadline! && sample.time < rest.end)),
+        JSON.stringify(rests)).toBe(true);
       }, kind);
     }, 120_000);
   }
@@ -276,7 +308,6 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
       recordDeliveredCadence(`${mode}-${String(rows)}-${cadence}`, result.cadence);
       const details = JSON.stringify({ ...result, cadence: assessment,
         timing: await evaluate('__noticeFrameSummary(0)') });
-      const leading = assessment.repaints.find(repaint => repaint.target === 'top');
       expect(assessment.violations, details).toEqual([]);
       if (result.firstRestAt === null || result.lastRestAt === null ||
           result.lastRestAt - result.firstRestAt <= 2000 || result.restTiming.frames < 2 ||
@@ -286,7 +317,9 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
       if (!assessment.rests.length) {
         expect(result.changes, details).toBeLessThanOrEqual(1);
         if (cadence === 'staged') {
-          expect(leading, details).toBeDefined();
+          // A later long upper visit can erase the aggregate lead. Require the
+          // actual clear, whose delivered history and deadline are checked above.
+          expect(assessment.changes.map(change => change.side), details).toEqual(['top']);
           expect(result.firstClear, details).not.toBeNull();
         }
       }
@@ -311,12 +344,11 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
           timing: __noticeFrameSummary(cadence.epoch), hidden: __notice.alert.hidden };
       })()`) as { cadence: DeliveredCadence; phases: number[]; timing: { frames: number }; hidden: boolean };
       const { samples } = result.cadence;
-      const changes = deliveredChanges(result.cadence);
       const firstClear = samples.find(sample => sample.side === 'top');
       const prompt = rows - 2;
       const afterDeadline = samples.filter(sample => sample.row === prompt && sample.time >= 2500);
       const assessment = assessDeliveredCadence(result.cadence);
-      const details = JSON.stringify({ phases: result.phases, timing: result.timing, changes, assessment,
+      const details = JSON.stringify({ phases: result.phases, timing: result.timing, assessment,
         firstClear, firstPrompt: afterDeadline[0], lastPrompt: afterDeadline.at(-1) });
       recordDeliveredCadence(`${mode}-${String(rows)}-long`, result.cadence);
       expect(result.hidden, details).toBe(false);
@@ -330,7 +362,9 @@ describe.each(['viewer', 'dashboard'])('%s real nested repaints', mode => {
       expect(samples[0]?.side, details).toBe('bottom');
       expect(firstClear, details).toBeDefined();
       expect(assessment.repaints.some(repaint => repaint.target === 'top'), details).toBe(true);
-      expect(changes.map(change => change.side), details).toEqual(['top']);
+      // A delayed next phase can turn a later upper visit into a genuine
+      // rest. Its mandatory clear has its own deadline and move count.
+      expect(assessment.repaintChanges.map(change => change.side), details).toEqual(['top']);
     }, 'long');
   }, 120_000);
   for (const cadence of ['short', 'extended']) for (const rows of [24, 150])
