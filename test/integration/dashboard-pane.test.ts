@@ -603,6 +603,24 @@ describe('a dashboard stream is passive without drive=0', () => {
 });
 
 describe('the echoed subprotocol names the dashboard credential', () => {
+  it('echoes the document proof only when the dashboard cookie admits a mixed-cookie stream', async () => {
+    const daemon = await startPane();
+    const id = await startGrid(daemon, 'viewer-echo');
+    const { cookie, proof } = await openDashboard(daemon);
+    const minted = await api(daemon.port, daemon.token, `/sessions/${id}/viewer`, { body: { readOnly: true } });
+    expect(minted.status).toBe(200);
+    const viewer = await redeemViewerUrl(String(minted.body['viewerUrl']));
+    const protocol = `sp-csrf.${proof}`;
+    const headers = streamHeaders(daemon.port, `${viewer}; ${cookie}`, {
+      'sec-websocket-protocol': `unused, ${protocol}`,
+    });
+    const route = `/sessions/${id}/stream`;
+    const dashboard = await upgradeStatus(daemon.port, route, headers);
+    expect(dashboard).toEqual({ status: 101, protocol });
+    const fallback = await upgradeStatus(daemon.port, route, { ...headers, 'sec-fetch-mode': 'cors' });
+    expect(fallback).toEqual({ status: 101, protocol: undefined });
+  });
+
   it('a client token selects no protocol even when the cookie and a live proof are offered', async () => {
     const daemon = await startPane();
     const id = await startGrid(daemon, 'echo-credential');

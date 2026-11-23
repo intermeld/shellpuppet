@@ -1249,8 +1249,10 @@ Token-based, following the Jupyter / SSH-agent model, with **five credentials**:
   64 hex digits. A header on the upgrade is not the proof. The compare hashes both strings
   and then compares the digests in constant time, the same way bearer tokens are compared.
   The cookie may open `GET /dashboard`, `GET /sessions`, `GET /dashboard/profiles`,
-  `/dashboard/events` and a session stream, and may call `POST /dashboard/launch` with the
-  proof. It does not open `/events`, a free-form `POST /sessions`, a kill, a shutdown, a
+  `/dashboard/events` and a session stream. With the document proof, an `Origin` matching
+  `Host` and `Sec-Fetch-Site: same-origin`, it may launch a profile with
+  `POST /dashboard/launch` or end a session with `DELETE /sessions/<id>`.
+  It does not open `/events`, a free-form `POST /sessions`, a shutdown, a
   screenshot, a viewer mint, the environment report, or an HTTP input or key call. While a
   `/dashboard/events` socket is open, a session start does not launch a per-session viewer
   window and the response omits `viewerUrl`.
