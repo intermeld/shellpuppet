@@ -7,6 +7,12 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-11-23
+
+Scheduled prompts for named sessions, a Hermes module and start folders in
+session listings, with fixes to restart records, wrapped Codex lines and
+Windows starts.
+
 ### Added
 
 - `terminal_list` and `shellpuppet list --json` show each session's absolute start folder in `cwd`.
