@@ -12,9 +12,13 @@ interface RepaintAssessment {
   start: number; end: number; top: number; bottom: number; target: string | null;
   firstCycle: number | null; clearBy: number; changes: number;
 }
-export function clearEdge(top: number, bottom: number): string | null {
-  return top <= bottom * 2 / 3 && bottom - top >= 20 ? 'top' :
-    bottom <= top * 2 / 3 && top - bottom >= 20 ? 'bottom' : null;
+export function clearEdge(top: number, bottom: number, guard = 0): string | null {
+  return top + guard <= bottom * 2 / 3 && bottom - top >= 20 ? 'top' :
+    bottom + guard <= top * 2 / 3 && top - bottom >= 20 ? 'bottom' : null;
+}
+function guardedCycleEdge(weights: { top: number; bottom: number }, duration: number): string | null {
+  const scale = Math.max(1, 1200 / Math.max(1, duration));
+  return clearEdge(weights.top * scale, weights.bottom * scale, 5);
 }
 export function deliveredWeights(legs: DeliveredCadence['legs'], start: number, end: number) {
   let top = 0, bottom = 0;
@@ -34,10 +38,42 @@ export function deliveredChanges(cadence: DeliveredCadence) {
   }
   return changes;
 }
+
+function cycleSummaries(legs: DeliveredCadence['legs'], restEnds: Set<number>) {
+  type Summary = { end: number; duration: number; validFor: number; edge: string | null; rows: number[] };
+  const renewals: Summary[] = [];
+  let active: Summary | undefined;
+  let anchorStart = -1;
+  for (const [i, leg] of legs.entries()) {
+    if (restEnds.has(leg.start)) { anchorStart = -1; active = undefined; }
+    if (anchorStart < 0) {
+      if (leg.top || leg.bottom) anchorStart = i;
+      continue;
+    }
+    if (leg.row !== legs[anchorStart]!.row) continue;
+    // A return can be internal to a longer word. Once two identical words
+    // close, the latest occurrence supplies all the weights for its renewal.
+    const half = (i - anchorStart) / 2;
+    if (Number.isInteger(half) && legs.slice(anchorStart, anchorStart + half)
+      .every((visit, j) => visit.row === legs[anchorStart + half + j]!.row)) anchorStart += half;
+    const word = legs.slice(anchorStart, i);
+    const start = word[0]!.start, end = leg.start, duration = end - start;
+    const weights = deliveredWeights(word, start, end);
+    if (weights.top <= 0 || weights.bottom <= 0) continue;
+    const rows = word.map(visit => visit.row);
+    const previousRows = active?.rows;
+    const sameWord = rows.length === previousRows?.length && rows.every((row, j) => row === previousRows[j]);
+    if (active && !sameWord && end - active.end < active.validFor && duration < active.duration) continue;
+    const longest = Math.max(...word.map(visit => visit.end - visit.start));
+    active = { end, rows, duration, validFor: Math.max(10000, duration + longest), edge: guardedCycleEdge(weights, duration) };
+    renewals.push(active);
+  }
+  return renewals.reverse();
+}
+
 export function assessDeliveredCadence(cadence: DeliveredCadence) {
   const violations: unknown[] = [], rests: unknown[] = [], repaints: RepaintAssessment[] = [];
   const historyStart = cadence.legs[0]?.start ?? 0;
-  const retainedSummaries: { end: number; edge: string | null; validFor: number }[] = [];
   const changes = deliveredChanges(cadence);
   const between = (start: number, end: number) => changes.filter(change => change.time >= start && change.time < end);
   const runs: { edge: string; start: number; end: number }[] = [];
@@ -55,6 +91,7 @@ export function assessDeliveredCadence(cadence: DeliveredCadence) {
   }
   const rectangleRests = runs.filter(run => run.end - run.start >= 1000);
   const restEnds = new Set(rectangleRests.map(run => run.end));
+  const summaries = cycleSummaries(cadence.legs, restEnds);
   const restChange = (change: typeof changes[number]) => rectangleRests.some(run =>
     change.time >= run.start && change.time < run.end && change.side !== run.edge);
   const evidenceStart = (time: number, start: number) => Math.max(start,
@@ -90,7 +127,7 @@ export function assessDeliveredCadence(cadence: DeliveredCadence) {
   }
   for (const change of changes) {
     const leg = cadence.legs[change.leg];
-    if (leg && (change.side === 'top' ? leg.top : leg.bottom)) violations.push({ rule: 'no move lands on the cursor', change });
+    if (change.covered || (leg && (change.side === 'top' ? leg.top : leg.bottom))) violations.push({ rule: 'no move lands on the cursor', change });
   }
   const inspectRepaint = (legs: DeliveredCadence['legs']) => {
     if (!legs.length) return;
@@ -113,18 +150,6 @@ export function assessDeliveredCadence(cadence: DeliveredCadence) {
     const target = clearEdge(weights.top, weights.bottom);
     const firstCycle = returns[1] === undefined ? null : returns[1] - start;
     const clearBy = start + (firstCycle !== null && firstCycle > 2500 ? firstCycle + 250 : 2500);
-    // Any complete conflicting prefix can remain the retained summary. An
-    // aggregate of later returns can look clear while that prefix still vetoes
-    // a correction, so the deadline must account for each candidate.
-    const summaries = returns.slice(1).flatMap(returnTime => {
-      const first = returns[0]!;
-      const covered = deliveredWeights(legs, first, returnTime);
-      if (covered.top <= 0 || covered.bottom <= 0) return [];
-      const longest = legs.reduce((length, leg) => leg.start >= first && leg.start < returnTime ?
-        Math.max(length, Math.min(leg.end, returnTime) - leg.start) : length, 0);
-      return [{ end: returnTime, edge: clearEdge(covered.top, covered.bottom),
-        validFor: Math.max(10000, returnTime - first + longest) }];
-    });
     for (const [i, cycleStart] of returns.entries()) {
       const cycleEnd = returns[i + 1] ?? end;
       const count = between(cycleStart, cycleEnd).filter(change => !restChange(change)).length;
@@ -140,29 +165,25 @@ export function assessDeliveredCadence(cadence: DeliveredCadence) {
         return clearEdge(whole.top, whole.bottom) === change.side;
       })) violations.push({ rule: 'whole retained history must clearly favour a repaint change', change });
     }
-    if (target) {
-      const firstChange = localChanges[0]?.time ?? Infinity;
-      const prior = repaintChanges.filter(change => change.time < start).at(-1);
-      const wrong = cadence.samples.find(sample => {
-        if (sample.time < clearBy || sample.time >= Math.min(end, firstChange) || sample.side === target) return false;
-        if (prior && sample.time - prior.time < 10000) return false;
-        const leg = cadence.legs[sample.leg];
-        if (!leg || (target === 'top' ? leg.top : leg.bottom)) return false;
-        const whole = deliveredWeights(cadence.legs,
-          Math.max(evidenceStart(sample.time, historyStart), sample.time - 10000), sample.time);
-        const complete = returns.filter(time => time <= sample.time && time >= evidenceStart(sample.time, start));
-        const cycleWeights = complete.length > 1 ? deliveredWeights(legs, complete[0]!, complete.at(-1)!) : null;
-        const cycle = cycleWeights ? clearEdge(cycleWeights.top, cycleWeights.bottom) : undefined;
-        const summaryVeto = [...retainedSummaries, ...summaries].some(summary => summary.end <= sample.time &&
-          summary.end >= evidenceStart(sample.time, historyStart) &&
-          sample.time - summary.end < summary.validFor && summary.edge !== target);
-        return sample.evaluation && clearEdge(whole.top, whole.bottom) === target &&
-          (cycle === undefined || cycle === target) && !summaryVeto;
-      });
-      if (wrong) violations.push({ rule: 'first eligible clear-edge deadline', target, clearBy, first: wrong.time });
-    }
+    const firstChange = localChanges[0]?.time ?? Infinity;
+    const prior = repaintChanges.filter(change => change.time < start).at(-1);
+    const wrong = cadence.samples.find(sample => {
+      if (!sample.evaluation || sample.time < clearBy || sample.time >= Math.min(end, firstChange)) return false;
+      if (prior && sample.time - prior.time < 10000) return false;
+      const leg = cadence.legs[sample.leg];
+      const destination = sample.side === 'top' ? 'bottom' : 'top';
+      if (!leg || (destination === 'top' ? leg.top : leg.bottom)) return false;
+      const whole = deliveredWeights(cadence.legs,
+        Math.max(evidenceStart(sample.time, historyStart), sample.time - 10000), sample.time);
+      // Only evidence already delivered can require a move at this evaluation.
+      if (clearEdge(whole.top, whole.bottom, 5) !== destination) return false;
+      const active = summaries.find(summary => summary.end <= sample.time);
+      return !active || active.end < evidenceStart(sample.time, historyStart) ||
+        sample.time - active.end >= active.validFor || active.edge === destination;
+    });
+    if (wrong) violations.push({ rule: 'first eligible clear-edge deadline',
+      target: wrong.side === 'top' ? 'bottom' : 'top', clearBy, first: wrong.time });
     repaints.push({ start, end, ...weights, target, firstCycle, clearBy, changes: localChanges.length });
-    retainedSummaries.push(...summaries);
   };
   let shortLegs: DeliveredCadence['legs'] = [];
   for (const leg of cadence.legs) {
@@ -170,19 +191,17 @@ export function assessDeliveredCadence(cadence: DeliveredCadence) {
       // A row change within the same rectangle does not end the rest.
       inspectRepaint(shortLegs);
       shortLegs = [];
-      retainedSummaries.length = 0;
     }
     const count = between(leg.start, leg.end).length;
     if (count > 1) violations.push({ rule: 'one change per delivered leg', start: leg.start, changes: count });
     const duration = leg.end - leg.start;
     if (duration < 1000) { shortLegs.push(leg); continue; }
     inspectRepaint(shortLegs); shortLegs = [];
-    if (leg.top || leg.bottom) retainedSummaries.length = 0;
     // A long row outside either rectangle has no notice to clear. Rectangle
     // stays, including stays across adjacent rows, are assessed above.
   }
   inspectRepaint(shortLegs);
-  return { violations, rests, repaints, legs: cadence.legs, changes };
+  return { violations, rests, repaints, legs: cadence.legs, changes, repaintChanges };
 }
 export function recordDeliveredCadence(name: string, cadence: DeliveredCadence): void {
   const directory = process.env['NOTICE_EVIDENCE_DIR'];

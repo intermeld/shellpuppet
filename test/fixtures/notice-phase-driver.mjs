@@ -1,7 +1,7 @@
 // Anchor each hold to the browser's observed row. Its immediate acknowledgement
 // travels during the hold instead of adding a round trip to every phase.
 export function phaseDriver() {
-  let phases = [], index = 0, active = false, serial = 0, awaiting = false, pending = '';
+  let phases = [], index = 0, repeatFrom = 0, active = false, serial = 0, awaiting = false, pending = '';
   let timer;
   const emit = () => {
     const [render, duration, row] = phases[index];
@@ -14,12 +14,14 @@ export function phaseDriver() {
     awaiting = false;
     timer = setTimeout(() => {
       if (!active || id !== serial) return;
-      index = (index + 1) % phases.length;
+      index = index + 1 === phases.length ? repeatFrom : index + 1;
       emit();
     }, Math.max(0, parsedAt + phases[index][1] - Date.now()));
   };
   return {
-    start(next) { clearTimeout(timer); phases = next; index = 0; active = true; emit(); },
+    start(next, loopStart = 0) {
+      clearTimeout(timer); phases = next; index = 0; repeatFrom = loopStart; active = true; emit();
+    },
     stop() { active = false; clearTimeout(timer); },
     read(bytes) {
       pending += bytes.toString();
