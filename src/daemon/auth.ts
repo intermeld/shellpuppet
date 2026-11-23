@@ -30,8 +30,8 @@
  *   to be exchanged, once, at `GET /dashboard` for the cookie below. The
  *   daemon mints it and never returns it to the caller.
  * - **Dashboard credential**: what that grant becomes. One `HttpOnly` cookie
- *   for the whole dashboard, plus a ring of the eight newest per-document
- *   proofs. A second redemption replaces the credential and drops its proofs.
+ *   for the whole dashboard, plus a proof for each connected document and
+ *   a few recent unused proofs. Redemption replaces the credential and its proofs.
  *   The cookie opens a session stream when the upgrade carries a live proof
  *   as the `sp-csrf` subprotocol. A viewer cookie is not this credential.
  */
@@ -54,8 +54,9 @@ export type AuthResult =
  */
 export const VIEWER_GRANT_TTL_MS = 5 * 60_000;
 
-/** How many per-document proofs the current dashboard credential keeps. */
-export const DASHBOARD_PROOF_RING = 8;
+/** Limits per credential. Every issued proof can open a socket. */
+export const DASHBOARD_UNUSED_PROOF_LIMIT = 8;
+export const DASHBOARD_PROOF_LIMIT = 256;
 
 interface ViewerGrant {
   sessionId: string;
@@ -110,6 +111,11 @@ interface DashboardGrant {
   expiresAt: number;
 }
 
+export interface DashboardProof {
+  readonly token: string;
+  connections: number;
+}
+
 interface DashboardCredential {
   /** The cookie value. */
   token: string;
@@ -118,8 +124,19 @@ interface DashboardCredential {
    * it handed out. A grant is one-use, so this names exactly one credential.
    */
   grant: string;
-  /** Newest proofs last. The ring holds `DASHBOARD_PROOF_RING` of them. */
-  proofs: string[];
+  /** Issuance order also determines which unused proof expires first. */
+  proofs: DashboardProof[];
+}
+
+/** A page load or the last socket closing can put us one proof over a limit. */
+function trimDashboardProofs(proofs: DashboardProof[], reserved: 0 | 1): boolean {
+  const unused = proofs.filter(proof => proof.connections === 0);
+  if (unused.length + reserved <= DASHBOARD_UNUSED_PROOF_LIMIT &&
+      proofs.length + reserved <= DASHBOARD_PROOF_LIMIT) return true;
+  const oldest = unused[0];
+  if (oldest === undefined) return false;
+  proofs.splice(proofs.indexOf(oldest), 1);
+  return true;
 }
 
 export class TokenStore {
@@ -286,29 +303,36 @@ export class TokenStore {
     }
   }
 
-  /**
-   * A fresh proof for the current credential, or null when there is none.
-   * The ninth proof drops the oldest.
-   */
+  /** A fresh proof, or null if there is no credential or every slot is in use. */
   issueDashboardProof(): string | null {
-    if (this.dashboardCredential === null) return null;
-    const proof = generateToken();
-    this.dashboardCredential.proofs.push(proof);
-    while (this.dashboardCredential.proofs.length > DASHBOARD_PROOF_RING) {
-      this.dashboardCredential.proofs.shift();
-    }
+    const proofs = this.dashboardCredential?.proofs;
+    if (proofs === undefined || !trimDashboardProofs(proofs, 1)) return null;
+    const token = generateToken();
+    proofs.push({ token, connections: 0 });
+    return token;
+  }
+
+  private findDashboardProof(presented: string | undefined | null): DashboardProof | undefined {
+    if (!presented) return undefined;
+    return this.dashboardCredential?.proofs.find(proof => tokensEqual(presented, proof.token));
+  }
+
+  acceptsDashboardProof(presented: string | undefined | null): boolean {
+    return this.findDashboardProof(presented) !== undefined;
+  }
+
+  /** Each authenticated socket holds one reference until its close event. */
+  retainDashboardProof(presented: string | null): DashboardProof | undefined {
+    const proof = this.findDashboardProof(presented);
+    if (proof !== undefined) proof.connections++;
     return proof;
   }
 
-  /**
-   * Whether `presented` is one of the proofs still in the ring. The compare
-   * hashes both strings, so a wrong proof of the same length takes the same
-   * path as a right one.
-   */
-  acceptsDashboardProof(presented: string | undefined | null): boolean {
-    if (presented === undefined || presented === null || presented === '') return false;
-    if (this.dashboardCredential === null) return false;
-    return this.dashboardCredential.proofs.some((proof) => tokensEqual(presented, proof));
+  releaseDashboardProof(proof: DashboardProof): void {
+    proof.connections--;
+    if (proof.connections === 0 && this.dashboardCredential !== null) {
+      trimDashboardProofs(this.dashboardCredential.proofs, 0);
+    }
   }
 
   /**

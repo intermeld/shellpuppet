@@ -9,11 +9,13 @@
 
 import * as fs from 'node:fs';
 import * as http from 'node:http';
+import { once } from 'node:events';
 import * as path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { createAuditor } from '../../src/daemon/audit.js';
-import { VIEWER_GRANT_TTL_MS } from '../../src/daemon/auth.js';
+import { DASHBOARD_PROOF_LIMIT, VIEWER_GRANT_TTL_MS } from '../../src/daemon/auth.js';
+import type { ViewerLaunchResult } from '../../src/daemon/viewerLauncher.js';
 import { createFileLogger } from '../../src/daemon/logger.js';
 import { api, eventually, makeTempHome, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
@@ -40,7 +42,8 @@ afterEach(async () => {
 });
 
 async function startDash(extra: { clock?: boolean; maxSessions?: number; viewerMode?: 'dashboard'; dashboardFontSize?: number;
-  dashboardHeartbeatIntervalMs?: number; dashboardHeartbeatTimeoutMs?: number } = {}): Promise<DashDaemon> {
+  dashboardHeartbeatIntervalMs?: number; dashboardHeartbeatTimeoutMs?: number;
+  launchResult?: Promise<ViewerLaunchResult> } = {}): Promise<DashDaemon> {
   const home = makeTempHome('dash-cred-');
   const logPath = path.join(home, 'daemon.log');
   const urls: string[] = [];
@@ -59,7 +62,7 @@ async function startDash(extra: { clock?: boolean; maxSessions?: number; viewerM
     ...(extra.clock === true ? { now: () => clock.now } : {}),
     launcher: (url) => {
       urls.push(url);
-      return Promise.resolve({ launched: true, mode: 'isolated-app' as const, browser: 'mock' });
+      return extra.launchResult ?? Promise.resolve({ launched: true, mode: 'isolated-app' as const, browser: 'mock' });
     },
   });
   const wrapped = Object.assign(daemon, { urls, logPath, clock });
@@ -193,6 +196,14 @@ interface FeedClient {
   protocol: string;
   send: (data: string) => void;
   close: () => void;
+}
+
+async function openSocket(port: number, route: string, cookie: string, proof: string): Promise<WebSocket> {
+  const ws = new WebSocket(`ws://127.0.0.1:${port}${route}`, [`sp-csrf.${proof}`], {
+    headers: eventsHeaders(port, cookie),
+  });
+  await once(ws, 'open');
+  return ws;
 }
 
 function connectFeed(
@@ -782,7 +793,7 @@ describe('the document proof', () => {
     feed.close();
   });
 
-  it('a reload and a second document each receive a proof, and the ring keeps the eight newest', async () => {
+  it('issues a fresh proof per document and drops the oldest unused proof', async () => {
     const daemon = await startDash();
     const { grant } = await openDashboard(daemon);
     const first = await redeem(daemon, grant);
@@ -806,6 +817,87 @@ describe('the document proof', () => {
     kept.close();
     const newest = await connectFeed(daemon.port, cookie, proofs[8] ?? '');
     newest.close();
+  });
+
+  it('keeps a proof until its last session stream closes, even after its feed closes', async () => {
+    const daemon = await startDash();
+    const id = await startQuiet(daemon, 'pane-proof');
+    const first = await redeem(daemon, (await openDashboard(daemon)).grant);
+    const cookie = cookiePair(first.headers);
+    const proof = csrfMeta(first.body)!;
+    const read = () => raw(daemon.port, 'GET', '/sessions', readHeaders({ cookie, 'x-shellpuppet-csrf': proof }));
+    const pane = await openSocket(daemon.port, `/sessions/${id}/stream`, cookie, proof);
+    const feed = await openSocket(daemon.port, '/dashboard/events', cookie, proof);
+    const closed = once(feed, 'close');
+    feed.close();
+    await closed;
+    for (let i = 0; i < 8; i++) {
+      expect((await raw(daemon.port, 'GET', '/dashboard', { ...navigationHeaders(), cookie })).status).toBe(200);
+    }
+    expect((await read()).status).toBe(200);
+    const paneClosed = once(pane, 'close');
+    pane.close();
+    await paneClosed;
+    await eventually(async () => (await read()).status === 403);
+  });
+
+  it('refuses a new page at capacity and admits it after a window closes', async () => {
+    const daemon = await startDash();
+    const first = await redeem(daemon, (await openDashboard(daemon)).grant);
+    const cookie = cookiePair(first.headers);
+    const proof = csrfMeta(first.body)!;
+    const feed = await openSocket(daemon.port, '/dashboard/events', cookie, proof);
+    // Fill the other slots without starting hundreds of sockets and heartbeats.
+    const store = daemon.daemon['tokens'];
+    for (let i = 1; i < DASHBOARD_PROOF_LIMIT; i++) {
+      expect(store.retainDashboardProof(store.issueDashboardProof())).toBeDefined();
+    }
+    const openPage = () => raw(daemon.port, 'GET', '/dashboard', { ...navigationHeaders(), cookie });
+    const refused = await openPage();
+    expect(refused.status).toBe(503);
+    expect(refused.headers['cache-control']).toBe('no-store');
+    expect(refused.body).toMatch(/close one and reload/i);
+    expect(csrfMeta(refused.body)).toBeNull();
+    expect(feed.readyState).toBe(WebSocket.OPEN);
+    const closed = once(feed, 'close');
+    feed.close();
+    await closed;
+    await eventually(async () => {
+      const admitted = await openPage();
+      if (admitted.status === 503) return false;
+      expect(admitted.status).toBe(200);
+      expect(csrfMeta(admitted.body)).toMatch(/^[0-9a-f]{64}$/);
+      return true;
+    });
+  });
+
+  it('closes every feed and session stream when a failed launch revokes a redeemed grant', async () => {
+    let failLaunch!: () => void;
+    const launchResult = new Promise<ViewerLaunchResult>(resolve => {
+      failLaunch = () => resolve({ launched: false, mode: 'no-window' });
+    });
+    const daemon = await startDash({ launchResult });
+    const id = await startQuiet(daemon, 'revoked-pane');
+    const opening = api(daemon.port, daemon.token, '/dashboard/open', { method: 'POST', body: {} });
+    try {
+      await eventually(() => daemon.urls.length === 1);
+      const first = await redeem(daemon, new URL(daemon.urls[0]!).searchParams.get('dt')!);
+      const cookie = cookiePair(first.headers);
+      const next = await raw(daemon.port, 'GET', '/dashboard', { ...navigationHeaders(), cookie });
+      const sockets = [
+        await openSocket(daemon.port, '/dashboard/events', cookie, csrfMeta(first.body)!),
+        await openSocket(daemon.port, '/dashboard/events', cookie, csrfMeta(next.body)!),
+        await openSocket(daemon.port, `/sessions/${id}/stream`, cookie, csrfMeta(first.body)!),
+      ];
+      const closures = sockets.map(ws => once(ws, 'close'));
+      failLaunch();
+      expect((await opening).status).toBe(502);
+      await eventually(() => sockets.every(ws => ws.readyState === WebSocket.CLOSED));
+      for (const [code, reason] of await Promise.all(closures)) {
+        expect(code).toBe(1008);
+        expect(String(reason)).toBe('Dashboard access expired');
+      }
+    } finally { failLaunch(); }
   });
 
   it('any script that can read this origin can act as the dashboard, and HttpOnly is not the control', async () => {

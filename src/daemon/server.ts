@@ -60,6 +60,7 @@ import type {
 } from '../core/types.js';
 import {
   DASHBOARD_COOKIE,
+  type DashboardProof,
   TokenStore,
   VIEWER_COOKIE,
   VIEWER_GRANT_TTL_MS,
@@ -681,8 +682,8 @@ export class Daemon {
   private readonly dashboardWindowIds = new Map<WebSocket, { id: string; instance: string; focused: number }>();
   private readonly dashboardAssignments = new Map<string, string[]>();
   private dashboardDesignated: string | null = null;
-  /** The document proof survives a feed reconnect and expires with the proof ring. */
-  private readonly dashboardDocumentFocus = new Map<string, { id: string; focused: number }>();
+  /** Remember focus across reconnects for the lifetime of the document proof. */
+  private readonly dashboardDocumentFocus = new WeakMap<DashboardProof, { id: string; focused: number }>();
 
   private readonly liveDashboardEventSockets = new Set<WebSocket>();
   /** A launched dashboard has 30 seconds to connect before a start may retry. */
@@ -1469,7 +1470,7 @@ export class Daemon {
       if (grantPresented) {
         const redeemed = this.tokens.redeemDashboardGrant(grant, this.now());
         if (redeemed !== null) {
-          this.retireDashboardFeeds();
+          this.retireDashboardSockets();
           this.audit.record('dashboard', 'grant-redeem');
           res.writeHead(303, {
             location: '/dashboard',
@@ -1483,7 +1484,13 @@ export class Daemon {
         return;
       }
       const proof = cookie === null ? null : this.tokens.issueDashboardProof();
-      if (proof !== null) this.retireDashboardFeeds();
+      if (cookie !== null && proof === null) {
+        this.auditDashboardRefusal(req, 'limit');
+        res.writeHead(503, { 'content-type': 'text/plain; charset=utf-8',
+          'cache-control': 'no-store', 'content-security-policy': PAGE_CSP });
+        res.end('Too many dashboard windows are open. Close one and reload this page.');
+        return;
+      }
       this.sendDashboardPage(res, proof, req.method === 'HEAD');
       return;
     }
@@ -1518,7 +1525,7 @@ export class Daemon {
     this.pendingDashboardGrants.delete(grant);
     if (this.stopping || !opened.launched || opened.mode === 'default-browser') {
       this.tokens.revokeDashboardGrant(grant);
-      this.retireDashboardFeeds();
+      this.retireDashboardSockets();
       this.auditDashboardRefusal(req, 'launch-failed');
       return false;
     }
@@ -4850,13 +4857,11 @@ export class Daemon {
       this.tokens.acceptsDashboardProof(dashboardProofFromProtocol(ws.protocol));
   }
 
-  private retireDashboardFeeds(): void {
-    for (const protocol of this.dashboardDocumentFocus.keys()) {
-      if (!this.tokens.acceptsDashboardProof(dashboardProofFromProtocol(protocol))) this.dashboardDocumentFocus.delete(protocol);
-    }
+  private retireDashboardSockets(): void {
     let changed = false;
-    for (const ws of this.dashboardEventSockets) {
-      if (ws.readyState === ws.OPEN && !this.dashboardFeedCurrent(ws)) {
+    for (const ws of this.sockets) {
+      const credential = this.dashboardSocketCredential.get(ws);
+      if (credential !== undefined && ws.readyState === ws.OPEN && !this.tokens.verifyDashboardToken(credential)) {
         if (this.dashboardWindowIds.delete(ws)) changed = true;
         this.liveDashboardEventSockets.delete(ws);
         ws.close(1008, 'Dashboard access expired');
@@ -4865,8 +4870,20 @@ export class Daemon {
     if (changed) this.publishDashboardWindows();
   }
 
-  private attachDashboardSocket(ws: WebSocket, credential: string): void {
+  private retainSocketProof(ws: WebSocket, credential: string): DashboardProof | undefined {
+    const proof = this.tokens.retainDashboardProof(dashboardProofFromProtocol(ws.protocol));
+    if (proof === undefined) {
+      ws.close(1008, 'Dashboard access expired');
+      return undefined;
+    }
     this.dashboardSocketCredential.set(ws, credential);
+    ws.once('close', () => this.tokens.releaseDashboardProof(proof));
+    return proof;
+  }
+
+  private attachDashboardSocket(ws: WebSocket, credential: string): void {
+    const proof = this.retainSocketProof(ws, credential);
+    if (proof === undefined) return;
     this.sockets.add(ws);
     this.dashboardEventSockets.add(ws);
     this.liveDashboardEventSockets.add(ws);
@@ -4912,7 +4929,7 @@ export class Daemon {
         if (claim.type === 'window-focus') {
           const at = claim.focusedAt === undefined ? performance.timeOrigin + performance.now() : claim.focusedAt;
           current.focused = Math.max(current.focused, this.dashboardFocusTime(at));
-          this.dashboardDocumentFocus.set(ws.protocol, { id: current.id, focused: current.focused });
+          this.dashboardDocumentFocus.set(proof, { id: current.id, focused: current.focused });
           this.publishDashboardWindows();
         } else if (claim.type === 'window-designate') {
           this.dashboardDesignated = pair;
@@ -4941,10 +4958,10 @@ export class Daemon {
           typeof claim.instance !== 'string' ||
           !/^[a-z0-9]+-[a-z0-9]+(?:-[1-9][0-9]*)?$/.test(claim.instance) ||
           claim.instance.length > 100) return;
-      const previous = this.dashboardDocumentFocus.get(ws.protocol);
+      const previous = this.dashboardDocumentFocus.get(proof);
       const focused = Math.max(previous?.id === claim.id ? previous.focused : 0, this.dashboardFocusTime(claim.focusedAt));
       this.dashboardWindowIds.set(ws, { id: claim.id, instance: claim.instance, focused });
-      this.dashboardDocumentFocus.set(ws.protocol, { id: claim.id, focused });
+      this.dashboardDocumentFocus.set(proof, { id: claim.id, focused });
       this.publishDashboardWindows();
     });
     ws.on('close', () => {
@@ -5092,8 +5109,9 @@ export class Daemon {
     // dashboard cookie did. The actor names the credential, not the person
     // or program behind it.
     const actor = credential.kind;
+    if (credential.dashboardToken !== undefined &&
+        this.retainSocketProof(ws, credential.dashboardToken) === undefined) return;
     this.sockets.add(ws);
-    if (credential.dashboardToken !== undefined) this.dashboardSocketCredential.set(ws, credential.dashboardToken);
     let watchers = this.sessionSockets.get(session.id);
     if (watchers === undefined) {
       watchers = new Map();
@@ -5464,6 +5482,7 @@ export class Daemon {
       this.broadcastControl(session.id, { type: 'input-source', source: 'human' });
     };
     ws.on('message', (message: Buffer | string) => {
+      if (actor === 'dashboard' && ws.readyState !== ws.OPEN) return;
       this.callerContext.run(options.callerSession, () => {
         void onViewerMessage(message).catch((error: unknown) => {
           this.logger.warn('viewer message failed', { id: session.id, error: String(error) });
