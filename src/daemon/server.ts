@@ -348,6 +348,9 @@ class HomeOwnershipError extends Error {}
 
 type JsonBody = Record<string, unknown>;
 
+type DashboardSocketCredential = { kind: 'dashboard'; readOnly: false; dashboardToken: string; protocol: string };
+type SessionStreamCredential = DashboardSocketCredential | { kind: 'client' | 'viewer'; readOnly: boolean };
+
 /** The scheme and authority that open an absolute-form request target (`http://user@host:port`). */
 const SCHEME_AND_AUTHORITY = /^[a-z][a-z0-9+.-]*:\/\/[^/]*/i;
 
@@ -629,13 +632,11 @@ export class Daemon {
   private readonly promptScheduler: PromptScheduler;
   private stopScheduleWatch?: () => void;
   private readonly server: http.Server;
+  /** Protocol accepted by dashboard authentication for this specific upgrade. */
+  private readonly dashboardUpgradeProtocols = new WeakMap<http.IncomingMessage, string>();
   private readonly wss = new WebSocketServer({
     noServer: true,
-    // Echo a subprotocol only when the dashboard credential opens the feed
-    // or a session stream. A client token wins a session stream, so that
-    // upgrade selects none even if the cookie and a live proof are also
-    // offered. Returning false leaves the upgrade with none selected.
-    handleProtocols: (protocols, request) => this.dashboardProtocol(protocols, request),
+    handleProtocols: (_protocols, request) => this.dashboardUpgradeProtocols.get(request) ?? false,
   });
   private readonly sockets = new Set<WebSocket>();
   /** Every watcher of a session, with the gate that orders its stream across snapshots. */
@@ -1978,8 +1979,9 @@ export class Daemon {
       }
     }
     const requestedWindow = body['window'];
-    const launchingWindow = requestedWindow === undefined ? undefined : this.dashboardWindows().find(
-      (window) => window.pair === requestedWindow && dashboardProofFromProtocol(window.socket.protocol) === documentProof);
+    const launchingWindow = requestedWindow === undefined || documentProof === undefined ? undefined
+      : this.dashboardWindows().find(window => window.pair === requestedWindow &&
+        tokensEqual(window.socket.protocol, `sp-csrf.${documentProof}`));
     if (requestedWindow !== undefined && launchingWindow === undefined) {
       json(res, 409, { error: 'The launching dashboard window has closed.' });
       return;
@@ -2392,13 +2394,11 @@ export class Daemon {
   }
 
   /**
-   * Authenticate the dashboard event feed and retain its issuing credential.
-   * The client token on the query is not a way in. The proof is the
-   * subprotocol, not `X-ShellPuppet-CSRF`.
+   * Authenticate a dashboard upgrade and select the offered protocol that proved it.
    */
   private dashboardUpgradeCredential(
     req: http.IncomingMessage,
-  ): { code: number; reason: string; audit: string } | string {
+  ): DashboardSocketCredential | { code: number; reason: string; audit: string } {
     const token = this.dashboardCookieToken(req.headers.cookie);
     if (token === null) {
       return { code: 401, reason: 'Unauthorized', audit: 'unauthenticated' };
@@ -2415,43 +2415,10 @@ export class Daemon {
       (site === undefined && mode === undefined))) {
       return { code: 403, reason: 'Forbidden', audit: 'fetch-site' };
     }
-    const accepted = offeredProtocols(req).some((protocol) => {
-      const proof = dashboardProofFromProtocol(protocol);
-      return proof !== null && this.tokens.acceptsDashboardProof(proof);
-    });
-    if (!accepted) return { code: 403, reason: 'Forbidden', audit: 'proof' };
-    return token;
-  }
-
-  /**
-   * Select `sp-csrf.<proof>` when this upgrade's credential is the dashboard
-   * cookie: the dashboard feed, or a session stream the client token did not
-   * take. The echo names that credential. A viewer or client socket, including
-   * a client token that also carries the cookie and offers a live proof,
-   * selects none. Returning false leaves the upgrade with none selected.
-   */
-  private dashboardProtocol(protocols: Set<string>, request: http.IncomingMessage): string | false {
-    let url: URL;
-    try {
-      url = new URL(request.url ?? '/', 'http://127.0.0.1');
-    } catch {
-      return false;
-    }
-    const segments = url.pathname.split('/').filter((part) => part !== '');
-    const sessionStream =
-      segments.length === 3 && segments[0] === 'sessions' && segments[2] === 'stream';
-    if (url.pathname !== '/dashboard/events' && !sessionStream) return false;
-    // Same preference as sessionStreamDecision: a live client token opens a
-    // client socket, so the echoed protocol must not say this is the dashboard.
-    if (sessionStream && this.tokens.verify(url.searchParams.get('token'))?.kind === 'client') {
-      return false;
-    }
-    if (this.dashboardCookieToken(request.headers.cookie) === null) return false;
-    for (const protocol of protocols) {
-      const proof = dashboardProofFromProtocol(protocol);
-      if (proof !== null && this.tokens.acceptsDashboardProof(proof)) return protocol;
-    }
-    return false;
+    const protocol = offeredProtocols(req).find(offer =>
+      this.tokens.acceptsDashboardProof(dashboardProofFromProtocol(offer)));
+    if (protocol === undefined) return { code: 403, reason: 'Forbidden', audit: 'proof' };
+    return { kind: 'dashboard', readOnly: false, dashboardToken: token, protocol };
   }
 
   /**
@@ -2463,9 +2430,9 @@ export class Daemon {
    * upgrade's rules: a live `sp-csrf` subprotocol, a matching Origin, and
    * same-origin Fetch Metadata. A header is not the proof. A viewer cookie,
    * including a read-only one, is never treated as the dashboard credential.
-   * When both are present and the proof is live, the dashboard cookie is the
+   * When both are present and the dashboard checks pass, the dashboard cookie is the
    * one that opens the socket, so a read-only viewer cookie in the same jar
-   * does not mask it. When the proof is missing, a viewer cookie for this
+   * does not mask it. When the dashboard checks fail, a viewer cookie for this
    * session still opens the socket on its own rules.
    */
   private sessionStreamDecision(
@@ -2473,7 +2440,7 @@ export class Daemon {
     url: URL,
     sessionId: string,
   ):
-    | { ok: true; credential: { kind: 'client' | 'viewer' | 'dashboard'; readOnly: boolean; dashboardToken?: string }; frozen?: { bytes: string; cols: number; rows: number } }
+    | { ok: true; credential: SessionStreamCredential; frozen?: { bytes: string; cols: number; rows: number } }
     | { ok: false; code: number; reason: string; audit: string | null } {
     const client = this.tokens.verify(url.searchParams.get('token'));
     if (client?.kind === 'client') {
@@ -2484,9 +2451,8 @@ export class Daemon {
     }
 
     const dashboard = this.dashboardUpgradeCredential(req);
-    if (typeof dashboard === 'string') {
-      return { ok: true, credential: { kind: 'dashboard', readOnly: false,
-        dashboardToken: dashboard } };
+    if ('kind' in dashboard) {
+      return { ok: true, credential: dashboard };
     }
 
     const viewer = cookieValues(req.headers.cookie, VIEWER_COOKIE)
@@ -4669,15 +4635,16 @@ export class Daemon {
 
     // The dashboard feed is cookie-only. Its Origin rule is stricter than the
     // client-token sockets below, which still allow a missing Origin.
-    if (segments[0] === 'dashboard' && segments[1] === 'events' && segments.length === 2) {
+    if (url.pathname === '/dashboard/events') {
       const credential = this.dashboardUpgradeCredential(req);
-      if (typeof credential !== 'string') {
+      if ('code' in credential) {
         this.auditDashboardRefusal(req, credential.audit);
         reject(credential.code, credential.reason);
         return;
       }
+      this.dashboardUpgradeProtocols.set(req, credential.protocol);
       this.wss.handleUpgrade(req, socket, head, (ws) => {
-        this.attachDashboardSocket(ws, credential);
+        this.attachDashboardSocket(ws, credential.dashboardToken);
       });
       return;
     }
@@ -4714,7 +4681,7 @@ export class Daemon {
       return;
     }
 
-    if (segments[0] !== 'sessions' || segments[2] !== 'stream') {
+    if (segments.length !== 3 || segments[0] !== 'sessions' || segments[2] !== 'stream') {
       reject(404, 'Not Found');
       return;
     }
@@ -4755,6 +4722,9 @@ export class Daemon {
     // dashboard credential is made passive in attachSocket, whatever the
     // query says, so this flag cannot turn that socket into a driver.
     const passive = passiveDrive(url);
+    if (decision.credential.kind === 'dashboard') {
+      this.dashboardUpgradeProtocols.set(req, decision.credential.protocol);
+    }
     this.wss.handleUpgrade(req, socket, head, (ws) => {
       // Which credential opened the socket travels with it, so the audit log
       // names that credential rather than assuming a browser: `client` for
@@ -4812,7 +4782,9 @@ export class Daemon {
     for (const [id, previous] of this.dashboardTransferable) {
       const owner = windows.find(w => this.dashboardAssignments.get(w.pair)?.includes(id));
       const recipient = owner?.socket.protocol;
-      if (recipient === previous || (previous === null && windows.length === 0)) continue;
+      const unchanged = recipient === undefined ? previous === undefined
+        : typeof previous === 'string' && tokensEqual(previous, recipient);
+      if (unchanged || (previous === null && windows.length === 0)) continue;
       this.dashboardTransferable.set(id, recipient);
       const session = this.manager.get(id);
       if (session) this.announceGeometry(id, session, { resync: false });
@@ -5028,7 +5000,7 @@ export class Daemon {
 
   private gridOfferedTo(id: string, ws: WebSocket): boolean {
     const recipient = this.dashboardTransferable.get(id);
-    return (recipient === null || recipient === ws.protocol) &&
+    return (recipient === null || (recipient !== undefined && tokensEqual(recipient, ws.protocol))) &&
       this.dashboardCredentialOwner.has(id) && this.dashboardSocketCredential.has(ws) &&
       tokensEqual(this.dashboardCredentialOwner.get(id)!, this.dashboardSocketCredential.get(ws)!);
   }
@@ -5091,7 +5063,7 @@ export class Daemon {
   private attachSocket(
     ws: WebSocket,
     session: Session,
-    credential: { kind: 'client' | 'viewer' | 'dashboard'; readOnly: boolean; dashboardToken?: string },
+    credential: SessionStreamCredential,
     options: { passive?: boolean; frozen?: { bytes: string; cols: number; rows: number };
       callerSession?: string } = {},
   ): void {
@@ -5109,7 +5081,7 @@ export class Daemon {
     // dashboard cookie did. The actor names the credential, not the person
     // or program behind it.
     const actor = credential.kind;
-    if (credential.dashboardToken !== undefined &&
+    if (credential.kind === 'dashboard' &&
         this.retainSocketProof(ws, credential.dashboardToken) === undefined) return;
     this.sockets.add(ws);
     let watchers = this.sessionSockets.get(session.id);
@@ -5344,7 +5316,7 @@ export class Daemon {
               this.geometryEpoch.set(session.id, (this.geometryEpoch.get(session.id) ?? 0) + 1);
               if (credential.kind === 'dashboard') {
                 this.dashboardGeometryOwner.set(session.id, ws.protocol);
-                this.dashboardCredentialOwner.set(session.id, credential.dashboardToken!);
+                this.dashboardCredentialOwner.set(session.id, credential.dashboardToken);
               } else {
                 this.dashboardGeometryOwner.delete(session.id);
                 this.dashboardCredentialOwner.delete(session.id);
@@ -5375,7 +5347,7 @@ export class Daemon {
                   this.geometryEpoch.set(session.id, (this.geometryEpoch.get(session.id) ?? 0) + 1);
                   if (credential.kind === 'dashboard') {
                     this.dashboardGeometryOwner.set(session.id, ws.protocol);
-                    this.dashboardCredentialOwner.set(session.id, credential.dashboardToken!);
+                    this.dashboardCredentialOwner.set(session.id, credential.dashboardToken);
                   } else {
                     this.dashboardGeometryOwner.delete(session.id);
                     this.dashboardCredentialOwner.delete(session.id);

@@ -1,7 +1,8 @@
 /** The daemon owns the dashboard window roster and pane assignments. */
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import * as http from 'node:http';
 import WebSocket from 'ws';
+import * as auth from '../../src/daemon/auth.js';
 import { api, eventually, startTestDaemon } from './helpers.js';
 
 type State = { type: 'window-state'; designated: string; windows: string[]; assignments: Record<string, string[]>; move?: { before?: string } };
@@ -25,6 +26,7 @@ type Peer = { ws: WebSocket; states: State[]; pair: string };
 interface Fixture {
   authorise: () => Promise<void>;
   openDocument: () => Promise<void>;
+  socket: (route: string) => WebSocket;
   connect: (id: string, instance: string) => Promise<Peer>;
   closedLaunch: (source: string) => Promise<Response>;
   sessionId: string;
@@ -59,12 +61,16 @@ async function withDashboard(check: (fixture: Fixture) => Promise<void>) {
       await openDocument();
     };
     await authorise();
-    const connect = async (id: string, instance: string) => {
-      const ws = new WebSocket(`ws://127.0.0.1:${String(daemon.port)}/dashboard/events`, [`sp-csrf.${proof}`], {
+    const socket = (route: string) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${String(daemon.port)}${route}`, [`sp-csrf.${proof}`], {
         headers: { cookie, origin: `http://127.0.0.1:${String(daemon.port)}`,
           'sec-fetch-site': 'same-origin', 'sec-fetch-mode': 'websocket' },
       });
       sockets.push(ws);
+      return ws;
+    };
+    const connect = async (id: string, instance: string) => {
+      const ws = socket('/dashboard/events');
       const states: State[] = [];
       ws.on('message', (raw) => {
         const bytes = Array.isArray(raw) ? Buffer.concat(raw) : Buffer.from(raw as Buffer);
@@ -83,12 +89,51 @@ async function withDashboard(check: (fixture: Fixture) => Promise<void>) {
         'x-shellpuppet-csrf': proof!, 'content-type': 'application/json' },
       body: JSON.stringify({ profile: 'lead', window: source }),
     });
-    await check({ sessionId, connect, authorise, openDocument, closedLaunch });
+    await check({ sessionId, socket, connect, authorise, openDocument, closedLaunch });
   } finally {
     for (const ws of sockets) ws.terminate();
     await daemon.stop();
   }
 }
+
+it('compares the launching document with the registered window in constant time', () =>
+  withDashboard(async ({ connect, openDocument, closedLaunch }) => {
+    const owner = await connect('owner-window', 'i-first');
+    await openDocument();
+    const neighbour = await connect('next-window', 'i-next');
+    const compared = vi.spyOn(auth, 'tokensEqual');
+    try {
+      expect((await closedLaunch(owner.pair)).status).toBe(409);
+      expect(compared).toHaveBeenCalledWith(owner.ws.protocol, neighbour.ws.protocol);
+    } finally { compared.mockRestore(); }
+  }), 120_000);
+
+it('compares the document proofs in constant time when offering and redirecting a grid', () =>
+  withDashboard(async ({ sessionId, socket, connect, openDocument }) => {
+    const owner = await connect('owner-window', 'i-first');
+    const pane = socket(`/sessions/${sessionId}/stream`);
+    const geometry: Record<string, unknown>[] = [];
+    pane.on('message', (data: Buffer, binary) => {
+      if (binary) return;
+      const frame = JSON.parse(data.toString('utf8')) as Record<string, unknown>;
+      if (frame.type === 'geometry') geometry.push(frame);
+    });
+    await eventually(() => geometry.length > 0);
+    pane.send(JSON.stringify({ type: 'resize', cols: 90, rows: 30, take: true }));
+    await eventually(() => geometry.at(-1)?.control === 'yours');
+    await openDocument();
+    const next = await connect('next-window', 'i-next');
+    const compared = vi.spyOn(auth, 'tokensEqual');
+    try {
+      pane.send(JSON.stringify({ type: 'release-grid' }));
+      await eventually(() => geometry.at(-1)?.dashboardTransferable === true);
+      expect(compared).toHaveBeenCalledWith(owner.ws.protocol, pane.protocol);
+      compared.mockClear();
+      next.ws.send(JSON.stringify({ type: 'window-move', session: sessionId, source: owner.pair, target: next.pair }));
+      await eventually(() => geometry.at(-1)?.dashboardTransferable === false);
+      expect(compared).toHaveBeenCalledWith(owner.ws.protocol, next.ws.protocol);
+    } finally { compared.mockRestore(); }
+  }), 120_000);
 
 it('accepts moves only from the recorded owner and reassigns a closed window', () =>
   withDashboard(async ({ connect, sessionId, closedLaunch }) => {
