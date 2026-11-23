@@ -132,14 +132,20 @@ foreach ($root in $roots) {
 }
 `;
 
-function secureWindowsHome(home: string, deadline = Infinity, launchHome?: string): WindowsHome & { launcher?: string } {
+function secureWindowsHome(home: string, deadline?: number, launchHome?: string): WindowsHome & { launcher?: string } {
   const powershell = systemTool('WindowsPowerShell', 'v1.0', 'powershell.exe');
   const files = ['daemon.json', 'launcher-claims.json', 'previous-sessions.json', 'restart-source.json', 'config.json', 'daemon.log', 'audit.log'];
   try {
-    const timeout = Math.min(15_000, deadline - Date.now());
+    // Starting the system shell and verifying the files share the caller's
+    // remaining start budget. A standalone daemon also bounds its single check.
+    const timeout = deadline === undefined || deadline === Infinity ? 60_000 : deadline - Date.now();
     if (timeout <= 0) throw new Error('Home permission check deadline expired.');
-    const script = launchHome === undefined ? windowsAclScript :
+    const verification = launchHome === undefined ? windowsAclScript :
       '[Console]::OutputEncoding = [Text.UTF8Encoding]::new($false)\n' + windowsAclScript + reserveWindowsLauncher;
+    // The identity can reach stdout while normal PowerShell shutdown still
+    // holds the process open. Finish explicitly after all ACL work and any
+    // launcher reservation. The parent still requires a successful exit.
+    const script = verification + '\n[Console]::Out.Flush()\n[Environment]::Exit(0)';
     const identity = execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand',
       Buffer.from(script, 'utf16le').toString('base64')], {
       windowsHide: true, stdio: 'pipe', timeout, encoding: 'utf8',
@@ -151,8 +157,8 @@ function secureWindowsHome(home: string, deadline = Infinity, launchHome?: strin
     const [sid, owner, launcher] = identity.split('|');
     if (!sid || !owner || !/^S-1-[0-9-]+$/.test(sid)) throw new Error('Missing Windows identity.');
     return { path: path.resolve(home), sid, setFileOwner: owner !== sid, ...(launcher ? { launcher } : {}) };
-  } catch {
-    throw new Error('Could not verify owner-only Windows permissions in the ShellPuppet home.');
+  } catch (cause) {
+    throw new Error('Could not verify owner-only Windows permissions in the ShellPuppet home.', { cause });
   }
 }
 
