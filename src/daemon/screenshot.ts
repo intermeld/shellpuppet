@@ -38,8 +38,10 @@ export interface CaptureOptions {
   height: number;
   /** Viewport rows the reasoning filter hid; covered before the picture is taken. */
   hiddenRows?: readonly number[];
-  /** Budget for the whole capture, browser start to screenshot. */
+  /** Capture budget, starting at readiness if the interaction has its own setup budget. */
   timeoutMs?: number;
+  /** Give a driven page a separate launch, navigation and readiness budget. */
+  setupTimeoutMs?: number;
   /**
    * Open the page as a viewer that may drive the grid, as a human's window
    * does, rather than in capture mode. Readiness is then the probe below,
@@ -247,8 +249,9 @@ export class DevTools {
     });
   }
 
-  extendDeadline(ms: number): void {
+  extendDeadline(ms: number): number {
     this.deadline = Date.now() + ms;
+    return this.deadline;
   }
 
   onEvent(sessionId: string, method: string, listener: (params: Record<string, unknown>) => void): () => void {
@@ -387,7 +390,9 @@ export function captureBrowserArgs(profileDir: string, width: number, height: nu
 export async function captureViewer(options: CaptureOptions): Promise<Capture> {
   const logger = options.logger ?? NULL_LOGGER;
   const started = Date.now();
-  const deadline = started + (options.timeoutMs ?? DEFAULT_CAPTURE_TIMEOUT_MS);
+  const timeout = options.timeoutMs ?? DEFAULT_CAPTURE_TIMEOUT_MS;
+  const setupTimeout = options.interact && options.setupTimeoutMs;
+  let deadline = started + (setupTimeout ?? timeout);
   const profileRoot = options.profileRoot ?? os.tmpdir();
   fs.mkdirSync(profileRoot, { recursive: true });
   const profileDir = fs.mkdtempSync(path.join(profileRoot, PROFILE_PREFIX));
@@ -485,6 +490,11 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
     }
 
     if (options.interact !== undefined) {
+      if (setupTimeout !== undefined) {
+        if (Date.now() >= deadline) throw new Error('Browser setup exceeded its readiness budget.');
+        timings['setupMs'] = Date.now() - started;
+        deadline = cdp.extendDeadline(timeout);
+      }
       stage = 'interaction';
       probed = await options.interact({
         evaluate,
