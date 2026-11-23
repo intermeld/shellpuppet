@@ -15,6 +15,17 @@ const home = makeTempHome('shellpuppet-identity-');
 const execFileAsync = promisify(execFile);
 let td: TestDaemon;
 
+// Each child publishes its complete report with one rename. Seeing the final
+// name means the write has finished, including in the nested CLI session.
+const publishIdentity = `
+  const fs = require('node:fs'), file = process.argv[1];
+  fs.writeFileSync(file + '.tmp', JSON.stringify({ id: process.env.SHELLPUPPET_SESSION,
+    token: process.env.SHELLPUPPET_SESSION_TOKEN, instance: process.env.SHELLPUPPET_DAEMON_INSTANCE,
+    cli: process.env.SHELLPUPPET_CLI }));
+  fs.renameSync(file + '.tmp', file);
+`;
+const liveReporter = publishIdentity + 'setInterval(() => {}, 200);';
+
 beforeAll(async () => {
   td = await startTestDaemon({ home, policy: { mode: 'allow-all' },
     logger: createFileLogger(daemonLogPath(home)), audit: createAuditor(home) });
@@ -22,9 +33,8 @@ beforeAll(async () => {
 afterAll(async () => { await td.stop(); }, 120_000);
 
 async function startReporter(file: string, headers: Record<string, string> = {}) {
-  const code = "require('node:fs').writeFileSync(process.argv[1],JSON.stringify({id:process.env.SHELLPUPPET_SESSION,token:process.env.SHELLPUPPET_SESSION_TOKEN,instance:process.env.SHELLPUPPET_DAEMON_INSTANCE,cli:process.env.SHELLPUPPET_CLI}));setInterval(()=>{},200)";
   const started = await api(td.port, td.token, '/sessions', { body: {
-    command: process.execPath, args: ['-e', code, file], shell: false,
+    command: process.execPath, args: ['-e', liveReporter, file], shell: false,
   }, headers });
   expect(started.status, JSON.stringify(started.body)).toBe(200);
   await eventually(() => fs.existsSync(file), 15_000);
@@ -124,9 +134,8 @@ describe('session identity', () => {
   }, 90_000);
   it('refuses the identity of a naturally exited session still in the list', async () => {
     const file = path.join(home, 'exited.json');
-    const code = "require('node:fs').writeFileSync(process.argv[1],JSON.stringify({id:process.env.SHELLPUPPET_SESSION,token:process.env.SHELLPUPPET_SESSION_TOKEN}))";
     const started = await api(td.port, td.token, '/sessions', { body: {
-      command: process.execPath, args: ['-e', code, file], shell: false, openViewer: false,
+      command: process.execPath, args: ['-e', publishIdentity, file], shell: false, openViewer: false,
     } });
     expect(started.status, JSON.stringify(started.body)).toBe(200);
     await eventually(() => fs.existsSync(file));
@@ -146,10 +155,9 @@ describe('session identity', () => {
   it('starts a child through the CLI from inside a session with its own identity', async () => {
     const parentFile = path.join(home, 'nested-parent.json');
     const childFile = path.join(home, 'nested-child.json');
-    const childCode = "require('node:fs').writeFileSync(process.argv[1],JSON.stringify({id:process.env.SHELLPUPPET_SESSION,token:process.env.SHELLPUPPET_SESSION_TOKEN,instance:process.env.SHELLPUPPET_DAEMON_INSTANCE}));setInterval(()=>{},200)";
-    const parentCode = "require('node:fs').writeFileSync(process.argv[1],JSON.stringify({id:process.env.SHELLPUPPET_SESSION,token:process.env.SHELLPUPPET_SESSION_TOKEN}));require('node:child_process').spawn(process.execPath,[process.env.SHELLPUPPET_CLI,'start','--no-viewer','--no-shell','--json',process.execPath,'-e',process.argv[3],process.argv[2]],{env:process.env,stdio:'ignore'});setInterval(()=>{},200)";
+    const parentCode = liveReporter + "require('node:child_process').spawn(process.execPath,[process.env.SHELLPUPPET_CLI,'start','--no-viewer','--no-shell','--json',process.execPath,'-e',process.argv[3],process.argv[2]],{env:process.env,stdio:'ignore'});";
     const started = await api(td.port, td.token, '/sessions', { body: {
-      command: process.execPath, args: ['-e', parentCode, parentFile, childFile, childCode],
+      command: process.execPath, args: ['-e', parentCode, parentFile, childFile, liveReporter],
       shell: false, openViewer: false, env: { SHELLPUPPET_HOME: home },
     } });
     expect(started.status, JSON.stringify(started.body)).toBe(200);
