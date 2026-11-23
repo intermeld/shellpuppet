@@ -98,6 +98,63 @@ it.each([false, true])('keeps the two-key limit across later scans and arrivals 
   expect(r.audit().filter(e => e.action === 'nudge')).toHaveLength(0);
 });
 
+it.each([false, true])('recovers the remaining key for a later arrival (original read: %s)', async read => {
+  const r = await recipient(1);
+  const pty = r.session['pty'];
+  const write = pty.write.bind(pty);
+  vi.spyOn(pty, 'write').mockImplementation(data => {
+    write(data);
+    if (data !== '\r') return;
+    if (read) r.read();
+    else {
+      // The immediate retry cannot prove the line on its first reading.
+      vi.spyOn(r.session, 'nudgeReadyWithLine').mockReturnValueOnce(false);
+    }
+  });
+  await r.tick();
+  vi.restoreAllMocks();
+  expect(r.bytes()).toBe(r.line + '\r');
+  expect(r.states()).toEqual([read ? 'read' : 'waiting']);
+  expect(r.audit().find(e => e.action === 'nudge-aborted')?.meta)
+    .toMatchObject({ reason: 'not-submitted', messageIds: [r.first.id] });
+  const second = r.send();
+  await r.tick();
+  expect(r.states()).toEqual([read ? 'read' : 'nudged', 'nudged']);
+  expect(r.bytes()).toBe(r.line + '\r\r');
+  expect(r.audit().filter(e => e.action === 'nudge').map(e => e.meta)).toEqual([{
+    messageIds: [r.first.id], count: 1, waitingMessageIds: [second.id], staleMessageIds: read ? [r.first.id] : [],
+  }]);
+});
+
+it('never retypes a pending notice submitted by a person before the first daemon key', async () => {
+  const r = await recipient(0);
+  const pty = r.session['pty'];
+  const write = pty.write.bind(pty);
+  let entered: Promise<string> | undefined;
+  const spy = vi.spyOn(pty, 'write').mockImplementation(data => {
+    write(data);
+    if (data === r.line) entered = r.session.write('\r', { humanInput: true });
+  });
+  await r.tick();
+  await entered;
+  spy.mockRestore();
+  expect(r.audit().find(e => e.action === 'nudge-aborted')?.meta)
+    .toMatchObject({ reason: 'other-input-arrived', messageIds: [r.first.id] });
+  // Advance the session's quiet and recent-input periods as well as the scheduler clock.
+  await eventually(() => r.bytes() === r.line + '\r' && r.session['pendingComposerVerdict']().ready);
+  const now = Date.now;
+  const clock = vi.spyOn(Date, 'now').mockImplementation(() => now() + 31_000);
+  try {
+    await r.tick();
+    await r.tick();
+    expect(r.session.nudgePendingLine()).toBeNull();
+    expect(r.audit().some(e => e.action === 'nudge-cleared')).toBe(true);
+    expect(r.bytes()).toBe(r.line + '\r');
+    expect(r.states()).toEqual(['waiting']);
+    expect(r.audit().some(e => e.action === 'nudge')).toBe(false);
+  } finally { clock.mockRestore(); }
+});
+
 it('never retypes an accepted line after a resize interrupted its confirmation', async () => {
   const r = await recipient(0);
   Object.assign(r.session, { pendingNudgeSettleMs: 25 });

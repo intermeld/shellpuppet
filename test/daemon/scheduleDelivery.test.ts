@@ -8,6 +8,42 @@ import { Mailbox } from '../../src/core/mailbox.js';
 import { ScreenRenderer } from '../../src/core/renderer.js';
 import { Session } from '../../src/core/session.js';
 import { Daemon } from '../../src/daemon/server.js';
+import { InputPty } from '../fixtures/inputPty.js';
+
+it.each([
+  ['claude-answered', 'skip', 'sent'],
+  ['claude-thinking', 'queue', 'queued'],
+  ['claude-thinking', 'skip', 'skipped'],
+] as const)('delivers a word-wrapped schedule on %s with %s', async (capture, whenBusy, outcome) => {
+  const message = 'Please review the completed release checklist before starting the next job.';
+  const schedule = { name: 'check', session: 'worker', whenBusy, enabled: true, message, cron: '* * * * *' };
+  const pty = new InputPty(48);
+  const session = new Session('s1', { command: process.execPath, agent: claude.name, cols: pty.cols, rows: pty.rows }, {
+    platform: 'linux', spawn: () => pty,
+  });
+  const screen = fs.readFileSync(path.join(__dirname, '../fixtures/reasoning', capture + '.ansi'), 'utf8')
+    .replace(/─{120}/gu, '─'.repeat(pty.cols));
+  const mailbox = new Mailbox({ enabled: false, policy: () => false });
+  mailbox.register({ id: session.id, name: 'worker', kind: 'session' });
+  const daemon = Object.create(Daemon.prototype) as Daemon;
+  Object.assign(daemon, { mailbox, pendingSchedules: new Map(), manager: { get: () => session },
+    now: () => Date.now() + 5_000 });
+  const record = pty.write.bind(pty);
+  vi.spyOn(pty, 'write').mockImplementation(data => {
+    record(data);
+    if (data === message) pty.paint('\x1b[H\x1b[2J' + screen.replace('❯\u00a0',
+      '❯\u00a0Please review the completed release checklist\r\n  before starting the next job.'));
+  });
+  try {
+    pty.paint(screen);
+    await session['renderer'].flush();
+    session.nudgeState(Date.now(), whenBusy);
+    const result = await daemon['deliverScheduled'](schedule, () => true);
+    expect(result).toMatchObject({ outcome, ...(outcome === 'skipped' ? { reason: 'busy' } : {}) });
+    expect(pty.writes).toEqual(outcome === 'skipped' ? [] : [message, '\r']);
+    expect(session.nudgePendingLine()).toBeNull();
+  } finally { await session['renderer'].dispose(); }
+});
 
 it.each([
   ['claude-answered', 'skip', 'sent', undefined],

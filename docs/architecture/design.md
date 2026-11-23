@@ -429,12 +429,14 @@ message whom, and a clock.
   with the last failed guard as the reason). After writing the submit key,
   the daemon checks the composer at the end of the module's settle time
   (300 ms by default). Confirmation requires a positively empty composer for
-  1.5 seconds. The daemon checks each rendered update during that period.
+  1.5 seconds. The daemon checks the input region on each rendered update.
   A busy transcript or sidebar can continue updating around an empty input.
   If the exact untouched line remains, the daemon repeats every submit guard
   and may send one more key. The two-key allowance belongs to the line across
   all scheduler visits. Input, a resize, a stall or terminal output during
   settling can cancel the retry, even if the original draft reappears.
+  A blank continuation inside a framed input can be a hard newline even
+  with the caret on the preceding row. Such an input waits for a person.
   Recovery requires one logical line. An application-drawn break that could
   also be a hard newline leaves the draft pending.
   Without confirmation after that check, the messages stay `waiting` and
@@ -463,8 +465,9 @@ message whom, and a clock.
   placeholder ink alone does not. A programme that holds accepted input
   unpainted beyond that period while showing an empty, idle composer can
   receive a second line. The submit check still refuses two copies, leaving
-  them for a person to clear. Once a mailbox line receives a submit key, its
-  text remains recorded on the recipient session after the composer clears.
+  them for a person to clear. Once the daemon or a person sends a submit
+  key to a pending mailbox line, the recipient session remembers the line
+  after the composer clears.
   An uncertain attempt keeps the messages waiting. Only a different unread
   notice can then start a fresh body.
 

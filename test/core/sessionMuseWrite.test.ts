@@ -44,7 +44,7 @@ function echoNudge(session: Session, pty: RecordingPty): void {
   const write = pty.write.bind(pty);
   vi.spyOn(pty, 'write').mockImplementation(data => {
     write(data);
-    void session['renderer'].write(data === '\r' ? idle : '\x1b[H\x1b[2K› ' + data);
+    void session['renderer'].write(data === '\r' ? idle + '\r\n\r\n  ? for shortcuts' : '\x1b[H\x1b[2K› ' + data);
   });
 }
 

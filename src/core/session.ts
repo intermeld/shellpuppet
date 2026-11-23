@@ -1387,6 +1387,16 @@ export class Session implements WaitTarget {
     this.pendingTurnBusy = false;
   }
 
+  /** A submit from either input path may have consumed the pending mailbox notice. */
+  private notePendingSubmission(endsWithSubmit = true): void {
+    if (this.pendingNudgeLine === null) return;
+    // A batched write may contain Enter followed by an edit or pasted text.
+    // It can prevent a replay, but only a final key can start the busy/empty clear.
+    if (endsWithSubmit) this.pendingTurnSubmitted = true;
+    this.pendingQuietSince = Date.now();
+    if (this.pendingNudgeIds.length > 0) this.lastAttemptedNudgeLine = this.pendingNudgeLine;
+  }
+
   /** A pending body may receive its submit key only after it is visible exactly once. */
   submitPendingNudge(line: string, ready: (screen: string) => boolean, queueKey = false) {
     const queued = this.writeChain.then(async (): Promise<'sent' | 'wait' | 'not-submitted'> => {
@@ -1549,9 +1559,7 @@ export class Session implements WaitTarget {
         this.refuseIfInputFailed();
         // Charge before writing. A pipe error can leave delivery uncertain.
         this.pendingSubmitKeys++;
-        if (this.pendingNudgeIds.length) this.lastAttemptedNudgeLine = line;
-        this.pendingQuietSince = Date.now();
-        this.pendingTurnSubmitted = true;
+        this.notePendingSubmission();
         this.pty.write(key);
         await settle(settleMs);
         if (interrupted()) return false;
@@ -1772,6 +1780,7 @@ export class Session implements WaitTarget {
           onNudgeAbort?.('not-submitted');
           return null;
         }
+        this.notePendingSubmission();
         this.pty.write(key);
         if (nudge) {
           this.clearPendingNudge();
@@ -1781,10 +1790,6 @@ export class Session implements WaitTarget {
               typedDraftSeen, beforeSubmitScreen, wasBusy, placeholdersBefore)
             : { submitRetried: false,
               message: "Submit key sent; the agent's composer was not on screen when the text was typed." });
-          if (this.pendingNudgeLine !== null) {
-            this.pendingQuietSince = Date.now();
-            this.pendingTurnSubmitted = true;
-          }
         }
       } catch (error) {
         onNudgeAbort?.(this.pendingSubmitKeys > 0 ? 'not-submitted' : failedCheck());
@@ -1793,9 +1798,11 @@ export class Session implements WaitTarget {
       return screen;
     }
 
+    if (!terminalReport && this.pendingNudgeLine !== null) {
+      const key = this.nudgeSubmit();
+      if (data.includes(key)) this.notePendingSubmission(data.endsWith(key));
+    }
     await this.writeData(data);
-    if (!terminalReport && this.pendingNudgeLine !== null &&
-      data.endsWith(this.nudgeSubmit())) this.pendingTurnSubmitted = true;
     return screen;
   }
 

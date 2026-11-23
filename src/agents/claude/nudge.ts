@@ -27,6 +27,8 @@ export function readiness(view: NudgeView): NudgeReadiness {
   return readingReadiness(view, reading, {
     placeholder: PLACEHOLDER,
     continuations: true,
+    // A freshly written schedule carries its busy policy through the draft check.
+    indentedWordWrap: view.whenBusy !== undefined,
     placeholderInk,
     // Claude Code also offers a suggested next prompt in the same dim ink; typed text is never dim.
     anyHintInPlaceholderInk: true,

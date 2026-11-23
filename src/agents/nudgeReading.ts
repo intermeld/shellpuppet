@@ -209,12 +209,11 @@ function matchesComposerRows(rows: readonly StyledLine[], expected: string, view
   indentedWordWrap: boolean): boolean {
   const first = rows[0]!;
   let text = first.text.replace(/^\s*[❯›>][\u00a0 ]?/u, '');
-  let last = 0;
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i]!;
-    if (row.text === '') continue;
-    if (i !== last + 1) return false;
-    const previous = rows[last]!;
+    // Even with the caret on the preceding row this can be a trailing hard newline.
+    if (row.text === '') return false;
+    const previous = rows[i - 1]!;
     if (row.wrapped) {
       text += ' '.repeat(previous.wrapPadding ?? 0) + row.text;
     } else {
@@ -223,13 +222,10 @@ function matchesComposerRows(rows: readonly StyledLine[], expected: string, view
           stringWidth(previous.text + ' ' + word) < view.viewportCols) return false;
       text += ' ' + row.text.slice(2);
     }
-    last = i;
   }
+  const last = rows.length - 1;
   const cursor = view.cursor;
-  if (view.recoveringDraft && rows.length > last + 1 &&
-      (cursor?.y !== at + last || cursor.x !== stringWidth(rows[last]!.text))) return false;
-  if (cursor && cursor.y >= at && cursor.y < at + rows.length &&
-      (cursor.y > at + last || (cursor.y === at + last && cursor.x > stringWidth(rows[last]!.text)))) return false;
+  if (cursor?.y === at + last && cursor.x > stringWidth(rows[last]!.text)) return false;
   return text === expected;
 }
 
@@ -294,16 +290,29 @@ export function readingReadiness(view: NudgeView, reading: AgentSignature, rule:
   if (busy && rule.queueWhileBusy !== true && view.whenBusy === undefined) return 'busy';
   const region = composerRegion(lines, reading, at, rule, view.expectedDraft !== undefined);
   if (region === null || region.unproven) return busy ? 'busy' : 'unknown';
+  const below = at + region.rows.length;
+  const framedInput = rule.continuations && reading.frame !== undefined;
+  // Framed inputs have no spacer inside the lower rule. Every additional row
+  // belongs to the draft, including a blank one with the caret on the first row.
+  const clear = view.expectedDraft === undefined && rowClear(region.rows[0]!, rule, view.exactEmpty) && (framedInput
+    ? region.rows.length === 1 : region.rows.slice(1).every(line => line.text.trim() === ''));
+  // A footer can print the prompt glyph too. For a framed input the lower
+  // boundary must still be on screen before a glyph can stand for empty input.
+  if (framedInput && below === lines.length) {
+    if (view.expectedDraft !== undefined) return 'draft';
+    if (clear) return 'unknown';
+  }
   // A running turn can show that its composer emptied even when it cannot accept another line.
-  if (busy && view.afterSubmit && view.expectedDraft === undefined) {
-    return region.rows.every(line => rowClear(line, rule, view.exactEmpty)) ? 'ready' : 'draft';
+  if (view.afterSubmit && view.expectedDraft === undefined) {
+    if ((rule.ruleRows && !framedByRules(lines, at, below, rule)) ||
+        (rule.status && below === lines.length)) return 'unknown';
+    return clear ? 'ready' : 'draft';
   }
   if (busy && view.whenBusy !== undefined) {
-    if (view.expectedDraft === undefined && region.rows.some(line => !rowClear(line, rule, view.exactEmpty))) return 'draft';
+    if (view.expectedDraft === undefined && !clear) return 'draft';
     if (view.whenBusy === 'skip' || rule.queueWhileBusy !== true) return 'busy';
   }
   if (busy && rule.composerFramed !== true) {
-    const below = at + region.rows.length;
     if (!framedByRules(lines, at, below, rule) || rule.queueFooter === undefined ||
       !rule.queueFooter(lines.slice(below + 1).filter((line) => line.text.trim() !== ''))) return 'busy';
   }
@@ -315,7 +324,6 @@ export function readingReadiness(view: NudgeView, reading: AgentSignature, rule:
     if (rule.matchesDraft) return rule.matchesDraft(region.rows, view.expectedDraft, view, at) ? 'ready' : 'draft';
     return matchesComposerRows(region.rows, view.expectedDraft, view, at, rule.indentedWordWrap === true) ? 'ready' : 'draft';
   }
-  const clear = region.rows.every((line) => rowClear(line, rule, view.exactEmpty));
   // A draft during a running turn waits: the person may be typing a reply.
   if (busy) return clear ? 'queue' : 'busy';
   return clear ? 'ready' : 'draft';
