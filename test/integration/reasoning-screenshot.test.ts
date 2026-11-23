@@ -13,6 +13,8 @@ import type { ApiResult, TestDaemon } from './helpers.js';
 const SECRET = 'VELVET_ZEPPELIN_42';
 let td: TestDaemon;
 let browser: string | null;
+// Allow up to 60 s for terminal output, 90 s for browser setup and 45 s for the photographs.
+const pairTestTimeout = 210_000;
 const referenceCaptures = new Map<string, typeof captureViewer>();
 
 beforeAll(async () => {
@@ -33,11 +35,14 @@ function expectPhotograph(result: ApiResult): void {
 // reference is taken before the production capture applies its row covers.
 async function photographPair(id: string, probe: string) {
   const reference: { plain?: { png: Buffer; probe: unknown } } = {};
-  referenceCaptures.set(id, options => captureViewer({ ...options, probe, interact: async ({ evaluate, send }) => {
-    const bounds = await evaluate(probe);
-    const image = await send('Page.captureScreenshot', { format: 'png' }) as { data: string };
-    reference.plain = { png: Buffer.from(image.data, 'base64'), probe: bounds };
-  } }));
+  referenceCaptures.set(id, options => captureViewer({
+    ...options, setupTimeoutMs: 90_000, probe,
+    interact: async ({ evaluate, send }) => {
+      const bounds = await evaluate(probe);
+      const image = await send('Page.captureScreenshot', { format: 'png' }) as { data: string };
+      reference.plain = { png: Buffer.from(image.data, 'base64'), probe: bounds };
+    },
+  }));
   try {
     const hidden = await api(td.port, td.token, `/sessions/${id}/screenshot`, {
       body: { width: 1000, height: 900, hideReasoning: true }, method: 'POST',
@@ -108,9 +113,19 @@ describe('filtered screenshot in Chromium', () => {
   it('matches a watched inline TUI after a wrapped row is deleted', async (context) => {
     if (browser === null) { context.skip(); return; }
     const dashboardUrls: string[] = [];
+    let dashboard: ReturnType<typeof captureDashboard>;
+    let markFrozen!: () => void;
+    const frozen = new Promise<void>(resolve => { markFrozen = resolve; });
     const watched = await startTestDaemon({
       launcher: (url) => { dashboardUrls.push(url); return Promise.resolve({ launched: true, mode: 'isolated-app', browser: 'mock' }); },
       idleCheckIntervalMs: 600_000,
+      capture: async options => {
+        // The daemon has frozen the watched frame. Release the watching browser
+        // before starting the photographer with that frame's real credential.
+        markFrozen();
+        await dashboard;
+        return captureViewer(options);
+      },
     });
     try {
       const started = await api(watched.port, watched.token, '/sessions', { body: {
@@ -122,9 +137,10 @@ describe('filtered screenshot in Chromium', () => {
       const id = String(started.body['id']);
       expect((await api(watched.port, watched.token, '/dashboard/open', { body: {} })).status).toBe(200);
       expect(dashboardUrls).toHaveLength(1);
-      await captureDashboard({
+      let photograph!: Promise<ApiResult>;
+      dashboard = captureDashboard({
         browser, viewerUrl: dashboardUrls[0]!, width: 1400, height: 900,
-        drive: true, timeoutMs: 120_000,
+        drive: true, probeOnly: true, timeoutMs: 120_000,
         probe: `(() => document.getElementById('connection')?.textContent === 'Connected' &&
           document.querySelector('.pane-size')?.textContent.includes('×') ? true : null)()`,
         interact: async () => {
@@ -148,14 +164,15 @@ describe('filtered screenshot in Chromium', () => {
           expect(String(before.body['screen']).split('\n')[3]?.length).toBe(0);
           await eventually(async () => String((await api(watched.port, watched.token,
             `/sessions/${id}/snapshot`)).body['screen']).includes('Working ('), 5_000);
-          const shot = await api(watched.port, watched.token, `/sessions/${id}/screenshot`,
+          photograph = api(watched.port, watched.token, `/sessions/${id}/screenshot`,
             { body: { width: 1000, height: 800, hideReasoning: true } });
-          expectPhotograph(shot);
-          expect((shot.body['lines'] as string[]).some((line) =>
-            line.includes('Working ('))).toBe(true);
-          return true;
+          await Promise.race([frozen, photograph.then(expectPhotograph)]);
         },
       });
+      await dashboard;
+      const shot = await photograph;
+      expectPhotograph(shot);
+      expect((shot.body['lines'] as string[]).some(line => line.includes('Working ('))).toBe(true);
     } finally {
       await watched.stop();
     }
@@ -182,7 +199,7 @@ describe('filtered screenshot in Chromium', () => {
     expect((hidden.body['lines'] as string[]).join('\n')).toContain('MMMM');
     const hiddenPng = Buffer.from(String(hidden.body['png']), 'base64');
     expect(horizontalDetail(hiddenPng, box.top, box.bottom)).toBeGreaterThan(horizontalDetail(plain.png, box.top, box.bottom) * 0.75);
-  }, 120_000);
+  }, pairTestTimeout);
 
   it('covers a continuation whose parent has left the buffer', async (context) => {
     if (browser === null) { context.skip(); return; }
@@ -207,7 +224,7 @@ describe('filtered screenshot in Chromium', () => {
     const hiddenPng = Buffer.from(String(hidden.body['png']), 'base64');
     expect(horizontalDetail(plain.png, box.top, box.bottom)).toBeGreaterThan(500);
     expect(horizontalDetail(hiddenPng, box.top, box.bottom)).toBeLessThan(horizontalDetail(plain.png, box.top, box.bottom) * 0.01);
-  }, 120_000);
+  }, pairTestTimeout);
 
   it('covers every physical row of a soft-wrapped reasoning bar', async (context) => {
     if (browser === null) { context.skip(); return; }
@@ -237,7 +254,7 @@ describe('filtered screenshot in Chromium', () => {
       // The first covered row carries the small 'reasoning hidden' label.
       expect(horizontalDetail(hiddenPng, box.top, box.bottom)).toBeLessThan(detail * (index === 0 ? 0.25 : 0.01));
     }
-  }, 120_000);
+  }, pairTestTimeout);
 
   it('covers reasoning on a screen that redraws while Chromium starts', async (context) => {
     if (browser === null) { context.skip(); return; }
@@ -268,7 +285,7 @@ describe('filtered screenshot in Chromium', () => {
     const hiddenPng = Buffer.from(String(hidden.body['png']), 'base64');
     expect(hiddenPng.subarray(0, 8)).toEqual(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));
     expect(horizontalDetail(hiddenPng, box.top, box.bottom)).toBeLessThan(horizontalDetail(plain.png, box.top, box.bottom) * 0.01);
-  }, 120_000);
+  }, pairTestTimeout);
 
   it('replaces the secret row text and removes its pixel detail', async (context) => {
     if (browser === null) { context.skip(); return; }
@@ -303,7 +320,7 @@ describe('filtered screenshot in Chromium', () => {
     // The cover should leave almost no fine detail in the planted text row.
     // A cover shifted by one row leaves much more than this one per cent bound.
     expect(hiddenDetail).toBeLessThan(plainDetail * 0.01);
-  }, 120_000);
+  }, pairTestTimeout);
 });
 
 describe('the screenshot capture credential', () => {
