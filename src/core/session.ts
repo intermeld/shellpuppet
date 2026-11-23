@@ -57,7 +57,7 @@ import {
 } from './types.js';
 
 export type NudgeAbortReason = 'line-not-seen' | 'other-input-arrived' | 'screen-changed' |
-  'prompt-showing' | 'stalled' | 'messages-changed' | 'schedule-changed' | 'session-ended';
+  'prompt-showing' | 'stalled' | 'messages-changed' | 'schedule-changed' | 'session-ended' | 'not-submitted';
 import type {
   Logger,
   ScreenSnapshot,
@@ -1362,33 +1362,36 @@ export class Session implements WaitTarget {
       return false;
     }
     if (!(this.pendingTurnBusy || Date.now() - this.pendingQuietSince >= this.pendingNudgeSettleMs)) return false;
+    this.clearPendingNudge();
+    return true;
+  }
+
+  private clearPendingNudge(): void {
     this.pendingNudgeLine = null;
     this.pendingNudgeIds = [];
     this.pendingNudgeTouched = false;
     this.pendingTouchRefusalAudited = false;
     this.pendingTurnSubmitted = false;
     this.pendingTurnBusy = false;
-    return true;
   }
 
   /** A pending body may receive its submit key only after it is visible exactly once. */
-  submitPendingNudge(line: string, ready: (screen: string) => boolean): Promise<boolean> {
-    const queued = this.writeChain.then(async () => {
+  submitPendingNudge(line: string, ready: (screen: string) => boolean, queueKey = false) {
+    const queued = this.writeChain.then(async (): Promise<'sent' | 'wait' | 'not-submitted'> => {
       this.refuseIfInputFailed();
       await this.renderer.flush();
       this.refuseIfEnded();
-      if (this.pendingNudgeLine !== line || this.pendingNudgeTouched ||
-        !ready(this.renderer.snapshot().screen) ||
-        !this.nudgeReadyWithLine(line)) return false;
-      this.pty.write(this.nudgeSubmit());
-      this.pendingNudgeLine = null;
-      this.pendingNudgeIds = [];
-      this.pendingNudgeTouched = false;
-      this.pendingTouchRefusalAudited = false;
-      this.pendingTurnSubmitted = false;
-      this.pendingTurnBusy = false;
-      this.inputVersion++;
-      return true;
+      const maySubmit = () => this.pendingNudgeLine === line && !this.pendingNudgeTouched &&
+        ready(this.renderer.snapshot().screen) && this.nudgeReadyWithLine(line, queueKey);
+      if (!maySubmit()) return 'wait';
+      this.writingNudge = true;
+      try {
+        const confirmed = await this.submitMessageNudge(line, this.nudgeSubmit(queueKey), maySubmit);
+        this.inputVersion++;
+        return confirmed ? 'sent' : 'not-submitted';
+      } finally {
+        this.writingNudge = false;
+      }
     });
     this.writeChain = queued.then(() => undefined, () => undefined);
     return queued;
@@ -1475,6 +1478,42 @@ export class Session implements WaitTarget {
       stall: this.getStalled(), unchangedMs: 0, expectedDraft: line, whenBusy,
       queueDraft: queued && this.agentModule?.nudge?.queueKey !== undefined,
     }).ready;
+  }
+
+  /** Both a fresh body and a recovered one need proof after the key reaches the PTY. */
+  private async submitMessageNudge(line: string, key: string, mayRetry: () => boolean): Promise<boolean> {
+    const queuedInput = this.inputQueueVersion;
+    const revision = this.screenRevision;
+    const before = this.renderer.snapshot().screen;
+    const settleMs = this.agentModule?.input?.submit?.settleMs ?? TYPED_SUBMIT_SETTLE_MS;
+    this.refuseIfInputFailed();
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      this.pty.write(key);
+      this.pendingQuietSince = Date.now();
+      this.pendingTurnSubmitted = true;
+      await new Promise(resolve => setTimeout(resolve, settleMs));
+      await this.renderer.flush();
+      this.refuseIfInputFailed();
+      this.refuseIfEnded();
+      if (this.inputQueueVersion !== queuedInput || this.screenRevision !== revision || this.pendingNudgeTouched) return false;
+      const screen = this.renderer.snapshot().screen;
+      if (this.answerablePrompt(screen) !== null || this.getStalled()) return false;
+      if (this.nudgeReadyWithLine(line, key !== this.nudgeSubmit())) {
+        if (attempt === 1 && mayRetry()) continue;
+        break;
+      }
+      const verdict = nudgeVerdict(this.agentModule, {
+        ...this.nudgeView(), unchangedMs: NUDGE_QUIET_MS, composerUnchangedMs: NUDGE_QUIET_MS,
+        exactEmpty: true, whenBusy: 'queue', afterSubmit: true,
+      });
+      // A turn already running above a stuck draft cannot confirm this key.
+      if (verdict.ready || (verdict.reason === 'busy' && this.typedLineInTranscript(line, before))) {
+        this.clearPendingNudge();
+        return true;
+      }
+      break;
+    }
+    return false;
   }
 
   /** Paste placeholders on the viewport before this body is written. */
@@ -1581,6 +1620,8 @@ export class Session implements WaitTarget {
       const submit = this.agentModule?.input?.submit;
       const key = nudgeKey ?? submit!.key;
       const body = data.slice(0, -key.length);
+      const maySubmitNudge = () => ready?.(this.renderer.snapshot().screen, 'submit') === true &&
+        (this.nudgeSchedule !== undefined || this.nudgeReadyWithLine(body, key !== this.nudgeSubmit()));
       const delayMs = nudge ? Math.max(NUDGE_SUBMIT_DELAY_MS, submit?.delayMs ?? 0)
         : Math.max(submit!.delayMs!, Math.ceil(Array.from(body).length * (submit?.perCharacterMs ?? 0)));
       const queuedInputVersion = this.inputQueueVersion;
@@ -1631,7 +1672,7 @@ export class Session implements WaitTarget {
               onNudgeAbort?.('other-input-arrived');
               return null;
             }
-            if (ready(this.renderer.snapshot().screen, 'submit')) break;
+            if (maySubmitNudge()) break;
             if (Date.now() >= deadline) {
               onNudgeAbort?.(failedCheck());
               return null;
@@ -1664,25 +1705,24 @@ export class Session implements WaitTarget {
         if (this.agentModule?.nudge !== undefined && this.programEnded) {
           throw new Error(`Session ${this.id} exited while input was being written.`);
         }
+        if (nudge && this.nudgeSchedule === undefined) {
+          if (await this.submitMessageNudge(body, key, maySubmitNudge)) return screen;
+          onNudgeAbort?.('not-submitted');
+          return null;
+        }
         this.pty.write(key);
-        if (!nudge) {
+        if (nudge) {
+          this.clearPendingNudge();
+        } else {
           onTypedSubmit?.(readableComposer || this.agentModule?.nudge === undefined
             ? await this.checkTypedSubmission(body, key, queuedInputVersion,
               typedDraftSeen, beforeSubmitScreen, wasBusy, placeholdersBefore)
             : { submitRetried: false,
               message: "Submit key sent; the agent's composer was not on screen when the text was typed." });
-        }
-        if (!nudge && this.pendingNudgeLine !== null) {
-          this.pendingQuietSince = Date.now();
-          this.pendingTurnSubmitted = true;
-        }
-        if (nudge) {
-          this.pendingNudgeLine = null;
-          this.pendingNudgeIds = [];
-          this.pendingNudgeTouched = false;
-          this.pendingTouchRefusalAudited = false;
-          this.pendingTurnSubmitted = false;
-          this.pendingTurnBusy = false;
+          if (this.pendingNudgeLine !== null) {
+            this.pendingQuietSince = Date.now();
+            this.pendingTurnSubmitted = true;
+          }
         }
       } catch (error) {
         onNudgeAbort?.(failedCheck());

@@ -21,7 +21,7 @@ import { SessionManager, PolicyViolationError, SessionStartError } from '../core
 import { Mailbox, MailboxError, NAME_PATTERN, buildNudge } from '../core/mailbox.js';
 import type { MailboxEntry } from '../core/mailbox.js';
 import { buildMessagingPolicy, DEFAULT_NUDGE_INTERVAL_MS, DEFAULT_NUDGES_PER_MINUTE } from './config.js';
-import { NudgeScheduler } from './nudgeScheduler.js';
+import { type NudgeDelivery, NudgeScheduler } from './nudgeScheduler.js';
 import { ScheduleStore, PromptScheduler, watchSchedules } from './schedules.js';
 import type { Schedule, ScheduleOutcome } from './schedules.js';
 import type { NudgeAbortReason } from '../core/session.js';
@@ -2804,7 +2804,7 @@ export class Daemon {
     }
   }
 
-  private async deliverNudge(id: string): Promise<'sent' | 'wait' | 'done'> {
+  private async deliverNudge(id: string): Promise<NudgeDelivery> {
     const session = this.manager.get(id);
     if (session === undefined || session.exited || this.mailbox.participant(id)?.kind !== 'session') return 'done';
     const pendingIds = session.nudgePendingLine() !== null ? [...session.nudgePendingIds()] : [];
@@ -2824,15 +2824,16 @@ export class Daemon {
       const ids = unread.filter((entry) => entry.state === 'waiting').map((entry) => entry.id);
       if (ids.length === 0) return 'done';
       const covered = session.nudgePendingIds();
+      const queueKey = !session.nudgeReadyWithLine(pending);
+      if (queueKey && !session.nudgeReadyWithLine(pending, true)) return 'wait';
       if (!session.nudgePendingUntouched()) {
-        if (session.nudgeReadyWithLine(pending) && session.nudgePendingTouchRefusal()) {
+        if (session.nudgePendingTouchRefusal()) {
           this.audit.record('daemon', 'nudge-aborted', id, {
             messageIds: [...covered], count: covered.length, reason: 'person-input-since',
           });
         }
         return 'wait';
       }
-      if (!session.nudgeReadyWithLine(pending)) return 'wait';
       const inputVersion = session.nudgeInputVersion();
       const queuedInputVersion = session.nudgeQueuedInputVersion();
       const screenRevision = session.nudgeScreenRevision();
@@ -2846,8 +2847,14 @@ export class Daemon {
           session.answerablePrompt(screen) === null && session.nudgePendingIds().length > 0 &&
           waitingIds.length === ids.length &&
           ids.every((messageId) => waitingIds.includes(messageId));
-      });
-      if (!submitted) {
+      }, queueKey);
+      if (submitted === 'not-submitted') {
+        this.audit.record('daemon', 'nudge-aborted', id, {
+          messageIds: [...covered], count: covered.length, reason: submitted,
+        });
+        return submitted;
+      }
+      if (submitted === 'wait') {
         if (session.nudgePendingTouchRefusal()) {
           this.audit.record('daemon', 'nudge-aborted', id, {
             messageIds: [...covered], count: covered.length, reason: 'person-input-since',
@@ -2874,6 +2881,7 @@ export class Daemon {
     });
     if (result.outcome === 'aborted') {
       this.audit.record('daemon', 'nudge-aborted', id, { messageIds: ids, count: ids.length, reason: result.reason });
+      if (result.reason === 'not-submitted') return 'not-submitted';
     }
     if (result.outcome !== 'sent' && result.outcome !== 'queued') return 'wait';
     this.mailbox.markNudged(ids);

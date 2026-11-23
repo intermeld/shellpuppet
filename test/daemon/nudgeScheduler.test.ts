@@ -2,6 +2,41 @@ import { describe, expect, it } from 'vitest';
 import { NudgeScheduler } from '../../src/daemon/nudgeScheduler.js';
 
 describe('nudge delivery scheduler', () => {
+  it('counts an unconfirmed submit and gives the next global slot to another recipient', async () => {
+    let now = 0;
+    const calls: string[] = [];
+    const scheduler = new NudgeScheduler({ now: () => now, intervalMs: 90_000, perMinute: 1,
+      deliver: id => {
+        calls.push(id);
+        return Promise.resolve(calls.length === 1 ? 'not-submitted' : 'sent');
+      } });
+    scheduler.queue('first');
+    scheduler.queue('second');
+    await scheduler.tick();
+    expect(calls).toEqual(['first']);
+    now += 90_000;
+    await scheduler.tick();
+    expect(calls).toEqual(['first', 'second']);
+    now += 60_000;
+    await scheduler.tick();
+    expect(calls).toEqual(['first', 'second', 'first']);
+  });
+
+  it('paces unconfirmed attempts even when the global limit has spare slots', async () => {
+    let now = 0;
+    let attempts = 0;
+    const scheduler = new NudgeScheduler({ now: () => now, intervalMs: 30_000, perMinute: 20,
+      deliver: () => { attempts++; return Promise.resolve('not-submitted'); } });
+    scheduler.queue('recipient');
+    await scheduler.tick();
+    now = 29_999;
+    await scheduler.tick();
+    expect(attempts).toBe(1);
+    now++;
+    await scheduler.tick();
+    expect(attempts).toBe(2);
+  });
+
   it('keeps busy, draft and unknown sessions pending until ready, then delivers once', async () => {
     let now = 100_000;
     const state = new Map([['busy', 'busy'], ['draft', 'draft'], ['unknown', 'unknown'], ['ready', 'ready']]);

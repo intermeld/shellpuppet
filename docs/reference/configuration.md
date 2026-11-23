@@ -629,6 +629,11 @@ stay in the inbox. The nudge names the `session_inbox` MCP tool, so a session
 that should read messages needs the ShellPuppet MCP server. The daemon
 writes the line, pauses for at least 150 milliseconds, checks that the composer
 and waiting messages are unchanged, then sends the agent's submit key.
+It checks for an empty composer or a submitted turn. If the exact untouched
+line remains, it checks the guards again and retries the key once. An
+unconfirmed attempt leaves messages `waiting` and records `not-submitted`
+in the audit. A later attempt can submit the same line for all waiting
+messages, even if the recipient has already read the message it names.
 
 `allow` says who may message whom, in both directions:
 

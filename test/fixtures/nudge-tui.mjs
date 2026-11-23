@@ -22,6 +22,11 @@ process.stdin.on('data', (bytes) => {
     return;
   }
   if (mode === 'late-person' && bytes.toString() === 'x') return;
+  if (mode === 'late' && bytes.toString() === '\r') {
+    process.stdout.write('\x1b[2J\x1b[H');
+    process.stdout.write(initialScreen);
+    return;
+  }
   if (mode === 'late' || mode === 'late-person' || mode === 'queued-paste') {
     // The PTY accepted the bytes, but this program has not painted them yet.
     lateBody += bytes.toString();

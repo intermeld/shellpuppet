@@ -122,6 +122,8 @@ export interface NudgeView {
   queueDraft?: boolean;
   /** Require a blank composer or the module's exact known placeholder. */
   exactEmpty?: boolean;
+  /** Inspect the composer after a submit, including an empty input below a queued item. */
+  afterSubmit?: boolean;
 }
 
 /** Internal harness data and the few detector walks not yet expressed as data. */

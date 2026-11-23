@@ -426,8 +426,15 @@ message whom, and a clock.
   repeats for up to 2 s until the composer shows exactly the line; other input
   in that time ends the wait at once. If anything changed in between,
   nothing more is sent and the messages stay `waiting` (audit `nudge-aborted`,
-  with the last failed guard as the reason). Once the body reaches the PTY,
-  it remains pending if Enter is not confirmed. The daemon must never type
+  with the last failed guard as the reason). After writing the submit key,
+  the daemon checks the composer at the end of the module's settle time
+  (300 ms by default). An empty composer or the submitted line newly echoed
+  in a running turn confirms the key. If the exact untouched line remains,
+  the daemon repeats every submit guard and sends the same key once more.
+  Without confirmation after that check, the messages stay `waiting` and
+  the audit records `nudge-aborted` with reason `not-submitted`. These
+  attempts count towards both delivery rate limits. The body stays pending
+  from its first write until submission or consumption is confirmed. The daemon must never type
   another body into that session while it is pending. It may send only the
   submit key after the live composer visibly holds exactly one copy of the
   pending body, provided no other input has reached the session since it was

@@ -278,6 +278,10 @@ export function readingReadiness(view: NudgeView, reading: AgentSignature, rule:
   if (busy && rule.queueWhileBusy !== true && view.whenBusy === undefined) return 'busy';
   const region = composerRegion(lines, reading, at, rule, view.expectedDraft !== undefined);
   if (region === null || region.unproven) return busy ? 'busy' : 'unknown';
+  // A running turn can show that its composer emptied even when it cannot accept another line.
+  if (busy && view.afterSubmit && view.expectedDraft === undefined) {
+    return region.rows.every(line => rowClear(line, rule, view.exactEmpty)) ? 'ready' : 'draft';
+  }
   if (busy && view.whenBusy !== undefined) {
     if (view.expectedDraft === undefined && region.rows.some(line => !rowClear(line, rule, view.exactEmpty))) return 'draft';
     if (view.whenBusy === 'skip' || rule.queueWhileBusy !== true) return 'busy';

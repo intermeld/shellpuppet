@@ -48,7 +48,7 @@ export function readiness(view: NudgeView): NudgeReadiness {
   if (!frame) return 'unknown';
   const first = lines[frame.first]!;
   if (frame.busy) {
-    if (lines.some(line => queueTitle.test(line.text))) return 'busy';
+    if (lines.some(line => queueTitle.test(line.text)) && (!view.afterSubmit || view.expectedDraft !== undefined)) return 'busy';
     if (view.expectedDraft !== undefined) return view.queueDraft && exactDraft(view, lines, frame) ? 'ready' : 'busy';
     if (view.cursor?.y !== frame.first || view.cursor.x !== 4 || frame.bottom !== frame.first + 1 ||
         first.text !== busyHint || !ink(first, 0, first.text.length, s => s.fg === '#b8860b' && s.italic)) return 'busy';

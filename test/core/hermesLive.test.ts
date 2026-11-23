@@ -162,5 +162,7 @@ it('queues only a stable empty busy composer and requires the exact draft for Ta
   expect(nudgeVerdict(hermes, { ...typed, expectedDraft, queueDraft: true })).toEqual({ ready: true });
   expect(nudgeVerdict(hermes, { ...typed, expectedDraft: expectedDraft + ' ', queueDraft: true }).ready).toBe(false);
   expect(nudgeVerdict(hermes, queued)).toEqual({ ready: false, reason: 'busy' });
+  expect(nudgeVerdict(hermes, { ...queued, afterSubmit: true })).toEqual({ ready: true, queued: true });
+  expect(nudgeVerdict(hermes, { ...typed, afterSubmit: true }).ready).toBe(false);
   expect(kept(queued.styled)).toEqual(expect.arrayContaining([31, 32]));
 });

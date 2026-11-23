@@ -41,7 +41,7 @@ export function readiness(view: NudgeView): NudgeReadiness {
   const busy = barIsBusy(view, reading);
   if (busy && view.whenBusy === undefined) return 'busy';
   const result = readingReadiness({ rows: changed, styled, expectedDraft: view.expectedDraft,
-    exactEmpty: view.exactEmpty, whenBusy: view.whenBusy }, { ...reading, composer: { text: '^> ' } }, {
+    exactEmpty: view.exactEmpty, whenBusy: view.whenBusy, afterSubmit: view.afterSubmit }, { ...reading, composer: { text: '^> ' } }, {
     placeholder,
     continuations: false,
     placeholderInk: (line) => {
@@ -51,5 +51,5 @@ export function readiness(view: NudgeView): NudgeReadiness {
   });
   if (result === 'ready' && [view.rows[frame - 4], view.rows[frame - 2]].some((row) =>
     row !== undefined && barBody(row) !== '')) return 'draft';
-  return busy && result !== 'draft' ? 'busy' : result;
+  return busy && !view.afterSubmit && result !== 'draft' ? 'busy' : result;
 }

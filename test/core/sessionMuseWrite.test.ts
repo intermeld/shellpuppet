@@ -38,6 +38,16 @@ function draftWait(session: Session, seen: boolean, delayMs = 150): void {
   });
 }
 
+const idle = '\x1b[2J\x1b[H› \x1b[2mAsk Codex to do anything\x1b[0m';
+
+function echoNudge(session: Session, pty: RecordingPty): void {
+  const write = pty.write.bind(pty);
+  vi.spyOn(pty, 'write').mockImplementation(data => {
+    write(data);
+    void session['renderer'].write(data === '\r' ? idle : '\x1b[H\x1b[2K› ' + data);
+  });
+}
+
 describe('Muse input submission', () => {
   const releaseNotes = 'Review the release plan and supporting notes for the next deployment step. ' +
     'Include the outstanding items reported at the readiness meeting this morning. ' +
@@ -70,7 +80,6 @@ describe('Muse input submission', () => {
   ] as const)('checks Enter against the captured Codex composer in %s', async (name, body, rows, submit) => {
     const { session, pty } = recordingSession('codex', { cols: 80, rows });
     const capture = readFileSync(join(__dirname, '../fixtures/nudge', name + '.ansi'), 'utf8');
-    const idle = '\x1b[2J\x1b[H› \x1b[2mAsk Codex to do anything\x1b[0m';
     const renderer = session['renderer'];
     const record = pty.write.bind(pty);
     vi.spyOn(pty, 'write').mockImplementation(data => {
@@ -94,6 +103,7 @@ describe('Muse input submission', () => {
 
   it('submits a Codex nudge after a separate delay', async () => {
     const { session, pty } = recordingSession('codex');
+    echoNudge(session, pty);
     const phases: string[] = [];
     expect(await session.writeNudge('fixed nudge\r', (_screen, phase) => {
       phases.push(phase);
@@ -106,6 +116,7 @@ describe('Muse input submission', () => {
 
   it('waits for a Codex nudge line painted after the pause, then submits it', async () => {
     const { session, pty } = recordingSession('codex');
+    echoNudge(session, pty);
     let checks = 0;
     const result = await session.writeNudge('fixed nudge\r', (_screen, phase) =>
       phase === 'before' || ++checks >= 4);

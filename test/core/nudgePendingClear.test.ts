@@ -67,6 +67,32 @@ it('never clears while the composer reading stays unknown', async () => {
   expect(session.nudgePendingLine()).toBe('fixed body');
 }, 10_000);
 
+it.each([false, true])('checks the composer below a newly running turn (line consumed: %s)', async consumed => {
+  const pty = new InputPty();
+  const session = new Session('turn-start', { command: process.execPath, shell: false, agent: 'muse' }, {
+    platform: 'linux', spawn: () => pty,
+  });
+  const line = 'fixed body';
+  const paint = (draft: string, busy: boolean) => '\x1b[2J\x1b[H' +
+    (busy ? '◈ Working (1s · esc to interrupt)\r\n' : '') +
+    '── Voice input (Alt+V to start) ──────────\r\n❯ ' + draft + '\r\n' +
+    '──────────────────────────────────────────\r\n  Background task running';
+  const record = pty.write.bind(pty);
+  vi.spyOn(pty, 'write').mockImplementation(data => {
+    record(data);
+    void session['renderer'].write(paint(data === '\r' && consumed ? '' : line, data === '\r'));
+  });
+  try {
+    await session['renderer'].write(paint('', false));
+    const result = await session.writeNudgeWithReason(line + '\r', () => true, ['m1']);
+    expect(result).toBe(consumed ? 'sent' : 'aborted-not-submitted');
+    expect(session.nudgePendingLine()).toBe(consumed ? null : line);
+    expect(pty.writes).toEqual([line, '\r']);
+  } finally {
+    await session['renderer'].dispose();
+  }
+});
+
 it('treats a terminal report as untouched but the same bytes on the ordinary path as input', async () => {
   const { session } = await pending(30_000);
   const focusIn = '\x1b[I';

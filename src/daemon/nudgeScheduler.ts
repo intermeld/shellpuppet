@@ -1,3 +1,5 @@
+export type NudgeDelivery = 'sent' | 'not-submitted' | 'wait' | 'done';
+
 /** Keep delivery checks at the daemon's scan cadence and enforce both rate limits. */
 export class NudgeScheduler {
   private readonly pending = new Set<string>();
@@ -12,7 +14,7 @@ export class NudgeScheduler {
     intervalMs: number;
     perMinute: number;
     /** A delivered or obsolete batch is done; a busy batch remains pending. */
-    deliver(id: string): Promise<'sent' | 'wait' | 'done'>;
+    deliver(id: string): Promise<NudgeDelivery>;
   }) {}
 
   queue(id: string): void {
@@ -31,7 +33,8 @@ export class NudgeScheduler {
 
   private async check(): Promise<void> {
     let failure: Error | undefined;
-    for (const id of this.pending) {
+    for (const id of [...this.pending]) {
+      if (!this.pending.has(id)) continue;
       const now = this.options.now();
       while (this.sentTimes.length > 0 && this.sentTimes[0]! <= now - 60_000) this.sentTimes.shift();
       if (now - (this.lastSent.get(id) ?? -Infinity) < this.options.intervalMs ||
@@ -40,7 +43,7 @@ export class NudgeScheduler {
       // One recipient failing (for example a program that ended mid-delivery) must not
       // hold up the others in this scan: it stays pending, and the first failure is still
       // reported once the scan has visited every recipient.
-      let result: 'sent' | 'wait' | 'done';
+      let result: NudgeDelivery;
       try {
         result = await this.options.deliver(id);
       } catch (error) {
@@ -49,8 +52,10 @@ export class NudgeScheduler {
       }
       // A message that arrived during this delivery was not in its batch: keep the
       // session pending so that message gets its own check.
-      if (result !== 'wait' && (this.requests.get(id) ?? 0) === requested) this.pending.delete(id);
-      if (result === 'sent') {
+      if ((result === 'sent' || result === 'done') && (this.requests.get(id) ?? 0) === requested) this.pending.delete(id);
+      // Give other recipients the next slot if this composer repeatedly ignores its key.
+      if (result === 'not-submitted' && this.pending.delete(id)) this.pending.add(id);
+      if (result === 'sent' || result === 'not-submitted') {
         const sentAt = this.options.now();
         this.lastSent.set(id, sentAt);
         this.sentTimes.push(sentAt);

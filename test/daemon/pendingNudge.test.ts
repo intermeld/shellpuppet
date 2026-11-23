@@ -25,7 +25,7 @@ it('submits the original visible body after another message arrives', async () =
     nudgeScreenRevision: () => 0,
     getStalled: () => undefined,
     answerablePrompt: () => null,
-    submitPendingNudge: () => { submits++; return Promise.resolve(true); },
+    submitPendingNudge: () => { submits++; return Promise.resolve('sent'); },
     writeNudgeWithReason: () => { throw new Error('A second body must not be written'); },
   };
   const daemon = Object.create(Daemon.prototype) as Daemon;
@@ -74,9 +74,9 @@ it('submits an untouched pending body when its named message was read and anothe
     submitPendingNudge: (_line: string, ready: (screen: string) => boolean) => {
       beforeSubmitCheck?.();
       beforeSubmitCheck = undefined;
-      if (!ready('screen')) return Promise.resolve(false);
+      if (!ready('screen')) return Promise.resolve('wait');
       submits++;
-      return Promise.resolve(true);
+      return Promise.resolve('sent');
     },
     writeNudgeWithReason: () => { throw new Error('A second body must not be written'); },
   };
