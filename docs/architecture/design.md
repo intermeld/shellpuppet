@@ -1241,7 +1241,8 @@ Token-based, following the Jupyter / SSH-agent model, with **five credentials**:
 - **Dashboard credential.** What that grant becomes: one `HttpOnly`, `SameSite=Strict`
   cookie named `sp_dash`, `Path=/`, with no `Max-Age`, no `Secure` and no `Domain`. A
   second successful redemption replaces it and drops its proofs. Each accepted navigation
-  embeds a fresh proof in `<meta name="sp-csrf">`. The daemon keeps the eight newest.
+  embeds a fresh proof in `<meta name="sp-csrf">`. The proof stays valid while a
+  dashboard socket uses it and the credential is current.
   The file on disk has an empty content, and the daemon fills it only for an authenticated
   navigation. `GET /sessions` requires the proof in `X-ShellPuppet-CSRF`. `/dashboard/events`
   and `/sessions/<id>/stream` require it as the WebSocket subprotocol `sp-csrf.` plus the
@@ -1278,9 +1279,13 @@ Token-based, following the Jupyter / SSH-agent model, with **five credentials**:
 - **Document proof and cookie checks.** An authenticated `GET /dashboard`,
   including a reload with a cookie and no grant, embeds a fresh 64-hex proof
   in `<meta name="sp-csrf">`, with `cache-control: no-store` and the viewer's
-  content security policy. The daemon keeps the newest eight proofs for a
-  credential; the ninth replaces the oldest, and every accepted navigation
-  gets a proof. `POST /dashboard/launch` and dashboard-authenticated `DELETE`
+  content security policy. An open event feed or dashboard-authenticated session
+  stream keeps its document proof in use. After the last such socket closes,
+  the document can reconnect while its proof is still retained. The daemon
+  keeps up to eight unused proofs and up to 256 proofs in total per credential.
+  It discards unused proofs in issuance order to stay within both limits.
+  When all 256 are in use, a new page load receives HTTP 503 with instructions
+  to close a window and reload. `POST /dashboard/launch` and dashboard-authenticated `DELETE`
   send it as `X-ShellPuppet-CSRF`; both strings are hashed and compared in
   constant time. Form media types are refused. Browser WebSockets cannot set
   that header, so `/dashboard/events` and a dashboard session stream carry
@@ -1974,8 +1979,9 @@ pane returns to the launching window. Ending the registration also cancels it.
 The successful launch still supplies the profile for Restart.
 
 The authenticated `/dashboard/events` socket registers one window instance.
-Replacing the dashboard credential retires its feeds immediately. Issuing a ninth
-document proof retires feeds using the oldest proof. On feed loss a window closes
+Replacing or revoking the dashboard credential closes all its feeds and session
+streams. Opening or reloading a window preserves the other windows' connections
+and pane assignments. On feed loss a window closes
 its pane clients and clears its designation until registration succeeds.
 The document records when it gains focus, including while disconnected.
 It sends the event time in epoch milliseconds as `focusedAt` on

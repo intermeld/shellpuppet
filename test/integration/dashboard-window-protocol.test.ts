@@ -143,16 +143,31 @@ it('removes the previous credential before assigning the replacement window', ()
     await eventually(() => old.ws.readyState === WebSocket.CLOSED);
   }), 120_000);
 
-it('hands over when a document proof leaves the eight-proof ring', () =>
+it('keeps all twelve documents connected and their panes assigned as windows open', () =>
   withDashboard(async ({ openDocument, connect, sessionId }) => {
-    const oldest = await connect('first-window', 'i-first');
-    await openDocument();
-    const next = await connect('second-window', 'i-second');
-    for (let index = 0; index < 7; index++) await openDocument();
-    await eventually(() => next.states.at(-1)?.windows.length === 1);
-    expect(next.states.at(-1)).toMatchObject({ windows: [next.pair], designated: next.pair,
-      assignments: { [next.pair]: [sessionId] } });
-    await eventually(() => oldest.ws.readyState === WebSocket.CLOSED);
+    const first = await connect('first-window', 'i-first');
+    const peers = [first];
+    for (let index = 2; index <= 12; index++) {
+      await openDocument();
+      const peer = await connect(`window-${index}`, `instance-${index}`);
+      peers.push(peer);
+      expect(peer.states.at(-1)).toMatchObject({ windows: peers.map(p => p.pair),
+        designated: first.pair, assignments: { [first.pair]: [sessionId] } });
+    }
+    expect(peers.every(peer => peer.ws.readyState === WebSocket.OPEN)).toBe(true);
+  }), 120_000);
+
+it('keeps the original window and its session through repeated reloads of a neighbour', () =>
+  withDashboard(async ({ openDocument, connect, sessionId }) => {
+    const first = await connect('first-window', 'i-first');
+    for (let index = 0; index < 10; index++) {
+      await openDocument();
+      const neighbour = await connect('second-window', `instance-${index}`);
+      expect(neighbour.states.at(-1)).toMatchObject({ windows: [first.pair, neighbour.pair],
+        designated: first.pair, assignments: { [first.pair]: [sessionId] } });
+      neighbour.ws.close();
+      await eventually(() => first.states.at(-1)?.windows.length === 1);
+    }
   }), 120_000);
 
 it('prefers the focused survivor to a later background registration', () =>

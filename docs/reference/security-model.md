@@ -129,8 +129,13 @@ make a reachable terminal safe.
   the call and kills nothing. It does not open `/events`, a raw start
   (`POST /sessions`), a shutdown, a screenshot, a viewer mint, or an HTTP
   input or key call. Each
-  accepted navigation puts a fresh proof in the page. The daemon keeps the
-  eight newest. `GET /sessions` sends the proof as `X-ShellPuppet-CSRF`.
+  accepted navigation puts a fresh proof in the page. An open dashboard feed or
+  dashboard-authenticated session stream keeps its proof valid for the current
+  credential. The daemon retains up to eight unused proofs and 256 proofs in
+  total, dropping the oldest unused proof first. When all 256 are in use, a new
+  page load receives HTTP 503 and asks the user to close a window and reload.
+  Revoking or replacing the credential drops all its proofs and closes its
+  sockets. `GET /sessions` sends the proof as `X-ShellPuppet-CSRF`.
   `/dashboard/events` and a session stream send it as the subprotocol
   `sp-csrf.` followed by the proof. A header on the upgrade is not accepted.
   Both sides are hashed and then compared in constant time. A session stream
