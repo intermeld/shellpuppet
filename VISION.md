@@ -9,7 +9,7 @@ stays that way, and where the commercial platform begins. The
 document carries the commitments they add up to. A commitment made here
 changes only through a new decision record, never through a quiet edit.
 
-> **Status:** 0.4.0, with scheduled prompts for named sessions and a Hermes
+> **Status:** 0.4.1, with scheduled prompts for named sessions and a Hermes
 > module, is on npm. The [README](README.md)
 > carries the current status.
 

@@ -7,6 +7,16 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-11-24
+
+Fixes for dashboard windows and for intermittent tests.
+
+### Fixed
+
+- Opening or reloading a dashboard window no longer disconnects another window once eight are open: a document proof is kept while any dashboard feed or session stream still uses it. At most eight unused proofs are kept, with 256 in total, and a new page gets a 503 with recovery instructions when every slot is in use. Revoking or replacing the credential still closes every feed and stream.
+- Dashboard proofs are compared in constant time in the launch and grid-transfer paths, and a session stream echoes a subprotocol only when dashboard authentication admitted it.
+- Intermittent tests: notice placement is checked against the delivered rows and deadlines, browser setup has its own readiness budget, and session identity reports are written atomically.
+
 ## [0.4.0] - 2026-11-23
 
 Scheduled prompts for named sessions, a Hermes module and start folders in
