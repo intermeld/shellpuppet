@@ -5,7 +5,7 @@
  * The rules this module owns:
  * - A message is bound to the recipient INSTANCE that held the name when it
  *   was sent. If that participant ends before reading, the message becomes
- *   `not-delivered` and is never handed to a later holder of the same name.
+ *   `not-delivered`. Explicit replacement of a live claim carries unread mail.
  * - States: `waiting` -> `nudged` -> `read`, or `not-delivered`.
  * - One message holds at most 16 KiB of UTF-8 text. Each recipient holds at
  *   most 200 messages and 1 MiB of text; when a send would pass those, the
@@ -30,6 +30,10 @@ import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 /** A participant name: 1 to 40 letters, digits, dots, underscores or hyphens. */
 export const NAME_PATTERN = /^[A-Za-z0-9._-]{1,40}$/;
+
+export function claimRecoveryCommand(name: string): string {
+  return name.startsWith('-') ? `msg claim --replace --name=${name}` : `msg claim ${name} --replace`;
+}
 
 /** The most text one message may hold, in UTF-8 bytes. */
 export const MAX_MESSAGE_BYTES = 16 * 1024;
@@ -114,7 +118,7 @@ export type MailboxErrorCode =
 export class MailboxError extends Error {
   readonly code: MailboxErrorCode;
 
-  constructor(code: MailboxErrorCode, message: string) {
+  constructor(code: MailboxErrorCode, message: string, readonly hint?: string) {
     super(message);
     this.name = 'MailboxError';
     this.code = code;
@@ -136,6 +140,13 @@ export interface MailboxDeps {
 
 // ------------------------------------------------------------------ internals
 
+export interface SavedClaim {
+  id: string;
+  name: string;
+  digest: string;
+  lastActivity: number;
+}
+
 interface ParticipantRecord {
   kind: ParticipantKind;
   id: string;
@@ -143,7 +154,7 @@ interface ParticipantRecord {
   role?: 'chair' | 'delegate';
   lastActivity?: number;
   generation: number;
-  /** Claims only: the secret handed out with the claim id. */
+  /** Claims only: the SHA-256 digest of the secret. */
   digest?: string;
 }
 
@@ -306,24 +317,44 @@ export class Mailbox extends EventEmitter {
     }
   }
 
-  /** Hold an outside name until release or idle expiry, proved by its secret. */
   private newClaimId(): string {
     return `claim_${randomBytes(16).toString('hex')}`;
   }
 
-  claim(name: string): { claimId: string; secret: string } {
+  /** Issue a proof, carrying unread mail only when replacing a live outside claim. */
+  claim(name: string, options: {
+    replace?: boolean;
+    beforeCommit?: (next: SavedClaim, previousId?: string) => void;
+  } = {}) {
     if (typeof name === 'string' && /^s[0-9]+$/.test(name)) {
       throw new MailboxError('invalid-name', 'Session id names are reserved for sessions.');
     }
-    this.checkName(name);
+    const previousId = this.byName.get(name);
+    if (previousId === undefined) {
+      this.checkName(name);
+    } else {
+      const previous = this.participants.get(previousId)!;
+      if (previous.kind === 'session' || !options.replace) {
+        const hint = previous.kind === 'session' ? 'That participant name is unavailable.' :
+          `Recover it with ${claimRecoveryCommand(name)} or replace: true on session_claim.`;
+        throw new MailboxError('duplicate-name', `The name "${name}" is already held by a live participant.`, hint);
+      }
+    }
     let claimId: string;
     do {
       claimId = this.newClaimId();
     } while (this.participants.has(claimId));
     const secret = randomBytes(32).toString('base64url');
-    this.participants.set(claimId, { kind: 'claim', id: claimId, name, generation: ++this.generation, digest: claimDigest(secret), lastActivity: this.now() });
+    const next = { id: claimId, name, digest: claimDigest(secret), lastActivity: this.now() };
+    // Finish required writes before retiring the old reader or changing delivery.
+    options.beforeCommit?.(next, previousId);
+    if (previousId !== undefined) {
+      for (const message of this.unreadFor(previousId)) message.toId = claimId;
+      this.end(previousId);
+    }
+    this.participants.set(claimId, { ...next, kind: 'claim', generation: ++this.generation });
     this.byName.set(name, claimId);
-    return { claimId, secret };
+    return { claimId, secret, previousId };
   }
 
   savedClaims(granted: readonly string[]) {
@@ -357,12 +388,12 @@ export class Mailbox extends EventEmitter {
     return timingSafeEqual(Buffer.from(claimDigest(secret)), Buffer.from(digest));
   }
 
-  /** Timing-safe claim verification. Unknown claims and wrong secrets are alike. */
-  verifyClaim(claimId: string, secret: string): boolean {
+  /** Marked requests can authenticate a proof without refreshing its idle deadline. */
+  verifyClaim(claimId: string, secret: string, refresh = true): boolean {
     const record = this.participants.get(claimId);
     const matched = this.compareSecrets(typeof secret === 'string' ? secret : '', record?.digest ?? DUMMY_CLAIM_DIGEST);
     if (record?.kind === 'claim' && typeof secret === 'string' && matched) {
-      record.lastActivity = this.now();
+      if (refresh) record.lastActivity = this.now();
       return true;
     }
     return false;

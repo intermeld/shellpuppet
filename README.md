@@ -96,6 +96,9 @@ On Windows, npm installs `shellpuppet` as a PowerShell script as well as a
 `Set-ExecutionPolicy -Scope Process -ExecutionPolicy RemoteSigned` in that
 window first, or run ShellPuppet from Command Prompt.
 
+If you lose an outside messaging claim code, run `shellpuppet msg claim <name> --replace`.
+For a name beginning with a hyphen, pass it with `--name=`, as in `shellpuppet msg claim --replace --name=--desk`.
+
 npm 12 runs a dependency's install script only when you allow it. On Linux,
 node-pty's install script is what builds it where no prebuilt binary matches
 the machine. Without the flag the install still completes; where a prebuilt

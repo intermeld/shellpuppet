@@ -10,6 +10,11 @@ version may change behaviour, and every such change is listed here.
 ### Fixed
 
 - Programs can copy text with OSC 52 for two seconds after you press the primary pointer button, type a character or use a supported editing or navigation key in the focused viewer or dashboard pane. Pasting ends that window. Hold Shift and drag to select text even when the program handles the mouse.
+- The CLI and MCP show recovery advice alongside the existing claim error. A conflict on a held outside name gives both recovery commands. A request marked as coming from inside a session can read or release its outside claim without extending its idle time.
+
+### Added
+
+- Recover a lost outside claim with `msg claim <name> --replace` or `replace: true` on `session_claim`. The new claim receives pending messages and any launch grant on the name. The daemon must write the audit entry before it can replace the claim and invalidate the old proof.
 
 ## [0.4.1] - 2026-11-24
 

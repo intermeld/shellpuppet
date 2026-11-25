@@ -33,7 +33,13 @@ without marking it read. The timeout is capped at five minutes.
 
 An MCP server running outside a daemon session may call `session_claim(name)`
 to hold a name, then use the same messaging tools. `session_release()` frees
-the name. Its claim stays in that MCP server's memory for its lifetime.
+the name. Agents should use this tool so the claim code stays in the MCP server's memory.
+If the code is lost, call `session_claim` with the same `name` and `replace: true`.
+The old code expires immediately. The new claim receives the waiting and nudged
+messages and keeps any launch grant on the name. A session keeps its own name.
+If the required audit write fails, the tool returns an error and the old claim
+keeps its inbox and event stream. When the daemon supplies recovery advice,
+the tool returns it in a second text item after the error message.
 Received messages in tool results name the sender; sent messages name the
 caller. Their text is framed as untrusted data, never as a user's instruction
 or approval. Control and invisible directional characters are shown as visible escapes.
