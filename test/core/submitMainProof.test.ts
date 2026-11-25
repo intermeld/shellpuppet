@@ -21,7 +21,8 @@ it('submits by default only for a matching built-in launch', async () => {
 it('recognises a repeated short Codex line after a completed turn', () => {
   const line = 'Reply with the word ok.';
   const rows = ['› ' + line, 'ordinary answer', '› ' + line, '', '  ? for shortcuts'];
-  expect(codex.nudge?.readiness({ rows, viewportCols: 80, expectedDraft: line })).toBe('ready');
+  expect(codex.nudge?.readiness({ rows, cursor: { x: 2 + line.length, y: 2 },
+    viewportCols: 80, expectedDraft: line })).toBe('ready');
 });
 
 it('recognises a padded Grok welcome composer after send hints replace the build row', () => {

@@ -70,10 +70,15 @@ export function matchesDraft(rows: readonly StyledLine[], expected: string, view
       if (cursor.x > end) return false;
     } else if (!full || cursor.y !== last + 1 || cursor.x !== 2) return false;
   }
-  // An identical block directly above (only blank rows between) leaves it unclear which
-  // copy is the live composer. An earlier copy in the transcript, separated by other
-  // output, is a past turn and does not count.
-  return !view.rows.slice(0, at).some((text, i) => text === rows[0]!.text && i + count <= at &&
-    rows.slice(1, count).every((line, n) => line.text === view.rows[i + n + 1]) &&
-    view.rows.slice(i + count, at).every((between) => between.trim() === ''));
+  // A transcript copy is distinguishable from the selected editor only while
+  // its cursor is at the end of this editor. A menu or another field can leave
+  // the same text painted below a completed turn without owning its focus.
+  let earlierCopy = false;
+  for (let i = 0; i < at; i++) {
+    if (view.rows[i] !== rows[0]!.text || i + count > at ||
+      !rows.slice(1, count).every((line, n) => line.text === view.rows[i + n + 1])) continue;
+    if (view.rows.slice(i + count, at).every((between) => between.trim() === '')) return false;
+    earlierCopy = true;
+  }
+  return !earlierCopy || (cursor?.y === last && cursor.x === end);
 }

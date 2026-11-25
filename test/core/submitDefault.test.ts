@@ -11,16 +11,18 @@ const line = 'Reply with the word ok.';
 
 function fixture(command: string, agent: string, shell = false) {
   let exit!: (event: { exitCode: number }) => void;
+  let output!: (data: string) => void;
   const writes: string[] = [];
   const pty = {
     pid: 0, cols: 80, rows: 24, process: 'fixture', handleFlowControl: false,
-    onData() { return { dispose() {} }; },
+    onData(listener) { output = listener; return { dispose() {} }; },
     onExit(listener) { exit = listener; return { dispose() {} }; },
     write(data: string) { writes.push(data); }, resize() {}, kill() {}, clear() {}, pause() {}, resume() {},
   } satisfies IPty;
   const session = new Session('s1', { command, agent, shell }, { platform: 'linux', spawn: () => pty });
   sessions.push(session);
-  return { session, writes, exit: () => exit({ exitCode: 0 }) };
+  return { session, writes, exit: () => exit({ exitCode: 0 }),
+    paint: async (data: string) => { output(data); await session['renderer'].flush(); } };
 }
 
 afterEach(async () => {
@@ -86,12 +88,35 @@ describe('marked submit policy', () => {
 describe('pre-Enter composer ownership', () => {
   it('accepts a repeated short Codex line only after an earlier completed turn', () => {
     const rows = ['› ' + line, 'ordinary answer', '› ' + line, '', '  ? for shortcuts'];
-    expect(codex.nudge?.readiness({ rows, viewportCols: 80, expectedDraft: line })).toBe('ready');
+    const cursor = { x: 2 + line.length, y: 2 };
+    expect(codex.nudge?.readiness({ rows, cursor, viewportCols: 80, expectedDraft: line })).toBe('ready');
     expect(codex.nudge?.readiness({ rows: [rows[0]!, '', ...rows.slice(2)],
-      viewportCols: 80, expectedDraft: line })).not.toBe('ready');
+      cursor, viewportCols: 80, expectedDraft: line })).not.toBe('ready');
     expect(codex.nudge?.readiness({ rows: [...rows.slice(0, 2), '› Reply with the word no.', ...rows.slice(3)],
-      viewportCols: 80, expectedDraft: line })).not.toBe('ready');
+      cursor, viewportCols: 80, expectedDraft: line })).not.toBe('ready');
   });
+
+  it('keeps a repeated Codex transcript line as draft when focus is off the selected composer', () => {
+    const body = 'sample line';
+    const rows = ['› sample line', 'ordinary answer', '› sample line', '', '  ? for shortcuts'];
+    const view = { rows, viewportCols: 80, expectedDraft: body };
+    expect(codex.nudge?.readiness({ ...view, cursor: { x: 2 + body.length, y: 2 } })).toBe('ready');
+    for (const cursor of [{ x: 4, y: 1 }, { x: 4, y: 0 }, { x: 4, y: 4 }]) {
+      expect(codex.nudge?.readiness({ ...view, cursor })).toBe('draft');
+    }
+    expect(codex.nudge?.readiness(view)).toBe('draft');
+  });
+
+  it('withholds auto Enter when the repeated Codex frame keeps its cursor on output', async () => {
+    const body = 'sample line';
+    const rows = ['› sample line', 'ordinary answer', '› sample line', '', '  ? for shortcuts'];
+    const f = fixture('codex', 'codex', true);
+    await f.paint('\x1b[2J\x1b[H' + rows.join('\r\n') + '\x1b[2;5H');
+    const written = await f.session.writeWithResult(body, { submitMode: 'auto' });
+    expect(f.writes).toEqual([body]);
+    expect(written.submitted).toBe(false);
+    expect(written.message).toMatch(/not seen in the composer/iu);
+  }, 9_000);
 
   it('recognises a padded Grok welcome composer after its send hints appear', () => {
     const rows = ['   Tip: Use Enter to send a message.',
