@@ -53,6 +53,14 @@ value, including with `envFromDaemon: "all"`. The CLI presents the session's
 identity automatically. Outside a session, run `msg claim <name>`, then set
 the printed `SHELLPUPPET_CLAIM=<id>:<secret>`
 in that client's environment for later commands. `msg release` frees it.
+If the code is lost, run `msg claim <name> --replace` and set the newly
+printed value. For a name beginning with a hyphen, use `--name=<name>`,
+for example `msg claim --replace --name=--desk`. The previous code expires
+immediately. Waiting and nudged messages follow the replacement, as does
+any launch grant on the name.
+If the audit entry cannot be written, the old claim remains active.
+A session-held name cannot be replaced. Agents should use MCP's
+`session_claim` so the MCP server keeps the code in memory.
 The CLI refuses `msg claim` when its environment identifies a session, which
 already messages under its own name. The daemon refuses claims presenting a
 session identity, a valid claim or the inside-session mark, and says which of
@@ -64,8 +72,10 @@ first. A request can present both. A request presenting neither is
 treated as outside. A local process with the daemon token can omit those
 signals and already has access to every session. Messaging rules govern which
 participants the daemon carries messages between, not that token's authority.
-Claims lapse after the configured idle period unless their holder makes an
-authenticated messaging call, including a pending wait.
+An outside claim lapses after the configured idle period. An unmarked,
+authenticated use of the claim, including a profile launch, restarts the timer.
+A request marked as coming from inside a session can use the proof to read the
+inbox without changing the idle deadline. A pending `msg wait` keeps the claim active.
 Treat a claim as a local same-user credential and keep it out of logs.
 
 The dashboard launcher has a Name box filled with the selected profile's

@@ -19,7 +19,7 @@ import { WebSocketServer } from 'ws';
 import type { WebSocket } from 'ws';
 import { SessionManager, PolicyViolationError, SessionStartError } from '../core/manager.js';
 import { Mailbox, MailboxError, NAME_PATTERN, buildNudge } from '../core/mailbox.js';
-import type { MailboxEntry } from '../core/mailbox.js';
+import type { MailboxEntry, SavedClaim } from '../core/mailbox.js';
 import { buildMessagingPolicy, DEFAULT_NUDGE_INTERVAL_MS, DEFAULT_NUDGES_PER_MINUTE } from './config.js';
 import { NudgeScheduler } from './nudgeScheduler.js';
 import { ScheduleStore, PromptScheduler, watchSchedules } from './schedules.js';
@@ -345,6 +345,9 @@ export interface DaemonOptions {
 export { AlreadyRunningError };
 
 class HomeOwnershipError extends Error {}
+class ClaimAuditError extends Error {}
+const CLAIM_RECOVERY_HINT = 'Claim the name again, using --replace if it is still held.';
+const invalidClaim = { code: 'invalid-claim', hint: CLAIM_RECOVERY_HINT };
 
 type JsonBody = Record<string, unknown>;
 
@@ -769,6 +772,7 @@ export class Daemon {
     const auditor = options.audit ?? NULL_AUDITOR;
     this.audit = {
       captureContent: auditor.captureContent,
+      recordRequired: auditor.recordRequired?.bind(auditor),
       record: (actor, action, session, meta) => auditor.record(
         actor, action, session, meta,
         // A session's timers and listeners can inherit the request that created
@@ -2155,9 +2159,10 @@ export class Daemon {
     }
 
     if (this.stopping) { json(res, 503, { error: 'The daemon is stopping.' }); return; }
-    if (launcher && this.grantedLauncher(req)?.id !== launcher.id) {
-      json(res, 403, { error: 'Session launch permission required.' });
-      return;
+    if (launcher) {
+      const current = this.grantedLauncher(req, res);
+      if (!current) return;
+      if (current.id !== launcher.id) { json(res, 403, { error: 'Session launch permission required.' }); return; }
     }
     const now = this.now();
     this.pruneLaunchTimes(now);
@@ -2718,32 +2723,59 @@ export class Daemon {
     writePrivateRecord(path.join(this.options.home, 'previous-sessions.json'), { version: 1, outgoingInstanceId: this.instanceId, sessions });
   }
 
-  private saveLauncherClaims(excludeId?: string): void {
+  private saveLauncherClaims(excludeId?: string, next?: SavedClaim, beforePublish?: () => void): void {
     const grants = this.launchProfiles.sessionLaunch ?? [];
     const file = path.join(this.options.home, 'launcher-claims.json');
     if (!this.claimsRestored) throw new Error('Saved launcher claims could not be restored.');
     if (grants.length || fs.existsSync(file)) {
       let discovery = this.requireHomeOwner();
       const claims = this.mailbox.savedClaims(grants).filter(claim => claim.id !== excludeId);
-      writePrivateRecord(file, claims, () => { discovery = this.requireHomeOwner(); });
+      if (next) claims.push(next);
+      writePrivateRecord(file, claims, () => {
+        beforePublish?.();
+        discovery = this.requireHomeOwner();
+      });
       if (!this.stopping && (discovery.kind === 'missing' || discovery.kind === 'not-a-record')) {
         void this.keepStatePublished();
       }
     }
   }
 
-  private grantedLauncher(req: http.IncomingMessage) {
+  private auditReplacement(actor: string, oldClaimId: string, next: SavedClaim): void {
+    const failure = 'Could not write the audit record for the claim replacement.';
+    if (!this.audit.recordRequired) throw new ClaimAuditError(failure);
+    try {
+      this.audit.recordRequired(actor, 'msg-replace', next.id, {
+        name: next.name, oldClaimId, newClaimId: next.id, member: this.isReservedClaimName(next.name),
+      });
+    } catch { throw new ClaimAuditError(failure); }
+  }
+
+  private presentedClaim(req: http.IncomingMessage, allowMarked = true): { id?: string; refused?: true } {
+    const id = req.headers['x-shellpuppet-claim'];
+    const secret = req.headers['x-shellpuppet-claim-secret'];
+    if (id === undefined && secret === undefined) return {};
+    const marked = req.headers['x-shellpuppet-inside-session'] === '1';
+    if ((!marked || allowMarked) && typeof id === 'string' && typeof secret === 'string' &&
+        this.mailbox.verifyClaim(id, secret, !marked)) return { id };
+    return { refused: true };
+  }
+
+  private grantedLauncher(req: http.IncomingMessage, res: http.ServerResponse) {
     this.lapseIdleClaims();
     let id = this.callerContext.getStore();
     if (id === undefined) {
-      const claim = headerOne(req, 'x-shellpuppet-claim');
-      const secret = headerOne(req, 'x-shellpuppet-claim-secret');
-      if (req.headers['x-shellpuppet-inside-session'] === '1' || !claim || !secret ||
-        !this.mailbox.verifyClaim(claim, secret)) return undefined;
-      id = claim;
+      const claim = this.presentedClaim(req, false);
+      if (claim.refused) {
+        json(res, 403, { error: 'Session launch permission required.', ...invalidClaim });
+        return undefined;
+      }
+      id = claim.id;
     }
-    const caller = this.mailbox.participant(id);
-    return caller && this.launchProfiles.sessionLaunch?.includes(caller.name) ? caller : undefined;
+    const caller = id === undefined ? undefined : this.mailbox.participant(id);
+    if (caller && this.launchProfiles.sessionLaunch?.includes(caller.name)) return caller;
+    json(res, 403, { error: 'Session launch permission required.' });
+    return undefined;
   }
 
   private messageAudit(action: string, entry: MailboxEntry, actor = 'daemon'): void {
@@ -2764,6 +2796,10 @@ export class Daemon {
       }
     }
     this.mailbox.end(id);
+    this.closeParticipantSockets(id);
+  }
+
+  private closeParticipantSockets(id: string): void {
     for (const [ws, participant] of this.eventSockets) {
       if (participant === id) ws.close();
     }
@@ -2972,27 +3008,23 @@ export class Daemon {
       return;
     }
     this.lapseIdleClaims();
-    const claimId = req.headers['x-shellpuppet-claim'];
-    const claimSecret = req.headers['x-shellpuppet-claim-secret'];
-    const claimPresented = claimId !== undefined || claimSecret !== undefined;
-    const claimValid = typeof claimId === 'string' && typeof claimSecret === 'string' &&
-      this.mailbox.verifyClaim(claimId, claimSecret);
     const route = segments[1];
     const creatingClaim = req.method === 'POST' && route === 'claims' && segments.length === 2;
-    if (claimPresented && !claimValid && !creatingClaim) {
-      json(res, 403, { error: 'Messaging claim was not recognised.' });
+    const { id: claimId, refused } = this.presentedClaim(req);
+    if (refused && !creatingClaim) {
+      json(res, 403, { error: 'Messaging claim was not recognised.', ...invalidClaim });
       return;
     }
-    const caller = this.callerContext.getStore() ?? (claimValid ? claimId : undefined);
+    const caller = this.callerContext.getStore() ?? claimId;
     if (creatingClaim) {
       // Each refusal says only what the daemon knows: a verified session, a valid claim, a mark on the request.
       if (this.callerContext.getStore() !== undefined) {
         json(res, 409, { error: 'This session already messages under its own name.' }); return;
       }
       const marked = req.headers['x-shellpuppet-inside-session'] === '1';
-      if (claimValid || marked) {
+      if (claimId !== undefined || marked) {
         const reasons: string[] = [];
-        if (claimValid) {
+        if (claimId !== undefined) {
           reasons.push('This client already holds a messaging claim: release it first (msg release), or stop ' +
             'presenting it (SHELLPUPPET_CLAIM), to make another.');
         }
@@ -3005,7 +3037,13 @@ export class Daemon {
         json(res, 409, { error: reasons.join(' ') }); return;
       }
       const body = await readBody(req);
-      if (typeof body['name'] !== 'string') { json(res, 400, { error: 'A valid name is required.' }); return; }
+      const name = body['name'];
+      const replace = body['replace'] === true;
+      if (typeof name !== 'string') { json(res, 400, { error: 'A valid name is required.' }); return; }
+      if (body['replace'] !== undefined && typeof body['replace'] !== 'boolean') {
+        json(res, 400, { error: 'replace must be a boolean.' }); return;
+      }
+      if (replace) this.lapseIdleClaims();
       const now = this.now();
       while (this.claimTimes.length > 0 && (this.claimTimes[0] ?? now) <= now - 60_000) this.claimTimes.shift();
       if (this.claimCount >= 64) {
@@ -3014,25 +3052,33 @@ export class Daemon {
       if (this.claimTimes.length >= 8) {
         json(res, 429, { error: 'Messaging claim rate reached (8 in 60 seconds).' }); return;
       }
-      const claim = this.mailbox.claim(body['name']);
-      this.claimTimes.push(now);
-      this.claimCount++;
-      if (this.launchProfiles.sessionLaunch?.includes(body['name'])) {
-        try { this.saveLauncherClaims(); }
-        catch (error) { this.mailbox.release(claim.claimId); this.claimCount--; throw error; }
-      }
-      this.audit.record(actor, 'msg-claim', claim.claimId, {
-        fromId: claim.claimId, fromName: body['name'], toId: null, toName: null,
-        messageId: null, length: 0, member: this.isReservedClaimName(body['name']),
+      const { claimId: newId, secret, previousId } = this.mailbox.claim(name, {
+        replace,
+        beforeCommit: (next, oldId) => {
+          this.claimTimes.push(now);
+          const audit = oldId === undefined ? undefined : () => this.auditReplacement(actor, oldId, next);
+          if (this.launchProfiles.sessionLaunch?.includes(name)) this.saveLauncherClaims(oldId, next, audit);
+          else audit?.();
+        },
       });
-      json(res, 201, claim);
+      if (previousId !== undefined) {
+        this.closeParticipantSockets(previousId);
+      } else {
+        this.claimCount++;
+        this.audit.record(actor, 'msg-claim', newId, {
+          fromId: newId, fromName: name, toId: null, toName: null,
+          messageId: null, length: 0, member: this.isReservedClaimName(name),
+        });
+      }
+      json(res, 201, { claimId: newId, secret });
       return;
     }
     if (caller === undefined) { json(res, 403, { error: 'Not a messaging participant.' }); return; }
-    if (claimValid) this.mailbox.touchClaim(claimId);
     if (req.method === 'DELETE' && route === 'claims' && segments.length === 3) {
-      if (!claimValid || claimId !== segments[2]) {
-        json(res, 403, { error: 'The matching claim is required.' }); return;
+      if (claimId === undefined || claimId !== segments[2]) {
+        json(res, 403, { error: 'The matching claim is required.',
+          ...(claimId === undefined ? {} : { hint: CLAIM_RECOVERY_HINT }) });
+        return;
       }
       const name = this.mailbox.participant(claimId)?.name;
       if (name && this.launchProfiles.sessionLaunch?.includes(name)) this.saveLauncherClaims(claimId);
@@ -3091,7 +3137,7 @@ export class Daemon {
       } catch (error) {
         if (!(error instanceof Error) || error.name !== 'AbortError') throw error;
       } finally { res.off('close', onClose); }
-      if (claimValid) this.mailbox.touchClaim(claimId);
+      if (claimId !== undefined && req.headers['x-shellpuppet-inside-session'] !== '1') this.mailbox.touchClaim(claimId);
       return;
     }
     if (req.method === 'GET' && route === 'log') {
@@ -3162,7 +3208,7 @@ export class Daemon {
       }
 
       if (url.pathname === '/launcher/previous' && req.method === 'GET') {
-        if (!this.grantedLauncher(req)) { json(res, 403, { error: 'Session launch permission required.' }); return; }
+        if (!this.grantedLauncher(req, res)) return;
         const file = path.join(this.options.home, 'previous-sessions.json');
         try {
           // Older version 1 records used the generated session id as an explicit name.
@@ -3182,8 +3228,8 @@ export class Daemon {
       }
 
       if (url.pathname === '/launcher/launch' && req.method === 'POST') {
-        const caller = this.grantedLauncher(req);
-        if (!caller) { json(res, 403, { error: 'Session launch permission required.' }); return; }
+        const caller = this.grantedLauncher(req, res);
+        if (!caller) return;
         if ((headerOne(req, 'content-type') ?? '').split(';')[0]?.trim().toLowerCase() !== 'application/json') {
           json(res, 415, { error: 'The launch body must be JSON.' }); return;
         }
@@ -3875,6 +3921,7 @@ export class Daemon {
       json(res, 404, { error: 'Not found.', path: url.pathname });
     } catch (error) {
       if (error instanceof HomeOwnershipError) { json(res, 409, { error: error.message }); return; }
+      if (error instanceof ClaimAuditError) { json(res, 503, { error: error.message }); return; }
       if (error instanceof MailboxError) {
         const status = error.code === 'unknown-name' ? 404 :
           error.code === 'not-allowed' || error.code === 'unknown-sender' ? 403 :
@@ -3891,7 +3938,7 @@ export class Daemon {
           'text-too-large': 'A message exceeds the 16 KiB limit.',
           'mailbox-full': 'The mailbox is full.',
         };
-        json(res, status, { error: messages[error.code] }); return;
+        json(res, status, { error: messages[error.code], hint: error.hint }); return;
       }
       if (error instanceof WaitConditionError) {
         json(res, 400, { error: error.message });
@@ -4599,8 +4646,9 @@ export class Daemon {
     // refusal never reaches. An error with no listener would be an uncaught
     // exception, on which the daemon shuts down with every session.
     socket.on('error', () => socket.destroy());
-    const reject = (code: number, reason: string): void => {
-      socket.write(`HTTP/1.1 ${String(code)} ${reason}\r\nReferrer-Policy: no-referrer\r\nConnection: close\r\n\r\n`);
+    const reject = (code: number, reason: string, hint?: string): void => {
+      const headers = hint ? `X-ShellPuppet-Hint: ${hint}\r\n` : '';
+      socket.write(`HTTP/1.1 ${String(code)} ${reason}\r\n${headers}Referrer-Policy: no-referrer\r\nConnection: close\r\n\r\n`);
       socket.destroy();
     };
 
@@ -4665,18 +4713,17 @@ export class Daemon {
         reject(403, 'Forbidden');
         return;
       }
-      const claimId = req.headers['x-shellpuppet-claim'];
-      const claimSecret = req.headers['x-shellpuppet-claim-secret'];
-      const claimPresented = claimId !== undefined || claimSecret !== undefined;
-      if (claimPresented) this.lapseIdleClaims();
-      if (claimPresented && (typeof claimId !== 'string' || typeof claimSecret !== 'string' ||
-          !this.mailbox.verifyClaim(claimId, claimSecret))) {
-        reject(403, 'Forbidden');
+      if (req.headers['x-shellpuppet-claim'] !== undefined || req.headers['x-shellpuppet-claim-secret'] !== undefined) {
+        this.lapseIdleClaims();
+      }
+      const claim = this.presentedClaim(req);
+      if (claim.refused) {
+        reject(403, 'Forbidden', CLAIM_RECOVERY_HINT);
         return;
       }
       this.wss.handleUpgrade(req, socket, head, (ws) => {
         this.callerContext.run(caller.session, () =>
-          this.attachEventSocket(ws, caller.session ?? (typeof claimId === 'string' ? claimId : undefined)));
+          this.attachEventSocket(ws, caller.session ?? claim.id));
       });
       return;
     }

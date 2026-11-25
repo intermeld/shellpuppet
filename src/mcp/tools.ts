@@ -136,6 +136,10 @@ interface ToolResult {
   [key: string]: unknown;
 }
 
+class DaemonRequestError extends Error {
+  constructor(message: string, readonly hint: string) { super(message); }
+}
+
 function text(value: string, isError = false): ToolResult {
   return { content: [{ type: 'text', text: value }], ...(isError ? { isError: true } : {}) };
 }
@@ -212,8 +216,7 @@ export interface PassLists {
 export function registerTools(server: McpServer, options: McpToolOptions = {}): () => Promise<void> {
   const framing = options.untrustedFraming ?? true;
   let cached: DaemonConnection | null = null;
-  let heldClaim: string | undefined;
-  let heldClaimId: string | undefined;
+  let heldClaim: { id: string; proof: string; replace: boolean } | undefined;
 
   const frame = (screen: string): string => (framing ? frameUntrusted(screen) : screen);
 
@@ -234,17 +237,20 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
     signal?: AbortSignal,
   ): Promise<{ payload: Body; warnings: string[] }> => {
     const { connection, warnings } = await connect();
+    const claim = heldClaim;
     let response = await request(connection, method, path, body, { ...options,
-      ...(heldClaim !== undefined ? { claim: heldClaim } : {}), signal });
-    if (heldClaim !== undefined && response.status === 403 &&
-      (response.body as Body)['error'] === 'Messaging claim was not recognised.') {
+      ...(claim !== undefined ? { claim: claim.proof } : {}), signal });
+    const refusal = response.body as Body;
+    if (response.status === 403 && claim !== undefined && claim === heldClaim &&
+        (refusal['error'] === 'Messaging claim was not recognised.' || (claim.replace && refusal['code'] === 'invalid-claim'))) {
       heldClaim = undefined;
-      heldClaimId = undefined;
-      response = await request(connection, method, path, body, { ...options, claim: '', signal });
+      if (!claim.replace) response = await request(connection, method, path, body, { ...options, claim: '', signal });
     }
     const payload = response.body as Body;
     if (response.status >= 400) {
       const message = typeof payload['error'] === 'string' ? payload['error'] : 'Request failed.';
+      const hint = payload['hint'] ?? refusal['hint'];
+      if (typeof hint === 'string') throw new DaemonRequestError(message, hint);
       throw new Error(message);
     }
     return { payload, warnings };
@@ -254,7 +260,9 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
     try {
       return await fn();
     } catch (error) {
-      return text(error instanceof Error ? error.message : String(error), true);
+      const result = text(error instanceof Error ? error.message : String(error), true);
+      if (error instanceof DaemonRequestError) result.content.push({ type: 'text', text: error.hint });
+      return result;
     }
   };
 
@@ -314,31 +322,30 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
     return text(messageResult(payload['message']));
   }));
   server.registerTool('session_claim', {
-    title: 'Claim a messaging name', description: 'Hold a name for this MCP server lifetime.',
-    inputSchema: params({ name: z.string() }),
-  }, async ({ name }) => run(async () => {
-    const { payload } = await call('POST', '/messages/claims', { name });
-    heldClaimId = String(payload['claimId']);
-    heldClaim = `${heldClaimId}:${String(payload['secret'])}`;
+    title: 'Claim a messaging name', description: 'Hold a name in memory. Set replace to recover a held outside claim and its unread messages.',
+    inputSchema: params({ name: z.string(), replace: z.boolean().optional() }),
+  }, async ({ name, replace }) => run(async () => {
+    const { payload } = await call('POST', '/messages/claims', { name, replace });
+    const id = String(payload['claimId']);
+    heldClaim = { id, proof: `${id}:${String(payload['secret'])}`, replace: replace === true };
     return text(`Claimed ${name}.`);
   }));
   server.registerTool('session_release', {
     title: 'Release messaging name', description: 'Release this MCP server\'s claim.', inputSchema: params({}),
   }, async () => run(async () => {
-    if (heldClaimId === undefined) return text('No claim is held.');
-    try { await call('DELETE', `/messages/claims/${heldClaimId}`); }
-    finally { heldClaim = undefined; heldClaimId = undefined; }
+    const claim = heldClaim;
+    if (claim === undefined) return text('No claim is held.');
+    try { await call('DELETE', `/messages/claims/${claim.id}`); }
+    finally { if (heldClaim === claim) heldClaim = undefined; }
     return text('Claim released.');
   }));
   }
   const releaseOnClose = async (): Promise<void> => {
-    if (heldClaimId === undefined || cached === null) return;
-    const id = heldClaimId;
     const claim = heldClaim;
-    heldClaimId = undefined;
+    if (claim === undefined || cached === null) return;
     heldClaim = undefined;
-    await request(cached, 'DELETE', `/messages/claims/${id}`, undefined,
-      { ...options, claim, autoStart: false }).catch(() => undefined);
+    await request(cached, 'DELETE', `/messages/claims/${claim.id}`, undefined,
+      { ...options, claim: claim.proof, autoStart: false }).catch(() => undefined);
   };
   process.once('beforeExit', () => { void releaseOnClose(); });
 

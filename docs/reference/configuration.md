@@ -620,9 +620,11 @@ so a daemon restart clears every mailbox.
 `nudgeIntervalMs` is the minimum time between typed nudges to one session
 (default 30,000 milliseconds). `nudgesPerMinute` caps typed nudges across the
 daemon in a rolling minute (default 20). Both must be positive integers.
-`claimIdleMinutes` is the time an outside claim may go without an authenticated
-messaging call (default 30 minutes; a positive number). A pending `msg wait`
-keeps the claim active. On lapse its unread messages become `not-delivered`.
+`claimIdleMinutes` sets how long an outside claim may be idle (a positive
+number, default 30). Each authenticated outside use, including a profile launch,
+restarts the timer. A request marked as coming from inside a session leaves the
+timer unchanged. A pending `msg wait` keeps the claim active. On lapse
+its unread messages become `not-delivered`.
 The daemon checks waiting messages on its existing screen scan. Only an idle
 supported session with an empty composer receives a fixed nudge; other messages
 stay in the inbox. The nudge names the `session_inbox` MCP tool, so a session
@@ -827,7 +829,9 @@ The live registry name controls the grant. A dashboard rename transfers the
 permission with the name. An ordinary child start cannot assign itself a
 grant through its label. An outside client can claim a free name when
 messaging is enabled. Any same-user process holding the daemon token can do
-this. Grant holders can start profiles that inherit daemon credentials.
+this and can replace a held outside claim. Replacement requires a successful
+audit write. Grant
+holders can start profiles that inherit daemon credentials.
 
 A granted outside claim keeps its id and secret through a restart. The
 daemon keeps its name, id, last activity time and SHA-256 secret digest in
