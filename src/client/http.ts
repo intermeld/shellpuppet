@@ -808,6 +808,11 @@ export interface ApiResponse {
   recordedResumeId?: string;
 }
 
+/** JSON already serialised by the caller for an exact wire-size check. */
+export class EncodedJson {
+  constructor(readonly text: string) {}
+}
+
 /**
  * One authenticated JSON request. If the daemon has gone since discovery
  * (stale state), re-ensure once and retry, because one-shot clients meet this
@@ -860,7 +865,7 @@ export async function request(
         } : {}),
         ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
       },
-      ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+      ...(body !== undefined ? { body: body instanceof EncodedJson ? body.text : JSON.stringify(body) } : {}),
     });
     return { status: response.status, body: await response.json(),
       recordedResumeId: response.headers.get('x-shellpuppet-resume-id-recorded') ?? undefined };

@@ -16,8 +16,8 @@ can claim a free outside name or replace a held outside claim when messaging is 
 The daemon writes the caller, name and both claim ids to the audit before
 revoking the previous proof. Unverified proofs receive a fixed recovery hint. A granted name can launch every configured profile, including
 profiles with daemon credentials.
-Audit and event records carry message metadata,
-never message text, even when input capture is enabled.
+The audit log and event stream record only metadata about each message.
+`audit.captureContent` enables content capture only for recognised terminal reports.
 
 How ShellPuppet protects you, and the limits that remain. The reasoning behind
 each mechanism is in the design (`../architecture/design.md` §4); this page is
