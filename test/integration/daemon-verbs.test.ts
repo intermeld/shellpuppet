@@ -96,7 +96,7 @@ function expectNoDaemonStarted(home: string, standIn: number): void {
 }
 
 describe('daemon verbs on a daemon that goes as it is asked', () => {
-  it('treats a standalone exit between preflight and handle acquisition as stopped', async () => {
+  it('treats a standalone exit between preflight and shutdown as stopped', async () => {
     const { home, pid } = await homeWithVanishingDaemon('standalone-preflight-exit');
     const result = await cliWithDelayedWatcher(home, 'daemon', 'stop', '--json');
     expect(result.code, result.stderr).toBe(0);
