@@ -162,7 +162,11 @@ it('does the same viewport reads before the next queued write with and without r
     let count = -1;
     const f = fixture('muse', data => {
       if (data === line) void f.paint(frame(line));
-      if (data === '\r') void f.paint(frame(hint) + running);
+      if (data === '\r') {
+        // Earlier polling depends on paint timing. Count just the work between these two PTY writes.
+        reads.mockClear();
+        void f.paint(frame(hint) + running);
+      }
       if (data === 'x') count = reads.mock.calls.length;
     });
     await f.paint(frame('') + title(folder));
