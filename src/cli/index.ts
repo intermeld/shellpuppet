@@ -13,6 +13,7 @@
 
 import { writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { resolve } from 'node:path';
 import process from 'node:process';
 import { createInterface } from 'node:readline';
@@ -27,6 +28,7 @@ import { visibleMessageText } from '../core/messageText.js';
 import { resultRefusal } from '../core/reasoning.js';
 import { inspectDaemonState, readDaemonState, shellpuppetHome } from '../daemon/paths.js';
 import { clearRestartHold, readRestartHold, writeRestartHold } from '../daemon/restartHold.js';
+import { observedProcessExit, readLinuxProcessIdentity } from '../daemon/liveness.js';
 import { planPassedEnv } from '../mcp/config.js';
 import { isEnvNamesProblem, readDaemonConfig } from '../daemon/config.js';
 import { agentNameFor } from '../core/reasoning.js';
@@ -874,6 +876,74 @@ async function main(): Promise<void> {
   process.exit(0);
 }
 
+type StopInfo = { version: 1; role: 'standalone' | 'embedded'; pid: number; instanceId: string };
+
+/** Hold a Windows kernel process handle before asking that process to stop. */
+async function openDaemonExitWatcher(pid: number): Promise<{ exited: Promise<boolean>; close: () => void }> {
+  if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Invalid daemon PID for exit observation.');
+  const script = `$ErrorActionPreference='Stop'; try { ` +
+    `$target=[System.Diagnostics.Process]::GetProcessById(${String(pid)}); ` +
+    `$null=$target.Handle; [Console]::WriteLine('READY'); [Console]::Out.Flush(); ` +
+    `$target.WaitForExit(); [Console]::WriteLine('EXIT'); [Console]::Out.Flush() ` +
+    `} catch { [Console]::WriteLine('ERROR'); [Console]::Out.Flush(); exit 1 ` +
+    `} finally { if ($target) { $target.Dispose() } }`;
+  const child: ChildProcess = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
+    stdio: ['ignore', 'pipe', 'ignore'], windowsHide: true,
+  });
+  let ready = false;
+  let completed = false;
+  let acceptReady!: () => void;
+  let rejectReady!: (error: Error) => void;
+  let finishExit!: (exited: boolean) => void;
+  const readyPromise = new Promise<void>((resolve, reject) => { acceptReady = resolve; rejectReady = reject; });
+  const exited = new Promise<boolean>((resolve) => { finishExit = resolve; });
+  const lines = createInterface({ input: child.stdout! });
+  lines.on('line', (line) => {
+    if (line === 'READY') { ready = true; acceptReady(); }
+    if (line === 'EXIT') { completed = true; finishExit(true); }
+    if (line === 'ERROR') { rejectReady(new Error('Could not hold a daemon process handle.')); finishExit(false); }
+  });
+  child.once('error', (error) => { rejectReady(error); finishExit(false); });
+  child.once('close', () => {
+    if (!ready) rejectReady(new Error('Daemon process watcher ended before it held a handle.'));
+    if (!completed) finishExit(false);
+    lines.close();
+  });
+  const close = (): void => {
+    lines.close();
+    if (child.exitCode === null && child.signalCode === null) child.kill();
+  };
+  let readyTimer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([readyPromise, new Promise<never>((_resolve, reject) => {
+      readyTimer = setTimeout(() => reject(new Error('Timed out opening the daemon process handle.')), 5_000);
+    })]);
+  } catch (error) {
+    close();
+    throw error;
+  } finally { if (readyTimer !== undefined) clearTimeout(readyTimer); }
+  return { exited, close };
+}
+
+async function waitForStandaloneExit(connection: DaemonConnection,
+  watcher: { exited: Promise<boolean>; close: () => void } | null, originalTick: string | null): Promise<boolean> {
+  const deadline = Date.now() + 65_000;
+  if (process.platform === 'win32') {
+    if (watcher === null) return false;
+    let timer: NodeJS.Timeout | undefined;
+    try {
+      return await Promise.race([watcher.exited, new Promise<false>((resolve) => {
+        timer = setTimeout(() => resolve(false), Math.max(0, deadline - Date.now()));
+      })]);
+    } finally { if (timer !== undefined) clearTimeout(timer); }
+  }
+  while (Date.now() < deadline) {
+    if (observedProcessExit(connection.pid, originalTick)) return true;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(150, Math.max(1, deadline - Date.now()))));
+  }
+  return observedProcessExit(connection.pid, originalTick);
+}
+
 async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> {
   const sub = parsed.positionals[0];
   const force = parsed.flags.get('force') === true;
@@ -896,6 +966,48 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
 
   /** Stop the daemon, or say false when it had already gone. */
   const stopRunning = async (connection: DaemonConnection): Promise<boolean> => {
+    let stopInfo: StopInfo | null = null;
+    if (sub === 'stop') {
+      let preflight;
+      try {
+        preflight = await request(connection, 'GET', '/daemon/stop-info', undefined, {
+          logger: stderrLogger, actor: 'cli', ...daemonOnly,
+        });
+      } catch (error) {
+        if (error instanceof DaemonGoneError) return false;
+        throw error;
+      }
+      if (preflight.status === 200) {
+        const completion = typeof preflight.body === 'object' && preflight.body !== null
+          ? (preflight.body as Body)['completion'] : undefined;
+        if (completion !== undefined && completion !== null) {
+          if (typeof completion !== 'object' || completion === null ||
+            (completion as Body)['version'] !== 1 ||
+            ((completion as Body)['role'] !== 'standalone' && (completion as Body)['role'] !== 'embedded') ||
+            !Number.isSafeInteger((completion as Body)['pid']) ||
+            typeof (completion as Body)['instanceId'] !== 'string') {
+            throw new Error('The daemon returned invalid stop capability information.');
+          }
+          stopInfo = completion as StopInfo;
+          if (stopInfo.pid !== connection.pid || stopInfo.instanceId !== connection.instanceId) {
+            throw new Error('The daemon changed before shutdown; its exit cannot be verified.');
+          }
+        }
+      } else if (preflight.status !== 404) {
+        throw new Error(`Could not read daemon stop information (HTTP ${String(preflight.status)}).`);
+      }
+    }
+    const standalone = stopInfo?.role === 'standalone';
+    const originalTick = standalone ? readLinuxProcessIdentity(connection.pid)?.startTick ?? null : null;
+    let watcher: Awaited<ReturnType<typeof openDaemonExitWatcher>> | null = null;
+    if (standalone && process.platform === 'win32') {
+      watcher = await openDaemonExitWatcher(connection.pid);
+    }
+    const unproved = (message: string): never => {
+      if (wantJson) printJson({ stopped: false, teardown: 'in-progress', pid: connection.pid,
+        instanceId: stopInfo?.instanceId, ...warningFields() });
+      throw new Error(message);
+    };
     let response;
     try {
       response = await request(connection, 'POST', '/daemon/shutdown', { force, ...(sub === 'restart' || holdSeconds !== undefined ? { restart: true } : {}) }, {
@@ -904,15 +1016,36 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
         ...daemonOnly,
       });
     } catch (error) {
+      if (standalone) {
+        try {
+          if (!await waitForStandaloneExit(connection, watcher, originalTick)) {
+            unproved(`Daemon teardown is still in progress (pid ${String(connection.pid)}, instance ${String(stopInfo?.instanceId)}). Check daemon.log.`);
+          }
+          if (holdSeconds !== undefined) writeRestartHold(shellpuppetHome(), holdSeconds);
+          return true;
+        } finally { watcher?.close(); }
+      }
       if (error instanceof DaemonGoneError) return false;
       throw error;
     }
     if (response.status === 409) {
-      fail(1, `${String((response.body as Body)['error'])} (use --force)`);
+      watcher?.close();
+      throw new Error(`${String((response.body as Body)['error'])} (use --force)`);
     }
     if (response.status >= 400) {
+      watcher?.close();
       const message = (response.body as Body)['error'];
       throw new Error(typeof message === 'string' ? message : 'Daemon shutdown failed.');
+    }
+    if (stopInfo !== null) {
+      const completion = (response.body as Body)['completion'];
+      if (typeof completion !== 'object' || completion === null ||
+        (completion as Body)['version'] !== 1 || (completion as Body)['role'] !== stopInfo.role ||
+        (completion as Body)['pid'] !== stopInfo.pid ||
+        (completion as Body)['instanceId'] !== stopInfo.instanceId) {
+        watcher?.close();
+        throw new Error('The daemon changed while accepting shutdown; its exit cannot be verified.');
+      }
     }
     const warnings = (response.body as Body)['warnings'];
     if (Array.isArray(warnings)) {
@@ -922,6 +1055,24 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
         if (!wantJson) console.error(warning);
       }
     }
+    if (sub === 'stop' && holdSeconds !== undefined) {
+      try {
+        // Cover the exit wait, then restart the requested interval on success.
+        writeRestartHold(shellpuppetHome(), Math.min(600, holdSeconds + 70));
+      } catch (error) {
+        watcher?.close();
+        throw error;
+      }
+    }
+    if (standalone) {
+      try {
+        if (!await waitForStandaloneExit(connection, watcher, originalTick)) {
+          unproved(`Daemon teardown is still in progress (pid ${String(connection.pid)}, instance ${String(stopInfo?.instanceId)}). Check daemon.log.`);
+        }
+        return true;
+      } finally { watcher?.close(); }
+    }
+    watcher?.close();
     // Wait for the port to actually go quiet so restart cannot race it.
     const deadline = Date.now() + 10_000;
     while (Date.now() < deadline) {

@@ -5,7 +5,17 @@
 
 import * as net from 'node:net';
 import { describe, expect, it } from 'vitest';
-import { daemonRunning, portAccepts, processExists } from '../../src/daemon/liveness.js';
+import { daemonRunning, linuxProcessIdentity, portAccepts, processExists } from '../../src/daemon/liveness.js';
+
+describe('Linux process identity', () => {
+  it('reads zombie state and start tick after a command containing brackets', () => {
+    const fields = ['Z', ...Array<string>(18).fill('0'), '123456'];
+    expect(linuxProcessIdentity(`42 (name (detail)) ${fields.join(' ')}`)).toEqual({
+      state: 'Z', startTick: '123456',
+    });
+    expect(linuxProcessIdentity('42 (incomplete')).toBeNull();
+  });
+});
 
 describe('processExists', () => {
   it('finds this process', () => {

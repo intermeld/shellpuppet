@@ -321,3 +321,15 @@ describe('canReadExitCode', () => {
     expect(fresh.canReadExitCode({})).toBe(false);
   });
 });
+
+describe('temporaryResizeReady', () => {
+  it('checks the pinned terminal readiness before a temporary native resize', async () => {
+    vi.resetModules();
+    const fresh = await import('../../src/core/windowsPtyStart.js');
+    expect(fresh.releaseFailedStarts()).toBe(true);
+    const terminal = { _agent: {}, _isReady: false };
+    expect(fresh.temporaryResizeReady(terminal)).toBe(false);
+    terminal._isReady = true;
+    expect(fresh.temporaryResizeReady(terminal)).toBe(true);
+  });
+});

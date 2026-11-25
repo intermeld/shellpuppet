@@ -158,6 +158,8 @@ refuses held grids, overlapping wider reads and sizes outside 2 to 400
 columns and 2 to 150 rows. `--last`, `--hide-reasoning` and `--json`
 continue to work. JSON reports `cols`, `rows` and `restored`; plain output
 warns on stderr when a later geometry act prevents restoration.
+On Windows, a wider read before the terminal's first output returns 409;
+retry after it prints. This avoids a native resize being queued beyond shutdown.
 
 
 `shellpuppet list --json` includes a `cwd` field for each session, including
@@ -247,6 +249,18 @@ name in `launcher.sessionLaunch`. Use the folder choice configured for the profi
 For example, `shellpuppet launch review --folder repo --resume-id abc-123`.
 
 ## Relaunch after a daemon restart
+
+`shellpuppet daemon stop` waits up to 65 seconds for a new standalone daemon
+to exit. On Windows it observes the process through a handle acquired before
+the shutdown request. It obtains the daemon's role and identity through a
+token-authenticated preflight. Even if the shutdown response is lost, exit
+proof is required before reporting success or writing a requested hold.
+If exit cannot be proved, it exits 1 and reports that
+teardown is still in progress, naming the PID and instance. A requested
+`--hold` is kept even on this timeout. An embedded daemon or an older daemon
+uses the earlier listener completion rule. `daemon restart` still waits for
+listener closure rather than process exit. The daemon's session tree cleanup
+is bounded; stop does not claim that every descendant was observed exiting.
 
 Run `shellpuppet daemon restart --force` to record live profile sessions and
 end them before restarting. A stop with `--hold` also requests a record.

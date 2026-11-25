@@ -176,6 +176,19 @@ slot or by atomic replacement of the observed stale record or restart handoff.
   between being found and being asked, as one that is stopping does, is reported as not
   running (`{ "running": false }` with `--json`). Asking about a daemon in the middle of
   a stop, a rebuild and a start must not start one from the old build.
+- **Standalone stop completion.** A new standalone daemon identifies its process
+  and instance in a token-authenticated preflight and the shutdown response. On Windows, `daemon stop`
+  holds a handle to that process before sending the request and waits up to 65
+  seconds for that handle to signal exit. On POSIX it accepts an observed absent
+  process, a Linux zombie or a changed Linux start tick. Uncertain or surviving
+  processes are reported as teardown still in progress, never as stopped. A
+  requested hold is written after an accepted shutdown, before this wait, and
+  remains on timeout. If the shutdown response is lost, exact exit proof is
+  still required and a hold is written only after that proof. A received response
+  must match the preflight identity. Embedded and older daemons retain the listener completion
+  rule. `daemon restart` retains its existing listener wait and published budgets;
+  it does not wait for process exit. Session tree cleanup remains bounded and
+  verifies roots, but cannot prove that every descendant has exited.
 - **Shutdown kills all session process trees** (§3.1). The daemon must never exit and
   strand running agent CLIs.
 
@@ -1776,8 +1789,15 @@ setting, never their values. Free-form client starts retain their usual environm
     queued after restore applies to the restored grid. A controller's departure
     does not change the chosen grid;
     the original size is restored while control stays as the departure left it.
-    A cancelled or failed read and daemon shutdown also restore a live session
-    before the request finishes. If the program ends during the read, the
+    A cancelled or failed read restores a live session before the request
+    finishes. Shutdown cancels all wider reads and gives their restoration one
+    shared 250 ms bound before session tree teardown. Completed temporary growth
+    is restored within that bound unless a deliberate resize won. A restore
+    blocked past the bound is abandoned; queued temporary changes check
+    cancellation and session lifetime when they run, so they cannot change a
+    removed session. On the pinned Windows terminal implementation, a wider
+    read before first output returns HTTP 409 without queuing a native resize.
+    If the program ends during the read, the
     daemon leaves its last grid in place and returns HTTP 409 with the reason.
     Viewers receive live grid changes and keep their
     controller. A wider read is audited with requested and original sizes,

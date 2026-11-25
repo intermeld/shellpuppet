@@ -15,6 +15,13 @@ version may change behaviour, and every such change is listed here.
 
 - Codex recognises a repeated short prompt in its live composer when an earlier copy belongs to a completed turn. Grok recognises a padded welcome footer after typed send hints appear.
 - Hermes welcome screens with hour and minute footer clocks now allow message nudges and exact wrapped drafts to be submitted.
+- `daemon stop` waits for a new standalone daemon's process to exit before
+  reporting success, or reports teardown still in progress after 65 seconds.
+  An authenticated preflight keeps that guarantee when the shutdown response
+  is lost. A requested restart hold survives a timeout after an accepted response.
+- Shutdown cancels wider reads before session tree teardown. Temporary growth
+  cannot apply to a removed session, including a Windows resize deferred until
+  first output.
 
 ## [0.4.2] - 2026-11-25
 
