@@ -4535,7 +4535,12 @@ export class Daemon {
         previous.prompt.options.length !== detected.options.length ||
         previous.prompt.options.some((option, index) => option !== detected.options[index]);
       const inputVersion = session.promptInputVersion();
-      const answered = previous !== undefined && previous.inputVersion !== inputVersion;
+      // Input alone does not mean this prompt was answered: a key may start
+      // a repaint while the same decision remains on screen. A missed prompt
+      // after input is evidence of a transition only when a prompt appears
+      // again; the normal grace check still handles a lasting disappearance.
+      const answered = previous !== undefined && previous.inputVersion !== inputVersion &&
+        previous.missingSince !== null;
       if (previous !== undefined) {
         this.clearPromptGraceCheck(session.id);
         previous.missingSince = null;

@@ -95,6 +95,11 @@ it('restarts a held prompt after input, while reports and redraws keep its clock
       frame.changed?.includes('waitingOnPrompt')).length;
     expect((await api(isolated.port, isolated.token, `/sessions/${id}/input`, { body: { data: 'y' } })).status).toBe(200);
     now = 8_000;
+    await scanner.scanForPromptStalls();
+    expect(scanner.promptStates.get(id)).toMatchObject({ since: 1_000, alerted: true });
+    expect(viewer.controls().filter((frame) => frame['type'] === 'prompt-clear')).toHaveLength(0);
+    screen = '';
+    await scanner.scanForPromptStalls();
     screen = dialog('echo a long command with identical beta', { hint: true });
     await scanner.scanForPromptStalls();
     expect(scanner.promptStates.get(id)).toMatchObject({ since: 8_000, alerted: false });
@@ -109,6 +114,11 @@ it('restarts a held prompt after input, while reports and redraws keep its clock
     now = 9_000;
     screen = dialog('echo', { rows: ['status: alpha'] });
     await scanner.scanForPromptStalls();
+    expect(scanner.promptStates.get(id)?.since).toBe(8_000);
+    screen = '';
+    await scanner.scanForPromptStalls();
+    screen = dialog('echo', { rows: ['status: alpha'] });
+    await scanner.scanForPromptStalls();
     expect(scanner.promptStates.get(id)?.since).toBe(9_000);
     now = 9_500;
     screen = dialog('echo', { rows: ['status: beta'] });
@@ -117,6 +127,11 @@ it('restarts a held prompt after input, while reports and redraws keep its clock
 
     expect((await api(isolated.port, isolated.token, `/sessions/${id}/key`, { body: { key: 'enter' } })).status).toBe(200);
     now = 10_000;
+    await scanner.scanForPromptStalls();
+    expect(scanner.promptStates.get(id)?.since).toBe(9_000);
+    screen = '';
+    await scanner.scanForPromptStalls();
+    screen = dialog('echo', { rows: ['status: beta'] });
     await scanner.scanForPromptStalls();
     expect(scanner.promptStates.get(id)?.since).toBe(10_000);
 
