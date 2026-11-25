@@ -21,7 +21,7 @@
  *   is a security control, and its failure mode
  *   must not silently hand every session the daemon's secrets.
  * - Invalid `idleMinutes` / `audit` ⇒ safe defaults, problem named
- *   (`captureContent` records typed secrets, so anything unclear means OFF).
+ *   (`captureContent` records terminal replies, so anything unclear means OFF).
  * - Unknown top-level keys ⇒ reported (typo detection), config otherwise
  *   honoured.
  *

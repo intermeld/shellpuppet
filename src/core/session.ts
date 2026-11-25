@@ -225,6 +225,19 @@ export interface TypedWriteResult {
   message?: string;
 }
 
+const lineNotSeen = 'The typed text was not seen in the composer; Enter was not sent.';
+const otherInputArrived = 'Other input arrived after the typed text; Enter was not sent.';
+
+/** Describe the completed write using only the existing submit checks. */
+export function submitOutcome(written: TypedWriteResult) {
+  if (written.submitted === true) return { outcome: 'submitted' } as const;
+  if (written.submitted === false && !written.submitRetried) {
+    if (written.message === lineNotSeen) return { outcome: 'withheld', reason: 'line-not-seen' } as const;
+    if (written.message === otherInputArrived) return { outcome: 'withheld', reason: 'other-input-arrived' } as const;
+  }
+  return { outcome: 'unconfirmed' } as const;
+}
+
 /**
  * Bracketed paste (DEC private mode 2004). A TUI that enables it is telling us
  * it wants multi-character input delivered as ONE paste event rather than as a
@@ -1651,12 +1664,12 @@ export class Session implements WaitTarget {
         if (readableComposer) {
           if (this.inputVersion !== bodyInputVersion) {
             onTypedSubmit?.({ submitted: false, submitRetried: false,
-              message: 'Other input arrived after the typed text; Enter was not sent.' });
+              message: otherInputArrived });
             return screen;
           }
           if (!typedDraftSeen || !this.typedDraftVisible(body, placeholdersBefore)) {
             onTypedSubmit?.({ submitted: false, submitRetried: false,
-              message: 'The typed text was not seen in the composer; Enter was not sent.' });
+              message: lineNotSeen });
             return screen;
           }
         }

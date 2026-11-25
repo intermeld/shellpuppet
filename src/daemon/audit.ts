@@ -1,14 +1,12 @@
 /**
  * Append-only action log at `~/.shellpuppet/audit.log` (design §4.5).
  *
- * THE RULE: typed content is never logged by default. Keystrokes are where the
- * secrets are: an SSH passphrase or API key typed into a prompt must
- * not end up in a plaintext log. Default entries record the action and the
- * input LENGTH; the command line for `start` is recorded because commands are
- * policy-visible by definition. Screen output is never logged.
+ * Typed entries record input length. Only a reporting marker adds a submit outcome. Start
+ * entries record the command line because commands are visible to policy.
+ * Typed content and screen output stay out of the log.
  *
- * `audit.captureContent: true` in config.json opts into full input capture for
- * debugging, and docs/reference/security-model.md documents it as secret-capturing.
+ * `audit.captureContent: true` in config.json includes terminal report bytes for
+ * debugging. Typed input entries carry fixed metadata and a character count.
  */
 
 import * as fs from 'node:fs';

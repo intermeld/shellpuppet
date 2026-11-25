@@ -95,7 +95,7 @@ describe('audit log (§4.5)', () => {
     const input = lines.find((l) => l.action === 'input');
     expect(input?.actor).toBe('cli');
     expect(input?.session).toBe(id);
-    expect(input?.meta?.['chars']).toBe(SECRET.length);
+    expect(input?.meta).toEqual({ chars: SECRET.length });
     expect(input?.meta?.['data']).toBeUndefined();
 
     const start = lines.find((l) => l.action === 'start');
@@ -104,13 +104,25 @@ describe('audit log (§4.5)', () => {
     expect(lines.some((l) => l.action === 'kill')).toBe(true);
   });
 
-  it('captureContent: true records input verbatim (the documented secret-capturing opt-in)', async () => {
+  it('records the requested submit outcome and keeps typed text private with capture enabled', async () => {
     const td = await auditedDaemon(true);
     const { id } = await startSpin(td);
-    await api(td.port, td.token, `/sessions/${id}/input`, { body: { data: SECRET } });
+    const response = await api(td.port, td.token, `/sessions/${id}/input`, { body: { data: SECRET + '\r', submit: true } });
+    expect(response.body['outcome']).toBe('unconfirmed');
 
     const input = readAudit(td.home).find((l) => l.action === 'input');
-    expect(input?.meta?.['data']).toBe(SECRET);
+    expect(input?.meta).toEqual({ chars: SECRET.length + 1, submit: true, outcome: 'unconfirmed' });
+    for (const fields of [{}, { submit: false }]) {
+      const unmarked = await api(td.port, td.token, `/sessions/${id}/input`, { body: { data: SECRET + '\r', ...fields } });
+      expect(unmarked.body).not.toHaveProperty('outcome');
+      expect(readAudit(td.home).filter(l => l.action === 'input').at(-1)?.meta).toEqual({ chars: SECRET.length + 1 });
+    }
+    const ws = await connectWs(td.port, id, td.token);
+    ws.ws.send(SECRET);
+    await eventually(() => readAudit(td.home).filter(l => l.action === 'input').length === 4);
+    expect(readAudit(td.home).filter(l => l.action === 'input').at(-1)?.meta).toEqual({ chars: SECRET.length });
+    ws.close();
+    expect(fs.readFileSync(auditLogPath(td.home), 'utf8')).not.toContain(SECRET);
   });
 
   it("attributes a browser's keystrokes and connection to the viewer actor", async () => {
@@ -304,7 +316,7 @@ describe("audit log: the viewer's terminal answering the program (§4.5, §5)", 
     watcher.close();
   });
 
-  it('records what a report said only under captureContent, as for input', async () => {
+  it('records what a report said only under captureContent', async () => {
     const td = await auditedDaemon(true);
     const { id } = await startSpin(td);
     const ws = await connectWs(td.port, id, td.token);
