@@ -74,19 +74,25 @@ it('preserves CLI and MCP PTY writes and the fields supported by the daemon', as
   }
 });
 
-// Windows process arguments cannot carry a megabyte. Supply the fixture through
-// the child's stdin and build argv before importing the compiled CLI entry point.
+// Pass only the fixture path across the process boundary. The child builds the
+// full argv from a regular file before importing the compiled CLI entry point.
 function largeCli(body: string, verify: boolean) {
+  const fixture = join(td.home, 'large CLI input.txt');
+  writeFileSync(fixture, body, 'utf8');
   const bootstrap = [
     "import { readFileSync } from 'node:fs'",
     "import { pathToFileURL } from 'node:url'",
-    "process.argv.splice(2, 0, 'type', 's1', readFileSync(0, 'utf8'))",
+    "process.argv.splice(2, 1, 'type', 's1', readFileSync(process.argv[2], 'utf8'))",
     "await import(pathToFileURL(process.argv[1]).href)",
   ].join('\n');
-  const child = exec(process.execPath, ['--import', countInput, '--input-type=module', '-e', bootstrap, join(clientDist, 'cli/index.js'),
-    '--enter', '--json', ...(verify ? ['--verify'] : [])], { env: env() });
-  child.child.stdin!.end(body);
-  return child;
+  const args = ['--import', countInput, '--input-type=module', '-e', bootstrap,
+    join(clientDist, 'cli/index.js'), fixture, '--enter', '--json', ...(verify ? ['--verify'] : [])];
+  return new Promise<{ code: number | string; stdout: string; stderr: string; diagnostic: string }>(resolve => {
+    execFile(process.execPath, args, { env: env() }, (error, stdout, stderr) => {
+      const code = error ? error.code ?? error.signal ?? 'unknown' : 0;
+      resolve({ code, stdout, stderr, diagnostic: `CLI exit ${String(code)}\nstderr: ${stderr || '(empty)'}` });
+    });
+  });
 }
 
 describe.each(['CLI', 'MCP'])('%s request boundary', adapter => {
@@ -104,7 +110,9 @@ describe.each(['CLI', 'MCP'])('%s request boundary', adapter => {
     requestSizes.length = 0;
     writes.length = 0;
     if (adapter === 'CLI') {
-      expect(JSON.parse((await largeCli(body, verify)).stdout)).toEqual(expected);
+      const cli = await largeCli(body, verify);
+      expect(cli.code, cli.diagnostic).toBe(0);
+      expect(JSON.parse(cli.stdout), cli.diagnostic).toEqual(expected);
     } else {
       const mcp = await client.callTool({ name: 'terminal_type', arguments: { session: 's1', text: body, submit: true, verify } });
       expect(mcp.isError).not.toBe(true);
@@ -122,7 +130,9 @@ describe.each(['CLI', 'MCP'])('%s request boundary', adapter => {
 it('retains the refusal for a legacy body one byte above the limit', async () => {
   const text = 'a'.repeat(1_000_001 - Buffer.byteLength(JSON.stringify({ data: '\r' })));
   writes.length = 0;
-  await expect(largeCli(text, false)).rejects.toThrow(/Request body too large/i);
+  const cli = await largeCli(text, false);
+  expect(cli.code, cli.diagnostic).toBe(1);
+  expect(cli.stderr, cli.diagnostic).toMatch(/Request body too large/i);
   const mcp = await client.callTool({ name: 'terminal_type', arguments: { session: 's1', text, submit: true } });
   expect(mcp.isError).toBe(true);
   expect(mcp.content).toEqual([{ type: 'text', text: 'Request body too large: the limit is 1000000 bytes.' }]);
