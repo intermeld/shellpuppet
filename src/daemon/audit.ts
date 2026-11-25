@@ -18,6 +18,8 @@ import { NULL_LOGGER } from '../core/types.js';
 
 export interface Auditor {
   readonly captureContent: boolean;
+  /** Append synchronously or throw. Operations that require an audit entry use this path. */
+  recordRequired?: Auditor['record'];
   record(
     actor: string,
     action: string,
@@ -44,19 +46,23 @@ export function createAuditor(
 ): Auditor {
   const file = auditLogPath(home);
   let warned = false;
+  const append: Auditor['record'] = (actor, action, session, meta, callerSession) => {
+    const entry = {
+      time: new Date().toISOString(),
+      actor,
+      action,
+      ...(callerSession !== undefined ? { callerSession } : {}),
+      ...(session !== undefined ? { session } : {}),
+      ...(meta !== undefined ? { meta } : {}),
+    };
+    fs.appendFileSync(file, JSON.stringify(entry) + '\n');
+  };
   return {
     captureContent: options.captureContent ?? false,
-    record(actor, action, session, meta, callerSession) {
+    recordRequired: append,
+    record(...args) {
       try {
-        const entry = {
-          time: new Date().toISOString(),
-          actor,
-          action,
-          ...(callerSession !== undefined ? { callerSession } : {}),
-          ...(session !== undefined ? { session } : {}),
-          ...(meta !== undefined ? { meta } : {}),
-        };
-        fs.appendFileSync(file, JSON.stringify(entry) + '\n');
+        append(...args);
       } catch (error) {
         if (!warned) {
           warned = true;

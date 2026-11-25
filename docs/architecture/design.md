@@ -385,9 +385,10 @@ message whom, and a clock.
   `not-delivered` when the recipient ended before reading it.
 - **Names.** A participant (a daemon session, or an outside client proving a
   claim with a secret) holds a name unique among live participants. A message
-  is bound to the recipient INSTANCE that held the name when it was sent: if
-  that participant ends before reading, the message is `not-delivered`, and a
-  later holder of the same name never receives it. Group member names are
+  is bound to the recipient instance that held the name when it was sent.
+  Explicit replacement of a live outside claim transfers its unread messages
+  to the new claim. Otherwise, ending the recipient before it reads the message
+  marks it `not-delivered`. Group member names are
   reserved for outside claims. A session takes its valid, available label as
   its name; repeated dashboard launch names are numbered `-2`, `-3` and so on
   within the 40-character limit. A dashboard owner may rename a live session. Rename
@@ -474,11 +475,24 @@ and secret; a client token alone cannot act as a messaging participant.
 At most 64 outside claims may be live, and at most eight may be created in
 60 seconds. A stale claim header is ignored when creating a new claim.
 An outside claim lapses after `claimIdleMinutes` without an authenticated
-messaging call; a pending wait keeps it active. Lapse releases its name and
+use of its proof, including a profile launch or an events upgrade. Marked
+requests can use a valid outside proof for messaging and events without
+refreshing its idle time. An outstanding message wait keeps the claim active. Lapse releases its name and
 marks unread messages `not-delivered`. A client that knows it runs inside a
 session refuses to make a claim. The daemon refuses a claim presenting a
 session identity or the inside-session mark. A request presenting neither is
 treated as an outside claim, and a claim of a configured member name is audited.
+An outside client can recover a held claim with `msg claim <name> --replace`
+(`replace: true` on `session_claim`). The old proof expires immediately. Waiting
+and nudged messages retain their order and state under the new claim. A session
+keeps its name. Claim limits also apply to replacements. After validation,
+an attempt consumes a rate slot even if a required write fails. The daemon
+must append the caller, name and both claim ids to the audit before publishing
+the new digest or transferring the inbox. If publishing the digest then fails,
+the audit retains the attempt and the old claim remains active. A refused
+proof gets a fixed recovery hint alongside the route's usual error. A held
+outside name offers CLI and MCP recovery. Agents
+should use MCP to keep the proof in memory.
 The client-token HTTP routes are `POST /messages`, `GET /messages/inbox`,
 `GET /messages/outbox`, `GET /messages/directory`, `GET /messages/wait`,
 `POST /messages/claims`, `DELETE /messages/claims/:id` and
@@ -1431,7 +1445,7 @@ The daemon resolves the participant itself. Both launch routes use the same
 policies, limits, folders, environment and role. Resume arguments come from
 the profile template and receive one validated conversation id. The audit
 records the participant name and instance. Granted claims survive a restart
-under their existing proof and idle deadline.
+under their existing proof and idle deadline. Replacing a granted outside claim transfers launch permission with the name.
 
 **Dashboard launch profiles.** `launcher.profiles` is a known top-level
 configuration key and an array of named entries. A bad entry is omitted and

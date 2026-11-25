@@ -21,6 +21,7 @@ import type { DaemonConnection } from '../client/http.js';
 import type { ListedSchedule } from '../daemon/schedules.js';
 import { assertNodeVersion, packageVersion } from '../daemon/meta.js';
 import { NO_MATCHES } from '../core/find.js';
+import { claimRecoveryCommand } from '../core/mailbox.js';
 import { visibleMessageText } from '../core/messageText.js';
 import { resultRefusal } from '../core/reasoning.js';
 import { inspectDaemonState, readDaemonState, shellpuppetHome } from '../daemon/paths.js';
@@ -154,7 +155,9 @@ Usage:
   shellpuppet mcp                                   Run the MCP stdio server (long-running)
   shellpuppet msg send <to> <text|->                Send a message; - reads standard input
   shellpuppet msg inbox|outbox|directory|wait      Read messages and live names
-  shellpuppet msg claim <name>|release|log         Manage an outside claim or inspect the log
+  shellpuppet msg claim <name> [--replace]          Claim a name, or recover it after losing the code
+  shellpuppet msg claim --replace --name=<name>    Recover a name beginning with a hyphen
+  shellpuppet msg release|log                      Release an outside claim or inspect the log
   shellpuppet inbox                                Alias for msg inbox
   shellpuppet --version | --help
 
@@ -213,19 +216,28 @@ const VALUE_FLAGS = new Set([
 ]);
 
 /**
- * `stopAtFirstPositional` is how `start` avoids eating the target command's
+ * Stopping at the first positional argument keeps `start` from eating the target command's
  * own flags: `shellpuppet start [options] <command> [args...]`. Once the
  * command appears, everything after it (including `--version`, `--help`,
  * anything) belongs to the command verbatim: `start goose --version` hands
  * `--version` to Goose.
  */
-function parseArgs(argv: string[], stopAtFirstPositional = false): ParsedArgs {
+function parseArgs(argv: string[], verb?: string): ParsedArgs {
   const positionals: string[] = [];
   const flags = new Map<string, string | boolean>();
   const lists = new Map<string, string[]>();
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i] ?? '';
-    if (!arg.startsWith('--') || (stopAtFirstPositional && positionals.length > 0)) {
+    if (verb === 'msg' && positionals[0] === 'claim' && arg.startsWith('--name=')) {
+      if (flags.has('name')) fail(2, 'Supply one claim name.');
+      flags.set('name', arg.slice('--name='.length));
+      continue;
+    }
+    if (arg === '--' && verb === 'msg' && positionals[0] === 'claim') {
+      positionals.push(...argv.slice(i + 1));
+      break;
+    }
+    if (!arg.startsWith('--') || (verb === 'start' && positionals.length > 0)) {
       positionals.push(arg);
       continue;
     }
@@ -295,7 +307,8 @@ async function call(
     // did not work" without reading the message. Everything else, meaning
     // 401, 403, 404, 409, 5xx and any transport failure, is the operation
     // failing and stays 1.
-    fail(response.status === 400 ? 2 : 1, `error (${String(response.status)}): ${message}`);
+    const hint = typeof payload['hint'] === 'string' ? `\n${payload['hint']}` : '';
+    fail(response.status === 400 ? 2 : 1, `error (${String(response.status)}): ${message}${hint}`);
   }
   return payload;
 }
@@ -323,7 +336,7 @@ async function main(): Promise<void> {
   assertNodeVersion();
   const argv = process.argv.slice(2);
   const verb = argv[0];
-  const parsed = parseArgs(argv.slice(1), verb === 'start');
+  const parsed = parseArgs(argv.slice(1), verb);
   const wantJson = parsed.flags.get('json') === true;
 
   // `--help` and `-h` as the FIRST argument are answered here, with `help` and
@@ -381,13 +394,17 @@ async function main(): Promise<void> {
       const input = parsed.positionals[2] ?? fail(2, 'msg send needs text or -.');
       payload = await call(connection, 'POST', '/messages', { to, text: input === '-' ? readFileSync(0, 'utf8') : input });
     } else if (sub === 'claim') {
-      const name = parsed.positionals[1] ?? fail(2, 'msg claim needs a name.');
-      payload = await call(connection, 'POST', '/messages/claims', { name });
+      const named = parsed.flags.get('name');
+      if (named !== undefined && parsed.positionals[1] !== undefined) fail(2, 'Supply one claim name.');
+      const name = typeof named === 'string' ? named : parsed.positionals[1] ?? fail(2, 'msg claim needs a name.');
+      const replace = parsed.flags.get('replace') === true;
+      payload = await call(connection, 'POST', '/messages/claims', { name, ...(replace ? { replace } : {}) });
       if (!wantJson) {
         const claim = `${String(payload['claimId'])}:${String(payload['secret'])}`;
         console.log(`SHELLPUPPET_CLAIM=${claim}`);
         console.log(`PowerShell: $env:SHELLPUPPET_CLAIM='${claim}'`);
         console.log(`POSIX shell: export SHELLPUPPET_CLAIM='${claim}'`);
+        console.log(`If you lose this code, run shellpuppet ${claimRecoveryCommand(name)} to obtain a new one.`);
         return;
       }
     } else if (sub === 'release') {

@@ -4,16 +4,18 @@
 
 A peer message carries at most its sender's authority. It is information
 from another participant, not the user's instruction or approval. MCP
-results label and frame the text as untrusted data. The daemon binds a sent
-message to the recipient instance that held its name, so a later holder
-does not receive it. Claims are local same-user credentials, checked with a
-secret on every request. Restart discards messages and ordinary outside claims.
+results label and frame the text as untrusted data. The daemon binds each message
+to the recipient instance. Explicitly replacing a live outside claim transfers
+its waiting and nudged messages to the new claim. Claims are local same-user
+credentials, checked with a secret on every request. Restart discards messages and ordinary outside claims.
 For active names in `launcher.sessionLaunch`, the owner-only `launcher-claims.json`
 stores the claim id, name, last activity time and secret digest. The holder
 presents its existing id and secret again. Release, idle expiry and grant
 removal revoke launch access. Any same-user process with the daemon token
-can claim a free outside name when messaging is enabled. A granted name can
-launch every configured profile, including profiles with daemon credentials.
+can claim a free outside name or replace a held outside claim when messaging is enabled.
+The daemon writes the caller, name and both claim ids to the audit before
+revoking the previous proof. Unverified proofs receive a fixed recovery hint. A granted name can launch every configured profile, including
+profiles with daemon credentials.
 Audit and event records carry message metadata,
 never message text, even when input capture is enabled.
 
@@ -502,7 +504,7 @@ already read the daemon client token, so it is not a boundary against local code
 `TERM` and `COLORTERM` take ShellPuppet's terminal values. Anyone able to use
 the dashboard credential can start an `"all"` profile and reach every other
 secret the daemon holds through its session. A verified name in `launcher.sessionLaunch` can also start every such profile.
-Any same-user process with the daemon token can claim a free outside name.
+Any same-user process with the daemon token can claim a free outside name or replace a held outside claim.
 Free-form starts retain their configured `sessionEnv` mode. Reserved credentials
 stay excluded whatever `sessionEnv` says
 ([ADR-007](../decisions/ADR-007-connected-features.md)).
