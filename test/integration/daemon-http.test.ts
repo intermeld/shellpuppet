@@ -31,6 +31,7 @@ import type { ApiResult, TestDaemon } from './helpers.js';
 
 let td: TestDaemon;
 const auditRecords: { actor: string; action: string; session?: string; meta?: Record<string, unknown> }[] = [];
+const mainHealthFields = ['inputSubmitMode', 'instanceId', 'ok', 'pid', 'version'];
 
 beforeAll(async () => {
   // No session cap unless configured; the configured cap is tested below.
@@ -86,7 +87,7 @@ async function waitForFirstOutput(port: number, token: string, id: string, marke
 describe('auth and loopback defences', () => {
   it('keeps stop capability behind the token while public health stays unchanged', async () => {
     const health = await api(td.port, null, '/health');
-    expect(Object.keys(health.body).sort()).toEqual(['instanceId', 'ok', 'pid', 'version']);
+    expect(Object.keys(health.body).sort()).toEqual(mainHealthFields);
     const anonymous = await api(td.port, null, '/daemon/stop-info');
     expect(anonymous.status).toBe(401);
     const authenticated = await api(td.port, td.token, '/daemon/stop-info');
@@ -113,7 +114,7 @@ describe('auth and loopback defences', () => {
   it('answers /health without a token, revealing only identity and the submit capability', async () => {
     const result = await api(td.port, null, '/health');
     expect(result.status).toBe(200);
-    expect(Object.keys(result.body).sort()).toEqual(['inputSubmitMode', 'instanceId', 'ok', 'pid', 'version']);
+    expect(Object.keys(result.body).sort()).toEqual(mainHealthFields);
   });
 
   it('rejects API requests without a token', async () => {
