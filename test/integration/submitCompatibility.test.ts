@@ -1,6 +1,8 @@
 import { execFile } from 'node:child_process';
+import { statSync, writeFileSync } from 'node:fs';
 import type { IncomingMessage } from 'node:http';
 import { join } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
@@ -19,6 +21,7 @@ const requestSizes: number[] = [];
 // The same wire tests can drive separately built clients against an older daemon.
 const clientDist = process.env['SHELLPUPPET_TEST_CLIENT_DIST'] ?? join(repoRoot, 'dist');
 const legacy = process.env['SHELLPUPPET_TEST_LEGACY_SUBMIT'] === '1';
+const countInput = pathToFileURL(join(repoRoot, 'test/integration/fixtures/count-input-serialisations.mjs')).href;
 const env = (): Record<string, string> => ({ ...process.env, SHELLPUPPET_HOME: td.home });
 
 beforeAll(async () => {
@@ -39,7 +42,7 @@ beforeAll(async () => {
   vi.spyOn(td.daemon['manager'], 'get').mockImplementation(id => id === 's1' ? session : undefined);
   client = new Client({ name: 'input-test', version: '1' });
   await client.connect(new StdioClientTransport({
-    command: process.execPath, args: [join(clientDist, 'mcp/index.js')], env: env(), stderr: 'pipe',
+    command: process.execPath, args: ['--import', countInput, join(clientDist, 'mcp/index.js')], env: env(), stderr: 'pipe',
   }));
 });
 
@@ -80,7 +83,7 @@ function largeCli(body: string, verify: boolean) {
     "process.argv.splice(2, 0, 'type', 's1', readFileSync(0, 'utf8'))",
     "await import(pathToFileURL(process.argv[1]).href)",
   ].join('\n');
-  const child = exec(process.execPath, ['--input-type=module', '-e', bootstrap, join(clientDist, 'cli/index.js'),
+  const child = exec(process.execPath, ['--import', countInput, '--input-type=module', '-e', bootstrap, join(clientDist, 'cli/index.js'),
     '--enter', '--json', ...(verify ? ['--verify'] : [])], { env: env() });
   child.child.stdin!.end(body);
   return child;
@@ -89,13 +92,15 @@ function largeCli(body: string, verify: boolean) {
 describe.each(['CLI', 'MCP'])('%s request boundary', adapter => {
   it.each([
     [999_986, false, true], [999_986, true, true], [999_987, true, false], [1_000_000, false, false],
-  ] as const)('delivers a %i-byte legacy JSON body, verify %s, marker fits %s', async (size, verify, fits) => {
+  ] as const)('serialises once and delivers a %i-byte legacy JSON body, verify %s, marker fits %s', async (size, verify, fits) => {
     const prefix = '\t\u3000\n';
     const fixed = Buffer.byteLength(JSON.stringify({ data: prefix + '\r', ...(verify ? { verify: true } : {}) }));
     const body = prefix + ' '.repeat(size - fixed);
     const fields = { ok: true, bytes: body.length + 1, ...(verify ? { verified: true } : {}) };
     const reported = fits && !legacy;
     const expected = { ...fields, ...(reported ? { outcome: 'unconfirmed' } : {}) };
+    const counter = join(td.home, 'input-serialisations');
+    writeFileSync(counter, '');
     requestSizes.length = 0;
     writes.length = 0;
     if (adapter === 'CLI') {
@@ -110,6 +115,7 @@ describe.each(['CLI', 'MCP'])('%s request boundary', adapter => {
     expect(requestSizes).toEqual([fits ? size + Buffer.byteLength(',"submit":true') : size]);
     expect(writes).toHaveLength(1);
     expect(writes[0] === '\x1b[200~' + body + '\x1b[201~\r').toBe(true);
+    expect(statSync(counter).size).toBe(1);
   });
 });
 
