@@ -14,6 +14,7 @@ version may change behaviour, and every such change is listed here.
 ### Fixed
 
 - Codex recognises a repeated short prompt in its live composer when an earlier copy belongs to a completed turn. Grok recognises a padded welcome footer after typed send hints appear.
+- Hermes welcome screens with hour and minute footer clocks now allow message nudges and exact wrapped drafts to be submitted.
 
 ## [0.4.2] - 2026-11-25
 

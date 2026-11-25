@@ -52,6 +52,29 @@ it('opens on the welcome banner with an empty suggestion and the cursor at the p
   expect(hermes?.input?.submit?.matches?.('\r')).toBe(false);
 });
 
+it.each(['welcome-long-129', 'welcome-seconds-129'])('recognises the synthetic %s welcome footer', async name => {
+  const view = await frame(name);
+  expect(view.styled).toHaveLength(25);
+  expect(view.cursor).toEqual({ x: 2, y: 22 });
+  expect(hermes?.readiness?.readyScreen?.(view.rows.join('\n'))).toBe(true);
+  expect(nudgeVerdict(hermes, view)).toEqual({ ready: true });
+  expect(kept(view.styled)).toEqual(expect.arrayContaining([21, 22, 23, 24]));
+  const changed = view.styled.map((line, i) => i === 24 ?
+    { ...line, text: line.text.replace('/ commands', '/ other') } : line);
+  expect(nudgeVerdict(hermes, { ...view, styled: changed, rows: changed.map(line => line.text) }))
+    .toEqual({ ready: false, reason: 'unknown' });
+});
+
+it('confirms the exact wrapped draft under the synthetic long-clock welcome footer', async () => {
+  const view = await frame('welcome-long-draft-129');
+  const draft = 'a'.repeat(200);
+  expect(view.styled).toHaveLength(26);
+  expect(view.cursor).toEqual({ x: 74, y: 23 });
+  expect(nudgeVerdict(hermes, view)).toEqual({ ready: false, reason: 'draft' });
+  expect(nudgeVerdict(hermes, { ...view, expectedDraft: draft })).toEqual({ ready: true });
+  expect(nudgeVerdict(hermes, { ...view, expectedDraft: draft + 'x' }).ready).toBe(false);
+});
+
 it('recognises the planning suggestion after a queued reply', async () => {
   const view = await frame('queued-answer');
   expect(hermes?.readiness?.readyScreen?.(view.rows.join('\n'))).toBe(true);
