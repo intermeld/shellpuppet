@@ -40,6 +40,17 @@ async function runFixture(home: string): Promise<FixtureResult> {
   const { stdout } = await execFileAsync(process.execPath, [fixture], {
     env: { ...process.env, SHELLPUPPET_HOME: home },
     timeout: 30_000,
+  }).catch(async (cause: unknown) => {
+    const failure = cause as { code?: string | number; signal?: string; killed?: boolean; stdout?: string; stderr?: string };
+    const state = readDaemonState(home);
+    const health = state && await fetch(`http://127.0.0.1:${String(state.port)}/health`,
+      { signal: AbortSignal.timeout(500) }).then(response => response.status, () => 'unreachable');
+    // The fixture writes a credential prefix on success. Its length suffices
+    // to distinguish a client that printed its result and failed to exit.
+    const details = { elapsedMs: Date.now() - startedAt, code: failure.code, signal: failure.signal,
+      killed: failure.killed, stdoutBytes: Buffer.byteLength(failure.stdout ?? ''), stderr: failure.stderr?.trim(),
+      logCreated: fs.existsSync(path.join(home, 'daemon.log')), record: state !== null, health };
+    throw new Error(`Private daemon client failed: ${JSON.stringify(details)}`, { cause });
   });
   const elapsedMs = Date.now() - startedAt;
   return { ...(JSON.parse(stdout) as Omit<FixtureResult, 'elapsedMs'>), elapsedMs };
