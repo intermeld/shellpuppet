@@ -876,11 +876,16 @@ async function main(): Promise<void> {
 type StopInfo = { version: 1; role: 'standalone' | 'embedded'; pid: number; instanceId: string };
 
 class DaemonHandleMissingError extends Error {}
+class DaemonWatcherNotReadyError extends Error {}
 
 /** Hold a Windows kernel process handle before asking that process to stop. */
-async function openDaemonExitWatcher(pid: number): Promise<{ exited: Promise<boolean>; close: () => void }> {
+async function openDaemonExitWatcher(pid: number, deadline: number): Promise<{ exited: Promise<boolean>; close: () => void }> {
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Invalid daemon PID for exit observation.');
-  const script = `$ErrorActionPreference='Stop'; try { ` +
+  const testDelay = process.env['SHELLPUPPET_TEST_WATCHER_DELAY_MS'];
+  const delayMs = testDelay !== undefined && /^\d{1,5}$/.test(testDelay) ? Math.min(Number(testDelay), 60_000) : 0;
+  const script = `$ErrorActionPreference='Stop'; ` +
+    (delayMs > 0 ? `Start-Sleep -Milliseconds ${String(delayMs)}; ` : '') +
+    `try { ` +
     `try { $target=[System.Diagnostics.Process]::GetProcessById(${String(pid)}); ` +
     `$null=$target.Handle } catch [System.ArgumentException] { ` +
     `[Console]::WriteLine('MISSING'); [Console]::Out.Flush(); exit 1 ` +
@@ -920,7 +925,8 @@ async function openDaemonExitWatcher(pid: number): Promise<{ exited: Promise<boo
   let readyTimer: NodeJS.Timeout | undefined;
   try {
     await Promise.race([readyPromise, new Promise<never>((_resolve, reject) => {
-      readyTimer = setTimeout(() => reject(new Error('Timed out opening the daemon process handle.')), 5_000);
+      readyTimer = setTimeout(() => reject(new DaemonWatcherNotReadyError('Timed out opening the daemon process handle.')),
+        Math.max(0, deadline - Date.now()));
     })]);
   } catch (error) {
     close();
@@ -930,8 +936,8 @@ async function openDaemonExitWatcher(pid: number): Promise<{ exited: Promise<boo
 }
 
 async function waitForStandaloneExit(connection: DaemonConnection,
-  watcher: { exited: Promise<boolean>; close: () => void } | null, originalTick: string | null): Promise<boolean> {
-  const deadline = Date.now() + 65_000;
+  watcher: { exited: Promise<boolean>; close: () => void } | null, originalTick: string | null,
+  deadline: number): Promise<boolean> {
   if (process.platform === 'win32') {
     if (watcher === null) return false;
     let timer: NodeJS.Timeout | undefined;
@@ -1002,19 +1008,20 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
       }
     }
     const standalone = stopInfo?.role === 'standalone';
+    const stopDeadline = Date.now() + 65_000;
     const originalTick = standalone ? readLinuxProcessIdentity(connection.pid)?.startTick ?? null : null;
     let watcher: Awaited<ReturnType<typeof openDaemonExitWatcher>> | null = null;
     if (standalone && process.platform === 'win32') {
       try {
-        watcher = await openDaemonExitWatcher(connection.pid);
+        watcher = await openDaemonExitWatcher(connection.pid, stopDeadline);
       } catch (error) {
-        if (!(error instanceof DaemonHandleMissingError)) throw error;
-        // A missing PID alone is insufficient: the record or PID may now name
-        // another process. Check discovery once, then ask the preflight endpoint
-        // with its original token before reporting an already completed stop.
+        if (!(error instanceof DaemonHandleMissingError || error instanceof DaemonWatcherNotReadyError)) throw error;
+        // A missing PID or unanswered watcher is insufficient: the record or
+        // PID may now name another process. Check discovery once, then ask the
+        // preflight endpoint with its original token before reporting a stop.
         const discovered = await discoverDaemon({ logger: stderrLogger });
         if (discovered !== null) {
-          throw new Error('The daemon changed or is still running after its process handle went missing. Try again.',
+          throw new Error('The daemon changed or is still running; its process handle could not be established. Try again.',
             { cause: error });
         }
         try {
@@ -1025,7 +1032,7 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
           if (probeError instanceof DaemonGoneError) return false;
           throw probeError;
         }
-        throw new Error('The preflight daemon still answers after its process handle went missing. Try again.',
+        throw new Error('The preflight daemon still answers; its process handle could not be established. Try again.',
           { cause: error });
       }
     }
@@ -1044,7 +1051,7 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
     } catch (error) {
       if (standalone) {
         try {
-          if (!await waitForStandaloneExit(connection, watcher, originalTick)) {
+          if (!await waitForStandaloneExit(connection, watcher, originalTick, stopDeadline)) {
             unproved(`Daemon teardown is still in progress (pid ${String(connection.pid)}, instance ${String(stopInfo?.instanceId)}). Check daemon.log.`);
           }
           if (holdSeconds !== undefined) writeRestartHold(shellpuppetHome(), holdSeconds);
@@ -1092,7 +1099,7 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
     }
     if (standalone) {
       try {
-        if (!await waitForStandaloneExit(connection, watcher, originalTick)) {
+        if (!await waitForStandaloneExit(connection, watcher, originalTick, stopDeadline)) {
           unproved(`Daemon teardown is still in progress (pid ${String(connection.pid)}, instance ${String(stopInfo?.instanceId)}). Check daemon.log.`);
         }
         return true;
