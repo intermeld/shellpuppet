@@ -1456,6 +1456,104 @@ describe('concurrent launches respect both caps', () => {
     expect((await launch(daemon, { profile: 'quick' })).status).toBe(429);
   });
 
+  it('releases failed program starts and gives the same refusal for pending and successful launches', async () => {
+    let now = Date.now();
+    let created = 0;
+    let failStarts!: (value: null) => void;
+    const failed = new Promise<null>(resolve => { failStarts = resolve; });
+    const daemon = await startLaunchDaemon({
+      now: () => now,
+      launcher: profilesOf([{ name: 'quick', command: process.execPath, shell: false }]),
+      dashboardSessionFactory: options => {
+        const session = standInStart(options, `start-${String(++created)}`);
+        if (created <= 8) {
+          session.startedProgramPid = () => failed;
+          session.startFailure = () => 'Program did not start.';
+        }
+        return session;
+      },
+    });
+    const start = () => launch(daemon, { profile: 'quick' });
+    const pending = Promise.all(Array.from({ length: 8 }, start));
+    let busy: RawResult;
+    try {
+      await eventually(() => created === 8);
+      now += 60_000;
+      busy = await start();
+    } finally { failStarts(null); }
+    expect((await pending).map(reply => reply.status)).toEqual(Array(8).fill(500));
+    expect(busy.status).toBe(429);
+    expect((await Promise.all(Array.from({ length: 8 }, start))).map(reply => reply.status)).toEqual(Array(8).fill(200));
+    now += 59_999;
+    const full = await start();
+    expect(full.status).toBe(429);
+    expect(full.body).toBe(busy.body);
+    expect(full.headers['retry-after']).toBe(busy.headers['retry-after']);
+    expect(full.headers['retry-after']).toBeUndefined();
+    now++;
+    expect((await start()).status).toBe(200);
+  });
+
+  it('keeps all eight slots after eight unsuccessful program starts in the same minute', async () => {
+    let created = 0;
+    const daemon = await startLaunchDaemon({
+      launcher: profilesOf([{ name: 'quick', command: process.execPath, shell: false }]),
+      dashboardSessionFactory: options => {
+        const session = standInStart(options, `start-${String(++created)}`);
+        if (created <= 8) {
+          session.startedProgramPid = () => Promise.resolve(null);
+          session.startFailure = () => 'Program did not start.';
+        }
+        return session;
+      },
+    });
+    const burst = () => Promise.all(Array.from({ length: 8 }, () => launch(daemon, { profile: 'quick' })));
+    expect((await burst()).map(reply => reply.status)).toEqual(Array(8).fill(500));
+    expect((await burst()).map(reply => reply.status)).toEqual(Array(8).fill(200));
+  });
+
+  it('releases cancelled and reaped starts while their console-host results are outstanding', async () => {
+    let created = 0;
+    let waiting = 0;
+    let settleHosts!: (ended: boolean) => void;
+    const hosts = new Promise<boolean>(resolve => { settleHosts = resolve; });
+    const daemon = await startLaunchDaemon({
+      now: () => 1000,
+      launcher: profilesOf([{ name: 'quick', command: process.execPath, shell: false }]),
+      dashboardSessionFactory: options => {
+        const session = standInStart(options, `s${String(++created)}`);
+        if (created <= 8) {
+          Object.assign(session, {
+            exited: true, exitedAt: 0, conptyConnectionTimedOut: true,
+            startedProgramPid: () => Promise.resolve(null), startFailure: () => 'ConPTY timeout',
+            kill: () => Promise.resolve(),
+            whenConsoleHostSettled: () => { waiting++; return hosts; },
+          });
+          daemon.daemon['manager']['sessions'].set(session.id, session);
+        }
+        return session;
+      },
+    });
+    const burst = () => Promise.all(Array.from({ length: 8 }, () => launch(daemon, { profile: 'quick' })));
+    const first = burst();
+    try {
+      await eventually(() => waiting === 8);
+      expect((await launch(daemon, { profile: 'quick' })).status).toBe(429);
+      for (const id of ['s1', 's2', 's3', 's4']) {
+        expect((await api(daemon.port, daemon.token, `/sessions/${id}`, { method: 'DELETE' })).status).toBe(200);
+      }
+      expect(await daemon.daemon['manager'].reapExited(0)).toEqual(['s5', 's6', 's7', 's8']);
+      expect((await burst()).map(reply => reply.status)).toEqual(Array(8).fill(200));
+      expect((await first).map(reply => reply.status)).toEqual(Array(8).fill(500));
+      settleHosts(true);
+      expect((await launch(daemon, { profile: 'quick' })).status).toBe(429);
+      expect(created).toBe(16);
+    } finally {
+      settleHosts(false);
+      await first;
+    }
+  });
+
   it('starts exactly maxSessions of ten simultaneous launches', async () => {
     const daemon = await startLaunchDaemon({
       policy: { mode: 'allow-all', maxSessions: 2 },

@@ -746,6 +746,7 @@ export class Daemon {
   private readonly compiledPolicy: CompiledPolicy;
   /** Accepted launch times, for the sliding sixty-second cap. */
   private readonly launchTimes: number[] = [];
+  private readonly pendingProfileStarts = new Set<Session>();
   private readonly claimTimes: number[] = [];
   private claimCount = 0;
   private folderPickerBusy = false;
@@ -2161,7 +2162,7 @@ export class Daemon {
     }
     const now = this.now();
     this.pruneLaunchTimes(now);
-    if (this.launchTimes.length >= 8) {
+    if (this.launchTimes.length + this.pendingProfileStarts.size >= 8) {
       this.auditDashboardRefusal(req, 'rate', launcher?.name);
       json(res, 429, {
         error:
@@ -2216,18 +2217,18 @@ export class Daemon {
       json(res, 500, { error: `Failed to start session: ${String(error)}` });
       return;
     }
-    // Counted the moment the launch is accepted, before the start contract's
-    // wait: the rate check above and this record must sit in the same
-    // synchronous stretch, or twelve launches fired together would all pass
-    // the check before any of them was counted.
-    this.launchTimes.push(now);
-
-    // The same start contract as `POST /sessions`: the dashboard's pane is a
-    // session only once its program exists, and a start that ends before any
-    // program did fails as 1.1.0's spawn did, leaving nothing in the grid.
-    const startedSession = await this.programStarted(session, options, res, 'dashboard session start failed');
-    if (startedSession === null) return;
-    session = startedSession;
+    // Reserve before yielding. Only a confirmed program starts its rolling minute.
+    const reserved = session;
+    this.pendingProfileStarts.add(reserved);
+    const releaseReservation = (): void => { this.pendingProfileStarts.delete(reserved); };
+    try {
+      const started = await this.programStarted(session, options, res, 'dashboard session start failed', releaseReservation);
+      if (started === null) return;
+      session = started;
+      this.launchTimes.push(this.now());
+    } finally {
+      releaseReservation();
+    }
     // A launch is an API call: the idle timer counts from it, so a session
     // that has just started is not reaped sooner than `idleMinutes` allows.
     this.lastActivity = Date.now();
@@ -4275,10 +4276,11 @@ export class Daemon {
    * is returned with the response already sent. Only the proven ConPTY worker
    * timeout gets one replacement attempt under the same id.
    */
-  private async programStarted(session: Session, options: SessionOptions, res: http.ServerResponse, logMessage: string): Promise<Session | null> {
+  private async programStarted(session: Session, options: SessionOptions, res: http.ServerResponse, logMessage: string,
+    onTerminalFailure?: () => void): Promise<Session | null> {
     this.startingIds.add(session.id);
     try {
-      if (this.manager.get(session.id) === session) return await this.manager.finishStart(session, options);
+      if (this.manager.get(session.id) === session) return await this.manager.finishStart(session, options, onTerminalFailure);
       // Test-only dashboard factories may supply a session outside the manager.
       if (await session.startedProgramPid() !== null) return session;
       throw new SessionStartError(session.startFailure());
