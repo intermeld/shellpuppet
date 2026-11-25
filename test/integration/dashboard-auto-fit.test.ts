@@ -578,48 +578,73 @@ it('clears a same-size Fit request and sends no repeat take across three relayou
   expect(started.status).toBe(200);
   expect((await api(daemon.port, daemon.token, '/dashboard/open', { method: 'POST', body: {} })).status).toBe(200);
   const shot = await captureDashboard({ browser, viewerUrl: urls.at(-1)!, width: 1400, height: 900,
-    drive: true, timeoutMs: 120_000,
-    probe: `(() => document.querySelector('.pane-size')?.textContent.includes('×') ? true : null)()`,
-    interact: async ({ evaluate }) => evaluate(`(async () => {
-      const socket = window.__dashboardDiagnostics.streams.find(entry =>
-        entry.url.includes('/stream') && entry.socket.readyState === 1)?.socket;
-      if (!socket) return { error: 'no pane socket' };
-      const takes = [];
-      const geometry = [];
-      const send = socket.send.bind(socket);
-      socket.send = data => {
-        if (typeof data === 'string' && data.includes('"take":true')) takes.push(JSON.parse(data));
-        return send(data);
-      };
-      socket.addEventListener('message', event => {
-        if (typeof event.data !== 'string') return;
-        try { const frame = JSON.parse(event.data); if (frame.type === 'geometry') geometry.push(frame); } catch {}
-      });
-      const waitForGeometry = async count => {
-        for (let attempt = 0; attempt < 100; attempt++) {
-          if (geometry.length >= count) return true;
-          await new Promise(resolve => setTimeout(resolve, 100));
+    drive: true, probeOnly: true, timeoutMs: 120_000,
+    beforeNavigateScript: `(() => {
+      const fit = window.__fit = { passes: 0, taken: 0 };
+      let api;
+      Object.defineProperty(window, 'ShellPuppetPane', {
+        configurable: true, get: () => api,
+        set(value) {
+          api = value;
+          const create = api.create;
+          api.create = options => {
+            const client = create({ ...options, onGridTaken() { fit.taken++; options.onGridTaken(); } });
+            const auto = client.autoFitGrid.bind(client);
+            client.autoFitGrid = (...args) => { const result = auto(...args); fit.passes++; return result; };
+            return client;
+          };
         }
-        return false;
-      };
-      const fit = () => document.querySelector('.pane button[aria-label="Fit"]').click();
-      fit();
-      if (!await waitForGeometry(1)) return { error: 'first Fit was not acknowledged', takes, geometry };
-      takes.length = 0;
-      geometry.length = 0;
-      fit();
-      const acknowledged = await waitForGeometry(1);
-      const sameSize = takes.length === 1 && geometry[0]?.cols === takes[0]?.cols &&
-        geometry[0]?.rows === takes[0]?.rows && geometry[0]?.control === 'yours';
-      takes.length = 0;
-      for (let index = 0; index < 3; index++) {
-        window.dispatchEvent(new Event('resize'));
-        await new Promise(resolve => setTimeout(resolve, 400));
+      });
+    })()`,
+    probe: `(() => {
+      const stream = window.__dashboardDiagnostics.streams.find(s => s.url.endsWith('/stream') && s.socket.readyState === 1);
+      return window.__fit.passes > 0 && stream?.geometry.at(-1)?.control === 'yours';
+    })()`,
+    interact: async ({ evaluate }) => {
+      await evaluate('document.fonts.ready.then(() => true)');
+      const state = `(() => {
+        const stream = window.__dashboardDiagnostics.streams.find(s => s.url.endsWith('/stream') && s.socket.readyState === 1);
+        return { ...window.__fit, takes: stream.resizes.filter(frame => frame.take), geometry: stream.geometry,
+          arrangements: window.__dashboardDiagnostics.arrangements };
+      })()`;
+      type Grid = { cols: number; rows: number; control?: string };
+      type State = { passes: number; taken: number; takes: Grid[]; geometry: Grid[]; arrangements: number };
+      const read = async () => await evaluate(state) as State;
+      const before = await read();
+      const grid = before.geometry.at(-1)!;
+      // Vary the dashboard width while keeping the pane's measured grid constant.
+      await evaluate(`(() => {
+        const term = document.querySelector('.pane-term');
+        const size = getComputedStyle(term);
+        term.style.width = size.width;
+        term.style.height = size.height;
+        document.querySelector('.pane button[aria-label="Fit"]').click();
+      })()`);
+      let last = before;
+      await eventually(async () => {
+        last = await read();
+        return last.taken > before.taken && last.geometry.length > before.geometry.length;
+      }, 10_000, 50, 'same-size Fit acknowledgement on the pane', () => last);
+      const wanted = { cols: grid.cols, rows: grid.rows };
+      expect(last.takes.slice(before.takes.length), JSON.stringify(last)).toMatchObject([wanted]);
+      expect(last.geometry.at(-1), JSON.stringify(last)).toMatchObject({ ...wanted, control: 'yours' });
+      const acknowledged = last;
+      for (const margin of [1, 2, 3]) {
+        const previous = last;
+        await evaluate(`(() => {
+          document.getElementById('panes').style.marginRight = '${margin}px';
+          window.dispatchEvent(new Event('resize'));
+        })()`);
+        await eventually(async () => {
+          last = await read();
+          return last.arrangements > previous.arrangements && last.passes > previous.passes;
+        }, 10_000, 50, 'arrangement and Auto fit after relayout ' + String(margin), () => last);
+        expect(last.takes.slice(acknowledged.takes.length), JSON.stringify(last)).toEqual([]);
       }
-      return { acknowledged, sameSize, repeats: takes.length };
-    })()`),
+      return last.passes - acknowledged.passes;
+    },
   });
-  expect(shot.probe).toMatchObject({ acknowledged: true, sameSize: true, repeats: 0 });
+  expect(shot.probe).toBeGreaterThanOrEqual(3);
 }, 150_000);
 
 // The daemon publishes the registered window pairs before it accepts a move.
