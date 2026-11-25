@@ -1,5 +1,11 @@
 import { defineConfig } from 'vitest/config';
 
+// DevTools and page waits expired while these files overlapped other browser
+// suites on CI. Give each file the runner for its capture and cleanup.
+const isolatedCaptures = ['dashboard-auto-fit', 'dashboard-geometry', 'dashboard-name-page', 'viewer-notice-occupancy']
+  .map(name => `test/integration/${name}.test.ts`);
+const capturePass = process.env['SP_CI_CAPTURE_PASS'];
+
 export default defineConfig({
   test: {
     coverage: {
@@ -30,7 +36,8 @@ export default defineConfig({
       {
         test: {
           name: 'integration',
-          include: ['test/integration/**/*.test.ts'],
+          include: capturePass === 'isolated' ? isolatedCaptures : ['test/integration/**/*.test.ts'],
+          ...(capturePass === 'remaining' ? { exclude: isolatedCaptures } : {}),
           // Builds dist/ first: the lifecycle tests spawn the real compiled
           // daemon as a detached subprocess.
           globalSetup: ['./test/integration/global-setup.ts'],
