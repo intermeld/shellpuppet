@@ -13,7 +13,7 @@ Copying from programs that use OSC 52, recovery of a lost outside claim, submit 
 
 ### Fixed
 
-- Codex recognises a repeated short prompt in its live composer when an earlier copy belongs to a completed turn. Grok recognises a padded welcome footer after typed send hints appear. Muse waits for its physical editor to settle while a separate background footer changes.
+- Codex recognises a repeated short prompt in its live composer when an earlier copy belongs to a completed turn. Grok recognises a padded welcome footer after typed send hints appear.
 - Programs can copy text with OSC 52 for two seconds after you press the primary pointer button, type a character or use a supported editing or navigation key in the focused viewer or dashboard pane. Pasting ends that window. Hold Shift and drag to select text even when the program handles the mouse.
 - The CLI and MCP show recovery advice alongside the existing claim error. A conflict on a held outside name gives both recovery commands. A request marked as coming from inside a session can read or release its outside claim without extending its idle time.
 - A dashboard or granted session launch that fails to start no longer uses up the per-minute launch allowance. A pending start reserves a slot, a confirmed start is charged for sixty seconds, and a failed or cancelled start releases its slot at once.

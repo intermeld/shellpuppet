@@ -1,6 +1,7 @@
 import { resolve } from 'node:path';
 import type { IPty } from 'node-pty';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { muse } from '../../src/agents/muse/index.js';
 import { Session, submitOutcome } from '../../src/core/session.js';
 import { buildNudge, Mailbox } from '../../src/core/mailbox.js';
 import { Daemon } from '../../src/daemon/server.js';
@@ -19,18 +20,19 @@ const sessions: Session[] = [];
 
 function fixture(agent: string, onWrite?: (data: string) => void) {
   let output!: (data: string) => void;
+  let exit!: (event: { exitCode: number }) => void;
   const writes: string[] = [];
   const pty = {
     pid: 0, cols: 100, rows: 24, process: 'fixture', handleFlowControl: false,
     onData(listener) { output = listener; return { dispose() {} }; },
-    onExit() { return { dispose() {} }; }, write(data: string) { writes.push(data); onWrite?.(data); },
+    onExit(listener) { exit = listener; return { dispose() {} }; }, write(data: string) { writes.push(data); onWrite?.(data); },
     resize() {}, kill() {}, clear() {}, pause() {}, resume() {},
   } satisfies IPty;
   const session = new Session('s1', { command: process.execPath, cwd: resolve(folder), agent, shell: false },
     { platform: 'linux', spawn: () => pty });
   sessions.push(session);
   const paint = (data: string) => { output(data); return session['renderer'].flush(); };
-  return { session, paint, writes };
+  return { session, paint, writes, exit: () => exit({ exitCode: 0 }) };
 }
 
 afterEach(async () => {
@@ -50,6 +52,76 @@ async function museTurn(options: { submit?: boolean }, afterEnter: string, after
   await f.paint(frame('') + title(folder));
   return { result: await type(f.session, line + '\r', options), writes: f.writes };
 }
+
+const styledMuseRule = (text: string) => '\x1b[2;38;2;103;108;116m' + text + '\x1b[0m';
+const styledMuseFrame = (body: string, task: number) => clear +
+  styledMuseRule('── Voice input (Alt+V to start) ──────────') + '\r\n' +
+  '\x1b[38;2;204;211;219m❯ ' + body + '\x1b[0m\r\n' +
+  styledMuseRule(rule) + '\r\nbackground task ' + String(task);
+
+async function tickingStyledMuse(marked: boolean) {
+  let typed = false;
+  let recognised = false;
+  let task = 0;
+  const f = fixture('muse', data => {
+    if (data === line) {
+      typed = true;
+      void f.paint(styledMuseFrame(line, task)).then(() => {
+        recognised = muse.nudge?.readiness({ ...f.session['nudgeView'](), expectedDraft: line }) === 'ready';
+      });
+    }
+  });
+  await f.paint(styledMuseFrame('', 0));
+  const timer = setInterval(() => {
+    if (typed) void f.paint(styledMuseFrame(line, ++task));
+  }, 100);
+  const started = performance.now();
+  try {
+    const result = await f.session.writeWithResult(marked ? line : line + '\r',
+      marked ? { submitMode: 'on' } : {});
+    return { writes: f.writes, elapsedMs: performance.now() - started, result, task, recognised };
+  } finally {
+    clearInterval(timer);
+  }
+}
+
+it('keeps the legacy styled Muse editor waiting while a task footer repaints', async () => {
+  const legacy = await tickingStyledMuse(false);
+  expect(legacy.recognised).toBe(true);
+  expect(legacy.task).toBeGreaterThan(10);
+  expect(legacy.writes).toEqual([line]);
+  expect(legacy.elapsedMs).toBeGreaterThanOrEqual(2_200);
+}, 8_000);
+
+it('matches main PTY writes and timing for marked Muse submit with a ticking footer', async () => {
+  const legacy = await tickingStyledMuse(false);
+  const marked = await tickingStyledMuse(true);
+  expect(legacy.recognised).toBe(true);
+  expect(marked.recognised).toBe(true);
+  expect(marked.task).toBeGreaterThan(10);
+  expect(marked.writes).toEqual(legacy.writes);
+  expect(marked.writes).toEqual([line]);
+  expect(marked.elapsedMs).toBeGreaterThanOrEqual(2_200);
+  expect(Math.abs(marked.elapsedMs - legacy.elapsedMs)).toBeLessThan(600);
+}, 12_000);
+
+it('keeps the main generic write path during the exit grace period', async () => {
+  for (const data of ['x', 'x\r']) {
+    const f = fixture('generic');
+    f.exit();
+    expect((await f.session.writeWithResult(data)).before).toBe('');
+    expect(f.writes).toEqual(data.endsWith('\r') ? ['x', '\r'] : ['x']);
+  }
+});
+
+it('matches main ended-session PTY writes for explicit on and off', async () => {
+  for (const mode of ['on', 'off'] as const) {
+    const f = fixture('generic');
+    f.exit();
+    expect((await f.session.writeWithResult('x', { submitMode: mode })).before).toBe('');
+    expect(f.writes).toEqual(mode === 'on' ? ['x', '\r'] : ['x']);
+  }
+});
 
 // Both request shapes use the 0.4.1 client's encoding. Assert individual writes so a
 // pasted body and Enter in one call cannot silently become two calls, or vice versa.

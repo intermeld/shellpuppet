@@ -1309,7 +1309,7 @@ export class Session implements WaitTarget {
       (options.submitMode === 'auto' && this.autoSubmitEligible());
     if (delayedSubmit) this.submissionsQueued++;
     const queued = this.writeChain.then(async () => {
-      if (options.submitMode !== undefined) this.refuseIfEnded();
+      if (options.submitMode === 'auto') this.refuseIfEnded();
       const result: TypedWriteResult = { before: '', submitRetried: false };
       const effective = data + (options.submitMode === 'on' ||
         (options.submitMode === 'auto' && this.autoSubmitEligible()) ? '\r' : '');
@@ -1543,8 +1543,6 @@ export class Session implements WaitTarget {
     const quietMs = submit?.quietMs ?? 150;
     const deadline = startedAt + minimumMs +
       (submit?.maxWaitMs ?? TYPED_SUBMIT_WAIT_MS);
-    let paneKey: string | undefined;
-    let paneSince = startedAt;
     for (;;) {
       await this.renderer.flush();
       this.refuseIfInputFailed();
@@ -1552,10 +1550,7 @@ export class Session implements WaitTarget {
       if (this.inputVersion !== bodyInputVersion) return false;
       const visible = this.typedDraftVisible(body, placeholdersBefore);
       const now = Date.now();
-      const pane = submit?.submitPane?.(this.nudgeView());
-      if (pane !== paneKey) { paneKey = pane; paneSince = now; }
-      const quietSince = submit?.submitPane === undefined || pane === undefined ? this.lastChangeAt() : paneSince;
-      if (visible && now - startedAt >= minimumMs && now - quietSince >= quietMs) return true;
+      if (visible && now - startedAt >= minimumMs && now - this.lastChangeAt() >= quietMs) return true;
       if (now >= deadline) return false;
       await new Promise((resolve) => setTimeout(resolve, NUDGE_SUBMIT_POLL_MS));
     }
