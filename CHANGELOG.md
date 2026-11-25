@@ -14,6 +14,7 @@ version may change behaviour, and every such change is listed here.
 ### Fixed
 
 - After a Hermes turn, waiting messages can be nudged when the completed summary lists extra activity and the grey footer clips a timer.
+- Waiting time and stall alerts restart after input to a held prompt, including when the next prompt has the same question and choices. Redraws without input retain the timer.
 - Codex recognises a repeated short prompt in its live composer when an earlier copy belongs to a completed turn. Grok recognises a padded welcome footer after typed send hints appear.
 - Hermes welcome screens with hour and minute footer clocks now allow message nudges and exact wrapped drafts to be submitted.
 - `daemon stop` waits for a new standalone daemon's process to exit before
