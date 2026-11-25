@@ -33,6 +33,7 @@ import {
   SessionProgramEndedError,
   WindowsWithoutConPTYError,
   credentialShapedNames,
+  submitOutcome,
 } from '../core/session.js';
 import { NativePtyUnavailableError } from '../core/nativePty.js';
 import { checkSessionCapacity, commandLine, compilePolicy, evaluateCommand } from '../core/policy.js';
@@ -49,7 +50,7 @@ import { WaitConditionError } from '../core/waiter.js';
 import { agentNames, hideReasoning, latestResult, programName, signatureForSession } from '../core/reasoning.js';
 import type { CompiledSignature, FilteredLines } from '../core/reasoning.js';
 import type { Session } from '../core/session.js';
-import { validResumeId, DEFAULT_WAIT_TIMEOUT_MS, ENV_NAME_PATTERN, MAX_WAIT_TIMEOUT_MS, WAIT_POLL_INTERVAL_MS, howSessionEnded } from '../core/types.js';
+import { validResumeId, DEFAULT_WAIT_TIMEOUT_MS, ENV_NAME_PATTERN, MAX_BODY_BYTES, MAX_WAIT_TIMEOUT_MS, WAIT_POLL_INTERVAL_MS, howSessionEnded } from '../core/types.js';
 import type {
   Logger,
   PolicyConfig,
@@ -132,7 +133,6 @@ const STATE_PUBLISH_CHECK_MS = 10_000;
  * enough that a busy day of short-lived sessions does not ratchet memory.
  */
 const EXITED_SESSION_GRACE_MS = 15 * 60_000;
-const MAX_BODY_BYTES = 1_000_000;
 /**
  * Prompt-stall detection: how often live screens are scanned for a
  * permission prompt, and how long the SAME prompt must persist before an
@@ -3635,6 +3635,7 @@ export class Daemon {
         // caller's request for a race in the session's lifetime. A session
         // whose input pipe has failed refuses the write too, and its error
         // says what to do.
+        const submit = body['submit'] === true;
         let written: Awaited<ReturnType<typeof session.writeWithResult>>;
         try {
           written = await session.writeWithResult(data);
@@ -3647,12 +3648,9 @@ export class Daemon {
           });
           return;
         }
-        // §4.5: content NEVER logged by default, only the length. Keystrokes
-        // are where the secrets are.
-        this.audit.record(actor, 'input', id, {
-          chars: data.length,
-          ...(this.audit.captureContent ? { data } : {}),
-        });
+        const reporting = submit ? submitOutcome(written) : undefined;
+        this.audit.record(actor, 'input', id, { chars: data.length,
+          ...(reporting ? { submit: true, ...reporting } : {}) });
         this.broadcastControl(id, { type: 'input-source', source: 'agent' });
         // §3.1: TUIs silently swallow input while loading or when a panel has
         // stolen focus. verify re-reads the screen and reports whether the
@@ -3662,6 +3660,7 @@ export class Daemon {
           json(res, 200, {
             ok: true,
             bytes: data.length,
+            ...reporting,
             verified: await this.verifyTyped(session, data, written.before),
             ...(written.submitted !== undefined ? { submitted: written.submitted } : {}),
             ...(written.submitRetried ? { submitRetried: true } : {}),
@@ -3670,6 +3669,7 @@ export class Daemon {
           return;
         }
         json(res, 200, { ok: true, bytes: data.length,
+          ...reporting,
           ...(written.submitted !== undefined ? { submitted: written.submitted } : {}),
           ...(written.submitRetried ? { submitRetried: true } : {}),
           ...(written.message !== undefined ? { message: written.message } : {}),
@@ -5487,7 +5487,7 @@ export class Daemon {
       // is or that the window gained focus, is written above like a keystroke
       // because the program asked for it. Nobody typed it, so it is audited
       // as a report and leaves the "last input" indicator alone (§4.5, §5).
-      // Content only under captureContent, as for input.
+      // Only reports allow opt-in content capture.
       if (report !== null) {
         this.audit.record(actor, 'report', session.id, {
           kind: report,
@@ -5498,7 +5498,6 @@ export class Daemon {
       }
       this.audit.record(actor, 'input', session.id, {
         chars: text.length,
-        ...(this.audit.captureContent ? { data: text } : {}),
       });
       this.broadcastControl(session.id, { type: 'input-source', source: 'human' });
     };
