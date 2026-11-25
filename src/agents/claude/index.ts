@@ -6,7 +6,7 @@ import { submittingText } from '../input.js';
 
 export const claude: AgentModule = {
   name: reading.name, programs: reading.programs, reading, prompts,
-  input: { submit: { key: '\r', delayMs: 150, matches: submittingText } },
+  input: { submit: { key: '\r', auto: true, delayMs: 150, matches: submittingText } },
   readiness: { readyText: ['? for shortcuts', 'shift+tab'] },
   nudge: { readiness: nudgeReadiness },
   resumeIdMarkers: ['CLAUDE_CODE_SESSION_ID'],

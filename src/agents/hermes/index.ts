@@ -15,7 +15,7 @@ export const hermes: AgentModule = {
     busy: (lines, start, _chrome, signature, context) => signature.builtIn ? !composer(lines)?.idle :
       lines.slice(start).some(line => signature.busy.some(test => context.matches(line, test))),
   },
-  input: { submit: { key: '\r', delayMs: 150, matches: data => submittingText(data) || /^ +\r$/u.test(data) } },
+  input: { submit: { key: '\r', auto: true, delayMs: 150, matches: data => submittingText(data) || /^ +\r$/u.test(data) } },
   nudge: { readiness, composerBlock, queueKey: '\t' },
   readiness: { readyScreen },
 };

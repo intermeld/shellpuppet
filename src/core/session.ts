@@ -14,7 +14,7 @@
  * No stdout/stderr: logging via the injected Logger only (lint-enforced).
  */
 
-import { agentResumeIds, moduleFor } from '../agents/index.js';
+import { agentResumeIds, moduleFor, programName } from '../agents/index.js';
 import { nudgeVerdict, NUDGE_QUIET_MS } from './nudge.js';
 import type { NudgeBlock } from './nudge.js';
 import type { AgentModule, AgentSource } from '../agents/types.js';
@@ -223,14 +223,18 @@ export interface TypedWriteResult {
   submitted?: boolean;
   submitRetried: boolean;
   message?: string;
+  /** Internal accounting for a marked request. */
+  submitApplied?: boolean;
+  inputBytes?: number;
 }
 
 const lineNotSeen = 'The typed text was not seen in the composer; Enter was not sent.';
 const otherInputArrived = 'Other input arrived after the typed text; Enter was not sent.';
 
-/** Describe the completed write using only the existing submit checks. */
-export function submitOutcome(written: TypedWriteResult) {
-  if (written.submitted === true) return { outcome: 'submitted' } as const;
+/** Retain the legacy screen inference, while marked input makes no unproved acceptance claim. */
+export function submitOutcome(written: TypedWriteResult, honest = false) {
+  // The legacy positive field is a screen inference, not a correlated acceptance event.
+  if (!honest && written.submitted === true) return { outcome: 'submitted' } as const;
   if (written.submitted === false && !written.submitRetried) {
     if (written.message === lineNotSeen) return { outcome: 'withheld', reason: 'line-not-seen' } as const;
     if (written.message === otherInputArrived) return { outcome: 'withheld', reason: 'other-input-arrived' } as const;
@@ -1299,13 +1303,19 @@ export class Session implements WaitTarget {
   }
 
   /** Write and report what a module can establish about a typed submission. */
-  writeWithResult(data: string, options: { terminalReport?: boolean; humanInput?: boolean } = {}): Promise<TypedWriteResult> {
+  writeWithResult(data: string, options: { terminalReport?: boolean; humanInput?: boolean; submitMode?: 'auto' | 'on' | 'off' } = {}): Promise<TypedWriteResult> {
     this.inputQueueVersion++;
-    const delayedSubmit = this.delayedSubmission(data);
+    const delayedSubmit = this.delayedSubmission(data) || options.submitMode === 'on' ||
+      (options.submitMode === 'auto' && this.autoSubmitEligible());
     if (delayedSubmit) this.submissionsQueued++;
     const queued = this.writeChain.then(async () => {
+      if (options.submitMode !== undefined) this.refuseIfEnded();
       const result: TypedWriteResult = { before: '', submitRetried: false };
-      result.before = (await this.writeInput(data, options.terminalReport === true,
+      const effective = data + (options.submitMode === 'on' ||
+        (options.submitMode === 'auto' && this.autoSubmitEligible()) ? '\r' : '');
+      result.submitApplied = effective !== data;
+      result.inputBytes = effective.length;
+      result.before = (await this.writeInput(effective, options.terminalReport === true,
         undefined, undefined, undefined, [], () => 'line-not-seen',
         (outcome) => Object.assign(result, outcome))) ?? '';
       if (result.submitted === true) this.recentInputUntil = 0;
@@ -1318,6 +1328,14 @@ export class Session implements WaitTarget {
       () => { if (delayedSubmit) this.submissionsQueued--; },
     );
     return queued;
+  }
+
+  /** The stored command precedes ShellPuppet's own one-shot shell wrapper. */
+  private autoSubmitEligible(): boolean {
+    const module = this.agentModule;
+    if (module?.input?.submit?.auto !== true || this.exitedFlag || this.isKilled || this.programEnded) return false;
+    const program = programName(this.command);
+    return module.programs.some(pattern => pattern === program || module.matchesProgram?.(pattern, program) === true);
   }
 
   /** Queue a nudge and retain the original result expected by direct callers. */
@@ -1521,9 +1539,12 @@ export class Session implements WaitTarget {
   /** A paste is ready only after its draft has appeared and output has settled. */
   private async waitForTypedDraft(body: string, placeholdersBefore: ReadonlySet<string> | null,
     startedAt: number, minimumMs: number, bodyInputVersion: number): Promise<boolean> {
-    const quietMs = this.agentModule?.input?.submit?.quietMs ?? 150;
+    const submit = this.agentModule?.input?.submit;
+    const quietMs = submit?.quietMs ?? 150;
     const deadline = startedAt + minimumMs +
-      (this.agentModule?.input?.submit?.maxWaitMs ?? TYPED_SUBMIT_WAIT_MS);
+      (submit?.maxWaitMs ?? TYPED_SUBMIT_WAIT_MS);
+    let paneKey: string | undefined;
+    let paneSince = startedAt;
     for (;;) {
       await this.renderer.flush();
       this.refuseIfInputFailed();
@@ -1531,7 +1552,10 @@ export class Session implements WaitTarget {
       if (this.inputVersion !== bodyInputVersion) return false;
       const visible = this.typedDraftVisible(body, placeholdersBefore);
       const now = Date.now();
-      if (visible && now - startedAt >= minimumMs && now - this.lastChangeAt() >= quietMs) return true;
+      const pane = submit?.submitPane?.(this.nudgeView());
+      if (pane !== paneKey) { paneKey = pane; paneSince = now; }
+      const quietSince = submit?.submitPane === undefined ? this.lastChangeAt() : pane === undefined ? now : paneSince;
+      if (visible && now - startedAt >= minimumMs && now - quietSince >= quietMs) return true;
       if (now >= deadline) return false;
       await new Promise((resolve) => setTimeout(resolve, NUDGE_SUBMIT_POLL_MS));
     }

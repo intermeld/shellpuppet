@@ -20,7 +20,7 @@ import { resolve as resolvePath } from 'node:path';
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ensureDaemon, request } from '../client/http.js';
-import { inputRequest } from '../client/input.js';
+import { preparedInput } from '../client/input.js';
 import type { ClientOptions, DaemonConnection } from '../client/http.js';
 import { NO_MATCHES } from '../core/find.js';
 import { visibleMessageText } from '../core/messageText.js';
@@ -236,16 +236,17 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
     path: string,
     body?: unknown,
     signal?: AbortSignal,
+    requestOptions: { submitMode?: 'auto' | 'on' | 'off'; expectedInstanceId?: string } = {},
   ): Promise<{ payload: Body; warnings: string[] }> => {
     const { connection, warnings } = await connect();
     const claim = heldClaim;
-    let response = await request(connection, method, path, body, { ...options,
+    let response = await request(connection, method, path, body, { ...options, ...requestOptions,
       ...(claim !== undefined ? { claim: claim.proof } : {}), signal });
     const refusal = response.body as Body;
     if (response.status === 403 && claim !== undefined && claim === heldClaim &&
         (refusal['error'] === 'Messaging claim was not recognised.' || (claim.replace && refusal['code'] === 'invalid-claim'))) {
       heldClaim = undefined;
-      if (!claim.replace) response = await request(connection, method, path, body, { ...options, claim: '', signal });
+      if (!claim.replace) response = await request(connection, method, path, body, { ...options, ...requestOptions, claim: '', signal });
     }
     const payload = response.body as Body;
     if (response.status >= 400) {
@@ -538,9 +539,9 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
     {
       title: 'Type text into the session',
       description:
-        'Type text into the PTY. With submit:true, send text and Enter separately after the ' +
+        'Type text into the PTY. Known agents submit by default. With submit:true, send text and Enter separately after the ' +
         'agent\'s submit pause. If the same text remains in a readable composer, one Enter ' +
-        'retry is reported. When available, the outcome is submitted, withheld with a reason, or unconfirmed. Set verify:true to confirm ' +
+        'retry is reported. The outcome is withheld with a reason, not-requested, or unconfirmed until an agent proves acceptance. Set verify:true to check ' +
         'the text actually appeared on screen: TUIs silently swallow input while loading MCP ' +
         'servers and when a suggestion panel has stolen focus. Verify waits longer for longer ' +
         'text (up to 15 s), since some TUIs draw a long line seconds after it arrives. ' +
@@ -553,16 +554,19 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
       inputSchema: params({
         session: z.string().describe('Session id.'),
         text: z.string().describe('The text to type, exactly as given.'),
-        submit: z.boolean().optional().describe('Append Enter after the text (the CLI\'s --enter).'),
+        submit: z.boolean().optional().describe('Omit for automatic submit to known agents; true sends Enter explicitly, false types only.'),
         verify: z.boolean().optional().describe('Re-read the screen and report whether the text landed (recommended for TUIs).'),
       }),
     },
     async ({ session, text: typed, submit, verify }) =>
       run(async () => {
-        const { payload, warnings } = await call('POST', `/sessions/${session}/input`,
-          inputRequest(typed, submit === true, verify === true));
+        const { connection, warnings: initialWarnings } = await connect();
+        const prepared = preparedInput(connection, typed, submit, verify === true);
+        const { payload, warnings: callWarnings } = await call('POST', `/sessions/${session}/input`,
+          prepared.body, undefined, prepared.options);
+        const warnings = [...initialWarnings, ...callWarnings];
         const reply = (value: string, isError = false): ToolResult => {
-          if (submit !== true || typeof payload['outcome'] !== 'string') return text(value, isError);
+          if (typeof payload['outcome'] !== 'string') return text(value, isError);
           const reason = typeof payload['reason'] === 'string' ? ` (${payload['reason']})` : '';
           return { ...text(`${value} Submit outcome: ${payload['outcome']}${reason}.`, isError), structuredContent: payload };
         };

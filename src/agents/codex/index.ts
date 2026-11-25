@@ -7,7 +7,7 @@ import { submittingText } from '../input.js';
 
 export const codex: AgentModule = {
   name: reading.name, programs: reading.programs, reading, prompts,
-  input: { submit: { key: '\r', delayMs: 150, perCharacterMs: 3,
+  input: { submit: { key: '\r', auto: true, delayMs: 150, perCharacterMs: 3,
     quietMs: 350, settleMs: 800, maxWaitMs: 5_000,
     pastePlaceholder: /^› (\[Pasted Content (?<chars>\d+(?:,\d{3})*) chars\])\s*$/u,
     pastePlaceholderBody: draftRepertoire,

@@ -6,7 +6,7 @@ import { submittingText } from '../input.js';
 
 export const agy: AgentModule = {
   name: reading.name, programs: reading.programs, reading, prompts,
-  input: { submit: { key: '\r', delayMs: 150, matches: submittingText } },
+  input: { submit: { key: '\r', auto: true, delayMs: 150, matches: submittingText } },
   nudge: { readiness },
   readiness: { readyText: ['? for shortcuts'] },
 };
