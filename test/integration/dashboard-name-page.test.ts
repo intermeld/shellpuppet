@@ -32,51 +32,70 @@ describe('dashboard naming controls', () => {
     if (!browser) { context.skip(); return; }
     const opened = await api(daemon.port, daemon.token, '/dashboard/open', { method: 'POST', body: {} });
     expect(opened.status).toBe(200);
+    const responses: { action: string; status: number }[] = [];
+    const launches: { profile: string; name: string; resumed: boolean }[] = [];
+    const labelFact = (value: unknown) => {
+      if (value === undefined) return 'absent';
+      return typeof value === 'string' && ['lead', 'resume', 'from-page', 'renamed-page', 'desk'].includes(value) ? value : 'other';
+    };
+    type Pane = { id: string; label: string; role: string };
+    const paneFacts = (panes: { id: string; label: string }[]) => panes.slice(-8).map(({ id, label }) => ({
+      id: /^s\d{1,5}$/.test(id) ? id : 'other', label: labelFact(label),
+    }));
+    let phase = 'opening dashboard';
+    let panes: Pane[] = [];
+    let sessionFacts: ReturnType<typeof paneFacts> | undefined;
+    let pageErrorShown: boolean | undefined;
     const result = await captureDashboard({ browser, viewerUrl: dashboardUrl, width: 1280, height: 720,
       drive: true, timeoutMs: 90_000, probeOnly: true,
+      failureFacts: () => ({ phase, launches, responses, sessions: sessionFacts, panes: paneFacts(panes), pageErrorShown }),
       probe: `(() => document.getElementById('connection')?.textContent === 'Connected' &&
         document.getElementById('session-name')?.value === 'lead' &&
         document.getElementById('start')?.disabled === false)()`,
       interact: async ({ evaluate, onEvent, send }) => {
-        const responses: { path: string; status: number }[] = [];
-        const launches: ({ profile?: string; name?: string; resumeId?: string } | 'unreadable request')[] = [];
         onEvent('Network.requestWillBeSent', event => {
           const request = event['request'] as { url: string; postData?: string };
           if (new URL(request.url).pathname === '/dashboard/launch' && request.postData) {
             try {
-              const { profile, name, resumeId } = JSON.parse(request.postData) as { profile?: string; name?: string; resumeId?: string };
-              launches.push({ profile, name, resumeId });
-            } catch { launches.push('unreadable request'); }
+              const { profile, name, resumeId } = JSON.parse(request.postData) as Record<string, unknown>;
+              launches.push({ profile: labelFact(profile), name: labelFact(name), resumed: resumeId === 'from-browser-42' });
+            } catch { launches.push({ profile: 'unreadable', name: 'unreadable', resumed: false }); }
+            if (launches.length > 8) launches.shift();
           }
         });
         onEvent('Network.responseReceived', event => {
           const response = event['response'] as { url: string; status: number };
           const path = new URL(response.url).pathname;
-          if (path === '/dashboard/launch' || path.endsWith('/rename')) responses.push({ path, status: response.status });
+          if (path === '/dashboard/launch' || path.endsWith('/rename')) {
+            responses.push({ action: path.endsWith('/rename') ? 'rename' : 'launch', status: response.status });
+            if (responses.length > 8) responses.shift();
+          }
         });
         await send('Network.enable');
         const cards = `[...document.querySelectorAll('.pane')].map(card => ({ id: card.dataset.session,
           label: card.querySelector('.pane-label')?.textContent, role: card.dataset.role }))`;
-        type Pane = { id: string; label: string; role: string };
         const waitForPane = async (description: string, matches: (pane: Pane) => boolean) => {
-          let panes: Pane[] = [];
+          phase = description;
           try {
             await eventually(async () => {
-              panes = await evaluate(cards) as typeof panes;
+              const observed = await evaluate(cards);
+              if (!Array.isArray(observed)) return false;
+              panes = observed as Pane[];
               return panes.some(matches);
-            }, 30_000, 100, description, () => panes);
-          } catch (cause) {
+            }, 30_000, 100, description);
+          } catch {
             const listed = await api(daemon.port, daemon.token, '/sessions');
-            const rows = listed.body['sessions'] as { id: string; name: string; label: string }[] | undefined;
-            const sessions = rows?.map(({ id, name, label }) => ({ id, name, label })) ?? { status: listed.status };
-            const pageError = await evaluate("document.getElementById('error-message')?.textContent")
-              .catch(() => 'page did not answer');
-            throw new Error(`Waiting for ${description}: ${JSON.stringify({ launches, responses, sessions, panes, pageError })}`, { cause });
+            const rows = listed.body['sessions'] as { id: string; label: string }[] | undefined;
+            if (Array.isArray(rows)) sessionFacts = paneFacts(rows);
+            const shown = await evaluate("!!document.getElementById('error-message')?.textContent").catch(() => undefined);
+            pageErrorShown = typeof shown === 'boolean' ? shown : undefined;
+            throw new Error('Dashboard pane wait failed.');
           }
           return panes.find(matches)!;
         };
 
         await evaluate("document.getElementById('start').click()");
+        phase = 'waiting for default session name';
         let leadId: string | undefined;
         await eventually(async () => {
           const listed = await api(daemon.port, daemon.token, '/sessions');
@@ -105,10 +124,11 @@ describe('dashboard naming controls', () => {
           input.closest('form').requestSubmit();
         })()`);
         const renamed = await waitForPane('the renamed pane', pane => pane.id === launched.id && pane.label === 'renamed-page');
-        return { ...renamed, nameBox: await evaluate("document.getElementById('session-name').value") };
+        return { label: labelFact(renamed.label), role: renamed.role === 'delegate' ? 'delegate' : 'other',
+          nameBox: labelFact(await evaluate("document.getElementById('session-name').value")) };
       },
     });
-    expect(readFileSync(join(daemon.home, 'audit.log'), 'utf8')).toContain('from-browser-42');
+    expect(readFileSync(join(daemon.home, 'audit.log'), 'utf8').includes('from-browser-42')).toBe(true);
     expect(result.probe).toMatchObject({ nameBox: 'from-page', label: 'renamed-page', role: 'delegate' });
   }, 120_000);
 });

@@ -35,25 +35,25 @@ function tempHome(): string {
   return home;
 }
 
-async function runFixture(home: string): Promise<FixtureResult> {
+async function runFixture(home: string, args = [fixture]): Promise<FixtureResult> {
   const startedAt = Date.now();
-  const { stdout } = await execFileAsync(process.execPath, [fixture], {
+  const { stdout } = await execFileAsync(process.execPath, args, {
     env: { ...process.env, SHELLPUPPET_HOME: home },
-    timeout: 30_000,
+    timeout: 30_000, encoding: 'buffer',
   }).catch(async (cause: unknown) => {
-    const failure = cause as { code?: string | number; signal?: string; killed?: boolean; stdout?: string; stderr?: string };
+    const failure = cause as { code?: string | number; signal?: string | null; killed?: boolean; stdout?: Buffer; stderr?: Buffer };
     const state = readDaemonState(home);
     const health = state && await fetch(`http://127.0.0.1:${String(state.port)}/health`,
       { signal: AbortSignal.timeout(500) }).then(response => response.status, () => 'unreachable');
     // The fixture writes a credential prefix on success. Its length suffices
     // to distinguish a client that printed its result and failed to exit.
     const details = { elapsedMs: Date.now() - startedAt, code: failure.code, signal: failure.signal,
-      killed: failure.killed, stdoutBytes: Buffer.byteLength(failure.stdout ?? ''), stderr: failure.stderr?.trim(),
+      killed: failure.killed, stdoutBytes: failure.stdout?.length ?? 0, stderrBytes: failure.stderr?.length ?? 0,
       logCreated: fs.existsSync(path.join(home, 'daemon.log')), record: state !== null, health };
-    throw new Error(`Private daemon client failed: ${JSON.stringify(details)}`, { cause });
+    throw new Error(`Private daemon client failed: ${JSON.stringify(details)}`);
   });
   const elapsedMs = Date.now() - startedAt;
-  return { ...(JSON.parse(stdout) as Omit<FixtureResult, 'elapsedMs'>), elapsedMs };
+  return { ...(JSON.parse(stdout.toString('utf8')) as Omit<FixtureResult, 'elapsedMs'>), elapsedMs };
 }
 
 /** Ask the daemon in `home` to shut down; tolerate it being gone already. */
@@ -87,6 +87,22 @@ afterEach(async () => {
 });
 
 describe('daemon auto-start', () => {
+  it('reports child exit and stream byte counts without disclosing fixture output', async () => {
+    const home = tempHome();
+    const token = 'private-fixture-token';
+    const stderr = home + '/£';
+    const args = ['-e', 'process.stdout.write(process.argv[1]); process.stderr.write(process.argv[2]); process.exitCode = 7',
+      token, stderr];
+    const error: unknown = await runFixture(home, args).catch((failure: unknown) => failure);
+    if (!(error instanceof Error)) throw new Error('Expected the private fixture to fail.');
+    expect(error.cause === undefined).toBe(true);
+    expect(error.message.includes(home) || error.message.includes(token)).toBe(false);
+    expect(JSON.parse(error.message.slice('Private daemon client failed: '.length))).toMatchObject({
+      code: 7, signal: null, stdoutBytes: Buffer.byteLength(token), stderrBytes: Buffer.byteLength(stderr),
+      killed: false, record: false, health: null,
+    });
+  });
+
   it('the spawning client exits promptly and cleanly (the inherited-stdio hang)', async () => {
     const home = tempHome();
     // execFileAsync resolving AT ALL proves the client's stdio closed: a

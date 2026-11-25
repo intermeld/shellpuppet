@@ -566,6 +566,10 @@ it('debounces a changing-width drag into one resize after settling', async (cont
 
 it('clears a same-size Fit request and sends no repeat take across three relayouts', async (context) => {
   if (!browser) { context.skip(); return; }
+  type Grid = { cols: number; rows: number; control?: string };
+  type State = { passes: number; taken: number; takes: Grid[]; geometry: Grid[]; arrangements: number };
+  let observed: State | undefined;
+  let relayout = 0;
   const urls: string[] = [];
   const daemon = running = await startTestDaemon({
     launcher: (url) => { urls.push(url); return Promise.resolve({ launched: true, mode: 'isolated-app', browser: 'mock' }); },
@@ -579,6 +583,8 @@ it('clears a same-size Fit request and sends no repeat take across three relayou
   expect((await api(daemon.port, daemon.token, '/dashboard/open', { method: 'POST', body: {} })).status).toBe(200);
   const shot = await captureDashboard({ browser, viewerUrl: urls.at(-1)!, width: 1400, height: 900,
     drive: true, probeOnly: true, timeoutMs: 120_000,
+    failureFacts: () => ({ relayout, passes: observed?.passes, taken: observed?.taken, arrangements: observed?.arrangements,
+      takeCount: observed?.takes.length, takes: observed?.takes.slice(-6), geometry: observed?.geometry.slice(-6) }),
     beforeNavigateScript: `(() => {
       const fit = window.__fit = { passes: 0, taken: 0 };
       let api;
@@ -604,12 +610,15 @@ it('clears a same-size Fit request and sends no repeat take across three relayou
       await evaluate('document.fonts.ready.then(() => true)');
       const state = `(() => {
         const stream = window.__dashboardDiagnostics.streams.find(s => s.url.endsWith('/stream') && s.socket.readyState === 1);
-        return { ...window.__fit, takes: stream.resizes.filter(frame => frame.take), geometry: stream.geometry,
+        const grid = frame => ({ cols: Number(frame.cols), rows: Number(frame.rows),
+          control: ['yours', 'adopt', 'held'].includes(frame.control) ? frame.control : undefined });
+        return { ...window.__fit, takes: stream.resizes.filter(frame => frame.take).map(grid), geometry: stream.geometry.map(grid),
           arrangements: window.__dashboardDiagnostics.arrangements };
       })()`;
-      type Grid = { cols: number; rows: number; control?: string };
-      type State = { passes: number; taken: number; takes: Grid[]; geometry: Grid[]; arrangements: number };
-      const read = async () => await evaluate(state) as State;
+      const read = async () => {
+        observed = await evaluate(state) as State;
+        return observed;
+      };
       const before = await read();
       const grid = before.geometry.at(-1)!;
       // Vary the dashboard width while keeping the pane's measured grid constant.
@@ -630,6 +639,7 @@ it('clears a same-size Fit request and sends no repeat take across three relayou
       expect(last.geometry.at(-1), JSON.stringify(last)).toMatchObject({ ...wanted, control: 'yours' });
       const acknowledged = last;
       for (const margin of [1, 2, 3]) {
+        relayout = margin;
         const previous = last;
         await evaluate(`(() => {
           document.getElementById('panes').style.marginRight = '${margin}px';
