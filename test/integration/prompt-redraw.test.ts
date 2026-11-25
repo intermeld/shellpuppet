@@ -6,12 +6,133 @@ import { afterAll, beforeAll, expect, it } from 'vitest';
 import { api, connectWs, eventually, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 import { museWrappedAnsi } from '../fixtures/museWrapped.js';
+import { detectPrompt } from '../../src/core/promptDetector.js';
 
 const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'repaint-dialog.mjs');
 const museFixture = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'fixtures', 'muse-hold.mjs');
 let td: TestDaemon;
 beforeAll(async () => { td = await startTestDaemon({ promptScanIntervalMs: 100, promptStallMs: 300 }); });
 afterAll(async () => { await td.stop(); });
+
+it('restarts a held prompt after input, while reports and redraws keep its clock', async () => {
+  let now = 1_000;
+  const isolated = await startTestDaemon({ promptScanIntervalMs: 300_000, promptStallMs: 5_000, now: () => now });
+  const started = await api(isolated.port, isolated.token, '/sessions', {
+    body: { command: process.execPath, args: ['-e', 'setInterval(() => {}, 200)'], shell: false },
+  });
+  const id = String(started.body['id']);
+  const scanner = isolated.daemon as unknown as {
+    manager: { get(id: string): {
+      snapshot(): Promise<{ screen: string }>;
+      answerablePrompt(screen: string): ReturnType<typeof detectPrompt>;
+      promptInputVersion(): number;
+      nudgeInputVersion(): number;
+    } | undefined };
+    promptStates: Map<string, { since: number; alerted: boolean }>;
+    sessionFeed: { subscribe(listener: (frame: { type: string; changed?: string[];
+      session?: { waitingOnPrompt?: { waitingMs: number } } }) => void): () => void };
+    scanForPromptStalls(): Promise<void>;
+  };
+  const session = scanner.manager.get(id)!;
+  const feed: { type: string; changed?: string[]; session?: { waitingOnPrompt?: { waitingMs: number } } }[] = [];
+  const unsubscribe = scanner.sessionFeed.subscribe((frame) => feed.push(frame));
+  const dialog = (command: string, extras: { hint?: boolean; side?: string; rows?: string[] } = {}): string => [
+    `  ┃  △ Permission required${extras.hint ? '        Esc to close' : ''}`,
+    `  ┃  $ ${command}${extras.side === undefined ? '' : `                 ${extras.side}`}`,
+    ...(extras.rows ?? []).map((row) => `  ┃  ${row}`),
+    '  ┃   Allow once   Reject',
+  ].join('\n');
+  let screen = dialog('echo a long command with identical alpha', { hint: true });
+  session.snapshot = () => Promise.resolve({ screen });
+  session.answerablePrompt = (frame) => detectPrompt(frame, 'opencode');
+  const viewer = await connectWs(isolated.port, id, isolated.token);
+  try {
+    expect(detectPrompt(screen, 'opencode')).toMatchObject({
+      question: 'Permission required', options: ['Allow once', 'Reject'],
+    });
+    await scanner.scanForPromptStalls();
+    expect(scanner.promptStates.get(id)?.since).toBe(1_000);
+
+    // The review's title hint, command continuation, sidebar and animated
+    // rows can all change while the held prompt has received no input.
+    now = 3_000;
+    screen = dialog('echo a long command with identical alpha', {
+      hint: true, side: 'neighbouring panel', rows: ['◐ Waiting', 'Elapsed: 00:01'],
+    });
+    await scanner.scanForPromptStalls();
+    expect(scanner.promptStates.get(id)?.since).toBe(1_000);
+
+    const reportVersion = session.nudgeInputVersion();
+    viewer.ws.send('\x1b[I');
+    await eventually(() => session.nudgeInputVersion() > reportVersion);
+    expect(session.promptInputVersion()).toBe(0);
+    now = 7_000;
+    await scanner.scanForPromptStalls();
+    expect(scanner.promptStates.get(id)).toMatchObject({ since: 1_000, alerted: true });
+    await viewer.waitForControl((frame) => frame['type'] === 'prompt-stall');
+
+    now = 7_500;
+    screen = dialog('echo a long command with identical alpha', {
+      hint: true, side: 'another panel', rows: ['◓ Waiting', 'Elapsed: 00:02'],
+    });
+    await scanner.scanForPromptStalls();
+    expect(scanner.promptStates.get(id)).toMatchObject({ since: 1_000, alerted: true });
+    expect(viewer.controls().filter((frame) => frame['type'] === 'prompt-clear')).toHaveLength(0);
+
+    // One missed scan with no input keeps the alert as well as its clock.
+    now = 7_600;
+    screen = '';
+    await scanner.scanForPromptStalls();
+    expect(scanner.promptStates.get(id)).toMatchObject({ since: 1_000, alerted: true });
+    now = 7_800;
+    screen = dialog('echo a long command with identical alpha', { hint: true });
+    await scanner.scanForPromptStalls();
+    expect(scanner.promptStates.get(id)).toMatchObject({ since: 1_000, alerted: true });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(viewer.controls().filter((frame) => frame['type'] === 'prompt-clear')).toHaveLength(0);
+
+    const updatesBefore = feed.filter((frame) => frame.type === 'session-updated' &&
+      frame.changed?.includes('waitingOnPrompt')).length;
+    expect((await api(isolated.port, isolated.token, `/sessions/${id}/input`, { body: { data: 'y' } })).status).toBe(200);
+    now = 8_000;
+    screen = dialog('echo a long command with identical beta', { hint: true });
+    await scanner.scanForPromptStalls();
+    expect(scanner.promptStates.get(id)).toMatchObject({ since: 8_000, alerted: false });
+    expect(feed.filter((frame) => frame.type === 'session-updated' &&
+      frame.changed?.includes('waitingOnPrompt')).length).toBeGreaterThan(updatesBefore);
+    expect(feed.at(-1)?.session?.waitingOnPrompt?.waitingMs).toBe(0);
+    await viewer.waitForControl((frame) => frame['type'] === 'prompt-clear');
+
+    const beforeViewerInput = session.promptInputVersion();
+    viewer.ws.send('x');
+    await eventually(() => session.promptInputVersion() > beforeViewerInput);
+    now = 9_000;
+    screen = dialog('echo', { rows: ['status: alpha'] });
+    await scanner.scanForPromptStalls();
+    expect(scanner.promptStates.get(id)?.since).toBe(9_000);
+    now = 9_500;
+    screen = dialog('echo', { rows: ['status: beta'] });
+    await scanner.scanForPromptStalls();
+    expect(scanner.promptStates.get(id)?.since).toBe(9_000);
+
+    expect((await api(isolated.port, isolated.token, `/sessions/${id}/key`, { body: { key: 'enter' } })).status).toBe(200);
+    now = 10_000;
+    await scanner.scanForPromptStalls();
+    expect(scanner.promptStates.get(id)?.since).toBe(10_000);
+
+    now = 10_400;
+    screen = '';
+    await scanner.scanForPromptStalls();
+    now = 10_700;
+    screen = dialog('echo', { rows: ['status: beta'] });
+    await scanner.scanForPromptStalls();
+    expect(scanner.promptStates.get(id)?.since).toBe(10_000);
+  } finally {
+    unsubscribe();
+    viewer.close();
+    await isolated.stop();
+  }
+}, 90_000);
 
 it.each([
   ['muse-8a-stage1of3', 6, 96, 30],
@@ -46,7 +167,7 @@ it.each([
   }
 }, 30_000);
 
-it('keeps age and one stall through a resize repaint and a short gap, then replaces and clears', async () => {
+it('keeps age through a resize repaint, then restarts after input and clears', async () => {
   const started = await api(td.port, td.token, '/sessions', {
     body: { command: process.execPath, args: [fixture], shell: false, cols: 100, rows: 30 },
   });
@@ -64,15 +185,9 @@ it('keeps age and one stall through a resize repaint and a short gap, then repla
     const before = (await waiting())!.waitingMs;
     const resized = await api(td.port, td.token, `/sessions/${id}/resize`, { body: { cols: 105, rows: 31 } });
     expect(resized.status).toBe(200);
-    expect((await api(td.port, td.token, `/sessions/${id}/input`, { body: { data: 'r' } })).status).toBe(200);
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect((await waiting())?.waitingMs).toBeGreaterThan(before);
     expect(viewer.controls().filter((frame) => frame['type'] === 'prompt-stall')).toHaveLength(1);
-    expect(viewer.controls().filter((frame) => frame['type'] === 'prompt-clear')).toHaveLength(0);
-
-    expect((await api(td.port, td.token, `/sessions/${id}/input`, { body: { data: 'g' } })).status).toBe(200);
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    expect((await waiting())?.alerted).toBe(true);
     expect(viewer.controls().filter((frame) => frame['type'] === 'prompt-clear')).toHaveLength(0);
 
     expect((await api(td.port, td.token, `/sessions/${id}/input`, { body: { data: 'q' } })).status).toBe(200);
@@ -91,11 +206,12 @@ it('keeps age and one stall through a resize repaint and a short gap, then repla
 it('clears a missing prompt one second after the first miss with the production scan interval', async () => {
   const slow = await startTestDaemon({ promptScanIntervalMs: 5_000, promptStallMs: 0 });
   const started = await api(slow.port, slow.token, '/sessions', {
-    body: { command: process.execPath, args: ['-e', 'setInterval(() => {}, 200)'], shell: false },
+    body: { command: process.execPath, args: ['-e',
+      "process.stdin.setRawMode?.(true); process.stdin.resume(); process.stdin.on('data', () => process.exit(0)); setInterval(() => {}, 200)"], shell: false },
   });
   const id = String(started.body['id']);
   const internals = slow.daemon as unknown as {
-    manager: { get(id: string): { snapshot(): Promise<{ screen: string }> } | undefined };
+    manager: { get(id: string): { snapshot(): Promise<{ screen: string }>; write(data: string): Promise<string>; exited: boolean } | undefined };
     promptScanTimer: NodeJS.Timeout | null;
     promptGraceTimers: Map<string, NodeJS.Timeout>;
     scanForPromptStalls(): Promise<void>;
@@ -132,6 +248,11 @@ it('clears a missing prompt one second after the first miss with the production 
     await eventually(async () => !(await waiting()), 2_500);
     expect(internals.promptGraceTimers.has(id)).toBe(false);
   } finally {
-    await slow.stop();
+    try {
+      await session.write('x');
+      await eventually(() => session.exited, 5_000);
+    } finally {
+      await slow.stop();
+    }
   }
 }, 30_000);

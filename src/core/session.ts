@@ -811,6 +811,8 @@ export class Session implements WaitTarget {
   /** Serialises write() so chunked writes cannot interleave. See write(). */
   private writeChain: Promise<void> = Promise.resolve();
   private inputVersion = 0;
+  /** Non-empty input from a person or nudge, excluding terminal reports. */
+  private promptInputRevision = 0;
   private inputQueueVersion = 0;
   /** A nudge body accepted by the PTY without a confirmed submit. */
   private pendingNudgeLine: string | null = null;
@@ -1419,6 +1421,7 @@ export class Session implements WaitTarget {
       this.pendingTurnSubmitted = false;
       this.pendingTurnBusy = false;
       this.inputVersion++;
+      this.promptInputRevision++;
       return true;
     });
     this.writeChain = queued.then(() => undefined, () => undefined);
@@ -1497,6 +1500,7 @@ export class Session implements WaitTarget {
   }
 
   nudgeInputVersion(): number { return this.inputVersion; }
+  promptInputVersion(): number { return this.promptInputRevision; }
   nudgeQueuedInputVersion(): number { return this.inputQueueVersion; }
   nudgeScreenRevision(): number { return this.screenRevision; }
 
@@ -1607,6 +1611,7 @@ export class Session implements WaitTarget {
       Date.now() - this.lastChange >= TYPED_PLACEHOLDER_SETTLE_MS;
     this.lastInputAt = Date.now();
     this.inputVersion++;
+    if (!terminalReport && data.length > 0) this.promptInputRevision++;
     this.stalePrompts.noteInput(screen, this.agent, this.renderer.promptStyles(lines));
 
     if (nudge || this.delayedSubmission(data)) {

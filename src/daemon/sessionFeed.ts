@@ -71,10 +71,11 @@ export class SessionFeed {
     this.emit({ type: 'session-added', at: new Date().toISOString(), session: summary });
   }
 
-  update(summary: FeedSummary): void {
+  update(summary: FeedSummary, promptRestarted = false): void {
     const previous = this.current.get(summary.id);
     if (previous === undefined) return;
     const changed = changedFields(previous, summary);
+    if (promptRestarted && !changed.includes('waitingOnPrompt')) changed.push('waitingOnPrompt');
     this.current.set(summary.id, summary);
     if (changed.length > 0) {
       this.emit({ type: 'session-updated', at: new Date().toISOString(), session: summary, changed });
