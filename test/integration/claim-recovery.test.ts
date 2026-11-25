@@ -1,13 +1,14 @@
 import { execFile } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdirSync, readFileSync, renameSync, rmdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, rmdirSync, writeFileSync } from 'node:fs';
 import { request } from 'node:http';
-import { join } from 'node:path';
+import { delimiter, join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { expect, it } from 'vitest';
 import WebSocket from 'ws';
+import { envValue } from '../../src/core/environment.js';
 import { createAuditor } from '../../src/daemon/audit.js';
 import { parseDaemonConfig } from '../../src/daemon/config.js';
 import { api, eventually, makeTempHome, repoRoot, startTestDaemon, type TestDaemon } from './helpers.js';
@@ -497,16 +498,24 @@ it.skipIf(process.platform !== 'win32')('recovers --desk through the installed P
       cwd: repoRoot, env: { ...f.env, npm_config_prefix: prefix, npm_config_cache: join(f.home, 'npm-cache'),
         npm_config_update_notifier: 'false' },
     });
-    const powershell = await exec('where.exe', ['pwsh.exe']).then(() => 'pwsh.exe', () => 'powershell.exe');
     const original = await f.cli(['msg', 'claim', '--name=--desk']);
     const command = /run shellpuppet (msg claim \S+ \S+) to obtain/.exec(original.stdout)?.[1];
     expect(command).toBe('msg claim --replace --name=--desk');
     const stderr = await f.cli(['msg', 'claim', '--name=--desk']).then(() => '', (error: { stderr: string }) => error.stderr);
     expect(stderr).toContain(`${heldName}\nRecover it with ${command}`);
     const options = { cwd: prefix, env: f.env };
-    const ps = await exec(powershell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'RemoteSigned',
-      '-Command', `.\\shellpuppet.ps1 ${command}; exit $LASTEXITCODE`], options);
-    expect(ps.stdout.includes(`shellpuppet ${command}`)).toBe(true);
+    const systemRoot = envValue(f.env, 'SystemRoot')!;
+    const shells = [join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')];
+    const searchDirs = (envValue(f.env, 'PATH') ?? '').split(delimiter).filter(Boolean);
+    const programFiles = envValue(f.env, 'ProgramFiles');
+    if (programFiles) searchDirs.unshift(join(programFiles, 'PowerShell', '7'));
+    const pwsh = searchDirs.map(dir => resolve(prefix, dir.replace(/^"|"$/g, ''), 'pwsh.exe')).find(existsSync);
+    if (pwsh) shells.push(pwsh);
+    for (const shell of shells) {
+      const ps = await exec(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'RemoteSigned',
+        '-Command', `.\\shellpuppet.ps1 ${command}; exit $LASTEXITCODE`], options);
+      expect(ps.stdout.includes(`shellpuppet ${command}`), shell).toBe(true);
+    }
     const cmd = await exec('cmd.exe', ['/d', '/c', `.\\shellpuppet.cmd ${command}`], options);
     const proof = /^SHELLPUPPET_CLAIM=(\S+)$/m.exec(cmd.stdout)?.[1];
     expect(typeof proof).toBe('string');
