@@ -1,35 +1,38 @@
 # MCP reference
 
-`terminal_type` with `submit: true` sends a single line, waits for a readable
-composer to show it or a recognised paste placeholder and for the screen to
-settle, then checks again immediately before sending Enter separately on the
-same input queue. Codex waits at least 3 ms per character, or 150 ms for
-short lines, with up to five more seconds for paint and quiet. A placeholder
-must be new since this write and match the body's character count. If the
-exact draft is absent, a prompt has opened or other input has arrived, Enter
-is not sent and the result reports `submitted: false`. If the draft remains
-after Enter, it sends Enter once more only while those checks still hold and
-reports `submitRetried: true`. An empty
-composer confirms submission only after the draft was seen; a busy indicator
-or a transcript echo also confirms it. Otherwise the result says submission
-was not confirmed. If the draft remains after the retry, it reports
-`submitted: false` with an error. It never retypes the line. If the composer
-cannot be read, the result only says that the submit key was sent. `verify`
-checks for visible text, which may already have cleared on submission.
+`terminal_type` submits by default for a live built-in agent whose policy-visible
+launch command matches that agent's programme list. `submit: false` types only;
+`submit: true` explicitly requests Enter for any session. An interactive shell
+remains auto off, even if someone starts an agent inside it. ShellPuppet's own
+one-shot launch wrapper is eligible. Auto and explicit true use the same guarded
+path: type the body, wait for a readable composer to show the exact line or a
+recognised paste placeholder, and check again immediately before sending Enter
+separately on the same input queue. Codex waits at least 3 ms per character, or
+150 ms for short lines, with up to five more seconds for paint and quiet. A
+placeholder must be new since this write and match the body's character count.
+If the draft is absent, a prompt opens or other input arrives, Enter is withheld
+and the legacy result reports `submitted: false`. If the draft remains after
+Enter, the existing guard permits one retry. It never retypes the line. `verify`
+checks visible text, which may already have cleared on submission.
 
-With explicit submit, the client appends the same carriage return to the input
-data as before. It also requests an `outcome` in the text and structured result.
-`submitted` means the existing checks returned `submitted: true`.
-`verified` describes text visibility and can be true for an unconfirmed
-submission. `withheld` means the daemon
-stopped before Enter, with reason `line-not-seen` or `other-input-arrived`.
-`unconfirmed` means acceptance is uncertain, including after an unsuccessful
-retry. Check the session before resending. An older daemon returns its usual
-fields. If the reporting marker would take the encoded JSON body above
-1,000,000 UTF-8 bytes, the client omits the marker and returns the legacy
-result. The existing `submitted`, `submitRetried` and `verified` fields retain
+New clients send `X-ShellPuppet-Submit: auto|on|off` to a daemon advertising
+`inputSubmitMode: 1` in `/health`. The JSON body remains `{data, verify?}`,
+with one serialisation and the same 1,000,000-byte limit. `auto` resolves in the
+session queue. Marked replies include `outcome` in the text and structured
+result. `withheld` carries a fixed reason; `not-requested` means policy chose
+off. `submitted` requires an agent-owned event correlated to this input and
+turn. No current module supplies one, so a written Enter is `unconfirmed` even
+when the legacy `submitted` field is true. An empty composer, busy hint,
+transcript echo or title change does not prove acceptance. Check the session
+before resending an unconfirmed line. `verified` describes text visibility.
+
+An older daemon refuses omitted submit before writing anything. Explicit true
+uses the old encoded carriage return and reporting marker, including the
+exact-size fallback; explicit false uses the old body. The older MCP reply
+remains text only, while CLI JSON retains its legacy fields. If the discovered
+daemon instance changes after preflight, a marked input is refused without
+replay. The legacy `submitted`, `submitRetried` and `verified` fields retain
 their meanings.
-
 ## Session messages
 
 Messaging starts off. The `session_*` tools below are offered only by an MCP
