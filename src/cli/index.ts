@@ -875,12 +875,18 @@ async function main(): Promise<void> {
 
 type StopInfo = { version: 1; role: 'standalone' | 'embedded'; pid: number; instanceId: string };
 
+class DaemonHandleMissingError extends Error {}
+
 /** Hold a Windows kernel process handle before asking that process to stop. */
 async function openDaemonExitWatcher(pid: number): Promise<{ exited: Promise<boolean>; close: () => void }> {
   if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Invalid daemon PID for exit observation.');
   const script = `$ErrorActionPreference='Stop'; try { ` +
-    `$target=[System.Diagnostics.Process]::GetProcessById(${String(pid)}); ` +
-    `$null=$target.Handle; [Console]::WriteLine('READY'); [Console]::Out.Flush(); ` +
+    `try { $target=[System.Diagnostics.Process]::GetProcessById(${String(pid)}); ` +
+    `$null=$target.Handle } catch [System.ArgumentException] { ` +
+    `[Console]::WriteLine('MISSING'); [Console]::Out.Flush(); exit 1 ` +
+    `} catch [System.InvalidOperationException] { ` +
+    `[Console]::WriteLine('MISSING'); [Console]::Out.Flush(); exit 1 }; ` +
+    `[Console]::WriteLine('READY'); [Console]::Out.Flush(); ` +
     `$target.WaitForExit(); [Console]::WriteLine('EXIT'); [Console]::Out.Flush() ` +
     `} catch { [Console]::WriteLine('ERROR'); [Console]::Out.Flush(); exit 1 ` +
     `} finally { if ($target) { $target.Dispose() } }`;
@@ -898,6 +904,7 @@ async function openDaemonExitWatcher(pid: number): Promise<{ exited: Promise<boo
   lines.on('line', (line) => {
     if (line === 'READY') { ready = true; acceptReady(); }
     if (line === 'EXIT') { completed = true; finishExit(true); }
+    if (line === 'MISSING') { rejectReady(new DaemonHandleMissingError('The daemon process ended before its handle could be opened.')); finishExit(false); }
     if (line === 'ERROR') { rejectReady(new Error('Could not hold a daemon process handle.')); finishExit(false); }
   });
   child.once('error', (error) => { rejectReady(error); finishExit(false); });
@@ -998,7 +1005,29 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
     const originalTick = standalone ? readLinuxProcessIdentity(connection.pid)?.startTick ?? null : null;
     let watcher: Awaited<ReturnType<typeof openDaemonExitWatcher>> | null = null;
     if (standalone && process.platform === 'win32') {
-      watcher = await openDaemonExitWatcher(connection.pid);
+      try {
+        watcher = await openDaemonExitWatcher(connection.pid);
+      } catch (error) {
+        if (!(error instanceof DaemonHandleMissingError)) throw error;
+        // A missing PID alone is insufficient: the record or PID may now name
+        // another process. Check discovery once, then ask the preflight endpoint
+        // with its original token before reporting an already completed stop.
+        const discovered = await discoverDaemon({ logger: stderrLogger });
+        if (discovered !== null) {
+          throw new Error('The daemon changed or is still running after its process handle went missing. Try again.',
+            { cause: error });
+        }
+        try {
+          await request(connection, 'GET', '/daemon/stop-info', undefined, {
+            logger: stderrLogger, actor: 'cli', ...daemonOnly,
+          });
+        } catch (probeError) {
+          if (probeError instanceof DaemonGoneError) return false;
+          throw probeError;
+        }
+        throw new Error('The preflight daemon still answers after its process handle went missing. Try again.',
+          { cause: error });
+      }
     }
     const unproved = (message: string): never => {
       if (wantJson) printJson({ stopped: false, teardown: 'in-progress', pid: connection.pid,
