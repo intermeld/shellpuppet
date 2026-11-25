@@ -1,7 +1,7 @@
 # MCP reference
 
 `terminal_type` submits by default for a live built-in agent whose policy-visible
-launch command matches that agent's programme list. `submit: false` types only;
+launch command matches that agent's program list. `submit: false` types only;
 `submit: true` explicitly requests Enter for any session. An interactive shell
 remains auto off, even if someone starts an agent inside it. ShellPuppet's own
 one-shot launch wrapper is eligible. Auto and explicit true use the same guarded
