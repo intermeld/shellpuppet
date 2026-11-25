@@ -63,7 +63,9 @@ async function run<T>(mode: string, expression: string, timed = false, timeoutMs
     <script src="${pathToFileURL(path.join(scratch, 'pane.js')).href}"></script>
     <script src="${url('../fixtures/notice-occupancy-browser.js')}"></script>`);
   const virtual = timed && !Number(process.env['NOTICE_FRAME_BUSY_MS']);
+  let pageException = false;
   const result = await captureViewer({ browser: browser!, viewerUrl: pathToFileURL(page).href,
+    failureFacts: () => ({ pageException }),
     cpuThrottlingRate: Number(process.env['NOTICE_CPU_RATE'] ?? 1),
     beforeNavigateScript: virtual ? undefined : noticeFrameLimitScript,
     width: 1000, height: 900, drive: true, probeOnly: true, timeoutMs,
@@ -80,8 +82,11 @@ async function run<T>(mode: string, expression: string, timed = false, timeoutMs
       // An outer frame loop would keep advancing virtual time between CDP calls.
       const reply = await send('Runtime.evaluate', {
         expression: `window.__noticeStep = 'running fixture'; ${expression}`, returnByValue: true, awaitPromise: true,
-      }) as { result: { value?: T[] }; exceptionDetails?: { text: string; exception?: { description?: string } } };
-      if (reply.exceptionDetails) throw new Error(reply.exceptionDetails.exception?.description ?? reply.exceptionDetails.text);
+      }) as { result: { value?: T[] }; exceptionDetails?: unknown };
+      if (reply.exceptionDetails) {
+        pageException = true;
+        throw new Error('The notice fixture raised a page exception.');
+      }
       if (!Array.isArray(reply.result.value)) throw new Error('The notice fixture did not return its measurements.');
       return reply.result.value;
     },

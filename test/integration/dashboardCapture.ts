@@ -1,19 +1,17 @@
 /** Test-only diagnostics for a dashboard whose renderer stalls on CI. */
-import { captureViewer } from './browserCapture.js';
-import type { CaptureOptions } from '../../src/daemon/screenshot.js';
+import { captureViewer, type TestCaptureOptions } from './browserCapture.js';
 
 export const dashboardDiagnosticsScript = `(() => {
   const state = window.__dashboardDiagnostics = {
     arrangements: 0, visibilityPasses: 0, pendingFrames: 0,
     pendingAnimationFrames: 0, arrangeTriggers: [], longTasks: 0, longestTaskMs: 0,
-    streams: [], paneCounts: [], errors: []
+    streams: [], paneCounts: [], scriptErrors: 0, resourceErrors: 0, unhandledRejections: 0
   };
   window.addEventListener('error', event => {
-    if (state.errors.length < 8) state.errors.push(event.message || ('resource: ' + event.target?.tagName));
+    if (event instanceof ErrorEvent) state.scriptErrors++;
+    else state.resourceErrors++;
   }, true);
-  window.addEventListener('unhandledrejection', event => {
-    if (state.errors.length < 8) state.errors.push(String(event.reason?.message ?? event.reason));
-  });
+  window.addEventListener('unhandledrejection', () => { state.unhandledRejections++; });
   document.addEventListener('DOMContentLoaded', () => {
     const root = document.getElementById('panes');
     if (!root) return;
@@ -100,7 +98,8 @@ export const dashboardTimeoutProbe = `(() => {
     layout: document.getElementById('panes')?.dataset.layout,
     share: document.getElementById('share-count')?.textContent,
     documentVisibility: document.visibilityState,
-    readyState: document.readyState, errors: d.errors, paneScript: typeof window.ShellPuppetPane,
+    readyState: document.readyState, scriptErrors: d.scriptErrors, resourceErrors: d.resourceErrors,
+    unhandledRejections: d.unhandledRejections, paneScript: typeof window.ShellPuppetPane,
     terminalScript: typeof window.Terminal, fonts: document.fonts.status,
     panes: cards.map(card => ({ id: card.dataset.session, size: card.querySelector('.pane-size')?.textContent,
       box: card.getBoundingClientRect().toJSON() })),
@@ -129,7 +128,7 @@ export const dashboardTimeoutProbe = `(() => {
   };
 })()`;
 
-export function captureDashboard(options: CaptureOptions): ReturnType<typeof captureViewer> {
+export function captureDashboard(options: TestCaptureOptions): ReturnType<typeof captureViewer> {
   const rate = Number(process.env['SP_DASHBOARD_CPU_RATE'] || '1');
   return captureViewer({
     ...options,
