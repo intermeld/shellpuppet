@@ -253,6 +253,12 @@ export function canReadExitCode(pty: unknown): boolean {
   return wrapped && (pty as ExitRecordingTerminal)._agent !== undefined;
 }
 
+/** The pinned Windows terminal defers resizes until its first output. */
+export function temporaryResizeReady(pty: unknown): boolean {
+  if (!canReadExitCode(pty)) return true;
+  return (pty as { _isReady?: boolean })._isReady === true;
+}
+
 /**
  * The exit code node-pty has recorded for a Windows terminal's program, or
  * undefined while it has recorded none: while the program runs, and wherever
