@@ -159,9 +159,26 @@ export interface LaunchProfile {
 
 export interface LauncherConfig {
   sessionLaunch?: string[];
+  launchesPerMinute?: number;
   profiles: LaunchProfile[];
   /** Sentences naming each entry that did not load. Logged at daemon start. */
   problems: string[];
+}
+
+export const DEFAULT_LAUNCHES_PER_MINUTE = 8;
+
+export function parseLaunchesPerMinute(raw: unknown): { value: number; problem?: string } {
+  if (!isRecord(raw) || raw['launchesPerMinute'] === undefined) {
+    return { value: DEFAULT_LAUNCHES_PER_MINUTE };
+  }
+  const value = raw['launchesPerMinute'];
+  if (typeof value !== 'number' || !Number.isInteger(value) || value < 1 || value > 60) {
+    return {
+      value: DEFAULT_LAUNCHES_PER_MINUTE,
+      problem: 'launcher.launchesPerMinute must be an integer from 1 to 60: using 8',
+    };
+  }
+  return { value };
 }
 
 const PROFILE_KEYS = new Set([
@@ -453,22 +470,24 @@ export function parseLauncher(
     return { launcher: { profiles, problems }, problems };
   }
   for (const key of Object.keys(raw)) {
-    if (key !== 'profiles' && key !== 'sessionLaunch') {
+    if (key !== 'profiles' && key !== 'sessionLaunch' && key !== 'launchesPerMinute') {
       problems.push(`launcher has an unknown key "${key}": ignored (typo?)`);
     }
   }
+  const allowance = parseLaunchesPerMinute(raw);
+  if (allowance.problem !== undefined) problems.push(allowance.problem);
   const entries = raw['profiles'];
   if (entries === undefined) {
     problems.push(
       'launcher has no profiles list: no dashboard launch profiles are loaded (an empty list is fine)',
     );
-    return { launcher: { profiles, problems }, problems };
+    return { launcher: { profiles, problems, launchesPerMinute: allowance.value }, problems };
   }
   if (!Array.isArray(entries)) {
     problems.push(
       'launcher.profiles must be an array: no dashboard launch profiles are loaded',
     );
-    return { launcher: { profiles, problems }, problems };
+    return { launcher: { profiles, problems, launchesPerMinute: allowance.value }, problems };
   }
 
   const names = new Set<string>();
@@ -517,7 +536,7 @@ export function parseLauncher(
       sessionLaunch = [...new Set(grants)];
     } else problems.push('launcher.sessionLaunch must be an array of participant names. No launch permission granted.');
   }
-  return { launcher: { profiles, problems, ...(sessionLaunch === undefined ? {} : { sessionLaunch }) }, problems };
+  return { launcher: { profiles, problems, launchesPerMinute: allowance.value, ...(sessionLaunch === undefined ? {} : { sessionLaunch }) }, problems };
 }
 
 /**

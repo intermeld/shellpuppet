@@ -1531,9 +1531,13 @@ path, including when a junction or symbolic link is involved. A removed
 folder refuses the launch. Global policy
 runs first against `commandLine(command, args)` before the Windows wrap;
 profile `deny` may refuse it, and profile `allow` must match when present.
-The route accepts at most eight starts in any sliding sixty seconds (`429`
-after that) and refuses at thirty-two live sessions when
-`policy.maxSessions` is unset (`403`). A configured `maxSessions` replaces
+The route accepts at most `launcher.launchesPerMinute` starts in any sliding
+sixty seconds (`429` after that). The setting is an integer from 1 to 60,
+defaults to eight, and reloads when the configuration changes. Invalid values
+are reported and use the default. Pending starts count, while failed and
+cancelled starts release their slot at once. The route refuses at thirty-two
+live sessions when `policy.maxSessions` is unset (`403`). A configured
+`maxSessions` replaces
 the thirty-two cap, and the rate still applies. These route caps do not
 apply to client-token `POST /sessions`. `GET /dashboard/profiles` returns
 profile names, labels, purposes, commands, arguments, folder names and

@@ -92,15 +92,21 @@ export class ScheduleStore {
 }
 
 /** Watch the parent so an editor can replace config.json with a rename. */
-export function watchSchedules(home: string, store: ScheduleStore, logger: Logger): () => void {
+export function watchSchedules(
+  home: string, store: ScheduleStore, logger: Logger,
+  onConfigChange?: (raw: Record<string, unknown>, initial: boolean) => void,
+): () => void {
   const file = configPath(home);
   let debounce: NodeJS.Timeout | undefined;
   let previousSection: string | undefined;
+  let initial = true;
   function reload(): void {
     let section: unknown;
+    let root: Record<string, unknown> = {};
     try {
-      const root: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
-      if (!isRecord(root)) throw new Error();
+      const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+      if (!isRecord(parsed)) throw new Error();
+      root = parsed;
       section = root['schedules'];
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
@@ -108,6 +114,8 @@ export function watchSchedules(home: string, store: ScheduleStore, logger: Logge
         return;
       }
     }
+    onConfigChange?.(root, initial);
+    initial = false;
     const contents = JSON.stringify(section === undefined ? [] : section);
     if (contents === previousSection) return;
     previousSection = contents;
