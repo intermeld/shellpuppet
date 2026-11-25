@@ -534,7 +534,7 @@ ambiguous in clients that do not, so the prefix stays.
 |---|---|---|
 | `terminal_start` | Launch a program in a new PTY session | `command`, `args[]`, `cwd`, `cols`, `rows`, `hold`, `label`, `purpose`, `agent`, `waitReady`, `readyTimeout`, `readyText`, `readyQuiet`, `shell`, `envNames` |
 | `terminal_snapshot` | Read the rendered screen as plain text | `session`, `lastLines`, `hideReasoning`, `wider`, `widerTimeout` |
-| `terminal_type` | Type text (optionally submit) | `session`, `text`, `submit`, `verify` |
+| `terminal_type` | Type text and optionally report the submit outcome | `session`, `text`, `submit`, `verify` |
 
 Typed text is checked against the composer only when the agent's own composer is
 readable on screen before the body is written. A launch line typed at a shell prompt
@@ -925,6 +925,13 @@ during that window, with no error. Mitigations, all of which are in the first re
 - `terminal_start` accepts `readyText` and `readyQuiet`, and reports a `ready` boolean
   with a `readyReason` (`not-tracked`, `pending`, `condition-met` or `never-held`); only
   `condition-met` is affirmative.
+- Explicit submit appends Enter to the same input data on both clients. The
+  optional request field asks for reporting only. The daemon derives the
+  outcome after the normal write and retry checks. A positive legacy
+  submission result gives `submitted`. An existing refusal before Enter
+  gives `withheld` with its reason. Other results give `unconfirmed`.
+  Verification describes whether the text appeared. If the reporting marker
+  would exceed the JSON byte limit, the clients send the legacy request.
 - `terminal_type` accepts `verify: true`, which re-reads the screen after typing and
   returns whether the text landed. It reads the text the way an input box wraps
   it, so a line break, an indent, the box's border or a side panel set apart by space on
@@ -1543,14 +1550,12 @@ the headers, the cookie, the proof and the grant are not recorded. A bad `Host` 
 only when the path is a dashboard path. The anonymous dashboard page, which answers 200
 with no credential, is not audited.
 
-**Typed content is never logged by default.** Keystrokes are where the secrets
-are: an SSH passphrase or API key typed into a prompt must not end up in a plaintext
-log. Default entries record the action and the input *length* (`type: 42 chars`,
-`key: enter`), plus the command line for `start` (commands are policy-visible by
-definition). Screen output is likewise not logged. One verbose opt-in flag
-(`audit.captureContent`) records typed input verbatim for debugging, clearly documented
-as secret-capturing. It does NOT capture screen output: nothing in the daemon logs what a
-program printed, whatever this flag is set to.
+Typed input audit entries record the length of the request data. Only the explicit
+`submit: true` marker records a request for outcome reporting and adds the outcome
+and any fixed refusal reason. An absent or false marker leaves only length, even
+when the data ends in Enter. Viewer keystrokes also record only length.
+Typed secrets and screen output stay out of the log under both capture settings.
+Key actions record the key name and start actions record the command line.
 
 **A viewer's terminal answering the program is not a person typing.** The viewer page is
 a real terminal, so it answers a program's queries (the cursor position, device

@@ -177,8 +177,8 @@ target and outcome, including a reason for a skipped or aborted run.
     ]
   },
 
-  // Audit log (design §4.5). captureContent also records the full
-  // text of every keystroke: SECRET-CAPTURING, for debugging only.
+  // Audit log (design §4.5). Enable captureContent to include terminal replies
+  // such as cursor position reports when debugging.
   "audit": {
     "captureContent": false
   },

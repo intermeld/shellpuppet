@@ -7,6 +7,13 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+- Explicit submit can report the result of the existing checks as `submitted`,
+  `withheld` with a reason, or `unconfirmed`. If the reporting marker would
+  exceed the request size limit, the client sends the original input.
+- Typed input audit entries record length under both capture settings. Only
+  requests with the reporting marker also record the outcome. Opt-in content
+  capture still records terminal replies.
+
 ## [0.4.1] - 2026-11-24
 
 Fixes for dashboard windows and for intermittent tests.
