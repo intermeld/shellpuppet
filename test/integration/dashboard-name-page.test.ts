@@ -37,43 +37,78 @@ describe('dashboard naming controls', () => {
       probe: `(() => document.getElementById('connection')?.textContent === 'Connected' &&
         document.getElementById('session-name')?.value === 'lead' &&
         document.getElementById('start')?.disabled === false)()`,
-      interact: async (page) => {
-        await page.evaluate(`document.getElementById('start').click()`);
-        const listed = async () => (await api(daemon.port, daemon.token, '/sessions')).body['sessions'] as { name: string }[];
-        await eventually(async () => (await listed()).some(session => session.name === 'lead'));
-        return page.evaluate(`new Promise((resolve) => {
-          const name = document.getElementById('session-name');
-          const field = document.getElementById('resume-field');
+      interact: async ({ evaluate, onEvent, send }) => {
+        const responses: { path: string; status: number }[] = [];
+        const launches: ({ profile?: string; name?: string; resumeId?: string } | 'unreadable request')[] = [];
+        onEvent('Network.requestWillBeSent', event => {
+          const request = event['request'] as { url: string; postData?: string };
+          if (new URL(request.url).pathname === '/dashboard/launch' && request.postData) {
+            try {
+              const { profile, name, resumeId } = JSON.parse(request.postData) as { profile?: string; name?: string; resumeId?: string };
+              launches.push({ profile, name, resumeId });
+            } catch { launches.push('unreadable request'); }
+          }
+        });
+        onEvent('Network.responseReceived', event => {
+          const response = event['response'] as { url: string; status: number };
+          const path = new URL(response.url).pathname;
+          if (path === '/dashboard/launch' || path.endsWith('/rename')) responses.push({ path, status: response.status });
+        });
+        await send('Network.enable');
+        const cards = `[...document.querySelectorAll('.pane')].map(card => ({ id: card.dataset.session,
+          label: card.querySelector('.pane-label')?.textContent, role: card.dataset.role }))`;
+        type Pane = { id: string; label: string; role: string };
+        const waitForPane = async (description: string, matches: (pane: Pane) => boolean) => {
+          let panes: Pane[] = [];
+          try {
+            await eventually(async () => {
+              panes = await evaluate(cards) as typeof panes;
+              return panes.some(matches);
+            }, 30_000, 100, description, () => panes);
+          } catch (cause) {
+            const listed = await api(daemon.port, daemon.token, '/sessions');
+            const rows = listed.body['sessions'] as { id: string; name: string; label: string }[] | undefined;
+            const sessions = rows?.map(({ id, name, label }) => ({ id, name, label })) ?? { status: listed.status };
+            const pageError = await evaluate("document.getElementById('error-message')?.textContent")
+              .catch(() => 'page did not answer');
+            throw new Error(`Waiting for ${description}: ${JSON.stringify({ launches, responses, sessions, panes, pageError })}`, { cause });
+          }
+          return panes.find(matches)!;
+        };
+
+        await evaluate("document.getElementById('start').click()");
+        let leadId: string | undefined;
+        await eventually(async () => {
+          const listed = await api(daemon.port, daemon.token, '/sessions');
+          leadId = (listed.body['sessions'] as { id: string; name: string }[]).find(session => session.name === 'lead')?.id;
+          return leadId !== undefined;
+        }, 15_000, 100, 'the default session name', () => ({ launches, responses }));
+        await waitForPane('the first launch to appear in this window', pane => pane.id === leadId);
+        expect(await evaluate("document.getElementById('resume-field').hidden")).toBe(true);
+        await evaluate(`(() => {
           const profile = document.querySelector('#launcher select');
-          if (!field.hidden) { resolve('unexpected resume field'); return; }
           profile.value = 'resume';
           profile.dispatchEvent(new Event('change'));
-          if (field.hidden) { resolve('missing resume field'); return; }
+        })()`);
+        expect(await evaluate("document.getElementById('resume-field').hidden")).toBe(false);
+        await evaluate(`(() => {
           document.getElementById('resume-id').value = 'from-browser-42';
-          name.value = 'from-page';
+          document.getElementById('session-name').value = 'from-page';
           document.getElementById('start').click();
-          const deadline = Date.now() + 30000;
-          const poll = () => {
-            const pane = [...document.querySelectorAll('.pane')].find((item) => item.querySelector('.pane-label')?.textContent === 'from-page');
-            if (!pane) { if (Date.now() < deadline) setTimeout(poll, 100); else resolve('launch timeout'); return; }
-            pane.querySelector('button[aria-label="Rename"]').click();
-            const input = pane.querySelector('input[aria-label="New session name"]');
-            input.value = 'renamed-page';
-            input.closest('form').requestSubmit();
-            const renamed = () => {
-              if (pane.querySelector('.pane-label')?.textContent === 'renamed-page') resolve(JSON.stringify({
-                nameBox: name.value, label: pane.querySelector('.pane-label').textContent,
-                role: pane.dataset.role }));
-              else if (Date.now() < deadline) setTimeout(renamed, 100);
-              else resolve('rename timeout');
-            };
-            renamed();
-          };
-          poll();
-        })`);
+        })()`);
+        const launched = await waitForPane('the pane labelled from-page', pane => pane.label === 'from-page');
+        await evaluate(`(() => {
+          const pane = document.querySelector('.pane[data-session="' + ${JSON.stringify(launched.id)} + '"]');
+          pane.querySelector('button[aria-label="Rename"]').click();
+          const input = pane.querySelector('input[aria-label="New session name"]');
+          input.value = 'renamed-page';
+          input.closest('form').requestSubmit();
+        })()`);
+        const renamed = await waitForPane('the renamed pane', pane => pane.id === launched.id && pane.label === 'renamed-page');
+        return { ...renamed, nameBox: await evaluate("document.getElementById('session-name').value") };
       },
     });
     expect(readFileSync(join(daemon.home, 'audit.log'), 'utf8')).toContain('from-browser-42');
-    expect(JSON.parse(String(result.probe))).toMatchObject({ nameBox: 'from-page', label: 'renamed-page', role: 'delegate' });
+    expect(result.probe).toMatchObject({ nameBox: 'from-page', label: 'renamed-page', role: 'delegate' });
   }, 120_000);
 });
