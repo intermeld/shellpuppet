@@ -10,6 +10,9 @@ import type { DetectedPrompt } from './promptDetector.js';
 
 export type { DetectedPrompt };
 
+/** Maximum UTF-8 byte length of a daemon JSON request body. */
+export const MAX_BODY_BYTES = 1_000_000;
+
 /** Injected logging interface (design §2.4).
  *
  * `core/` and `client/` never write to stdout or stderr: a stray console line
