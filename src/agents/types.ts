@@ -139,8 +139,6 @@ export interface AgentModule {
       auto?: boolean;
       /** Reserved for a future agent-owned, turn-correlated acceptance event. */
       acceptance?: (inputId: string, turnId: string) => boolean;
-      /** Physical editor frame for quiet time when a separate footer ticks. */
-      submitPane?: (view: NudgeView) => string | undefined;
       delayMs?: number;
       matches?: (data: string) => boolean;
       /** Minimum pause for a pasted line, scaled by its length where measured. */

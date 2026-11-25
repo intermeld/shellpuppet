@@ -583,7 +583,9 @@ placeholder more than a second late, with exactly this body's size and no screen
 change in between, would be mistaken for it. Programs paint a paste within
 milliseconds, so this is accepted as a limitation. If this check fails, no Enter is sent and the result
 reports `submitted: false`. The submit key is otherwise written separately
-on the ordered input chain. Muse keeps its own delay. After Enter, the exact
+on the ordered input chain. Muse keeps its own delay and the full-screen quiet
+clock for typed submit, so a repainting task footer delays both auto and explicit
+Enter. After Enter, the exact
 remaining draft can receive one further Enter, subject to the same checks.
 A changed composer, prompt or later input prevents a retry. An empty composer,
 new busy indicator or transcript echo may set the legacy `submitted` field,

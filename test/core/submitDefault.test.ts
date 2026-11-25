@@ -2,11 +2,9 @@ import type { IPty } from 'node-pty';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { codex } from '../../src/agents/codex/index.js';
 import { grok } from '../../src/agents/grok/index.js';
-import { submitPane } from '../../src/agents/muse/nudge.js';
 import { preparedInput } from '../../src/client/input.js';
 import { EncodedJson, request } from '../../src/client/http.js';
 import { Session, submitOutcome } from '../../src/core/session.js';
-import type { StyledLine } from '../../src/core/renderer.js';
 
 const sessions: Session[] = [];
 const line = 'Reply with the word ok.';
@@ -93,25 +91,6 @@ describe('pre-Enter composer ownership', () => {
       viewportCols: 80, expectedDraft: line })).not.toBe('ready');
     expect(codex.nudge?.readiness({ rows: [...rows.slice(0, 2), '› Reply with the word no.', ...rows.slice(3)],
       viewportCols: 80, expectedDraft: line })).not.toBe('ready');
-  });
-
-  it('holds Muse quiet time to its physical editor while a footer ticks', () => {
-    const style = { bold: false, italic: false, inverse: false, bg: null };
-    const rule = (text: string): StyledLine => ({ text, spans: [{ ...style, from: 0, to: text.length, fg: '#676c74', dim: true }] });
-    const typed = (text: string): StyledLine => ({ text, spans: [{ ...style, from: 0, to: text.length, fg: '#ccd3db', dim: false }] });
-    const screen = [rule('── Voice input (Alt+V to start) ──────'), typed('❯ ' + line),
-      rule('────────────────────────────────────'), typed('background task 1')];
-    const view = (styled: StyledLine[]) => ({ rows: styled.map(row => row.text), styled,
-      cursor: { x: 2 + line.length, y: 1 } });
-    expect(submitPane(view(screen))).toBe(submitPane(view([...screen.slice(0, 3), typed('background task 2')])));
-    expect(submitPane(view(screen))).not.toBe(submitPane(view([screen[0]!, typed('❯ changed'), ...screen.slice(2)])));
-    expect(submitPane(view(screen.slice(1)))).toBeUndefined();
-    const wrapped = [screen[0]!, typed('❯ Reply with the'), { ...typed('  word ok.'), wrapped: true },
-      screen[2]!, typed('background task 1')];
-    const wrappedView = (styled: StyledLine[]) => ({ rows: styled.map(row => row.text), styled,
-      cursor: { x: 10, y: 2 } });
-    expect(submitPane(wrappedView(wrapped))).toBeDefined();
-    expect(submitPane(wrappedView(wrapped))).toBe(submitPane(wrappedView([...wrapped.slice(0, 4), typed('background task 2')])));
   });
 
   it('recognises a padded Grok welcome composer after its send hints appear', () => {
