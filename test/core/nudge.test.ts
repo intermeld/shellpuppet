@@ -477,7 +477,7 @@ describe('nudge readiness', () => {
       const expectedDraft = '1234567890 dir/ab/cdef';
       const rows = ['› 1234567890 dir/', '  ab/cdef'];
       const view = { ...fromRows([...rows, '', '■ Conversation interrupted', '', ...rows, '', '  ? for shortcuts']),
-        viewportCols: 20, expectedDraft };
+        viewportCols: 20, expectedDraft, cursor: { x: 9, y: 6 } };
       expect(nudgeVerdict(codex, view).ready).toBe(true);
     });
 

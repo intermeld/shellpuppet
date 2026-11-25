@@ -1579,11 +1579,17 @@ the headers, the cookie, the proof and the grant are not recorded. A bad `Host` 
 only when the path is a dashboard path. The anonymous dashboard page, which answers 200
 with no credential, is not audited.
 
-Typed input audit entries record the length of the request data. Only the explicit
-`submit: true` marker records a request for outcome reporting and adds the outcome
-and any fixed refusal reason. An absent or false marker leaves only length, even
-when the data ends in Enter. Viewer keystrokes also record only length.
-Typed secrets and screen output stay out of the log under both capture settings.
+Typed input audit entries record the character count of the effective request
+data, including a requested trailing carriage return even if the guard withholds
+the key. For an older, unmarked JSON request, only its explicit `submit: true`
+reporting marker adds `submit: true`, the derived outcome and any fixed refusal
+reason. An absent or false legacy marker leaves only length, even when the data
+ends in Enter. A new client's `X-ShellPuppet-Submit: auto|on|off` header instead
+records `submitMode` and the derived outcome for every marked request. Explicit
+`off` and an ineligible `auto` record `not-requested`; a guard refusal records
+`withheld` and its fixed reason. A rejected auto preflight records no input
+entry. Viewer keystrokes also record only length. Typed secrets and screen
+output stay out of the log under both capture settings.
 Key actions record the key name and start actions record the command line.
 
 **A viewer's terminal answering the program is not a person typing.** The viewer page is
