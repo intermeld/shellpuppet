@@ -14,8 +14,8 @@ presents its existing id and secret again. Release, idle expiry and grant
 removal revoke launch access. Any same-user process with the daemon token
 can claim a free outside name when messaging is enabled. A granted name can
 launch every configured profile, including profiles with daemon credentials.
-Audit and event records carry message metadata,
-never message text, even when input capture is enabled.
+The audit log and event stream record only metadata about each message.
+`audit.captureContent` enables content capture only for recognised terminal reports.
 
 How ShellPuppet protects you, and the limits that remain. The reasoning behind
 each mechanism is in the design (`../architecture/design.md` §4); this page is
