@@ -88,6 +88,16 @@ function expectNoDaemonStarted(home: string, standIn: number): void {
 }
 
 describe('daemon verbs on a daemon that goes as it is asked', () => {
+  it('treats a standalone exit between preflight and handle acquisition as stopped', async () => {
+    const { home, pid } = await homeWithVanishingDaemon('standalone-preflight-exit');
+    const result = await cli(home, 'daemon', 'stop', '--json');
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ running: false, stopped: true });
+    expect(children.find((child) => child.pid === pid)?.exitCode).toBe(0);
+    expect(readDaemonState(home)).toBeNull();
+    expect(fs.existsSync(daemonLogPath(home))).toBe(false);
+  }, 30_000);
+
   it('waits for the accepted standalone process exit and retains warnings', async () => {
     const { home } = await homeWithVanishingDaemon('standalone-exit');
     const result = await cli(home, 'daemon', 'stop', '--force', '--json');

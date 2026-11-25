@@ -78,6 +78,11 @@ async function startNodeSession(marker: string): Promise<{ id: string; viewerUrl
   return started.body as unknown as { id: string; viewerUrl: string };
 }
 
+async function waitForFirstOutput(port: number, token: string, id: string, marker: string): Promise<void> {
+  await eventually(async () => String((await api(port, token, `/sessions/${id}/snapshot`)).body['screen'])
+    .includes(marker), 10_000);
+}
+
 describe('auth and loopback defences', () => {
   it('keeps stop capability behind the token while public health stays unchanged', async () => {
     const health = await api(td.port, null, '/health');
@@ -1231,6 +1236,7 @@ describe('viewer assets and the WS frame protocol (§5)', () => {
 
   it('temporarily widens a snapshot and restores its grid and controller', async () => {
     const session = await startNodeSession('wider-read');
+    await waitForFirstOutput(td.port, td.token, session.id, 'wider-read');
     const watcher = await connectWs(td.port, session.id, td.token);
     const original = await watcher.waitForControl((c) => c['type'] === 'geometry');
     expect(original['control']).toBe('yours');
@@ -1293,6 +1299,7 @@ describe('viewer assets and the WS frame protocol (§5)', () => {
 
   it('leaves an unowned grid unowned, and refuses held and overlapping wider reads', async () => {
     const session = await startNodeSession('wider-unowned');
+    await waitForFirstOutput(td.port, td.token, session.id, 'wider-unowned');
     const passive = await connectWs(td.port, session.id, td.token, {}, { drive: false });
     const ownership = td.daemon as unknown as {
       geometryController: Map<string, unknown>;
@@ -1342,6 +1349,7 @@ describe('viewer assets and the WS frame protocol (§5)', () => {
 
   it('lets a later API resize keep the grid during a wider read', async () => {
     const session = await startNodeSession('wider-override');
+    await waitForFirstOutput(td.port, td.token, session.id, 'wider-override');
     const read = api(td.port, td.token, `/sessions/${session.id}/snapshot?wider=140x40&widerTimeout=1000`);
     await eventually(async () => ((await api(td.port, td.token, '/sessions')).body['sessions'] as { id: string; cols: number }[])
       .some((s) => s.id === session.id && s.cols === 140), 10_000);
@@ -1356,6 +1364,7 @@ describe('viewer assets and the WS frame protocol (§5)', () => {
 
   it('restores after a snapshot read error', async () => {
     const session = await startNodeSession('wider-error');
+    await waitForFirstOutput(td.port, td.token, session.id, 'wider-error');
     const before = await api(td.port, td.token, `/sessions/${session.id}/snapshot`);
     const live = (td.daemon as unknown as { manager: SessionManager }).manager.get(session.id)!;
     const failing = vi.spyOn(live, 'lastLines').mockRejectedValueOnce(new Error('injected read failure'));
@@ -1377,6 +1386,7 @@ describe('viewer assets and the WS frame protocol (§5)', () => {
     } });
     expect(started.status).toBe(200);
     const id = String(started.body['id']);
+    await waitForFirstOutput(td.port, td.token, id, '.');
     const timed = await api(td.port, td.token, `/sessions/${id}/snapshot?wider=130x35&widerTimeout=300`);
     expect(timed.status).toBe(200);
     expect(timed.body).toMatchObject({ cols: 130, rows: 35, restored: true });
@@ -1403,6 +1413,7 @@ describe('viewer assets and the WS frame protocol (§5)', () => {
       } });
       expect(started.status).toBe(200);
       const id = String(started.body['id']);
+      await waitForFirstOutput(local.port, local.token, id, '.');
       const live = (local.daemon as unknown as { manager: SessionManager }).manager.get(id)!;
       const pending = fetch(`http://127.0.0.1:${String(local.port)}/sessions/${id}/snapshot?wider=140x40&widerTimeout=3000`, {
         headers: { authorization: `Bearer ${local.token}`, connection: 'close' },

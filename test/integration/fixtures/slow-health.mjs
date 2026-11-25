@@ -14,7 +14,7 @@
 
 import * as http from 'node:http';
 import process from 'node:process';
-import { setInterval, setTimeout } from 'node:timers';
+import { setImmediate, setInterval, setTimeout } from 'node:timers';
 
 const delay = process.argv[2] ?? 'never';
 const other = process.argv[3] ?? 'destroy';
@@ -39,6 +39,9 @@ const server = http.createServer((req, res) => {
       { 'content-type': 'application/json' });
     res.end(JSON.stringify(standalone || embedded ? { completion }
       : other === 'legacy-no-cap' ? {} : { error: 'Not found.' }));
+    if (other === 'standalone-preflight-exit') {
+      res.on('finish', () => setImmediate(() => process.exit(0)));
+    }
     return;
   }
   if (other === 'answer') {
