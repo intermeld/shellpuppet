@@ -81,6 +81,7 @@ export interface DaemonConnection {
   version: string;
   /** Identity returned by the daemon's own health response. */
   instanceId?: string;
+  inputSubmitMode?: number;
   /** Human-readable warnings (e.g. version mismatch), which adapters surface. */
   warnings: string[];
 }
@@ -159,6 +160,7 @@ interface HealthResponse {
   version: string;
   pid: number;
   instanceId?: string;
+  inputSubmitMode?: number;
 }
 
 async function health(port: number, timeoutMs = HEALTH_TIMEOUT_MS): Promise<HealthResponse | null> {
@@ -582,6 +584,7 @@ export async function discoverDaemon(options: ClientOptions = {}, deadline?: num
     pid: state.pid,
     version: alive.version,
     instanceId: alive.instanceId,
+    inputSubmitMode: alive.inputSubmitMode,
     warnings: versionWarnings(alive.version),
   };
 }
@@ -754,6 +757,7 @@ async function ensureDaemonUntil(options: ClientOptions, heldLock: Exclude<Start
             pid: state.pid,
             version: alive.version,
             instanceId: alive.instanceId,
+            inputSubmitMode: alive.inputSubmitMode,
             warnings: versionWarnings(alive.version),
           };
         }
@@ -829,7 +833,7 @@ export async function request(
   method: string,
   path: string,
   body?: unknown,
-  options: ClientOptions & { signal?: AbortSignal } = {},
+  options: ClientOptions & { signal?: AbortSignal; submitMode?: 'auto' | 'on' | 'off'; expectedInstanceId?: string } = {},
 ): Promise<ApiResponse> {
   const actor = typeof options.actor === 'function' ? options.actor() : options.actor;
   const attempt = async (conn: DaemonConnection): Promise<ApiResponse> => {
@@ -864,6 +868,8 @@ export async function request(
           'x-shellpuppet-claim-secret': claimParts[2]!,
         } : {}),
         ...(body !== undefined ? { 'content-type': 'application/json' } : {}),
+        ...(options.submitMode !== undefined ? { 'x-shellpuppet-submit': options.submitMode } : {}),
+        ...(options.expectedInstanceId !== undefined ? { 'x-shellpuppet-expected-instance': options.expectedInstanceId } : {}),
       },
       ...(body !== undefined ? { body: body instanceof EncodedJson ? body.text : JSON.stringify(body) } : {}),
     });
@@ -876,6 +882,7 @@ export async function request(
   } catch (error) {
     // Cancellation belongs to this call, not to daemon discovery or retry.
     if (options.signal?.aborted === true) throw error;
+    if (options.submitMode !== undefined) throw error;
     if (await daemonRunning(connection)) {
       const pid = String(connection.pid);
       throw new Error(
@@ -897,6 +904,7 @@ export async function request(
     connection.pid = fresh.pid;
     connection.version = fresh.version;
     connection.instanceId = fresh.instanceId;
+    connection.inputSubmitMode = fresh.inputSubmitMode;
     return attempt(fresh);
   }
 }

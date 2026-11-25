@@ -103,7 +103,7 @@ describe.each(['CLI', 'MCP'])('%s request boundary', adapter => {
     const fixed = Buffer.byteLength(JSON.stringify({ data: prefix + '\r', ...(verify ? { verify: true } : {}) }));
     const body = prefix + ' '.repeat(size - fixed);
     const fields = { ok: true, bytes: body.length + 1, ...(verify ? { verified: true } : {}) };
-    const reported = fits && !legacy;
+    const reported = !legacy;
     const expected = { ...fields, ...(reported ? { outcome: 'unconfirmed' } : {}) };
     const counter = join(td.home, 'input-serialisations');
     writeFileSync(counter, '');
@@ -120,7 +120,7 @@ describe.each(['CLI', 'MCP'])('%s request boundary', adapter => {
       const message = `Typed ${String(fields.bytes)} bytes` + (verify ? ' (verified on screen).' : '.');
       expect(mcp.content).toEqual([{ type: 'text', text: message + (reported ? ' Submit outcome: unconfirmed.' : '') }]);
     }
-    expect(requestSizes).toEqual([fits ? size + Buffer.byteLength(',"submit":true') : size]);
+    expect(requestSizes).toEqual([legacy ? fits ? size + Buffer.byteLength(',"submit":true') : size : size - 2]);
     expect(writes).toHaveLength(1);
     expect(writes[0] === '\x1b[200~' + body + '\x1b[201~\r').toBe(true);
     expect(statSync(counter).size).toBe(1);
@@ -128,7 +128,7 @@ describe.each(['CLI', 'MCP'])('%s request boundary', adapter => {
 });
 
 it('retains the refusal for a legacy body one byte above the limit', async () => {
-  const text = 'a'.repeat(1_000_001 - Buffer.byteLength(JSON.stringify({ data: '\r' })));
+  const text = 'a'.repeat((legacy ? 1_000_001 : 1_000_003) - Buffer.byteLength(JSON.stringify({ data: '\r' })));
   writes.length = 0;
   const cli = await largeCli(text, false);
   expect(cli.code, cli.diagnostic).toBe(1);
@@ -137,6 +137,64 @@ it('retains the refusal for a legacy body one byte above the limit', async () =>
   expect(mcp.isError).toBe(true);
   expect(mcp.content).toEqual([{ type: 'text', text: 'Request body too large: the limit is 1000000 bytes.' }]);
   expect(writes).toEqual([]);
+});
+
+it('defaults a new client to auto while explicit false keeps the PTY text alone', async () => {
+  if (legacy) return;
+  for (const args of [['type', 's1', 'sample', '--json'], ['type', 's1', 'sample', '--no-enter', '--json']]) {
+    writes.length = 0;
+    const cli = await exec(process.execPath, [join(clientDist, 'cli/index.js'), ...args], { env: env() });
+    expect(JSON.parse(cli.stdout)).toEqual({ ok: true, bytes: 6, outcome: 'not-requested' });
+    expect(writes).toEqual(['sample']);
+  }
+  writes.length = 0;
+  const mcp = await client.callTool({ name: 'terminal_type', arguments: { session: 's1', text: 'sample', submit: false } });
+  expect(writes).toEqual(['sample']);
+  expect(mcp.structuredContent).toEqual({ ok: true, bytes: 6, outcome: 'not-requested' });
+});
+
+it('marks new requests but leaves an old unmarked request and audit intent unchanged', async () => {
+  const audit = vi.spyOn(td.daemon['audit'], 'record');
+  try {
+    writes.length = 0;
+    const old = await api(td.port, td.token, '/sessions/s1/input', { body: { data: 'x' } });
+    expect(old.body).toEqual({ ok: true, bytes: 1 });
+    expect(writes).toEqual(['x']);
+    writes.length = 0;
+    const marked = await api(td.port, td.token, '/sessions/s1/input', {
+      body: { data: 'x' }, headers: { 'x-shellpuppet-submit': 'on' },
+    });
+    expect(marked.body).toEqual({ ok: true, bytes: 2, outcome: 'unconfirmed',
+      message: 'Submit key sent; this programme has no readable composer.' });
+    expect(writes).toEqual(['x', '\r']);
+    const inputs = audit.mock.calls.filter(call => call[1] === 'input').slice(-2);
+    expect(inputs.map(call => call[3])).toEqual([
+      { chars: 1 }, { chars: 2, submitMode: 'on', outcome: 'unconfirmed' },
+    ]);
+  } finally { audit.mockRestore(); }
+});
+
+it('refuses a daemon replacement after marked preflight before writing input', async () => {
+  writes.length = 0;
+  const result = await api(td.port, td.token, '/sessions/s1/input', {
+    body: { data: 'private line' },
+    headers: { 'x-shellpuppet-submit': 'auto', 'x-shellpuppet-expected-instance': 'different instance' },
+  });
+  expect(result.status).toBe(409);
+  expect(result.body).toEqual({ error: 'The daemon changed after submit preflight.' });
+  expect(writes).toEqual([]);
+});
+
+it('keeps the legacy positive field but reports marked acceptance as unconfirmed', async () => {
+  const write = vi.spyOn(session, 'writeWithResult').mockResolvedValue({ before: '', submitted: true,
+    submitRetried: false, submitApplied: true, inputBytes: 2 });
+  try {
+    const result = await api(td.port, td.token, '/sessions/s1/input', {
+      body: { data: 'x' }, headers: { 'x-shellpuppet-submit': 'on' },
+    });
+    expect(result.body).toEqual({ ok: true, bytes: 2, submitted: true, outcome: 'unconfirmed' });
+    expect(write.mock.calls).toEqual([['x', { submitMode: 'on' }]]);
+  } finally { write.mockRestore(); }
 });
 
 it('handles an older wire request containing Enter with the old response fields', async () => {

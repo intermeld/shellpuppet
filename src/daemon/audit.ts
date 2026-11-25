@@ -1,7 +1,7 @@
 /**
  * Append-only action log at `~/.shellpuppet/audit.log` (design §4.5).
  *
- * Typed entries record input length. Only a reporting marker adds a submit outcome. Start
+ * Typed entries record input length. A marked submit header or legacy reporting marker adds an outcome. Start
  * entries record the command line because commands are visible to policy.
  * Typed content and screen output stay out of the log.
  *

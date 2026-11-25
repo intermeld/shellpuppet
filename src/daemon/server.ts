@@ -2505,7 +2505,7 @@ export class Daemon {
     // Unauthenticated by design (§4.1): clients must be able to poll before
     // the token file settles. The instance id is an identity, not a secret.
     if (req.method === 'GET' && url.pathname === '/health') {
-      json(res, 200, { ok: true, version: this.version, pid: process.pid, instanceId: this.instanceId });
+      json(res, 200, { ok: true, version: this.version, pid: process.pid, instanceId: this.instanceId, inputSubmitMode: 1 });
       return;
     }
 
@@ -3616,6 +3616,13 @@ export class Daemon {
       }
 
       if (req.method === 'POST' && action === 'input') {
+        const header = req.headers['x-shellpuppet-submit'];
+        const submitMode = header === undefined ? undefined : header === 'auto' || header === 'on' || header === 'off' ? header : null;
+        if (submitMode === null) { json(res, 400, { error: 'Invalid submit mode.' }); return; }
+        if (req.headers['x-shellpuppet-expected-instance'] !== undefined &&
+          req.headers['x-shellpuppet-expected-instance'] !== this.instanceId) {
+          json(res, 409, { error: 'The daemon changed after submit preflight.' }); return;
+        }
         const body = await readBody(req);
         const data = asString(body['data']);
         if (data === undefined) {
@@ -3638,7 +3645,9 @@ export class Daemon {
         const submit = body['submit'] === true;
         let written: Awaited<ReturnType<typeof session.writeWithResult>>;
         try {
-          written = await session.writeWithResult(data);
+          written = submitMode === undefined
+            ? await session.writeWithResult(data)
+            : await session.writeWithResult(data, { submitMode });
         } catch (error) {
           json(res, 409, {
             error:
@@ -3648,9 +3657,13 @@ export class Daemon {
           });
           return;
         }
-        const reporting = submit ? submitOutcome(written) : undefined;
-        this.audit.record(actor, 'input', id, { chars: data.length,
-          ...(reporting ? { submit: true, ...reporting } : {}) });
+        const reporting = submitMode === undefined ? submit ? submitOutcome(written) : undefined
+          : submitMode === 'off' || (submitMode === 'auto' && !written.submitApplied)
+            ? { outcome: 'not-requested' as const }
+            : submitOutcome(written, true);
+        const bytes = submitMode === undefined ? data.length : written.inputBytes ?? 0;
+        this.audit.record(actor, 'input', id, { chars: bytes,
+          ...(submitMode !== undefined ? { submitMode, ...reporting } : reporting ? { submit: true, ...reporting } : {}) });
         this.broadcastControl(id, { type: 'input-source', source: 'agent' });
         // §3.1: TUIs silently swallow input while loading or when a panel has
         // stolen focus. verify re-reads the screen and reports whether the
@@ -3659,7 +3672,7 @@ export class Daemon {
         if (asBoolean(body['verify']) === true) {
           json(res, 200, {
             ok: true,
-            bytes: data.length,
+            bytes,
             ...reporting,
             verified: await this.verifyTyped(session, data, written.before),
             ...(written.submitted !== undefined ? { submitted: written.submitted } : {}),
@@ -3668,7 +3681,7 @@ export class Daemon {
           });
           return;
         }
-        json(res, 200, { ok: true, bytes: data.length,
+        json(res, 200, { ok: true, bytes,
           ...reporting,
           ...(written.submitted !== undefined ? { submitted: written.submitted } : {}),
           ...(written.submitRetried ? { submitRetried: true } : {}),

@@ -18,7 +18,7 @@ import process from 'node:process';
 import { createInterface } from 'node:readline';
 import { DaemonGoneError, daemonStartMode, discoverDaemon, ensureDaemon, request, waitForPendingDaemon, withDaemonStartLock } from '../client/http.js';
 import type { DaemonConnection } from '../client/http.js';
-import { inputRequest } from '../client/input.js';
+import { preparedInput } from '../client/input.js';
 import type { ListedSchedule } from '../daemon/schedules.js';
 import { assertNodeVersion, packageVersion } from '../daemon/meta.js';
 import { NO_MATCHES } from '../core/find.js';
@@ -97,8 +97,9 @@ Usage:
       reasoning. --hide-reasoning is accepted but changes nothing: result
       always leaves reasoning out. Exits 3, with the reason on stderr, while
       the agent is still working or when no answer is recognised.
-  shellpuppet type <id> <text> [--enter] [--verify] Type text; --enter sends the text,
-                                                    waits for its painted draft and a quiet
+  shellpuppet type <id> <text> [--enter|--no-enter] [--verify] Type text; known agents submit by default.
+                                                    --no-enter types without submitting; --enter submits explicitly.
+                                                    Submission waits for a painted draft and quiet
                                                     screen, then checks again before Enter.
                                                     If the draft is absent, Enter is not sent.
                                                     --verify re-reads the screen.
@@ -291,7 +292,7 @@ async function call(
   method: string,
   path: string,
   body?: unknown,
-  options: { autoStart?: boolean } = {},
+  options: { autoStart?: boolean; submitMode?: 'auto' | 'on' | 'off'; expectedInstanceId?: string } = {},
 ): Promise<Body> {
   const response = await request(connection, method, path, body, {
     logger: stderrLogger,
@@ -644,8 +645,10 @@ async function main(): Promise<void> {
     case 'type': {
       const id = parsed.positionals[0] ?? fail(2, 'type needs a session id.');
       const text = parsed.positionals[1] ?? fail(2, 'type needs text.');
-      const result = await call(connection, 'POST', `/sessions/${id}/input`,
-        inputRequest(text, parsed.flags.get('enter') === true, parsed.flags.get('verify') === true));
+      if (parsed.flags.get('enter') === true && parsed.flags.get('no-enter') === true) fail(2, 'Choose --enter or --no-enter.');
+      const intent = parsed.flags.get('enter') === true ? true : parsed.flags.get('no-enter') === true ? false : undefined;
+      const prepared = preparedInput(connection, text, intent, parsed.flags.get('verify') === true);
+      const result = await call(connection, 'POST', `/sessions/${id}/input`, prepared.body, prepared.options);
       if (!wantJson && typeof result['outcome'] === 'string') {
         const reason = typeof result['reason'] === 'string' ? ` (${result['reason']})` : '';
         console.log(`Submit outcome: ${result['outcome']}${reason}.`);

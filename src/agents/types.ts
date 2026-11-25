@@ -135,6 +135,12 @@ export interface AgentModule {
   input?: {
     submit?: {
       key: string;
+      /** Omitted submit may use this module's existing guarded submit path. */
+      auto?: boolean;
+      /** Reserved for a future agent-owned, turn-correlated acceptance event. */
+      acceptance?: (inputId: string, turnId: string) => boolean;
+      /** Physical editor frame for quiet time when a separate footer ticks. */
+      submitPane?: (view: NudgeView) => string | undefined;
       delayMs?: number;
       matches?: (data: string) => boolean;
       /** Minimum pause for a pasted line, scaled by its length where measured. */
