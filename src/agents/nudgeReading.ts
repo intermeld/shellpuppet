@@ -288,11 +288,11 @@ export function readingReadiness(view: NudgeView, reading: AgentSignature, rule:
       !rule.queueFooter(lines.slice(below + 1).filter((line) => line.text.trim() !== ''))) return 'busy';
   }
   if (view.expectedDraft !== undefined) {
+    if (rule.matchesDraft) return rule.matchesDraft(region.rows, view.expectedDraft, view, at) ? 'ready' : 'draft';
     // A later copy may look like a fresh composer row. Do not select its
     // prompt glyph and forget the earlier copy still waiting above it.
     if (lines.slice(0, at).some((line) =>
       composer.test(line.text) && stripGlyph(line.text) === view.expectedDraft)) return 'draft';
-    if (rule.matchesDraft) return rule.matchesDraft(region.rows, view.expectedDraft, view, at) ? 'ready' : 'draft';
     const [first, ...rest] = region.rows;
     const pieces = [stripGlyph(first?.text ?? ''), ...rest.map(line => line.text.trim())].filter(Boolean);
     return matchesWrappedDraft(pieces, view.expectedDraft) ? 'ready' : 'draft';
