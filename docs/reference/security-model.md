@@ -574,16 +574,14 @@ daemon noticing a session has held a prompt unanswered; `grant-mint` is a
 viewer link being made, `grant-redeem` the page loading it, and `ws-connect`
 the stream itself opening: three events, kept apart in the log.)
 
-**Typed content is never logged by default**: keystrokes are where the
-secrets are; an SSH passphrase typed into a prompt must not end up in a
-plaintext log. Default `input` entries record the character count only, and
-`report` entries the kind and the character count. The command line for
-`start` is recorded, because commands are policy-visible by definition.
-Screen output is never logged.
-
-`audit.captureContent: true` switches on full capture of input and reports
-for debugging. **This records secrets typed into sessions in plain text.**
-Leave it off unless actively debugging, and delete the log afterwards.
+Typed input stays private. Each typed input entry records its character count.
+Only an explicit `submit: true` reporting marker adds `submit: true`, the
+outcome and any fixed withholding reason to the audit entry. Unmarked input
+records only length. A trailing carriage return could be literal text or a
+client's encoded Enter. Viewer keystrokes also record only length.
+Terminal reports record their kind and character count. Enabling
+`audit.captureContent` adds the contents of those reports. Start entries
+record the command line.
 
 ## Residual risks, stated plainly
 

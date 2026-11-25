@@ -17,6 +17,19 @@ was not confirmed. If the draft remains after the retry, it reports
 cannot be read, the result only says that the submit key was sent. `verify`
 checks for visible text, which may already have cleared on submission.
 
+With explicit submit, the client appends the same carriage return to the input
+data as before. It also requests an `outcome` in the text and structured result.
+`submitted` means the existing checks returned `submitted: true`.
+`verified` describes text visibility and can be true for an unconfirmed
+submission. `withheld` means the daemon
+stopped before Enter, with reason `line-not-seen` or `other-input-arrived`.
+`unconfirmed` means acceptance is uncertain, including after an unsuccessful
+retry. Check the session before resending. An older daemon returns its usual
+fields. If the reporting marker would take the encoded JSON body above
+1,000,000 UTF-8 bytes, the client omits the marker and returns the legacy
+result. The existing `submitted`, `submitRetried` and `verified` fields retain
+their meanings.
+
 ## Session messages
 
 Messaging starts off. The `session_*` tools below are offered only by an MCP
