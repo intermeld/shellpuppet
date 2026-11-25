@@ -31,6 +31,7 @@ import {
   DEFAULT_SESSION_ENV,
   SessionInputFailedError,
   SessionProgramEndedError,
+  TemporaryResizeNotReadyError,
   WindowsWithoutConPTYError,
   credentialShapedNames,
   submitOutcome,
@@ -293,6 +294,8 @@ export interface DaemonOptions {
   exitedGraceMs?: number;
   /** Called after an idle or lost-race self-stop; the entry point wires process.exit. */
   onSelfStop?: (reason: string) => void;
+  /** Set only by the daemon entry point, whose process exits after stop. */
+  exitProcessOnStop?: true;
   /** Prompt-stall detection cadence. Test hooks; defaults above. */
   promptScanIntervalMs?: number;
   promptStallMs?: number;
@@ -1268,11 +1271,20 @@ export class Daemon {
     this.folderPickerAbort?.abort(new FolderPickerFailureError('The folder picker was stopped.'));
     for (const read of this.widerReads.values()) read.abort.abort();
     const readsDone = Promise.allSettled([...this.widerReads.values()].map((read) => read.done));
+    const widerDeadline = Date.now() + 250;
     await this.shutdownRecords;
     // A free port lets a successor retire the ownership marker. Keep it
     // bound through publication, then close without waiting for PTY teardown.
     const listenerClosed = this.closeServerOnly();
-    await readsDone;
+    let widerTimer: NodeJS.Timeout | undefined;
+    const widerOutcome = await Promise.race([
+      readsDone.then(() => 'settled' as const),
+      new Promise<'timeout'>((resolve) => {
+        widerTimer = setTimeout(() => resolve('timeout'), Math.max(0, widerDeadline - Date.now()));
+      }),
+    ]);
+    if (widerTimer !== undefined) clearTimeout(widerTimer);
+    if (widerOutcome === 'timeout') this.logger.warn('wider reads exceeded shutdown restoration budget');
     for (const socket of this.sockets) {
       try {
         socket.close();
@@ -3164,11 +3176,20 @@ export class Daemon {
         json(res, 200, { schedules: this.promptScheduler.list() });
         return;
       }
+      if (url.pathname === '/daemon/stop-info' && req.method === 'GET') {
+        res.setHeader('Cache-Control', 'no-store');
+        json(res, 200, { completion: { version: 1,
+          role: this.options.exitProcessOnStop === true ? 'standalone' : 'embedded',
+          pid: process.pid, instanceId: this.instanceId } });
+        return;
+      }
       if (segments[0] === 'daemon' && segments[1] === 'shutdown' && req.method === 'POST') {
         const body = await readBody(req);
+        const completion = { version: 1, role: this.options.exitProcessOnStop === true ? 'standalone' : 'embedded',
+          pid: process.pid, instanceId: this.instanceId };
         if (this.stopping) {
           await this.shutdownRecords;
-          json(res, 200, { ok: true, stopping: true, warnings: this.shutdownWarnings });
+          json(res, 200, { ok: true, stopping: true, warnings: this.shutdownWarnings, completion });
           return;
         }
         const force = asBoolean(body['force']) ?? false;
@@ -3184,7 +3205,7 @@ export class Daemon {
         const stopping = this.stop({ restart: body['restart'] === true });
         this.audit.record(actor, 'shutdown', undefined, { force, liveSessions: live });
         await this.shutdownRecords;
-        json(res, 200, { ok: true, stopping: true, warnings: this.shutdownWarnings });
+        json(res, 200, { ok: true, stopping: true, warnings: this.shutdownWarnings, completion });
         void stopping.then(() => {
           this.options.onSelfStop?.('shutdown-request');
         });
@@ -3542,7 +3563,7 @@ export class Daemon {
         this.audit.record(actor, 'wider-read', id, { requested, original });
         try {
           if (target.cols !== original.cols || target.rows !== original.rows) {
-            await session.resize(target.cols, target.rows);
+            await session.resize(target.cols, target.rows, { temporarySignal: abort.signal });
             announce();
           }
           const settled = await session.waitFor({ quiet: 250 }, {
@@ -3562,6 +3583,7 @@ export class Daemon {
             // Only a deliberate geometry act wins. A departing controller does
             // not choose a new size; keep the control state its departure left.
             const mayRestore = (): boolean => (this.geometryEpoch.get(id) ?? 0) === epoch &&
+              this.manager.get(id) === session && !session.isKilled &&
               !session.geometryHeld && !session.exited &&
               session.cols === target.cols && session.rows === target.rows;
             restored = target.cols === original.cols && target.rows === original.rows
@@ -3581,6 +3603,8 @@ export class Daemon {
         if (session.exited || readError instanceof SessionProgramEndedError) {
           const code = readError instanceof SessionProgramEndedError ? readError.exitCode : session.exitCode;
           json(res, 409, { error: endedRefusal(id, code, session.fault) });
+        } else if (readError instanceof TemporaryResizeNotReadyError) {
+          json(res, 409, { error: readError.message });
         } else if (readError !== undefined) {
           throw readError instanceof Error ? readError : new Error('Wider read failed with a non-Error value.');
         } else if (payload !== null) {

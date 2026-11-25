@@ -11,7 +11,7 @@ import { execFile } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { promisify } from 'node:util';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { claimDaemonState, daemonStatePath, readDaemonState } from '../../src/daemon/paths.js';
 import { Daemon, AlreadyRunningError } from '../../src/daemon/server.js';
 import { NULL_LOGGER } from '../../src/core/types.js';
@@ -260,6 +260,65 @@ describe('daemon lifecycle', () => {
       }
     }, 30_000);
   });
+  it.each(['stuck growth', 'completed growth', 'stuck restoration'] as const)(
+    'cancels a wider read before session teardown with %s', async stage => {
+      const td = await startTestDaemon();
+      let release!: () => void;
+      const blocked = new Promise<void>(resolve => { release = resolve; });
+      let read: Promise<unknown> | undefined;
+      try {
+        const started = await api(td.port, td.token, '/sessions', { body: {
+          command: process.execPath, args: ['-e', "setInterval(() => process.stdout.write('.'), 40)"],
+          shell: false, cols: 80, rows: 24,
+        } });
+        expect(started.status).toBe(200);
+        const manager = td.daemon['manager'];
+        const session = manager.get(String(started.body['id']))!;
+        if (stage !== 'stuck growth' && process.platform === 'win32') {
+          await eventually(() => (session['pty'] as unknown as { _isReady?: boolean })._isReady === true);
+        }
+        const blockResizeQueue = (): void => {
+          Object.assign(session, {
+            agentModule: { input: { resizeBehindSubmit: true } }, submissionsQueued: 1, writeChain: blocked,
+          });
+        };
+        const resize = vi.spyOn(session, 'resize');
+        if (stage === 'stuck growth') blockResizeQueue();
+        const restore = vi.spyOn(session, 'resizeIfCurrent');
+        const waitFor = session.waitFor.bind(session);
+        const quiet = vi.spyOn(session, 'waitFor').mockImplementation((_condition, options) =>
+          waitFor({ quiet: 30_000 }, options));
+        const killAll = manager.killAll.bind(manager);
+        let gridAtKill: number[] | undefined;
+        vi.spyOn(manager, 'killAll').mockImplementationOnce(() => {
+          gridAtKill = [session.cols, session.rows];
+          return killAll();
+        });
+        read = api(td.port, td.token, `/sessions/${session.id}/snapshot?wider=150x45&widerTimeout=30000`).catch(() => undefined);
+        await eventually(() => stage === 'stuck growth' ? resize.mock.calls.length > 0 : quiet.mock.calls.length > 0);
+        if (stage !== 'stuck growth') expect([session.cols, session.rows]).toEqual([150, 45]);
+        if (stage === 'stuck restoration') blockResizeQueue();
+        const response = await api(td.port, td.token, '/daemon/shutdown', { body: { force: true } });
+        expect(response.status).toBe(200);
+        await eventually(() => gridAtKill !== undefined, 2_000);
+        expect(gridAtKill).toEqual(stage === 'stuck restoration' ? [150, 45] : [80, 24]);
+        if (stage !== 'stuck growth') {
+          expect(quiet.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+          expect(restore).toHaveBeenCalledOnce();
+        }
+        release();
+        if (stage === 'stuck restoration') expect(await restore.mock.results[0]?.value).toBe(false);
+        if (stage === 'stuck growth') {
+          await Promise.resolve(resize.mock.results[0]?.value).catch(() => undefined);
+          expect([session.cols, session.rows]).toEqual([80, 24]);
+        }
+        await eventually(() => td.daemon['widerReads'].size === 0);
+      } finally {
+        release();
+        await td.stop();
+        await read;
+      }
+    });
 });
 
 describe('config validation end-to-end', () => {

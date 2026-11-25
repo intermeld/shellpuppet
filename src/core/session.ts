@@ -43,6 +43,7 @@ import {
   observeConptyStartError,
   recordedExitCode,
   releaseFailedStarts,
+  temporaryResizeReady,
 } from './windowsPtyStart.js';
 import { queueConsoleHostEnd, registerConsoleHostWindow } from './windowsConsoleHost.js';
 import {
@@ -384,6 +385,13 @@ export class SessionProgramEndedError extends Error {
       ? `Cannot resize session ${sessionId}: it has ended or is being killed.`
       : `Cannot resize session ${sessionId}: its program has exited (code ${String(exitCode)}).`);
     this.name = 'SessionProgramEndedError';
+  }
+}
+
+export class TemporaryResizeNotReadyError extends Error {
+  constructor() {
+    super('A wider read cannot resize this Windows terminal before its first output. Try again after it prints.');
+    this.name = 'TemporaryResizeNotReadyError';
   }
 }
 
@@ -1850,7 +1858,7 @@ export class Session implements WaitTarget {
    * by node-pty and run later; one that finds the program ended by then is
    * dropped (`windowsPtyStart.ts`).
    */
-  resize(cols: number, rows: number, options: { hold?: boolean; onApplied?: () => void } = {}): void | Promise<void> {
+  resize(cols: number, rows: number, options: { hold?: boolean; onApplied?: () => void; temporarySignal?: AbortSignal } = {}): void | Promise<void> {
     if (this.agentModule?.input?.resizeBehindSubmit === true && this.submissionsQueued > 0) {
       const queued = this.writeChain.then(() => { this.resizeNow(cols, rows, options); options.onApplied?.(); });
       this.writeChain = queued.then(() => undefined, () => undefined);
@@ -1878,8 +1886,12 @@ export class Session implements WaitTarget {
     return apply();
   }
 
-  private resizeNow(cols: number, rows: number, options: { hold?: boolean }): void {
+  private resizeNow(cols: number, rows: number, options: { hold?: boolean; temporarySignal?: AbortSignal }): void {
     if (this.exitedFlag || this.isKilled) throw new SessionProgramEndedError(this.id, this.exitCodeValue);
+    if (options.temporarySignal?.aborted) throw new Error('Temporary resize was cancelled.');
+    if (options.temporarySignal !== undefined && this.platform === 'win32' && !temporaryResizeReady(this.pty)) {
+      throw new TemporaryResizeNotReadyError();
+    }
     const ended = recordedExitCode(this.pty);
     if (ended !== undefined) throw new SessionProgramEndedError(this.id, ended);
     const oldCols = this.renderer.cols;

@@ -7,6 +7,16 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+### Fixed
+
+- `daemon stop` waits for a new standalone daemon's process to exit before
+  reporting success, or reports teardown still in progress after 65 seconds.
+  An authenticated preflight keeps that guarantee when the shutdown response
+  is lost. A requested restart hold survives a timeout after an accepted response.
+- Shutdown cancels wider reads before session tree teardown. Temporary growth
+  cannot apply to a removed session, including a Windows resize deferred until
+  first output.
+
 ## [0.4.2] - 2026-11-25
 
 Copying from programs that use OSC 52, recovery of a lost outside claim, submit outcome reporting and a launch allowance fix.

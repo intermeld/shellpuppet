@@ -61,6 +61,7 @@ async function main(): Promise<void> {
     ...(config.dashboard?.fontSize !== undefined ? { dashboardFontSize: config.dashboard.fontSize } : {}),
     ...(config.launcher !== undefined ? { launchProfiles: config.launcher } : {}),
     onSelfStop: () => process.exit(0),
+    exitProcessOnStop: true,
   });
 
   const shutdown = (signal: string): void => {

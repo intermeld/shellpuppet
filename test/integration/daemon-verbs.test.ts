@@ -40,10 +40,10 @@ afterEach(async () => {
 });
 
 /** A home whose daemon.json names a stand-in that vanishes on its second request. */
-async function homeWithVanishingDaemon(): Promise<{ home: string; pid: number }> {
+async function homeWithVanishingDaemon(mode = 'vanish'): Promise<{ home: string; pid: number }> {
   const home = makeTempHome('shellpuppet-verbs-');
   homes.push(home);
-  const child = spawn(process.execPath, [STAND_IN, '0', 'vanish'], {
+  const child = spawn(process.execPath, [STAND_IN, '0', mode], {
     stdio: ['ignore', 'pipe', 'inherit'],
   });
   children.push(child);
@@ -59,22 +59,25 @@ async function homeWithVanishingDaemon(): Promise<{ home: string; pid: number }>
       token: 'stand-in-token',
       pid,
       version: '0.0.0-stand-in',
+      ...(mode.startsWith('standalone-') || mode === 'embedded-stop' ? { instanceId: 'stand-in-instance' } : {}),
       startedAt: new Date().toISOString(),
     }),
   );
   return { home, pid };
 }
 
-async function cli(home: string, ...args: string[]): Promise<{ code: number; stdout: string }> {
+async function cli(home: string, ...args: string[]): Promise<{ code: number; stdout: string; stderr: string; elapsed: number }> {
+  const started = Date.now();
   try {
-    const { stdout } = await execFileAsync(process.execPath, [cliEntry, ...args], {
+    const { stdout, stderr } = await execFileAsync(process.execPath, [cliEntry, ...args], {
       env: { ...process.env, SHELLPUPPET_HOME: home },
-      timeout: 60_000,
+      timeout: 80_000,
     });
-    return { code: 0, stdout };
+    return { code: 0, stdout, stderr, elapsed: Date.now() - started };
   } catch (error) {
-    const failure = error as { code?: number; stdout?: string };
-    return { code: failure.code ?? -1, stdout: failure.stdout ?? '' };
+    const failure = error as { code?: number; stdout?: string; stderr?: string };
+    return { code: failure.code ?? -1, stdout: failure.stdout ?? '',
+      stderr: failure.stderr ?? '', elapsed: Date.now() - started };
   }
 }
 
@@ -85,6 +88,76 @@ function expectNoDaemonStarted(home: string, standIn: number): void {
 }
 
 describe('daemon verbs on a daemon that goes as it is asked', () => {
+  it('waits for the accepted standalone process exit and retains warnings', async () => {
+    const { home } = await homeWithVanishingDaemon('standalone-exit');
+    const result = await cli(home, 'daemon', 'stop', '--force', '--json');
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.elapsed).toBeGreaterThanOrEqual(1_000);
+    expect(JSON.parse(result.stdout)).toMatchObject({ stopped: true, warnings: ['snapshot warning'] });
+  }, 20_000);
+
+  it('reports a surviving standalone process and keeps a requested hold', async () => {
+    const { home, pid } = await homeWithVanishingDaemon('standalone-survive');
+    const result = await cli(home, 'daemon', 'stop', '--force', '--hold', '1', '--json');
+    expect(result.code).toBe(1);
+    expect(result.stdout).not.toContain('"stopped":true');
+    expect(JSON.parse(result.stdout)).toMatchObject({ stopped: false, warnings: ['snapshot warning'] });
+    expect(result.stderr).toContain(`pid ${String(pid)}`);
+    expect(result.stderr).toContain('stand-in-instance');
+    expect(fs.existsSync(path.join(home, 'restart-hold.json'))).toBe(true);
+  }, 80_000);
+
+  it('waits for exit when an accepted shutdown loses its response', async () => {
+    const { home } = await homeWithVanishingDaemon('standalone-lost-exit');
+    const result = await cli(home, 'daemon', 'stop', '--force', '--hold', '1', '--json');
+    expect(result.code, result.stderr).toBe(0);
+    expect(result.elapsed).toBeGreaterThanOrEqual(7_000);
+    expect(JSON.parse(result.stdout)).toMatchObject({ stopped: true, holdRemainingSeconds: 1 });
+    expect(fs.existsSync(path.join(home, 'restart-hold.json'))).toBe(true);
+  }, 30_000);
+
+  it('reports in-progress without a hold when the response is lost and the process survives', async () => {
+    const { home, pid } = await homeWithVanishingDaemon('standalone-lost-survive');
+    const result = await cli(home, 'daemon', 'stop', '--force', '--hold', '1', '--json');
+    expect(result.code).toBe(1);
+    expect(JSON.parse(result.stdout)).toMatchObject({ stopped: false, instanceId: 'stand-in-instance' });
+    expect(result.stderr).toContain(`pid ${String(pid)}`);
+    expect(fs.existsSync(path.join(home, 'restart-hold.json'))).toBe(false);
+  }, 100_000);
+
+  it('keeps the legacy completion rule after stop-info returns 404', async () => {
+    const { home, pid } = await homeWithVanishingDaemon();
+    const result = await cli(home, 'daemon', 'stop', '--force', '--json');
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ running: false, stopped: true });
+    expect(children.find((child) => child.pid === pid)?.exitCode).toBeNull();
+  }, 30_000);
+
+  it('keeps the legacy completion rule when stop-info has no capability', async () => {
+    const { home, pid } = await homeWithVanishingDaemon('legacy-no-cap');
+    const result = await cli(home, 'daemon', 'stop', '--force', '--json');
+    expect(result.code).toBe(0);
+    expect(JSON.parse(result.stdout)).toEqual({ running: false, stopped: true });
+    expect(children.find((child) => child.pid === pid)?.exitCode).toBeNull();
+  }, 30_000);
+
+  it('completes an embedded stop while its host remains alive', async () => {
+    const { home, pid } = await homeWithVanishingDaemon('embedded-stop');
+    const result = await cli(home, 'daemon', 'stop', '--force', '--json');
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout)).toMatchObject({ stopped: true, warnings: ['snapshot warning'] });
+    expect(children.find((child) => child.pid === pid)?.exitCode).toBeNull();
+  }, 30_000);
+
+  it('refuses a shutdown response naming a different instance', async () => {
+    const { home } = await homeWithVanishingDaemon('standalone-mismatch');
+    const result = await cli(home, 'daemon', 'stop', '--force', '--hold', '1', '--json');
+    expect(result.code).toBe(1);
+    expect(result.stdout).not.toContain('"stopped":true');
+    expect(result.stderr).toContain('daemon changed');
+    expect(fs.existsSync(path.join(home, 'restart-hold.json'))).toBe(false);
+  }, 30_000);
+
   it('status reports not running, and starts nothing', async () => {
     const { home, pid } = await homeWithVanishingDaemon();
     const result = await cli(home, 'daemon', 'status');

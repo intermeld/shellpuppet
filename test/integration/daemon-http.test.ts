@@ -79,6 +79,17 @@ async function startNodeSession(marker: string): Promise<{ id: string; viewerUrl
 }
 
 describe('auth and loopback defences', () => {
+  it('keeps stop capability behind the token while public health stays unchanged', async () => {
+    const health = await api(td.port, null, '/health');
+    expect(Object.keys(health.body).sort()).toEqual(['instanceId', 'ok', 'pid', 'version']);
+    const anonymous = await api(td.port, null, '/daemon/stop-info');
+    expect(anonymous.status).toBe(401);
+    const authenticated = await api(td.port, td.token, '/daemon/stop-info');
+    expect(authenticated.status).toBe(200);
+    expect(authenticated.body['completion']).toEqual({ version: 1, role: 'embedded',
+      pid: process.pid, instanceId: health.body['instanceId'] });
+  });
+
   it('sends no CORS headers, so a foreign page is never allowed to read an answer', async () => {
     // Claimed in security-model.md, and pinned here.
     for (const [route, token] of [
@@ -1404,6 +1415,27 @@ describe('viewer assets and the WS frame protocol (§5)', () => {
     } finally {
       await local.stop();
     }
+  });
+
+  it.skipIf(process.platform !== 'win32')('refuses temporary growth before first output without queuing a native resize', async () => {
+    const local = await startTestDaemon({ policy: { mode: 'allow-all' } });
+    try {
+      const started = await api(local.port, local.token, '/sessions', { body: {
+        command: process.execPath,
+        args: ['-e', 'setInterval(() => {}, 1000)'],
+        shell: false, openViewer: false, cols: 80, rows: 24,
+      } });
+      expect(started.status).toBe(200);
+      const session = (local.daemon as unknown as { manager: SessionManager }).manager.get(String(started.body['id']))!;
+      const terminal = session['pty'] as unknown as { _isReady: boolean; _deferreds: unknown[]; cols: number; rows: number };
+      expect(terminal._isReady).toBe(false);
+      const deferred = terminal._deferreds.length;
+      const response = await api(local.port, local.token,
+        `/sessions/${session.id}/snapshot?wider=150x45&widerTimeout=3000`);
+      expect(response.status).toBe(409);
+      expect([session.cols, session.rows, terminal.cols, terminal.rows]).toEqual([80, 24, 80, 24]);
+      expect(terminal._deferreds.length).toBe(deferred);
+    } finally { await local.stop(); }
   });
 
   it('tells each viewport whether the grid is theirs, adopted or held', async () => {
