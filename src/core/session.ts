@@ -1554,7 +1554,7 @@ export class Session implements WaitTarget {
       const now = Date.now();
       const pane = submit?.submitPane?.(this.nudgeView());
       if (pane !== paneKey) { paneKey = pane; paneSince = now; }
-      const quietSince = submit?.submitPane === undefined ? this.lastChangeAt() : pane === undefined ? now : paneSince;
+      const quietSince = submit?.submitPane === undefined || pane === undefined ? this.lastChangeAt() : paneSince;
       if (visible && now - startedAt >= minimumMs && now - quietSince >= quietMs) return true;
       if (now >= deadline) return false;
       await new Promise((resolve) => setTimeout(resolve, NUDGE_SUBMIT_POLL_MS));
