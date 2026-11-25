@@ -54,7 +54,7 @@ function occupancyFailures(result: Occupancy, kind: string): string[] {
   return failures;
 }
 
-async function run<T>(mode: string, expression: string, timed = false): Promise<T[]> {
+async function run<T>(mode: string, expression: string, timed = false, timeoutMs = 80_000): Promise<T[]> {
   const url = (relative: string): string => new URL(relative, import.meta.url).href;
   const page = path.join(scratch, `${mode}.html`);
   fs.writeFileSync(page, `<!doctype html><link rel="stylesheet" href="${url('../../node_modules/@xterm/xterm/css/xterm.css')}">
@@ -66,17 +66,24 @@ async function run<T>(mode: string, expression: string, timed = false): Promise<
   const result = await captureViewer({ browser: browser!, viewerUrl: pathToFileURL(page).href,
     cpuThrottlingRate: Number(process.env['NOTICE_CPU_RATE'] ?? 1),
     beforeNavigateScript: virtual ? undefined : noticeFrameLimitScript,
-    width: 1000, height: 900, drive: true, probeOnly: true, timeoutMs: 180_000,
+    width: 1000, height: 900, drive: true, probeOnly: true, timeoutMs,
+    timeoutProbe: `({ mode: ${JSON.stringify(mode)}, virtual: ${String(virtual)}, step: window.__noticeStep,
+      pageMs: performance.now(), visibility: document.visibilityState, fonts: document.fonts.status,
+      fixtureLoaded: typeof window.noticeOccupancyCases === 'function', panes: document.querySelectorAll('#term').length })`,
     probe: '!!window.noticeOccupancyCases', interact: async ({ evaluate, send }) => {
       if (virtual) {
-        await evaluate('document.fonts.ready.then(() => true)');
+        await evaluate("window.__noticeStep = 'waiting for fonts'; document.fonts.ready.then(() => true)");
         await evaluate(virtualNoticeFrames);
         await send('Emulation.setVirtualTimePolicy', { policy: 'advance' });
       }
-      await evaluate('window.__stopCaseFrames = noticeFrameTiming()');
-      const cases = await evaluate(expression) as Record<string, unknown>[];
-      const timing = await evaluate('__stopCaseFrames()') as Record<string, unknown>;
-      return cases.map(item => ({ ...timing, samples: timing['frames'], ...item }));
+      // The occupancy cases measure frames inside their own decision windows.
+      // An outer frame loop would keep advancing virtual time between CDP calls.
+      const reply = await send('Runtime.evaluate', {
+        expression: `window.__noticeStep = 'running fixture'; ${expression}`, returnByValue: true, awaitPromise: true,
+      }) as { result: { value?: T[] }; exceptionDetails?: { text: string; exception?: { description?: string } } };
+      if (reply.exceptionDetails) throw new Error(reply.exceptionDetails.exception?.description ?? reply.exceptionDetails.text);
+      if (!Array.isArray(reply.result.value)) throw new Error('The notice fixture did not return its measurements.');
+      return reply.result.value;
     },
   });
   return result.probe as T[];
@@ -86,7 +93,7 @@ describe.each(['viewer', 'dashboard'])('%s notice occupancy', mode => {
   for (const kind of ['dominant', 'quiet', 'alternation']) {
     it(`keeps the resting row uncovered during ${kind}`, async context => {
       if (!browser) { context.skip(); return; }
-      const results = await run<Occupancy>(mode, `noticeOccupancyCases(${JSON.stringify(mode)}, ${JSON.stringify(kind)})`, true);
+      const results = await run<Occupancy>(mode, `noticeOccupancyCases(${JSON.stringify(mode)}, ${JSON.stringify(kind)})`, true, 180_000);
       for (const result of results) {
         expect(occupancyFailures(result, kind), JSON.stringify(result)).toEqual([]);
       }
@@ -208,16 +215,23 @@ describe.each(['viewer', 'dashboard'])('%s notice occupancy', mode => {
     interface Measure { side: string; overlap: boolean; height: number }
     const result = (await run<{ first: Measure; immediate: Measure; afterFrame: Measure; later: Measure;
       replaced: Measure; replacedFrame: Measure }>(mode, `(async () => {
+      window.__noticeStep = 'creating pane';
       const p = makeNoticePane(${JSON.stringify(mode)}, 24);
+      window.__noticeStep = 'first cursor write';
       await p.move(0); p.show(); await noticePause(1200); const first = p.measure();
+      window.__noticeStep = 'clearing first prompt';
       p.control({ type: 'prompt-clear' }); await noticePause(1500);
+      window.__noticeStep = 'lower cursor write';
       await p.move(22);
       p.control({ type: 'session-stalled', stalled: { reason: 'provider-refused',
         since: '2026-01-01T00:00:00.000Z', description: 'The provider declined to answer.' } });
+      window.__noticeStep = 'first frame after provider stall';
       const immediate = p.measure(); await new Promise(requestAnimationFrame); const afterFrame = p.measure();
       await noticePause(600); const later = p.measure();
       // A prompt that replaces the visible stall is a different notice too.
+      window.__noticeStep = 'upper cursor write';
       await p.move(0); p.show(); const replaced = p.measure();
+      window.__noticeStep = 'first frame after replacement prompt';
       await new Promise(requestAnimationFrame); const replacedFrame = p.measure();
       p.destroy(); return [{ first, immediate, afterFrame, later, replaced, replacedFrame }];
     })()`, true))[0]!;
