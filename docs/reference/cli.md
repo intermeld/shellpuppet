@@ -1,7 +1,7 @@
 # CLI reference
 
 `type <id> <text>` submits by default for a live built-in agent whose
-policy-visible launch command matches its programme list. `--no-enter` types
+policy-visible launch command matches its program list. `--no-enter` types
 only, and `--enter` explicitly requests Enter for any session. An interactive
 shell remains auto off, even if an agent is later started inside it.
 ShellPuppet's own one-shot launch wrapper is eligible. Auto and explicit true

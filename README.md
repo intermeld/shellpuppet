@@ -236,7 +236,7 @@ between sessions are switched on, the `session_*` messaging tools join them
 
 | Tool | Prompt supervision |
 | --- | --- |
-| `terminal_type` | New clients submit by default for listed built-in agents when the launched programme matches the agent. Set `submit: false` to type only, or `submit: true` to request Enter explicitly. A written Enter reports `unconfirmed` until the agent supplies a turn-correlated acceptance event. Older daemons refuse omitted submit before writing; explicit values retain legacy compatibility. |
+| `terminal_type` | New clients submit by default for listed built-in agents when the launched program matches the agent. Set `submit: false` to type only, or `submit: true` to request Enter explicitly. A written Enter reports `unconfirmed` until the agent supplies a turn-correlated acceptance event. Older daemons refuse omitted submit before writing; explicit values retain legacy compatibility. |
 | `terminal_start` | Pass `waitReady: true` when starting an agent CLI to delegate work to. Returns ready, a question, exit or a timeout with the session still running. |
 | `terminal_wait` | `prompt: true` with no session or an array of ids waits for any prompt. `now: true` polls once. Both return compact details without a screen. |
 | `terminal_list` | `waitingOnly: true` returns only sessions waiting on a prompt. |
