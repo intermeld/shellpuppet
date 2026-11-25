@@ -30,8 +30,11 @@ export function readiness(view: NudgeView): NudgeReadiness {
   const bottom = view.rows[at + 1] ?? '';
   if (at < 1 || !((/^ {2}╭─/u.test(top) && /^ {2}╰─/u.test(bottom)) ||
     (/^ {2}┌─/u.test(top) && /^ {2}└─/u.test(bottom)))) return 'unknown';
-  const status = view.rows[at + 2] ?? '';
-  const hints = view.rows[at + 3] ?? '';
+  // ConPTY can retain full-width padding on these footer rows. The frame
+  // above owns the rows; only right padding is removed, never body cells.
+  const status = (view.rows[at + 2] ?? '').trimEnd();
+  const hints = (view.rows[at + 3] ?? '').trimEnd();
+  const right = view.rows[at]!.lastIndexOf('│');
   const afterTurn = STATUS.test(status) && IDLE_HINTS.test(hints);
   // During a turn the empty composer keeps the status row and shows the turn's
   // key hints. A typed line under those hints is queued by Enter.
@@ -43,9 +46,14 @@ export function readiness(view: NudgeView): NudgeReadiness {
   // row and a right-aligned build channel. A rotating hint line above the frame
   // (a tip, or an offer to resume another program's session) identifies this
   // layout; all three rows must be in the live bottom block.
-  const welcome = status === '' && /^ {10,}\[stable\]$/u.test(hints) &&
-    view.rows.slice(Math.max(0, at - 5), at - 1).some((row) => /^ {3}\S/u.test(row));
-  if ((!afterTurn && !welcome && !busyEmpty && !(busyTyped && view.expectedDraft !== undefined)) ||
+  const welcomeTip = view.rows.slice(Math.max(0, at - 5), at - 1).some((row) => /^ {3}\S/u.test(row));
+  const stable = /^ {10,}\[stable\]$/u;
+  const welcome = status === '' && stable.test(hints) && welcomeTip;
+  // Before the first turn, typing replaces the welcome build channel with
+  // send keys. The status row is still blank and padded to the full width.
+  const welcomeTyped = view.expectedDraft !== undefined && status === '' && IDLE_HINTS.test(hints) &&
+    /\bGrok\b/u.test(bottom) && view.cursor?.y === at && view.cursor.x >= 6 && view.cursor.x <= right;
+  if ((!afterTurn && !welcome && !welcomeTyped && !busyEmpty && !(busyTyped && view.expectedDraft !== undefined)) ||
     !onlyBlankRowsAfter(view.rows, at + 3)) return 'unknown';
   const original = view.rows[at]!;
   const close = original.lastIndexOf('│');
