@@ -706,6 +706,7 @@ export class Daemon {
     string,
     {
       signature: string;
+      inputVersion: number;
       since: number;
       alerted: boolean;
       prompt: DetectedPrompt;
@@ -4427,9 +4428,9 @@ export class Daemon {
     };
   }
 
-  private updateFeedSession(id: string): void {
+  private updateFeedSession(id: string, promptRestarted = false): void {
     const session = this.manager.get(id);
-    if (session !== undefined) this.sessionFeed.update(this.summaryWithPrompt(session.summary()));
+    if (session !== undefined) this.sessionFeed.update(this.summaryWithPrompt(session.summary()), promptRestarted);
   }
 
   /** One transition drives the feed, audit, log and both notification channels. */
@@ -4557,6 +4558,13 @@ export class Daemon {
         previous.prompt.selectedOption !== detected.selectedOption ||
         previous.prompt.options.length !== detected.options.length ||
         previous.prompt.options.some((option, index) => option !== detected.options[index]);
+      const inputVersion = session.promptInputVersion();
+      // Input alone does not mean this prompt was answered: a key may start
+      // a repaint while the same decision remains on screen. A missed prompt
+      // after input is evidence of a transition only when a prompt appears
+      // again; the normal grace check still handles a lasting disappearance.
+      const answered = previous !== undefined && previous.inputVersion !== inputVersion &&
+        previous.missingSince !== null;
       if (previous !== undefined) {
         this.clearPromptGraceCheck(session.id);
         previous.missingSince = null;
@@ -4568,7 +4576,7 @@ export class Daemon {
       // then changes although the person still faces the same decision.
       // A stable signature also covers focus markers moving among options.
       const sameContent = previous !== undefined && !promptChanged;
-      if (previous === undefined || (previous.signature !== detected.signature && !sameContent)) {
+      if (previous === undefined || answered || (previous.signature !== detected.signature && !sameContent)) {
         // A new (or changed) prompt starts its stall clock; it has not
         // alerted yet, so a prompt answered promptly stays silent.
         if (previous?.alerted === true) {
@@ -4591,12 +4599,13 @@ export class Daemon {
         }
         this.promptStates.set(session.id, {
           signature: detected.signature,
+          inputVersion,
           since: this.now(),
           alerted: false,
           prompt: detected,
           missingSince: null,
         });
-        if (promptChanged || previous?.alerted === true) this.updateFeedSession(session.id);
+        this.updateFeedSession(session.id, previous !== undefined);
         continue;
       }
 
