@@ -18,6 +18,7 @@ import process from 'node:process';
 import { createInterface } from 'node:readline';
 import { DaemonGoneError, daemonStartMode, discoverDaemon, ensureDaemon, request, waitForPendingDaemon, withDaemonStartLock } from '../client/http.js';
 import type { DaemonConnection } from '../client/http.js';
+import { inputRequest } from '../client/input.js';
 import type { ListedSchedule } from '../daemon/schedules.js';
 import { assertNodeVersion, packageVersion } from '../daemon/meta.js';
 import { NO_MATCHES } from '../core/find.js';
@@ -626,11 +627,12 @@ async function main(): Promise<void> {
     case 'type': {
       const id = parsed.positionals[0] ?? fail(2, 'type needs a session id.');
       const text = parsed.positionals[1] ?? fail(2, 'type needs text.');
-      const data = parsed.flags.get('enter') === true ? `${text}\r` : text;
-      const result = await call(connection, 'POST', `/sessions/${id}/input`, {
-        data,
-        ...(parsed.flags.get('verify') === true ? { verify: true } : {}),
-      });
+      const result = await call(connection, 'POST', `/sessions/${id}/input`,
+        inputRequest(text, parsed.flags.get('enter') === true, parsed.flags.get('verify') === true));
+      if (!wantJson && typeof result['outcome'] === 'string') {
+        const reason = typeof result['reason'] === 'string' ? ` (${result['reason']})` : '';
+        console.log(`Submit outcome: ${result['outcome']}${reason}.`);
+      }
       if (wantJson) printJson(result);
       else if (result['submitted'] === false) {
         console.log(String(result['message']));

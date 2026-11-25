@@ -20,6 +20,7 @@ import { resolve as resolvePath } from 'node:path';
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ensureDaemon, request } from '../client/http.js';
+import { inputRequest } from '../client/input.js';
 import type { ClientOptions, DaemonConnection } from '../client/http.js';
 import { NO_MATCHES } from '../core/find.js';
 import { visibleMessageText } from '../core/messageText.js';
@@ -532,7 +533,7 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
       description:
         'Type text into the PTY. With submit:true, send text and Enter separately after the ' +
         'agent\'s submit pause. If the same text remains in a readable composer, one Enter ' +
-        'retry is reported; submitted:false means it still remains. Set verify:true to confirm ' +
+        'retry is reported. When available, the outcome is submitted, withheld with a reason, or unconfirmed. Set verify:true to confirm ' +
         'the text actually appeared on screen: TUIs silently swallow input while loading MCP ' +
         'servers and when a suggestion panel has stolen focus. Verify waits longer for longer ' +
         'text (up to 15 s), since some TUIs draw a long line seconds after it arrives. ' +
@@ -551,19 +552,22 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
     },
     async ({ session, text: typed, submit, verify }) =>
       run(async () => {
-        const { payload, warnings } = await call('POST', `/sessions/${session}/input`, {
-          data: submit === true ? `${typed}\r` : typed,
-          ...(verify === true ? { verify: true } : {}),
-        });
+        const { payload, warnings } = await call('POST', `/sessions/${session}/input`,
+          inputRequest(typed, submit === true, verify === true));
+        const reply = (value: string, isError = false): ToolResult => {
+          if (submit !== true || typeof payload['outcome'] !== 'string') return text(value, isError);
+          const reason = typeof payload['reason'] === 'string' ? ` (${payload['reason']})` : '';
+          return { ...text(`${value} Submit outcome: ${payload['outcome']}${reason}.`, isError), structuredContent: payload };
+        };
         if (payload['submitted'] === false) {
-          return text(withWarnings(warnings, String(payload['message'])), true);
+          return reply(withWarnings(warnings, String(payload['message'])), true);
         }
         if (payload['submitRetried'] === true) {
-          return text(withWarnings(warnings,
+          return reply(withWarnings(warnings,
             `Typed ${String(payload['bytes'])} bytes. ${String(payload['message'])}`));
         }
         if (payload['verified'] === false) {
-          return text(
+          return reply(
             withWarnings(
               warnings,
               `Typed ${String(payload['bytes'])} bytes but the text did NOT appear on screen. ` +
@@ -579,7 +583,7 @@ export function registerTools(server: McpServer, options: McpToolOptions = {}): 
             true,
           );
         }
-        return text(
+        return reply(
           withWarnings(
             warnings,
             `Typed ${String(payload['bytes'])} bytes` +
