@@ -548,7 +548,18 @@ ambiguous in clients that do not, so the prefix stays.
 |---|---|---|
 | `terminal_start` | Launch a program in a new PTY session | `command`, `args[]`, `cwd`, `cols`, `rows`, `hold`, `label`, `purpose`, `agent`, `waitReady`, `readyTimeout`, `readyText`, `readyQuiet`, `shell`, `envNames` |
 | `terminal_snapshot` | Read the rendered screen as plain text | `session`, `lastLines`, `hideReasoning`, `wider`, `widerTimeout` |
-| `terminal_type` | Type text and optionally report the submit outcome | `session`, `text`, `submit`, `verify` |
+| `terminal_type` | Type text, submitting by default for recognised built-in agents | `session`, `text`, `submit`, `verify` |
+
+New clients request `auto` when `submit` is omitted. The daemon resolves it in
+the session queue only when the live policy-visible launched command matches a
+built-in agent module. ShellPuppet's own one-shot wrapper qualifies; an
+interactive shell or interpreter supplied as the command does not. Explicit
+false types only, and explicit true requests Enter for any session. The
+`inputSubmitMode: 1` health capability and `X-ShellPuppet-Submit: auto|on|off`
+header carry this choice outside the unchanged JSON body. An older daemon
+refuses omitted submit before writing, while explicit values use the old
+encoding and exact-size fallback. A marked input is not replayed on a new
+daemon instance after preflight.
 
 Typed text is checked against the composer only when the agent's own composer is
 readable on screen before the body is written. A launch line typed at a shell prompt
@@ -574,9 +585,11 @@ milliseconds, so this is accepted as a limitation. If this check fails, no Enter
 reports `submitted: false`. The submit key is otherwise written separately
 on the ordered input chain. Muse keeps its own delay. After Enter, the exact
 remaining draft can receive one further Enter, subject to the same checks.
-A changed composer, prompt or later input prevents a retry. An empty composer
-confirms submission only after the draft was seen painted; a new busy
-indicator or the line appearing in the transcript also confirms it. A module
+A changed composer, prompt or later input prevents a retry. An empty composer,
+new busy indicator or transcript echo may set the legacy `submitted` field,
+but the marked outcome stays `unconfirmed` after a written Enter unless an
+agent-owned event identifies this exact input and turn. No current module has
+that event. A module
 without a readable composer sends Enter after its delay and reports that
 submission cannot be confirmed.
 | `terminal_key` | Press a semantic key | `session`, `key` |
@@ -939,13 +952,13 @@ during that window, with no error. Mitigations, all of which are in the first re
 - `terminal_start` accepts `readyText` and `readyQuiet`, and reports a `ready` boolean
   with a `readyReason` (`not-tracked`, `pending`, `condition-met` or `never-held`); only
   `condition-met` is affirmative.
-- Explicit submit appends Enter to the same input data on both clients. The
-  optional request field asks for reporting only. The daemon derives the
-  outcome after the normal write and retry checks. A positive legacy
-  submission result gives `submitted`. An existing refusal before Enter
-  gives `withheld` with its reason. Other results give `unconfirmed`.
-  Verification describes whether the text appeared. If the reporting marker
-  would exceed the JSON byte limit, the clients send the legacy request.
+- New clients mark input as auto, on or off in a header and use the same
+  guarded submit path for auto and explicit on. A refusal before Enter gives
+  `withheld` with its reason. A written Enter gives `unconfirmed` without a
+  correlated agent acceptance event, even when the legacy field says
+  `submitted: true`. `not-requested` means policy selected off. Verification
+  describes whether the text appeared. Older daemons refuse auto before
+  writing; explicit on keeps the legacy encoded body and marker fallback.
 - `terminal_type` accepts `verify: true`, which re-reads the screen after typing and
   returns whether the text landed. It reads the text the way an input box wraps
   it, so a line break, an indent, the box's border or a side panel set apart by space on

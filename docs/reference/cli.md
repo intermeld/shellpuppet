@@ -1,30 +1,33 @@
 # CLI reference
 
-`type <id> <text> --enter` writes a single line, waits for a readable composer
-to show it or a recognised paste placeholder and for the screen to settle,
-then checks again immediately before sending Enter separately on the same
-input queue. Codex waits at least 3 ms per character, or 150 ms for short
-lines, with up to five more seconds for paint and quiet. A placeholder must
-be new since this write and match the body's character count. If the exact
-draft is absent, a prompt has opened or other input has arrived, Enter is not
-sent and the result reports `submitted: false`. A composer still showing the
-exact draft after Enter gets one further Enter only if these checks still
-hold. An empty composer confirms
-submission only if the draft was seen first; a busy indicator or an echo in
-the transcript also confirms it. Otherwise the result says submission was
-not confirmed. If the draft remains after the retry, JSON reports
-`submitted: false` and plain text mode exits with an error. The text is never
-typed twice. `--verify` checks for visible text, which may have cleared after
-submission.
+`type <id> <text>` submits by default for a live built-in agent whose
+policy-visible launch command matches its programme list. `--no-enter` types
+only, and `--enter` explicitly requests Enter for any session. An interactive
+shell remains auto off, even if an agent is later started inside it.
+ShellPuppet's own one-shot launch wrapper is eligible. Auto and explicit true
+use the same guarded path: type the body, wait for the exact line or a
+recognised paste placeholder in a readable composer, and check again just
+before sending Enter separately on the input queue. Codex waits at least 3 ms
+per character, or 150 ms for short lines, with up to five more seconds for
+paint and quiet. A placeholder must be new and match the body's character
+count. An absent draft, prompt or intervening input withholds Enter and the
+legacy result reports `submitted: false`. A draft still present after Enter
+may receive one guarded retry. The text is never typed twice. `--verify`
+checks visible text, which may have cleared after submission.
 
-With `--enter`, the CLI prints the submit outcome. JSON includes `outcome`
-alongside the existing fields. Values are `submitted`, `withheld` with a
-fixed `reason`, and `unconfirmed`. Check the session before resending an
-unconfirmed line. The outcome comes from the daemon's existing submit checks.
-An older daemon returns the same result as before. If the reporting marker
-would take the encoded JSON body above 1,000,000 UTF-8 bytes, the CLI sends
-the original request and returns the legacy result.
+New clients send `X-ShellPuppet-Submit: auto|on|off` when `/health` advertises
+`inputSubmitMode: 1`. CLI JSON includes `outcome` alongside the legacy fields.
+`withheld` has a fixed reason; `not-requested` means policy selected off.
+`submitted` requires an agent-owned event tied to this input and turn. No
+current module supplies one, so written Enter reports `unconfirmed` even when
+legacy `submitted` is true. An empty composer, busy hint, transcript echo or
+title change does not prove acceptance. Check the session before resending.
 
+An older daemon refuses omitted submit before writing. Explicit `--enter` uses
+the old encoded carriage return and reporting marker, including its exact-size
+fallback; `--no-enter` uses the old body. CLI JSON keeps its legacy fields on
+fallback. A marked request is not replayed if the daemon changes after
+preflight.
 ## Scheduled prompts
 
 `shellpuppet schedule list [--json]` shows each valid schedule's name, target

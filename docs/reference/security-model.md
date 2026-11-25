@@ -575,10 +575,14 @@ viewer link being made, `grant-redeem` the page loading it, and `ws-connect`
 the stream itself opening: three events, kept apart in the log.)
 
 Typed input stays private. Each typed input entry records its character count.
-Only an explicit `submit: true` reporting marker adds `submit: true`, the
-outcome and any fixed withholding reason to the audit entry. Unmarked input
-records only length. A trailing carriage return could be literal text or a
-client's encoded Enter. Viewer keystrokes also record only length.
+A new client's authenticated `X-ShellPuppet-Submit` header adds only
+`submitMode`, the derived outcome and any fixed withholding reason. A written
+Enter is `unconfirmed` without an agent-owned event tied to that input and
+turn, regardless of the legacy screen inference. An old client's unmarked
+input records only length, or its legacy `submit: true` marker and outcome;
+the daemon does not invent intent from a trailing carriage return. A rejected
+auto preflight records no input entry. Viewer keystrokes also record only
+length. No typed content is recorded even with `audit.captureContent` enabled.
 Terminal reports record their kind and character count. Enabling
 `audit.captureContent` adds the contents of those reports. Start entries
 record the command line.
