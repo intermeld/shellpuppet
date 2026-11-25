@@ -648,13 +648,14 @@ describe('the echoed subprotocol names the dashboard credential', () => {
 describe('Fit, Enlarge and Restore are the resize', () => {
   it('restores the grid but preserves a departed dashboard owner for reconnect', async () => {
     const daemon = await startPane();
-    const id = await startGrid(daemon, 'wider-dashboard-departure');
+    const id = await startGrid(daemon, 'wider-dashboard-departure', true);
     const { cookie, proof } = await openDashboard(daemon);
     const passive = await connectWs(daemon.port, id, daemon.token, {}, { drive: false });
     await passive.waitForControl(c => c['type'] === 'geometry');
     const pane = await connectDash(daemon.port, id, cookie, proof);
     pane.send(JSON.stringify({ type: 'resize', cols: 120, rows: 34, take: true }));
     await pane.waitForControl(c => c['type'] === 'geometry' && c['control'] === 'yours');
+    await eventually(async () => (await gridOf(daemon, id)).screen.includes('ECHO READY'), 10_000);
     const pending = api(daemon.port, daemon.token, `/sessions/${id}/snapshot?wider=140x40&widerTimeout=1000`);
     await passive.waitForControl(c => c['type'] === 'geometry' && c['cols'] === 140 && c['temporary'] === true);
     pane.close();
@@ -673,7 +674,7 @@ describe('Fit, Enlarge and Restore are the resize', () => {
 
   it.each(['dashboard take', 'viewer resize', 'pop-out handover'])('keeps a %s made during a wider read', async (action) => {
     const daemon = await startPane();
-    const id = await startGrid(daemon, `wider-${action.replace(' ', '-')}`);
+    const id = await startGrid(daemon, `wider-${action.replace(' ', '-')}`, true);
     const { cookie, proof } = await openDashboard(daemon);
     const viewer = await connectWs(daemon.port, id, daemon.token);
     expect(await viewer.waitForControl(c => c['type'] === 'geometry')).toMatchObject({ control: 'yours' });
@@ -683,6 +684,7 @@ describe('Fit, Enlarge and Restore are the resize', () => {
       pane.send(JSON.stringify({ type: 'resize', cols: 120, rows: 34, take: true }));
       await pane.waitForControl(c => c['type'] === 'geometry' && c['control'] === 'yours');
     }
+    await eventually(async () => (await gridOf(daemon, id)).screen.includes('ECHO READY'), 10_000);
     const pending = api(daemon.port, daemon.token, `/sessions/${id}/snapshot?wider=140x40&widerTimeout=1000`);
     await pane.waitForControl(c => c['type'] === 'geometry' && c['cols'] === 140 && c['temporary'] === true);
     let popped: PaneClient | undefined;
