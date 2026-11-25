@@ -1044,6 +1044,15 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
         instanceId: stopInfo?.instanceId, ...warningFields() });
       throw new Error(message);
     };
+    const reconcilePosixExit = async (): Promise<void> => {
+      if (process.platform === 'win32') return;
+      // The POSIX exit proof can finish after request() has already decided the
+      // daemon went away. Discovery clears that stale record, as it does for a
+      // daemon that vanishes before stop starts.
+      if (await discoverDaemon({ logger: stderrLogger }) !== null) {
+        throw new Error('A daemon is still running after the original process exited. Try again.');
+      }
+    };
     let response;
     try {
       response = await request(connection, 'POST', '/daemon/shutdown', { force, ...(sub === 'restart' || holdSeconds !== undefined ? { restart: true } : {}) }, {
@@ -1057,6 +1066,7 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
           if (!await waitForStandaloneExit(connection, watcher, originalTick, stopDeadline)) {
             unproved(`Daemon teardown is still in progress (pid ${String(connection.pid)}, instance ${String(stopInfo?.instanceId)}). Check daemon.log.`);
           }
+          await reconcilePosixExit();
           if (holdSeconds !== undefined) writeRestartHold(shellpuppetHome(), holdSeconds);
           return true;
         } finally { watcher?.close(); }
@@ -1105,6 +1115,7 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
         if (!await waitForStandaloneExit(connection, watcher, originalTick, stopDeadline)) {
           unproved(`Daemon teardown is still in progress (pid ${String(connection.pid)}, instance ${String(stopInfo?.instanceId)}). Check daemon.log.`);
         }
+        await reconcilePosixExit();
         return true;
       } finally { watcher?.close(); }
     }
