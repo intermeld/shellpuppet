@@ -550,18 +550,7 @@ describe('human controls in the browser', () => {
       browser, viewerUrl: url, width: 1920, height: 1080,
       drive: true, timeoutMs: 120_000, beforeNavigateScript: instrument,
       probe: `(() => { try {
-        const marker = localStorage.getItem('shellpuppet.controls.probe');
         const cards = () => [...document.querySelectorAll('.pane')];
-        if (marker === 'reloading') {
-          if (document.getElementById('connection')?.textContent !== 'Connected' || cards().length !== 2) return null;
-          return JSON.stringify({
-            ok: true,
-            layout: document.getElementById('panes').dataset.layout,
-            pref: JSON.parse(localStorage.getItem('shellpuppet.dashboard') || '{}'),
-            ids: cards().map((pane) => pane.dataset.session),
-            connection: document.getElementById('connection').textContent,
-          });
-        }
         const started = window.__layoutStarted || (window.__layoutStarted = Date.now());
         const ready = document.getElementById('connection')?.textContent === 'Connected' && cards().length === 2
           && cards().every((pane) => (pane.querySelector('.pane-size')?.textContent || '').includes('\\u00d7'));
@@ -578,10 +567,34 @@ describe('human controls in the browser', () => {
         localStorage.setItem('shellpuppet.dashboard', JSON.stringify({
           mode: 'grid', order: ['gone-session', secondId, firstId], pins: [firstId], prefix: 'a',
         }));
-        localStorage.setItem('shellpuppet.controls.probe', 'reloading');
-        setTimeout(() => location.reload(), 30);
-        return null;
+        return JSON.stringify({ ok: true });
       } catch (error) { return JSON.stringify({ ok: false, error: String(error) }); } })()`,
+      interact: async ({ evaluate, send }) => {
+        const ready = await evaluate(`JSON.parse(localStorage.getItem('shellpuppet.dashboard') || '{}').order?.[0] === 'gone-session'`);
+        if (!ready) return JSON.stringify({ ok: false, phase: 'ready after probe' });
+        // Reload only after the first evaluation has replied. A timer inside
+        // that evaluation can destroy its own context before DevTools replies.
+        await send('Page.reload');
+        const deadline = Date.now() + 12_000;
+        for (;;) {
+          try {
+            const restored = await evaluate(`(() => {
+              if (performance.getEntriesByType('navigation')[0]?.type !== 'reload') return null;
+              const cards = [...document.querySelectorAll('.pane')];
+              if (document.getElementById('connection')?.textContent !== 'Connected' || cards.length !== 2) return null;
+              return JSON.stringify({ ok: true, layout: document.getElementById('panes').dataset.layout,
+                pref: JSON.parse(localStorage.getItem('shellpuppet.dashboard') || '{}'),
+                ids: cards.map(pane => pane.dataset.session),
+                connection: document.getElementById('connection').textContent });
+            })()`);
+            if (restored) return restored;
+          } catch (error) {
+            if (!/Execution context was destroyed|Cannot find context|Inspected target navigated or closed/i.test(String(error))) throw error;
+          }
+          if (Date.now() >= deadline) throw new Error('Dashboard did not reconnect after reload.');
+          await new Promise(resolve => setTimeout(resolve, 50));
+        }
+      },
     });
     const result = JSON.parse(String(shot.probe)) as {
       ok: boolean; layout?: string; ids?: string[]; connection?: string;
