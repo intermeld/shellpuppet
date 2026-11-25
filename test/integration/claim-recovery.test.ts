@@ -8,7 +8,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 import { expect, it } from 'vitest';
 import WebSocket from 'ws';
-import { envValue } from '../../src/core/environment.js';
+import { childEnv, envValue } from '../../src/core/environment.js';
 import { createAuditor } from '../../src/daemon/audit.js';
 import { parseDaemonConfig } from '../../src/daemon/config.js';
 import { api, eventually, makeTempHome, repoRoot, startTestDaemon, type TestDaemon } from './helpers.js';
@@ -494,31 +494,44 @@ it.skipIf(process.platform !== 'win32')('recovers --desk through the installed P
   const td = await startTestDaemon(f.options);
   try {
     const prefix = join(f.home, 'npm-prefix');
-    await exec('cmd.exe', ['/d', '/c', 'npm.cmd link --offline --ignore-scripts --no-audit --no-fund'], {
-      cwd: repoRoot, env: { ...f.env, npm_config_prefix: prefix, npm_config_cache: join(f.home, 'npm-cache'),
-        npm_config_update_notifier: 'false' },
+    mkdirSync(prefix, { recursive: true });
+    // Keep the fixture's parent environment and override the runner's NPM_CONFIG_PREFIX case-insensitively.
+    const env = childEnv('win32', f.env, {
+      npm_config_prefix: prefix, npm_config_cache: join(f.home, 'npm-cache'), npm_config_update_notifier: 'false',
     });
+    const systemRoot = envValue(env, 'SystemRoot') ?? 'C:\\Windows';
+    const cmdExe = envValue(env, 'ComSpec') ?? join(systemRoot, 'System32', 'cmd.exe');
+    const spawnFacts = (exe: string, cwd: string) => {
+      const keys = ['SystemRoot', 'ComSpec', 'PATHEXT'].map(key => `${key}Present=${Boolean(envValue(env, key))}`);
+      return `cwd=${cwd} cwdExists=${existsSync(cwd)} executable=${exe} executableExists=${existsSync(exe)} ${keys.join(' ')}`;
+    };
+    const run = (exe: string, args: string[], cwd: string) =>
+      exec(exe, args, { cwd, env }).catch((error: NodeJS.ErrnoException) => {
+        throw new Error(`Command failed (${String(error.code ?? error.name)}). ${spawnFacts(exe, cwd)}`);
+      });
+    await run(cmdExe, ['/d', '/c', 'npm.cmd link --offline --ignore-scripts --no-audit --no-fund'], repoRoot);
+    for (const shim of ['shellpuppet.ps1', 'shellpuppet.cmd']) {
+      expect(existsSync(join(prefix, shim)), `Missing ${shim} after npm link. ${spawnFacts(cmdExe, prefix)}`).toBe(true);
+    }
     const original = await f.cli(['msg', 'claim', '--name=--desk']);
     const command = /run shellpuppet (msg claim \S+ \S+) to obtain/.exec(original.stdout)?.[1];
     expect(command).toBe('msg claim --replace --name=--desk');
     const stderr = await f.cli(['msg', 'claim', '--name=--desk']).then(() => '', (error: { stderr: string }) => error.stderr);
     expect(stderr).toContain(`${heldName}\nRecover it with ${command}`);
-    const options = { cwd: prefix, env: f.env };
-    const systemRoot = envValue(f.env, 'SystemRoot')!;
     const shells = [join(systemRoot, 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe')];
-    const searchDirs = (envValue(f.env, 'PATH') ?? '').split(delimiter).filter(Boolean);
-    const programFiles = envValue(f.env, 'ProgramFiles');
+    const searchDirs = (envValue(env, 'PATH') ?? '').split(delimiter).filter(Boolean);
+    const programFiles = envValue(env, 'ProgramFiles');
     if (programFiles) searchDirs.unshift(join(programFiles, 'PowerShell', '7'));
     const pwsh = searchDirs.map(dir => resolve(prefix, dir.replace(/^"|"$/g, ''), 'pwsh.exe')).find(existsSync);
     if (pwsh) shells.push(pwsh);
     for (const shell of shells) {
-      const ps = await exec(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'RemoteSigned',
-        '-Command', `.\\shellpuppet.ps1 ${command}; exit $LASTEXITCODE`], options);
-      expect(ps.stdout.includes(`shellpuppet ${command}`), shell).toBe(true);
+      const ps = await run(shell, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'RemoteSigned',
+        '-Command', `.\\shellpuppet.ps1 ${command}; exit $LASTEXITCODE`], prefix);
+      expect(ps.stdout.includes(`shellpuppet ${command}`), spawnFacts(shell, prefix)).toBe(true);
     }
-    const cmd = await exec('cmd.exe', ['/d', '/c', `.\\shellpuppet.cmd ${command}`], options);
+    const cmd = await run(cmdExe, ['/d', '/c', `.\\shellpuppet.cmd ${command}`], prefix);
     const proof = /^SHELLPUPPET_CLAIM=(\S+)$/m.exec(cmd.stdout)?.[1];
-    expect(typeof proof).toBe('string');
+    expect(typeof proof, spawnFacts(cmdExe, prefix)).toBe('string');
     expect((await f.cli(['msg', 'release'], proof)).stdout).toContain('released');
   } finally { await td.stop(); }
 }, 120_000);
