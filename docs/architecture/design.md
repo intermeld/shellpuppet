@@ -1642,6 +1642,26 @@ setting, never their values. Free-form client starts retain their usual environm
 
 ## 5. Viewer
 
+- **Clipboard.** The viewer and dashboard share a pane-local xterm OSC 52
+  handler. Only a trusted press in the focused terminal opens its two-second
+  clipboard window. The press must use the primary pointer button or be an
+  initial keydown for a printable character, Enter, Tab, Backspace, Delete,
+  Escape, an arrow key, Home, End, PageUp or PageDown. Paste shortcuts are
+  excluded. Other buttons and keys, repeats and releases cannot extend the
+  window. Pasting or leaving the terminal or window clears it. At the write,
+  the terminal must still have focus and the press must be at most two seconds
+  old on both the event clock and the wall clock.
+  A press may queue for at most one second before dispatch, and that delay
+  counts only awake time if the press was queued just before sleep on a
+  platform whose event clock pauses during sleep. The handler
+  validates the payload delivered by xterm, whose parser discards some C0
+  controls, including line feed, inside an OSC string. Read-only viewers can
+  copy. A successful write shows a brief notice and the first refused write shows the
+  copy-failure banner. Shift+drag selects terminal text locally even in mouse
+  tracking mode. On macOS, Option-drag retains xterm's usual mouse reporting
+  or rectangular selection according to the program's mouse tracking mode.
+  The Shift override uses xterm's macOS platform check. An iPad reporting
+  its mobile platform keeps xterm's continuous Shift selection across rows.
 - **Register `term.onData` exactly once.** Registering it inside the connect path would
   stack a listener per reconnect and send every keystroke N times.
 - **Fit to the window** via `@xterm/addon-fit`, reporting new geometry over the WebSocket so

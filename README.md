@@ -204,6 +204,13 @@ to the program, there is no in-pane shortcut. Ctrl+C copies selected terminal
 text, and sends `^C` when nothing is selected. On macOS, Cmd+V pastes and
 Ctrl+V still sends `^V`.
 
+In the viewer and dashboard, hold Shift and drag to select terminal text even
+when the program handles the mouse. A program that copies with OSC 52 can
+write to your clipboard for two seconds after you press the primary pointer
+button, type a character or use a supported editing or navigation key in its
+focused pane. Holding a key does not extend that time, and
+pasting closes the window. Copying also works in a read-only viewer.
+
 **How long it takes.** On clean machines:
 
 - **Windows 11** (a fresh Windows Sandbox, Node 24): installing ShellPuppet with

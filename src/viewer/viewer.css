@@ -44,7 +44,7 @@ button.active { background: #3d2c14; border-color: #8a6d3b; color: #e8c284; }
 /* Amber, not the banner's red: a held prompt is the session waiting on YOU, not
    a fault. Deliberately loud: the whole feature exists because a held prompt
    can go unnoticed for minutes at a time. */
-#prompt-alert {
+#prompt-alert, #copy-notice {
   padding: 8px 14px; background: #3d2f14; color: #f0c674;
   border-bottom: 1px solid #7a5c1e; font-size: 12px;
 }
