@@ -37,6 +37,14 @@ window.ShellPuppetPane = (() => {
   const MIN_FONT_PX = 6;
   const MAX_FONT_PX = 40;
   const DEFAULT_FONT_PX = 13;
+  const MAX_CLIPBOARD_BYTES = 1024 * 1024;
+  const MAX_CLIPBOARD_DISPATCH_MS = 1000;
+  const CLIPBOARD_GESTURE_MS = 2000;
+  const CLIPBOARD_KEYS = new Set(['Enter', 'Tab', 'Backspace', 'Delete', 'Escape', 'ArrowUp', 'ArrowDown',
+    'ArrowLeft', 'ArrowRight', 'Home', 'End', 'PageUp', 'PageDown']);
+  // A printable base (including space or a supplementary character) can carry combining marks.
+  const PRINTABLE_KEY = /^[\p{L}\p{M}\p{N}\p{P}\p{S}\p{Zs}]\p{M}*$/u;
+  const recentClipboardAge = (age, limit = CLIPBOARD_GESTURE_MS) => age >= 0 && age <= limit;
   const NOTICE_HISTORY_MS = 10000;
   const NOTICE_DECISION_MS = 1200;
   const NOTICE_COVER_MARGIN_MS = 20;
@@ -62,6 +70,23 @@ window.ShellPuppetPane = (() => {
 
   function clampFont(px) {
     return Math.min(MAX_FONT_PX, Math.max(MIN_FONT_PX, px));
+  }
+
+  function decodeClipboard(data) {
+    const start = data.startsWith('c;') ? 2 : data.startsWith(';') ? 1 : 0;
+    if (!start || data.length - start > 4 * Math.ceil(MAX_CLIPBOARD_BYTES / 3)) return null;
+    const encoded = data.slice(start);
+    if (encoded.length % 4 !== 0) return null;
+    const padding = encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0;
+    if (encoded.length / 4 * 3 - padding > MAX_CLIPBOARD_BYTES) return null;
+    try {
+      const binary = window.atob(encoded);
+      // atob also accepts whitespace and non-zero padding bits.
+      if (window.btoa(binary) !== encoded) return null;
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+      return new window.TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+    } catch { return null; }
   }
 
   /**
@@ -386,6 +411,90 @@ window.ShellPuppetPane = (() => {
     outerScroll?.addEventListener('wheel', scrollOversizedPane, { capture: true, passive: false });
     const platform = navigator.userAgentData?.platform || navigator.userAgent;
     const isMac = /Mac|iPhone|iPad/i.test(platform);
+    // Match the browser platform list in xterm's common/Platform.ts for selection.
+    const macShiftSelection = ['Macintosh', 'MacIntel', 'MacPPC', 'Mac68K'].includes(navigator.platform);
+    let lastGesture = null;
+    let copyFailureShown = false;
+    let copyNoticeTimer;
+    const forgetGesture = () => { lastGesture = null; };
+    const terminalFocused = () => document.hasFocus() && document.activeElement === term.textarea;
+    const recordGesture = (event) => {
+      if (!event.isTrusted || !terminalFocused()) return;
+      if (event.type === 'keydown') {
+        const key = event.key;
+        const pasteShortcut = key === 'Paste' || event.code === 'Paste' ||
+          ((event.ctrlKey || event.metaKey) && (key === 'v' || key === 'V' || event.code === 'KeyV')) ||
+          (event.shiftKey && event.key === 'Insert');
+        if (pasteShortcut) { forgetGesture(); return; }
+        if (event.repeat !== false || typeof key !== 'string' || !(CLIPBOARD_KEYS.has(key) || PRINTABLE_KEY.test(key))) return;
+      } else if (event.button !== 0) return;
+
+      const age = window.performance.now() - event.timeStamp;
+      const wallNow = Date.now();
+      // Charge time already spent waiting for event dispatch to both clocks.
+      lastGesture = Number.isFinite(event.timeStamp) && recentClipboardAge(age, MAX_CLIPBOARD_DISPATCH_MS) && Number.isFinite(wallNow)
+        ? { eventTime: event.timeStamp, wallTime: wallNow - age } : null;
+    };
+    const hasRecentGesture = () => {
+      if (!lastGesture) return false;
+      if (recentClipboardAge(window.performance.now() - lastGesture.eventTime) &&
+          recentClipboardAge(Date.now() - lastGesture.wallTime)) return true;
+      forgetGesture();
+      return false;
+    };
+    const canWriteClipboard = () => !destroyed && terminalFocused() && hasRecentGesture();
+    const startShiftSelection = (event) => {
+      if (!event.isTrusted || event.button !== 0 || !event.shiftKey || term.modes.mouseTrackingMode === 'none') return;
+      // xterm chooses the drag mode on mousedown. Let its macOS handlers see
+      // Option for this press, then restore the option after they have run.
+      const previous = term.options.macOptionClickForcesSelection;
+      const addOption = !event.altKey;
+      if (addOption) Object.defineProperty(event, 'altKey', { value: true, configurable: true });
+      term.options.macOptionClickForcesSelection = true;
+      const restore = () => {
+        clearTimeout(timer);
+        term.element?.removeEventListener('mousedown', restore);
+        if (addOption) delete event.altKey;
+        if (!destroyed) term.options.macOptionClickForcesSelection = previous;
+      };
+      // A child can stop the event before it bubbles back to xterm's element.
+      const timer = setTimeout(restore, 0);
+      term.element.addEventListener('mousedown', restore);
+    };
+    const writeClipboard = async (text) => {
+      if (!canWriteClipboard()) return;
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch {
+        if (!destroyed && !copyFailureShown) {
+          copyFailureShown = true;
+          showBanner('Could not copy selected text to the clipboard.');
+        }
+        return;
+      }
+      if (destroyed || !elements.copyNotice) return;
+      elements.copyNotice.hidden = false;
+      positionNotices();
+      clearTimeout(copyNoticeTimer);
+      copyNoticeTimer = setTimeout(() => { elements.copyNotice.hidden = true; }, 1500);
+    };
+    // Use just one press event. A compatibility mousedown after a touch can
+    // arrive on release, well after the original pointerdown.
+    const gestureEvents = [window.PointerEvent ? 'pointerdown' : 'mousedown', 'keydown'];
+    if (!captureMode && term.textarea) {
+      for (const type of gestureEvents) term.element.addEventListener(type, recordGesture, true);
+      term.element.addEventListener('paste', forgetGesture, true);
+      if (macShiftSelection) term.element.addEventListener('mousedown', startShiftSelection, true);
+      term.textarea.addEventListener('blur', forgetGesture);
+      window.addEventListener('blur', forgetGesture);
+      term.parser.registerOscHandler(52, data => {
+        if (canWriteClipboard()) {
+          const text = decodeClipboard(data);
+          if (text !== null) void writeClipboard(text);
+        }
+        return true;
+      });
+    }
     // Let the browser deliver paste to xterm's textarea on Windows and Linux.
     term.attachCustomKeyEventHandler((event) => {
       if (destroyed) return false;
@@ -1232,6 +1341,15 @@ window.ShellPuppetPane = (() => {
       destroy(reassigned = false) {
         if (destroyed) return;
         destroyed = true;
+        if (!captureMode && term.textarea) {
+          for (const type of gestureEvents) term.element.removeEventListener(type, recordGesture, true);
+          term.element.removeEventListener('paste', forgetGesture, true);
+          if (macShiftSelection) term.element.removeEventListener('mousedown', startShiftSelection, true);
+          term.textarea.removeEventListener('blur', forgetGesture);
+          window.removeEventListener('blur', forgetGesture);
+        }
+        clearTimeout(copyNoticeTimer);
+        if (elements.copyNotice) elements.copyNotice.hidden = true;
         fontListeners.delete(refreshFontMetrics);
         resolutionListener.dispose();
         if (metricsFrame !== null) window.cancelAnimationFrame(metricsFrame);

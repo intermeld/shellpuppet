@@ -7,6 +7,10 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Programs can copy text with OSC 52 for two seconds after you press the primary pointer button, type a character or use a supported editing or navigation key in the focused viewer or dashboard pane. Pasting ends that window. Hold Shift and drag to select text even when the program handles the mouse.
+
 ## [0.4.1] - 2026-11-24
 
 Fixes for dashboard windows and for intermittent tests.

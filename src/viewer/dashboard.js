@@ -663,10 +663,15 @@
     const prompt = document.createElement('div');
     prompt.className = 'pane-prompt';
     prompt.hidden = true;
-    notices.append(banner, prompt);
+    const copyNotice = document.createElement('div');
+    copyNotice.className = 'pane-copy-notice';
+    copyNotice.setAttribute('role', 'status');
+    copyNotice.hidden = true;
+    copyNotice.textContent = 'Copied to clipboard.';
+    notices.append(banner, copyNotice, prompt);
     wrap.append(term, notices);
     card.append(head, menu, overflowNote, wrap);
-    Object.assign(item, { term, banner, prompt });
+    Object.assign(item, { term, banner, copyNotice, prompt });
     card.addEventListener('click', () => select(item.id, true));
     card.addEventListener('focus', () => select(item.id));
     updateCard(item);
@@ -757,7 +762,8 @@
     item.client = ShellPuppetPane.create({
       container: item.term, sessionId: item.id, dashboardProof: proof,
       initialFontOverride: fontSize,
-      elements: { banner: item.banner, promptAlert: item.prompt, size: item.size, overflowNote: item.overflowNote },
+      elements: { banner: item.banner, copyNotice: item.copyNotice, promptAlert: item.prompt,
+        size: item.size, overflowNote: item.overflowNote },
       onAttentionChange: () => updateAttention(),
       onGeometryReady: () => scheduleAutoFit(),
       onGeometryChange: () => scheduleFontFit(),

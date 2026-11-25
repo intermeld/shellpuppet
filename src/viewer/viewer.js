@@ -58,6 +58,7 @@
     elements: {
       dot: document.getElementById('dot'),
       banner,
+      copyNotice: document.getElementById('copy-notice'),
       size: document.getElementById('size'),
       inputSource: document.getElementById('input-source'),
       readonly: document.getElementById('readonly'),

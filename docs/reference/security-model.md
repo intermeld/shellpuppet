@@ -99,6 +99,27 @@ make a reachable terminal safe.
   into a session, give them a read-only link rather than relying on the
   toggle.
 
+  **Clipboard access is local to the focused pane.** A program can replace
+  the browser clipboard with text of its choosing for two seconds after a
+  trusted primary-button press in that pane, or a trusted initial keydown
+  there for a printable character, Enter, Tab, Backspace, Delete, Escape,
+  an arrow key, Home, End, PageUp or PageDown. Paste shortcuts are excluded,
+  including Ctrl+V, Cmd+V, their Shift variants and Shift+Insert. Other keys
+  and buttons, key repeats and releases cannot open or extend the window.
+  Pasting or moving focus away closes it. A write requires the terminal to
+  retain focus and the age of the press to be between zero and two seconds
+  on both the event clock and the wall clock. An invalid age closes the window.
+  A press may queue for at most one second before dispatch, and that delay
+  counts only awake time if the press was queued just before sleep on a
+  platform whose event clock pauses during sleep.
+  This applies in the dashboard and in read-only viewers. OSC 52 accepts the
+  clipboard target (`c` or empty) and up to 1 MiB of UTF-8 text encoded in
+  base64. Validation uses the payload delivered by xterm, whose parser
+  discards some C0 controls, including line feed, inside an OSC string.
+  Other targets, malformed payloads and requests outside the window are
+  ignored. A clipboard query (`?`) gets no reply. The handler never reads
+  the clipboard or sends clipboard data to the session.
+
   **One credential per session per browser profile.** Redeeming a second link
   for the same session in the same browser profile replaces the credential
   that profile already holds, so a read-write page that reconnects after a
