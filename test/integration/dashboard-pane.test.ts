@@ -13,8 +13,9 @@
 import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as path from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import WebSocket from 'ws';
+import type { SessionManager } from '../../src/core/manager.js';
 import { createAuditor } from '../../src/daemon/audit.js';
 import {
   api,
@@ -685,29 +686,46 @@ describe('Fit, Enlarge and Restore are the resize', () => {
       await pane.waitForControl(c => c['type'] === 'geometry' && c['control'] === 'yours');
     }
     await eventually(async () => (await gridOf(daemon, id)).screen.includes('ECHO READY'), 10_000);
-    const pending = api(daemon.port, daemon.token, `/sessions/${id}/snapshot?wider=140x40&widerTimeout=1000`);
-    await pane.waitForControl(c => c['type'] === 'geometry' && c['cols'] === 140 && c['temporary'] === true);
-    let popped: PaneClient | undefined;
-    if (action === 'dashboard take') pane.send(JSON.stringify({ type: 'resize', cols: 140, rows: 40, take: true }));
-    else if (action === 'viewer resize') viewer.ws.send(JSON.stringify({ type: 'resize', cols: 150, rows: 45 }));
-    else {
+    // Keep the read active until the competing resize has taken the grid.
+    // A pop-out reconnect can outlast the 250 ms quiet period on a busy host.
+    const session = (daemon.daemon as unknown as { manager: SessionManager }).manager.get(id)!;
+    const waitFor = session.waitFor.bind(session);
+    let release!: () => void;
+    const released = new Promise<void>(resolve => { release = resolve; });
+    const wait = vi.spyOn(session, 'waitFor').mockImplementationOnce(async (...args) => {
+      const result = await waitFor(...args);
+      await released;
+      return result;
+    });
+    try {
+      const pending = api(daemon.port, daemon.token, `/sessions/${id}/snapshot?wider=140x40&widerTimeout=1000`);
+      await pane.waitForControl(c => c['type'] === 'geometry' && c['cols'] === 140 && c['temporary'] === true);
+      let popped: PaneClient | undefined;
+      if (action === 'dashboard take') pane.send(JSON.stringify({ type: 'resize', cols: 140, rows: 40, take: true }));
+      else if (action === 'viewer resize') viewer.ws.send(JSON.stringify({ type: 'resize', cols: 150, rows: 45 }));
+      else {
+        pane.close();
+        popped = await connectDash(daemon.port, id, cookie, proof);
+        popped.send(JSON.stringify({ type: 'resize', cols: 150, rows: 45, take: true }));
+        await popped.waitForControl(c => c['type'] === 'geometry' && c['cols'] === 150 && c['control'] === 'yours');
+      }
+      release();
+      const result = await pending;
+      expect(result.status).toBe(200);
+      expect(result.body['restored']).toBe(false);
+      expect(await gridOf(daemon, id)).toMatchObject(action === 'dashboard take'
+        ? { cols: 140, rows: 40 } : { cols: 150, rows: 45 });
+      if (action === 'dashboard take') {
+        expect(await pane.waitForControl(c => c['type'] === 'geometry' && c['control'] === 'yours' && c['cols'] === 140))
+          .toMatchObject({ rows: 40 });
+      }
+      viewer.close();
       pane.close();
-      popped = await connectDash(daemon.port, id, cookie, proof);
-      popped.send(JSON.stringify({ type: 'resize', cols: 150, rows: 45, take: true }));
-      await popped.waitForControl(c => c['type'] === 'geometry' && c['cols'] === 150 && c['control'] === 'yours');
+      popped?.close();
+    } finally {
+      release();
+      wait.mockRestore();
     }
-    const result = await pending;
-    expect(result.status).toBe(200);
-    expect(result.body['restored']).toBe(false);
-    expect(await gridOf(daemon, id)).toMatchObject(action === 'dashboard take'
-      ? { cols: 140, rows: 40 } : { cols: 150, rows: 45 });
-    if (action === 'dashboard take') {
-      expect(await pane.waitForControl(c => c['type'] === 'geometry' && c['control'] === 'yours' && c['cols'] === 140))
-        .toMatchObject({ rows: 40 });
-    }
-    viewer.close();
-    pane.close();
-    popped?.close();
   });
 
   it('take changes the PTY, tells every watcher, restores, and clamps above 400 by 150', async () => {
