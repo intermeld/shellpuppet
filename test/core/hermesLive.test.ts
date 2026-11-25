@@ -75,6 +75,42 @@ it('confirms the exact wrapped draft under the synthetic long-clock welcome foot
   expect(nudgeVerdict(hermes, { ...view, expectedDraft: draft + 'x' }).ready).toBe(false);
 });
 
+it('recognises the synthetic completed frame with an overflow summary and a clipped timer', async () => {
+  const view = await frame('post-turn-clipped-99');
+  expect(view.styled).toHaveLength(35);
+  expect(view.cursor).toEqual({ x: 2, y: 32 });
+  expect(hermes?.readiness?.readyScreen?.(view.rows.join('\n'))).toBe(true);
+  expect(nudgeVerdict(hermes, view)).toEqual({ ready: true });
+  expect(kept(view.styled)).toEqual(expect.arrayContaining([30, 31, 32, 33, 34]));
+});
+
+it('keeps the completed-frame guards and other Hermes states', async () => {
+  const view = await frame('post-turn-clipped-99');
+  const verdict = (styled: StyledLine[], cursor = view.cursor) => nudgeVerdict(hermes, {
+    ...view, styled, rows: styled.map(line => line.text), cursor,
+  });
+  const changedSummary = (text: string) => view.styled.map((line, i) => i === 30 ? { ...line, text } : line);
+  expect(verdict(changedSummary(view.rows[30]!.replace('+3 more', '+more'))))
+    .toEqual({ ready: false, reason: 'unknown' });
+  expect(verdict(changedSummary(view.rows[30]!.replace('+3 more', '+3 more · +2 more'))))
+    .toEqual({ ready: false, reason: 'unknown' });
+  const plainSummary = view.styled.map((line, i) => i === 30 ?
+    { ...line, spans: line.spans.map(span => ({ ...span, dim: false })) } : line);
+  expect(verdict(plainSummary)).toEqual({ ready: false, reason: 'unknown' });
+  const otherFooterInk = view.styled.map((line, i) => i === 34 ?
+    { ...line, spans: line.spans.map(span => ({ ...span, fg: '#8a7a4a' })) } : line);
+  expect(verdict(otherFooterInk)).toEqual({ ready: false, reason: 'unknown' });
+  expect(verdict(view.styled, { x: 2, y: 31 })).toEqual({ ready: false, reason: 'unknown' });
+  const promptInk = view.styled[32]!.spans[0]!;
+  const typed = view.styled.map((line, i) => i === 32 ? { text: '❯ hello', spans: [
+    { ...promptInk, from: 0, to: 2 },
+    { ...promptInk, from: 2, to: 7, fg: null, italic: false },
+  ] } : line);
+  expect(verdict(typed, { x: 7, y: 32 })).toEqual({ ready: false, reason: 'draft' });
+  expect(nudgeVerdict(hermes, await frame('busy'))).toEqual({ ready: true, queued: true });
+  expect(nudgeVerdict(hermes, await frame('approval'))).toEqual({ ready: false, reason: 'prompt' });
+});
+
 it('recognises the planning suggestion after a queued reply', async () => {
   const view = await frame('queued-answer');
   expect(hermes?.readiness?.readyScreen?.(view.rows.join('\n'))).toBe(true);

@@ -3,9 +3,12 @@ import { appendFileSync, readFileSync } from 'node:fs';
 const [input, state] = process.argv.slice(2);
 const busy = state === 'busy';
 const longWelcome = state === 'welcome-long';
-const screen = readFileSync(new URL(busy ? 'busy.ansi' : longWelcome ? 'welcome-long-129.ansi' : 'welcome.ansi', import.meta.url), 'utf8');
+const postTurn = state === 'post-turn-clipped';
+const fixture = busy ? 'busy.ansi' : longWelcome ? 'welcome-long-129.ansi' :
+  postTurn ? 'post-turn-clipped-99.ansi' : 'welcome.ansi';
+const screen = readFileSync(new URL(fixture, import.meta.url), 'utf8');
 const column = busy ? 4 : 2;
-const inputRow = longWelcome ? 23 : 35;
+const inputRow = postTurn ? 33 : longWelcome ? 23 : 35;
 let body = '';
 
 process.stdin.setRawMode(true);
