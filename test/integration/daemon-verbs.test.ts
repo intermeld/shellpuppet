@@ -66,11 +66,11 @@ async function homeWithVanishingDaemon(mode = 'vanish'): Promise<{ home: string;
   return { home, pid };
 }
 
-async function cli(home: string, ...args: string[]): Promise<{ code: number; stdout: string; stderr: string; elapsed: number }> {
+async function cliWithEnv(home: string, extraEnv: Record<string, string>, ...args: string[]): Promise<{ code: number; stdout: string; stderr: string; elapsed: number }> {
   const started = Date.now();
   try {
     const { stdout, stderr } = await execFileAsync(process.execPath, [cliEntry, ...args], {
-      env: { ...process.env, SHELLPUPPET_HOME: home },
+      env: { ...process.env, ...extraEnv, SHELLPUPPET_HOME: home },
       timeout: 80_000,
     });
     return { code: 0, stdout, stderr, elapsed: Date.now() - started };
@@ -79,6 +79,14 @@ async function cli(home: string, ...args: string[]): Promise<{ code: number; std
     return { code: failure.code ?? -1, stdout: failure.stdout ?? '',
       stderr: failure.stderr ?? '', elapsed: Date.now() - started };
   }
+}
+
+function cli(home: string, ...args: string[]): Promise<{ code: number; stdout: string; stderr: string; elapsed: number }> {
+  return cliWithEnv(home, {}, ...args);
+}
+
+function cliWithDelayedWatcher(home: string, ...args: string[]): Promise<{ code: number; stdout: string; stderr: string; elapsed: number }> {
+  return cliWithEnv(home, { SHELLPUPPET_TEST_WATCHER_DELAY_MS: '6000' }, ...args);
 }
 
 /** No daemon was started: the record still names the stand-in, and no daemon wrote a log. */
@@ -90,13 +98,14 @@ function expectNoDaemonStarted(home: string, standIn: number): void {
 describe('daemon verbs on a daemon that goes as it is asked', () => {
   it('treats a standalone exit between preflight and handle acquisition as stopped', async () => {
     const { home, pid } = await homeWithVanishingDaemon('standalone-preflight-exit');
-    const result = await cli(home, 'daemon', 'stop', '--json');
+    const result = await cliWithDelayedWatcher(home, 'daemon', 'stop', '--json');
     expect(result.code, result.stderr).toBe(0);
+    if (process.platform === 'win32') expect(result.elapsed).toBeGreaterThanOrEqual(6_000);
     expect(JSON.parse(result.stdout)).toEqual({ running: false, stopped: true });
     expect(children.find((child) => child.pid === pid)?.exitCode).toBe(0);
     expect(readDaemonState(home)).toBeNull();
     expect(fs.existsSync(daemonLogPath(home))).toBe(false);
-  }, 30_000);
+  }, 45_000);
 
   it('waits for the accepted standalone process exit and retains warnings', async () => {
     const { home } = await homeWithVanishingDaemon('standalone-exit');
@@ -119,12 +128,13 @@ describe('daemon verbs on a daemon that goes as it is asked', () => {
 
   it('waits for exit when an accepted shutdown loses its response', async () => {
     const { home } = await homeWithVanishingDaemon('standalone-lost-exit');
-    const result = await cli(home, 'daemon', 'stop', '--force', '--hold', '1', '--json');
+    const result = await cliWithDelayedWatcher(home, 'daemon', 'stop', '--force', '--hold', '1', '--json');
     expect(result.code, result.stderr).toBe(0);
     expect(result.elapsed).toBeGreaterThanOrEqual(7_000);
+    if (process.platform === 'win32') expect(result.elapsed).toBeGreaterThanOrEqual(13_000);
     expect(JSON.parse(result.stdout)).toMatchObject({ stopped: true, holdRemainingSeconds: 1 });
     expect(fs.existsSync(path.join(home, 'restart-hold.json'))).toBe(true);
-  }, 30_000);
+  }, 45_000);
 
   it('reports in-progress without a hold when the response is lost and the process survives', async () => {
     const { home, pid } = await homeWithVanishingDaemon('standalone-lost-survive');
