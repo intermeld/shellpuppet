@@ -114,7 +114,7 @@ import {
   resolveAnyFolder,
 } from './launchProfiles.js';
 import type { LaunchFolder, LaunchProfile, LauncherConfig } from './launchProfiles.js';
-import { listRootFolders, resolveRootFolder } from './launchProfiles.js';
+import { DEFAULT_LAUNCHES_PER_MINUTE, listRootFolders, parseLaunchesPerMinute, resolveRootFolder } from './launchProfiles.js';
 import { chooseFolder, FOLDER_PICKER_TIMEOUT_MS, FolderPickerFailureError, FolderPickerUnavailableError, FolderPickerTimeoutError } from './folderPicker.js';
 
 const DEFAULT_IDLE_MS = 30 * 60_000;
@@ -747,6 +747,7 @@ export class Daemon {
   private readonly sessionEnv: SessionEnvMode;
   /** The profiles the dashboard may name, and the entries that did not load. */
   private readonly launchProfiles: LauncherConfig;
+  private launchesPerMinute: number;
   private readonly daemonEnv: NodeJS.ProcessEnv;
   private readonly cliPath: string;
   /** The global policy, kept here so a launch can report it before creating. */
@@ -787,6 +788,7 @@ export class Daemon {
     };
     this.sessionEnv = options.sessionEnv ?? DEFAULT_SESSION_ENV;
     this.launchProfiles = options.launchProfiles ?? { profiles: [], problems: [] };
+    this.launchesPerMinute = this.launchProfiles.launchesPerMinute ?? DEFAULT_LAUNCHES_PER_MINUTE;
     this.daemonEnv = options.daemonEnv ?? process.env;
     this.cliPath = fileURLToPath(new URL('../../dist/cli/index.js', import.meta.url));
     this.compiledPolicy = compilePolicy(options.policy);
@@ -1072,7 +1074,12 @@ export class Daemon {
         });
     }, this.options.promptScanIntervalMs ?? PROMPT_SCAN_INTERVAL_MS);
     this.promptScanTimer.unref();
-    this.stopScheduleWatch = watchSchedules(home, this.schedules, this.logger);
+    this.stopScheduleWatch = watchSchedules(home, this.schedules, this.logger, (raw, initial) => {
+      if (initial && raw['launcher'] === undefined) return;
+      const allowance = parseLaunchesPerMinute(raw['launcher']);
+      this.launchesPerMinute = allowance.value;
+      if (!initial && allowance.problem !== undefined) this.logger.warn('CONFIG PROBLEM', { problem: allowance.problem });
+    });
     this.promptScheduler.start();
 
     this.logger.info('daemon started', {
@@ -2180,11 +2187,11 @@ export class Daemon {
     }
     const now = this.now();
     this.pruneLaunchTimes(now);
-    if (this.launchTimes.length + this.pendingProfileStarts.size >= 8) {
+    if (this.launchTimes.length + this.pendingProfileStarts.size >= this.launchesPerMinute) {
       this.auditDashboardRefusal(req, 'rate', launcher?.name);
       json(res, 429, {
         error:
-          'Dashboard launch rate reached (8 in 60 seconds). Wait before starting another profile.',
+          `Dashboard launch rate reached (${String(this.launchesPerMinute)} in 60 seconds). Wait before starting another profile.`,
       });
       return;
     }

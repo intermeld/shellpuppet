@@ -7,6 +7,10 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+### Added
+
+- `launcher.launchesPerMinute` sets the dashboard and granted session launch allowance from 1 to 60 starts per minute. It defaults to eight and updates when configuration changes.
+
 ### Changed
 
 - New CLI and MCP clients now submit by default for listed built-in agents whose launched program matches the agent. Explicit false types only. Written Enter reports `unconfirmed` until a turn-correlated agent acceptance event exists; legacy response fields remain available.

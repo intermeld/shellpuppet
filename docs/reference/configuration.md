@@ -32,10 +32,10 @@ reserved for outside claims. A session name never grants messaging rights.
 
 All configuration lives in one optional file: `~/.shellpuppet/config.json`
 (override the directory with the `SHELLPUPPET_HOME` environment variable).
-No file means all defaults. The daemon reloads `schedules` when the file
-changes. Run `shellpuppet daemon restart` for every other daemon setting.
-The MCP adapter reads its own
-`mcp` section at launch.
+No file means all defaults. The daemon reloads `schedules` and
+`launcher.launchesPerMinute` when the file changes. Run
+`shellpuppet daemon restart` for every other daemon setting. The MCP adapter
+reads its own `mcp` section at launch.
 
 Dashboard launch profiles (`launcher.profiles`, decided in
 [ADR-009](../decisions/ADR-009-dashboard-and-sessions-you-start-yourself.md))
@@ -104,6 +104,7 @@ target and outcome, including a reason for a skipped or aborted run.
   // Programs the dashboard may start (ADR-009, design §5.1). Empty by
   // default. Nothing adds profiles for you and nothing scans PATH.
   "launcher": {
+    "launchesPerMinute": 12,
     "profiles": [
       {
         "name": "shell",
@@ -763,11 +764,16 @@ never in the session's folder, and a relative path with a separator is taken
 from the profile's working directory. That is the file that runs, and the
 audit records it beside the written command. A command that cannot be
 resolved refuses the launch and starts nothing. The launch route accepts at
-most eight starts in any sixty seconds, and refuses at thirty-two live
-sessions when `policy.maxSessions` is unset. If you set `policy.maxSessions`,
+most `launcher.launchesPerMinute` starts in any sixty seconds (eight by
+default), and refuses at thirty-two live sessions when `policy.maxSessions`
+is unset. If you set `policy.maxSessions`,
 that number is the live cap instead, and the rate still applies. A refusal
 starts nothing. These caps apply to both profile launch routes: a client token's
 `POST /sessions` keeps its existing behaviour.
+Set `launcher.launchesPerMinute` to an integer from 1 to 60. An invalid value
+is reported as a configuration problem and uses eight. Pending starts count
+towards the allowance; failed and cancelled starts release their slot at once.
+Changes to this setting take effect when you save `config.json`.
 
 Under the Windows default shell, ShellPuppet joins `command` and `args` with
 spaces and runs the line through `cmd.exe /d /s /c`. The array keeps each

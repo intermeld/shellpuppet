@@ -698,6 +698,54 @@ describe('policy sees the real command, and both caps bite', () => {
     });
     expect(clientStart.status).toBe(200);
   });
+
+  it('accepts twelve configured launches and refuses the thirteenth', async () => {
+    const { config, problems } = parseDaemonConfig({ launcher: {
+      launchesPerMinute: 12,
+      profiles: [{ name: 'quick', command: process.execPath, shell: false }],
+    } });
+    expect(problems).toEqual([]);
+    let created = 0;
+    const daemon = await startLaunchDaemon({
+      now: () => 1000,
+      launcher: config.launcher,
+      dashboardSessionFactory: options => standInStart(options, `configured-${String(++created)}`),
+    });
+    const results = await Promise.all(Array.from({ length: 13 }, () => launch(daemon, { profile: 'quick' })));
+    expect(results.map(result => result.status).filter(status => status === 200)).toHaveLength(12);
+    expect(results.map(result => result.status).filter(status => status === 429)).toHaveLength(1);
+    expect(results.find(result => result.status === 429)?.body).toContain('(12 in 60 seconds)');
+    expect(created).toBe(12);
+  });
+
+  it.each([0, 61, 1.5, '12'])('reports an invalid launch allowance %s and uses eight', (value) => {
+    const { config, problems } = parseDaemonConfig({ launcher: { profiles: [], launchesPerMinute: value } });
+    expect(config.launcher?.launchesPerMinute).toBe(8);
+    expect(problems).toContain('launcher.launchesPerMinute must be an integer from 1 to 60: using 8');
+    expect(config.launcher?.problems).toContain(problems[0]);
+  });
+
+  it('applies a changed launch allowance without restarting', async () => {
+    let created = 0;
+    const daemon = await startLaunchDaemon({
+      now: () => 1000,
+      launcher: profilesOf([{ name: 'quick', command: process.execPath, shell: false }]),
+      dashboardSessionFactory: options => standInStart(options, `reloaded-${String(++created)}`),
+    });
+    for (let index = 0; index < 8; index++) expect((await launch(daemon, { profile: 'quick' })).status).toBe(200);
+    expect((await launch(daemon, { profile: 'quick' })).status).toBe(429);
+
+    const configPath = path.join(daemon.home, 'config.json');
+    fs.writeFileSync(configPath, JSON.stringify({ launcher: { profiles: [], launchesPerMinute: 12 } }));
+    await eventually(() => daemon.daemon['launchesPerMinute'] === 12);
+    for (let index = 0; index < 4; index++) expect((await launch(daemon, { profile: 'quick' })).status).toBe(200);
+    expect((await launch(daemon, { profile: 'quick' })).status).toBe(429);
+
+    fs.writeFileSync(configPath, JSON.stringify({ launcher: { profiles: [], launchesPerMinute: 3 } }));
+    await eventually(() => daemon.daemon['launchesPerMinute'] === 3);
+    expect((await launch(daemon, { profile: 'quick' })).status).toBe(429);
+    expect(created).toBe(12);
+  });
 });
 
 describe('envFromDaemon copies names from the daemon, never from the body', () => {
