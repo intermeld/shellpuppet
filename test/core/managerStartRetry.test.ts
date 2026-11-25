@@ -1,7 +1,8 @@
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { IPty } from 'node-pty';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import * as consoleHosts from '../../src/core/windowsConsoleHost.js';
 import { SessionManager } from '../../src/core/manager.js';
 import { compilePolicy } from '../../src/core/policy.js';
 import { Daemon } from '../../src/daemon/server.js';
@@ -165,7 +166,7 @@ describe('ConPTY start retry', () => {
     }
   }, 25_000);
 
-  it('does not spawn a retry when kill begins during the first attempt cleanup', async () => {
+  it.each(['kill', 'killAll', 'reapExited'] as const)('releases the retry reservation as soon as %s begins', async action => {
     let settleHost: (ended: boolean) => void = () => undefined;
     let hostQueued: () => void = () => undefined;
     const entered = new Promise<void>((resolve) => { hostQueued = resolve; });
@@ -173,13 +174,20 @@ describe('ConPTY start retry', () => {
       onHostQueue: (settle) => { settleHost = settle; hostQueued(); },
     });
     const first = manager.create({ command: 'cmd.exe', shell: true });
-    const failed = expect(manager.finishStart(first, { command: 'cmd.exe', shell: true })).rejects.toThrow();
+    const released = vi.fn();
+    const failed = expect(manager.finishStart(first, { command: 'cmd.exe', shell: true }, released)).rejects.toThrow();
     await entered;
     while (ptys[0]?.kills !== 1) await new Promise((resolve) => setTimeout(resolve, 1));
-    const killing = manager.kill(first.id);
-    settleHost(true);
-    await failed;
-    await killing;
+    const killing = action === 'kill' ? manager.kill(first.id) : action === 'killAll' ? manager.killAll() : manager.reapExited(0);
+    try {
+      expect(released).toHaveBeenCalledOnce();
+      await failed;
+    } finally {
+      settleHost(true);
+      await killing;
+      await failed;
+    }
+    expect(released).toHaveBeenCalledOnce();
     expect(ptys).toHaveLength(1);
     expect(manager.size()).toBe(0);
   });
@@ -190,6 +198,52 @@ describe('ConPTY start retry', () => {
     await expect(manager.finishStart(first, { command: 'cmd.exe', shell: true })).rejects.toThrow('ConPTY output worker never connected');
     expect(ptys).toHaveLength(1);
     expect(manager.size()).toBe(0);
+  });
+
+  it('reports a terminal start failure without waiting for unrelated console host cleanup', async () => {
+    let waited!: (value: string) => void;
+    const waiting = new Promise<string>(resolve => { waited = resolve; });
+    let release!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const queue = vi.spyOn(consoleHosts, 'whenConsoleHostBatchSettled').mockImplementation(() => {
+      waited('unrelated cleanup');
+      return blocked;
+    });
+    const { manager } = harness([timeout, undefined], { hostEnded: false });
+    const options = { command: 'cmd.exe', shell: true };
+    const finished = manager.finishStart(manager.create(options), options)
+      .then(() => 'unexpected success', (err: Error) => err.message);
+    try {
+      expect(await Promise.race([finished, waiting])).toContain('ConPTY output worker never connected');
+    } finally {
+      release();
+      await finished;
+      queue.mockRestore();
+    }
+  });
+
+  it.each([
+    ['The output worker failed', 'The output worker failed'],
+    [timeout, 'ConPTY output worker never connected'],
+  ])('releases a terminal failure before disposal finishes for %s', async (error, message) => {
+    const { manager } = harness([error, undefined], { hostEnded: false });
+    const options = { command: 'cmd.exe', shell: true };
+    const first = manager.create(options);
+    let entered!: () => void;
+    const disposing = new Promise<void>(resolve => { entered = resolve; });
+    let release!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const originalKill = first.kill.bind(first);
+    vi.spyOn(first, 'kill').mockImplementation(async () => { entered(); await blocked; await originalKill(); });
+    const failed = vi.fn();
+    const result = expect(manager.finishStart(first, options, failed)).rejects.toThrow(message);
+    try {
+      await disposing;
+      expect(failed).toHaveBeenCalledOnce();
+    } finally {
+      release();
+      await result;
+    }
   });
 
   it('waits past node-pty\'s worker disposal bound before the retry spawn', async () => {

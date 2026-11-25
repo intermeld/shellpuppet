@@ -9,7 +9,6 @@
 import { Session, TREE_KILL_TIMEOUT_MS, taskkillTrees } from './session.js';
 import { createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 import type { SessionDeps } from './session.js';
-import { whenConsoleHostBatchSettled } from './windowsConsoleHost.js';
 import { checkSessionCapacity, evaluateCommand } from './policy.js';
 import type { CompiledPolicy } from './policy.js';
 import { NULL_LOGGER } from './types.js';
@@ -42,8 +41,7 @@ export class SessionManager {
   private readonly sessionDeps: SessionDeps;
   private policy: CompiledPolicy;
   private seq = 0;
-  private readonly starting = new Set<string>();
-  private readonly cancelledStarts = new Set<string>();
+  private readonly starting = new Map<string, AbortController>();
 
   constructor(
     policy: CompiledPolicy,
@@ -112,12 +110,25 @@ export class SessionManager {
    * connection timeout under the same id after the failed attempt is ended.
    * The starting reservation remains in the capacity count throughout.
    */
-  async finishStart(session: Session, options: SessionOptions): Promise<Session> {
-    this.starting.add(session.id);
+  async finishStart(session: Session, options: SessionOptions, onTerminalFailure?: () => void): Promise<Session> {
+    const start = new AbortController();
+    this.starting.set(session.id, start);
+    let notifyFailure = onTerminalFailure;
+    const releaseReservation = (): void => {
+      const notify = notifyFailure;
+      notifyFailure = undefined;
+      notify?.();
+    };
+    const cancelled = new Promise<null>(resolve => {
+      start.signal.addEventListener('abort', () => {
+        releaseReservation();
+        resolve(null);
+      }, { once: true });
+    });
     let current = session;
     const registered = (allowOwnKill = false): boolean =>
       this.sessions.get(session.id) === current &&
-      !this.cancelledStarts.has(session.id) &&
+      !start.signal.aborted &&
       (allowOwnKill || !current.isKilled);
     const discard = (): void => {
       if (this.sessions.get(session.id) !== current) return;
@@ -129,6 +140,7 @@ export class SessionManager {
       for (let attempt = 0; attempt < 2; attempt++) {
         const pid = await current.startedProgramPid();
         if (!registered()) {
+          releaseReservation();
           await current.kill();
           discard();
           throw new SessionStartError('Session start was cancelled.');
@@ -136,15 +148,22 @@ export class SessionManager {
         if (pid !== null) return current;
         const retry = attempt === 0 && current.conptyConnectionTimedOut;
         const failure = current.startFailure();
-        await current.kill();
         if (!retry) {
+          releaseReservation();
+          await current.kill();
           discard();
           throw new SessionStartError(failure);
         }
-        // The first attempt's host must be ended before the id is reused.
-        // The queue can settle after exhausting its attempts without ending it.
-        const hostEnded = await current.whenConsoleHostSettled();
-        await whenConsoleHostBatchSettled();
+        // The exit has queued this attempt's host. A negative result rules
+        // out a retry immediately, even if renderer disposal is still busy.
+        const [hostEnded] = await Promise.all([
+          Promise.race([current.whenConsoleHostSettled().then(ended => {
+            if (!ended) releaseReservation();
+            return ended;
+          }), cancelled]),
+          current.kill(),
+        ]);
+        if (hostEnded === null) throw new SessionStartError('Session start was cancelled.');
         if (!hostEnded) {
           discard();
           throw new SessionStartError(failure);
@@ -168,7 +187,6 @@ export class SessionManager {
       throw new Error('unreachable start attempt');
     } finally {
       this.starting.delete(session.id);
-      this.cancelledStarts.delete(session.id);
     }
   }
 
@@ -208,6 +226,7 @@ export class SessionManager {
     for (const [id, session] of [...this.sessions]) {
       if (!session.exited || session.exitedAt === null) continue;
       if (now - session.exitedAt < graceMs) continue;
+      this.starting.get(id)?.abort();
       this.sessions.delete(id);
       this.identities.delete(id);
       this.onRemoved(id);
@@ -231,7 +250,7 @@ export class SessionManager {
   async kill(id: string): Promise<boolean> {
     const session = this.sessions.get(id);
     if (session === undefined) return false;
-    if (this.starting.has(id)) this.cancelledStarts.add(id);
+    this.starting.get(id)?.abort();
     await session.kill();
     this.sessions.delete(id);
     this.identities.delete(id);
@@ -270,7 +289,7 @@ export class SessionManager {
   async killAll(timeoutMs = 10_000): Promise<void> {
     const all = [...this.sessions.values()];
     for (const session of all) {
-      if (this.starting.has(session.id)) this.cancelledStarts.add(session.id);
+      this.starting.get(session.id)?.abort();
       this.sessions.delete(session.id);
       this.identities.delete(session.id);
       this.onRemoved(session.id);
