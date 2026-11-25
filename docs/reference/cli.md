@@ -17,6 +17,14 @@ not confirmed. If the draft remains after the retry, JSON reports
 typed twice. `--verify` checks for visible text, which may have cleared after
 submission.
 
+With `--enter`, the CLI prints the submit outcome. JSON includes `outcome`
+alongside the existing fields. Values are `submitted`, `withheld` with a
+fixed `reason`, and `unconfirmed`. Check the session before resending an
+unconfirmed line. The outcome comes from the daemon's existing submit checks.
+An older daemon returns the same result as before. If the reporting marker
+would take the encoded JSON body above 1,000,000 UTF-8 bytes, the CLI sends
+the original request and returns the legacy result.
+
 ## Scheduled prompts
 
 `shellpuppet schedule list [--json]` shows each valid schedule's name, target

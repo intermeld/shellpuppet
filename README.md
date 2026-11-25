@@ -236,6 +236,7 @@ between sessions are switched on, the `session_*` messaging tools join them
 
 | Tool | Prompt supervision |
 | --- | --- |
+| `terminal_type` | With `submit: true`, requests an outcome from the existing submission checks. The legacy fields are returned if the daemon is older or the reporting marker would exceed the request size limit. |
 | `terminal_start` | Pass `waitReady: true` when starting an agent CLI to delegate work to. Returns ready, a question, exit or a timeout with the session still running. |
 | `terminal_wait` | `prompt: true` with no session or an array of ids waits for any prompt. `now: true` polls once. Both return compact details without a screen. |
 | `terminal_list` | `waitingOnly: true` returns only sessions waiting on a prompt. |

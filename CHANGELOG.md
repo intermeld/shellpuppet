@@ -14,7 +14,12 @@ version may change behaviour, and every such change is listed here.
 
 ### Added
 
+- Explicit submit can report the result of the existing checks as `submitted`, `withheld` with a reason, or `unconfirmed`. If the reporting marker would exceed the request size limit, the client sends the original input.
 - Recover a lost outside claim with `msg claim <name> --replace` or `replace: true` on `session_claim`. The new claim receives pending messages and any launch grant on the name. The daemon must write the audit entry before it can replace the claim and invalidate the old proof.
+
+### Changed
+
+- `audit.captureContent: true` no longer records typed input; it captures recognised terminal reports only. Typed input audit entries record their length, and requests with the reporting marker also record the outcome.
 
 ## [0.4.1] - 2026-11-24
 
