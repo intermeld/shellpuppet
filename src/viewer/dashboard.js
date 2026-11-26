@@ -586,7 +586,8 @@
     overflowNote.className = 'pane-overflow-note';
     overflowNote.textContent = 'Shift+wheel or drag the scrollbars to see the rest. Enlarge or Fit to show it whole.';
     overflowNote.hidden = true;
-    const item = { id: summary.id, summary, card, label, purpose, role, badge, messageCount, state, size, overflowNote, client: null, previousGrid: null };
+    const item = { id: summary.id, summary, card, label, purpose, role, badge, messageCount, state, size, overflowNote,
+      client: null, previousGrid: null, fitRevision: 0 };
     const renameForm = document.createElement('form');
     renameForm.className = 'pane-rename';
     renameForm.hidden = true;
@@ -622,6 +623,11 @@
     item.fit = makeButton('Fit', () => { select(item.id); item.client?.fitGrid(); });
     item.enlarge = makeButton('Enlarge', () => {
       select(item.id);
+      // A queued Enlarge fit must not run after a later Restore of this pane.
+      const fitRevision = ++item.fitRevision;
+      const fitAfterLayout = (fit) => window.requestAnimationFrame(() => {
+        if (item.fitRevision === fitRevision) fit();
+      });
       if (enlarged === item.id) {
         enlarged = null;
         arrange('restore');
@@ -630,13 +636,13 @@
           else item.client?.takeGrid(item.previousGrid.cols, item.previousGrid.rows);
         }
         item.previousGrid = null;
-        if (autoFit) window.requestAnimationFrame(() => item.client?.autoFitGrid(80, 24, true));
+        if (autoFit) fitAfterLayout(() => item.client?.autoFitGrid(80, 24, true));
       } else {
         item.previousGrid = item.client?.getGrid() || null;
         enlarged = item.id;
         arrange('enlarge');
-        if (autoFit) window.requestAnimationFrame(() => item.client?.autoFitGrid(80, 24, true));
-        if (!autoFit) window.requestAnimationFrame(() => item.client?.fitGrid());
+        if (autoFit) fitAfterLayout(() => item.client?.autoFitGrid(80, 24, true));
+        if (!autoFit) fitAfterLayout(() => item.client?.fitGrid());
       }
     });
     item.pin = makeButton('Pin', () => {
