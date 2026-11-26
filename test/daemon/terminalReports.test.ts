@@ -9,7 +9,7 @@
 import xterm from '@xterm/headless';
 import { describe, expect, it } from 'vitest';
 import { keyToBytes, knownKeys } from '../../src/core/keys.js';
-import { terminalReportKind } from '../../src/daemon/terminalReports.js';
+import { TerminalReportStream, terminalReportBatchKind, terminalReportKind } from '../../src/daemon/terminalReports.js';
 import type { TerminalReportKind } from '../../src/daemon/terminalReports.js';
 
 // Same CJS-bundle caveat as src/core/renderer.ts: default import, then destructure.
@@ -19,6 +19,11 @@ const ESC = '\x1b';
 const ST = `${ESC}\\`;
 
 describe('terminalReportKind: the answers xterm.js sends on its own', () => {
+  it.each([
+    `${ESC}[<0;10;5M`, `${ESC}[<0;10;5m`, `${ESC}[<64;10;5M`, `${ESC}[<32;10;5M`,
+  ])('recognises a complete mouse report as non-typing: %j', (message) => {
+    expect(terminalReportKind(message)).toBe('mouse');
+  });
   it.each<[string, TerminalReportKind, string]>([
     // CoreBrowserTerminal: focus gained or lost, and the state at the moment
     // the program sets DECSET 1004.
@@ -126,6 +131,12 @@ describe('terminalReportKind: answers from a real xterm.js parser', () => {
 });
 
 describe('terminalReportKind: what a person sends stays input', () => {
+  it('treats a complete normal/X10-shaped input as typing', () => {
+    const message = `${ESC}[M *%`;
+    expect(terminalReportKind(message)).toBeNull();
+    expect(terminalReportBatchKind(message)).toBeNull();
+  });
+
   it.each<[string, string]>([
     ['a printable key', 'a'],
     ['a word', 'hello'],
@@ -174,8 +185,6 @@ describe('terminalReportKind: what a person sends stays input', () => {
     ['Alt+Shift+I', `${ESC}I`],
     ['Alt+Shift+O', `${ESC}O`],
     ['Alt+Shift+P', `${ESC}P`],
-    ['a mouse press (SGR)', `${ESC}[<0;10;5M`],
-    ['a mouse release (SGR)', `${ESC}[<0;10;5m`],
   ])('%s', (_label, message) => {
     expect(terminalReportKind(message)).toBeNull();
   });
@@ -222,11 +231,112 @@ describe('terminalReportKind: what a person sends stays input', () => {
     ['a colour ended by BEL', `${ESC}]11;rgb:0b0b/0e0e/1414\x07`],
     ['a palette entry past 255', `${ESC}]4;256;rgb:0000/0000/0000${ST}`],
     ['a mode state past 4', `${ESC}[?1004;5$y`],
+    ['an impossible mouse button code', `${ESC}[<999999;1;1M`],
+    ['a mouse coordinate past the supported bound', `${ESC}[<35;10001;1M`],
+    ['a wheel report with a release terminator', `${ESC}[<64;10;5m`],
+    ['a movement report with a release terminator', `${ESC}[<32;10;5m`],
     ['a cursor row of 0', `${ESC}[0;1R`],
     ['a number with a leading zero', `${ESC}[01;1R`],
     ['device attributes under another terminal name', `${ESC}[?6c`],
     ['a window size, which the viewer never sends', `${ESC}[8;24;80t`],
   ])('a shape xterm.js does not send from the viewer: %s', (_label, message) => {
     expect(terminalReportKind(message)).toBeNull();
+  });
+});
+
+describe('complete mouse reports and independent input frames', () => {
+  it('classifies a batch of reports, but a mixed keyboard write remains input', () => {
+    expect(terminalReportBatchKind(`${ESC}[<35;12;7M${ESC}[I`)).toBe('multiple');
+    expect(terminalReportBatchKind(`${ESC}[<35;12;7Mx`)).toBeNull();
+    expect(terminalReportBatchKind(`${ESC}[32;12;7M`)).toBeNull(); // unsupported urxvt mode
+  });
+
+  it('forwards split SGR fragments immediately and recognises only a whole frame', () => {
+    const delivered: { data: string; kind: string | null }[] = [];
+    const stream = new TerminalReportStream((data, kind) => delivered.push({ data, kind }));
+    stream.push(`${ESC}[<35;12;`);
+    expect(delivered).toEqual([{ data: `${ESC}[<35;12;`, kind: null }]);
+    stream.push('7M');
+    expect(delivered).toEqual([
+      { data: `${ESC}[<35;12;`, kind: null },
+      { data: '7M', kind: null },
+    ]);
+    stream.push(`${ESC}[<35;12;7M`);
+    stream.push(`${ESC}[M *%`);
+    expect(delivered).toEqual([
+      { data: `${ESC}[<35;12;`, kind: null },
+      { data: '7M', kind: null },
+      { data: `${ESC}[<35;12;7M`, kind: 'mouse' },
+      { data: `${ESC}[M *%`, kind: null },
+    ]);
+  });
+
+  it('forwards an SGR-looking keyboard frame ending in M immediately', () => {
+    const delivered: { data: string; kind: string | null }[] = [];
+    const stream = new TerminalReportStream((data, kind) => delivered.push({ data, kind }));
+    stream.push(`${ESC}[<35;12M`);
+    expect(delivered).toEqual([{ data: `${ESC}[<35;12M`, kind: null }]);
+  });
+
+  it.each([`${ESC}[<`, `${ESC}[<35;`])('keeps a failed mouse prefix separate from a following focus report: %j',
+    (prefix) => {
+    const delivered: { data: string; kind: string | null }[] = [];
+    const stream = new TerminalReportStream((data, kind) => delivered.push({ data, kind }));
+    stream.push(prefix);
+    expect(delivered).toEqual([{ data: prefix, kind: null }]);
+    stream.push(`${ESC}[I`);
+    expect(delivered).toEqual([
+      { data: prefix, kind: null },
+      { data: `${ESC}[I`, kind: 'focus-in' },
+    ]);
+  });
+
+  it('treats a split X10 continuation as keyboard input', () => {
+    const delivered: { data: string; kind: string | null }[] = [];
+    const stream = new TerminalReportStream((data, kind) => delivered.push({ data, kind }));
+    stream.push(`${ESC}[M `);
+    expect(delivered).toEqual([{ data: `${ESC}[M `, kind: null }]);
+    stream.push('xy');
+    expect(delivered).toEqual([
+      { data: `${ESC}[M `, kind: null },
+      { data: 'xy', kind: null },
+    ]);
+  });
+
+  it('forwards a lone mouse opener and the next keyboard frame without delay', () => {
+    const delivered: { data: string; kind: string | null }[] = [];
+    const stream = new TerminalReportStream((data, kind) => delivered.push({ data, kind }));
+    stream.push(`${ESC}[<`);
+    expect(delivered).toEqual([{ data: `${ESC}[<`, kind: null }]);
+    stream.push('xy');
+    expect(delivered).toEqual([
+      { data: `${ESC}[<`, kind: null },
+      { data: 'xy', kind: null },
+    ]);
+  });
+
+  it('never delays keyboard input or hides a keyboard byte in a mixed write', () => {
+    const delivered: { data: string; kind: string | null }[] = [];
+    const stream = new TerminalReportStream((data, kind) => delivered.push({ data, kind }));
+    stream.push('x');
+    stream.push(ESC);
+    stream.push(`${ESC}[`);
+    stream.push(`${ESC}[<35;12;7My`);
+    expect(delivered).toEqual([
+      { data: 'x', kind: null }, { data: ESC, kind: null },
+      { data: `${ESC}[`, kind: null }, { data: `${ESC}[<35;12;7My`, kind: null },
+    ]);
+  });
+
+  it('forwards every unfinished mouse prefix without waiting for another frame', () => {
+    const delivered: { data: string; kind: string | null }[] = [];
+    const stream = new TerminalReportStream((data, kind) => delivered.push({ data, kind }));
+    stream.push(`${ESC}[<35;`);
+    expect(delivered).toEqual([{ data: `${ESC}[<35;`, kind: null }]);
+    stream.push(`${ESC}[<35;12;`);
+    expect(delivered).toEqual([
+      { data: `${ESC}[<35;`, kind: null },
+      { data: `${ESC}[<35;12;`, kind: null },
+    ]);
   });
 });

@@ -193,7 +193,7 @@ it('keeps the legacy positive field but reports marked acceptance as unconfirmed
       body: { data: 'x' }, headers: { 'x-shellpuppet-submit': 'on' },
     });
     expect(result.body).toEqual({ ok: true, bytes: 2, submitted: true, outcome: 'unconfirmed' });
-    expect(write.mock.calls).toEqual([['x', { submitMode: 'on' }]]);
+    expect(write.mock.calls).toEqual([['x', { submitMode: 'on', terminalReport: false }]]);
   } finally { write.mockRestore(); }
 });
 
@@ -209,7 +209,7 @@ it.each([{}, { submit: false }])('sends ordinary input through the original rout
   try {
     writes.length = 0;
     const result = await api(td.port, td.token, '/sessions/s1/input', { body: { data: 'x', ...fields } });
-    expect(write.mock.calls).toEqual([['x']]);
+    expect(write.mock.calls).toEqual([['x', { terminalReport: false }]]);
     expect(writes).toEqual(['x']);
     expect(result.body).toEqual({ ok: true, bytes: 1 });
   } finally { write.mockRestore(); }
@@ -225,7 +225,7 @@ it.each([
   const write = vi.spyOn(session, 'writeWithResult').mockResolvedValue({ before: '', submitted, submitRetried, message });
   try {
     const result = await api(td.port, td.token, '/sessions/s1/input', { body: { data: '\r', submit: true, verify: true } });
-    expect(write.mock.calls).toEqual([['\r']]);
+    expect(write.mock.calls).toEqual([['\r', { terminalReport: false }]]);
     expect(result.body).toEqual({ ok: true, bytes: 1, verified: true, ...report,
       ...(submitted !== undefined ? { submitted } : {}), ...(submitRetried ? { submitRetried } : {}),
       ...(message ? { message } : {}) });

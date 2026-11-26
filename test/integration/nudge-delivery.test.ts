@@ -5,10 +5,59 @@ import { buildNudge } from '../../src/core/mailbox.js';
 import { NUDGE_SUBMIT_DELAY_MS } from '../../src/core/session.js';
 import { createAuditor, auditLogPath } from '../../src/daemon/audit.js';
 import { createFileLogger } from '../../src/daemon/logger.js';
-import { api, eventually, makeTempHome, repoRoot, startTestDaemon } from './helpers.js';
+import { api, connectWs, eventually, makeTempHome, repoRoot, startTestDaemon } from './helpers.js';
 
 describe('fixed message nudges through a real terminal', () => {
-  it('recovers a pending line after its named message was read through the inbox', async () => {
+  it('delivers a nudge while a viewer forwards a continuing mouse-report flood', async () => {
+    const home = makeTempHome('nudge-mouse-flood-');
+    const td = await startTestDaemon({ home, audit: createAuditor(home), promptScanIntervalMs: 30_000,
+      messaging: { enabled: true, allow: [{ group: 'peers', members: ['sender'] }],
+        nudgeIntervalMs: 60_000 } });
+    (td.daemon as unknown as { mailbox: { policy: (from: unknown, to: unknown) => boolean } }).mailbox.policy = () => true;
+    let flood: ReturnType<typeof setInterval> | undefined;
+    let viewer: Awaited<ReturnType<typeof connectWs>> | undefined;
+    try {
+      const input = path.join(home, 'recipient.input');
+      const fixture = path.join(repoRoot, 'test', 'fixtures', 'nudge-tui.mjs');
+      const started = await api(td.port, td.token, '/sessions', { body: {
+        command: process.execPath, args: [fixture, 'mouse-ready', input, path.join(home, 'unused.read')],
+        shell: false, openViewer: false, cols: 120, rows: 34, label: 'recipient', agent: 'claude',
+      } });
+      expect(started.status).toBe(200);
+      const id = String(started.body['id']);
+      const session = td.daemon['manager'].get(id)!;
+      viewer = await connectWs(td.port, id, td.token);
+      await eventually(() => session.nudgeReady(Date.now()), 10_000);
+      const mouse = '\x1b[<35;12;7M';
+      let reports = 0;
+      flood = setInterval(() => { viewer?.ws.send(mouse); reports++; }, 16);
+      await eventually(() => reports >= 12 && fs.existsSync(input) &&
+        fs.readFileSync(input, 'utf8').includes(mouse), 5_000);
+      const claim = await api(td.port, td.token, '/messages/claims', { body: { name: 'sender' } });
+      const headers = { 'x-shellpuppet-claim': String(claim.body['claimId']),
+        'x-shellpuppet-claim-secret': String(claim.body['secret']) };
+      const sent = await api(td.port, td.token, '/messages', { body: { to: 'recipient', text: 'notice' }, headers });
+      const line = buildNudge([{ id: String(sent.body['id']), from: {
+        id: String(claim.body['claimId']), name: 'sender' } }]);
+      await td.daemon['nudges'].tick();
+      await eventually(async () => (await api(td.port, td.token, '/messages/outbox', { headers }))
+        .body['messages'] instanceof Array &&
+        ((await api(td.port, td.token, '/messages/outbox', { headers })).body['messages'] as
+          { id: string; state: string }[]).some(entry => entry.id === sent.body['id'] && entry.state === 'nudged'), 12_000);
+      expect(reports).toBeGreaterThan(12);
+      expect(fs.readFileSync(input, 'utf8')).toContain(`${line}\r`);
+      const audit = fs.readFileSync(auditLogPath(home), 'utf8').split('\n').filter(Boolean)
+        .map(row => JSON.parse(row) as { action: string; actor: string; session?: string });
+      expect(audit.some(entry => entry.session === id && entry.action === 'report' && entry.actor === 'client')).toBe(true);
+      expect(audit.some(entry => entry.session === id && entry.action === 'input' && entry.actor === 'client')).toBe(false);
+    } finally {
+      if (flood !== undefined) clearInterval(flood);
+      viewer?.close();
+      await td.stop();
+    }
+  }, 45_000);
+
+  it('retires a read pending line and nudges a later message after the composer clears', async () => {
     const home = makeTempHome('nudge-stale-pending-');
     const td = await startTestDaemon({ home, audit: createAuditor(home), promptScanIntervalMs: 30_000,
       messaging: { enabled: true, allow: [{ group: 'peers', members: ['sender'] }],
@@ -45,19 +94,30 @@ describe('fixed message nudges through a real terminal', () => {
       expect((await outbox()).find((entry) => entry.id === first.body['id'])?.state).toBe('read');
       await td.daemon['nudges'].tick();
       expect(fs.readFileSync(input, 'utf8')).toBe(line);
-      expect(session.nudgePendingLine()).toBe(line);
+      expect(session.nudgePendingLine()).toBeNull();
+      expect(audit().filter((entry) => entry.action === 'nudge-pending-stale'))
+        .toHaveLength(1);
+      expect(audit().find((entry) => entry.action === 'nudge-pending-stale')?.meta)
+        .toEqual({ messageIds: [first.body['id']], count: 1 });
       const second = await api(td.port, td.token, '/messages', { body: { to: 'recipient', text: 'second' }, headers });
       fs.writeFileSync(`${input}.paint`, 'paint');
       await eventually(() => session.nudgeReadyWithLine(line), 5_000);
       await td.daemon['nudges'].tick();
-      await eventually(() => fs.readFileSync(input, 'utf8') === `${line}\r`, 5_000);
-      expect((await outbox()).find((entry) => entry.id === second.body['id'])?.state).toBe('nudged');
-      const nudges = audit().filter((entry) => entry.action === 'nudge');
-      expect(nudges).toHaveLength(1);
-      expect(nudges[0]?.meta).toMatchObject({ messageIds: [first.body['id']],
-        waitingMessageIds: [second.body['id']], staleMessageIds: [first.body['id']] });
+      expect(fs.readFileSync(input, 'utf8')).toBe(line);
+      expect((await outbox()).find((entry) => entry.id === second.body['id'])?.state).toBe('waiting');
+      expect(audit().filter((entry) => entry.action === 'nudge')).toHaveLength(0);
       expect(fs.readFileSync(`${input}.events`, 'utf8').split('\n').filter(Boolean)
-        .map((row) => (JSON.parse(row) as { data: string }).data)).toEqual([line, '\r']);
+        .map((row) => (JSON.parse(row) as { data: string }).data)).toEqual([line]);
+      await session.write('\x15', { humanInput: true });
+      await eventually(() => session.nudgeReady(Date.now()), 15_000);
+      await td.daemon['nudges'].tick();
+      const next = buildNudge([{ id: String(second.body['id']), from: {
+        id: String(claim.body['claimId']), name: 'sender' } }]);
+      await eventually(() => fs.existsSync(input) && fs.readFileSync(input, 'utf8') === `${line}\x15${next}\r`, 10_000);
+      expect((await outbox()).find((entry) => entry.id === second.body['id'])?.state).toBe('nudged');
+      expect(audit().filter((entry) => entry.action === 'nudge-pending-stale')).toHaveLength(1);
+      expect(fs.readFileSync(`${input}.events`, 'utf8').split('\n').filter(Boolean)
+        .map((row) => (JSON.parse(row) as { data: string }).data)).toEqual([line, '\x15', next, '\r']);
     } finally { await td.stop(); }
   }, 45_000);
 

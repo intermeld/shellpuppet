@@ -247,6 +247,19 @@ describe("audit log: the viewer's terminal answering the program (§4.5, §5)", 
       .filter((c) => c['type'] === 'input-source' && c['source'] === 'human').length;
   }
 
+  it('forwards a complete API mouse report without recording typing activity', async () => {
+    const td = await auditedDaemon(false);
+    const { id } = await startSpin(td);
+    const mouse = '\x1b[<35;12;7M';
+    const response = await api(td.port, td.token, `/sessions/${id}/input`, { body: { data: mouse } });
+    expect(response.status).toBe(200);
+    expect(response.body['bytes']).toBe(mouse.length);
+    expect(td.daemon['manager'].get(id)?.recentInput).toBe(false);
+    const records = readAudit(td.home).filter(line => line.session === id &&
+      (line.action === 'report' || line.action === 'input'));
+    expect(records).toMatchObject([{ actor: 'client', action: 'report', meta: { kind: 'mouse', chars: mouse.length } }]);
+  });
+
   it('forwards a focus report to the program, and files it as a report rather than as a person typing', async () => {
     const td = await auditedDaemon(false);
     const started = await api(td.port, td.token, '/sessions', {
