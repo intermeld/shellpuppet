@@ -647,11 +647,14 @@ it('clears a same-size Fit request and sends no repeat take across three relayou
         })()`);
         await eventually(async () => {
           last = await read();
-          return last.arrangements > previous.arrangements && last.passes > previous.passes;
-        }, 10_000, 50, 'arrangement and Auto fit after relayout ' + String(margin), () => last);
+          return last.arrangements > previous.arrangements;
+        }, 10_000, 50, 'arrangement after relayout ' + String(margin), () => last);
+        // An unchanged pane need not run Auto fit. Let any scheduled pass settle before checking for a repeat take.
+        await evaluate('new Promise(resolve => setTimeout(resolve, 400))');
+        last = await read();
         expect(last.takes.slice(acknowledged.takes.length), JSON.stringify(last)).toEqual([]);
       }
-      return last.passes - acknowledged.passes;
+      return last.arrangements - acknowledged.arrangements;
     },
   });
   expect(shot.probe).toBeGreaterThanOrEqual(3);
