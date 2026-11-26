@@ -7,6 +7,10 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-26
+
+Message nudge fixes: pointer input no longer holds or aborts nudges, a queued nudge is not repeated, and busy Claude Code sessions with background tasks are nudged. Also default-encoded mouse reports from the viewer and colour kept when the daemon starts from an agent tool shell.
+
 ### Fixed
 
 - Sessions started from a daemon launched inside an agent tool shell no longer inherit that shell's `NO_COLOR` through an `"all"` dashboard profile or global passthrough. Explicitly named values remain available.
