@@ -42,6 +42,19 @@ describe('capture page selection', () => {
     expect(send.mock.calls.at(-1)?.[0]).toBe('Target.createTarget');
     expect(send.mock.calls.length).toBeGreaterThan(2);
   });
+
+  it.each([undefined, {}, { targetInfos: null }, { targetInfos: 'invalid' },
+    { targetInfos: [null, { type: 'page', url: 'about:blank' }] }])(
+    'falls back when target discovery returns %j', async reply => {
+      vi.useFakeTimers();
+      const send = vi.fn((method: string): Promise<unknown> => Promise.resolve(method === 'Target.getTargets'
+        ? reply : { targetId: 'fallback' }));
+      const selected = capturePageTarget({ send } as unknown as Pick<DevTools, 'send'>, Date.now() + 5_000);
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(await selected).toBe('fallback');
+      expect(send.mock.calls.at(-1)?.[0]).toBe('Target.createTarget');
+    },
+  );
 });
 
 /** A socket that takes every message and answers none of them. */

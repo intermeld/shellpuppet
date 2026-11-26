@@ -386,10 +386,12 @@ export function captureBrowserArgs(profileDir: string, width: number, height: nu
 export async function capturePageTarget(cdp: Pick<DevTools, 'send'>, deadline: number): Promise<string> {
   const pageDeadline = Math.min(deadline, Date.now() + 2_000);
   for (;;) {
-    const { targetInfos } = await cdp.send<{ targetInfos: { targetId: string; type: string; url: string }[] }>(
+    const reply = await cdp.send<{ targetInfos?: { targetId: string; type: string; url: string }[] }>(
       'Target.getTargets',
     );
-    const initial = targetInfos.find((target) => target.type === 'page' && target.url === 'about:blank');
+    const initial = Array.isArray(reply?.targetInfos) ? reply.targetInfos.find(
+      (target) => target?.type === 'page' && target.url === 'about:blank' && typeof target.targetId === 'string',
+    ) : undefined;
     if (initial !== undefined) return initial.targetId;
     if (Date.now() >= pageDeadline) break;
     await sleep(Math.min(50, pageDeadline - Date.now()));
@@ -445,6 +447,9 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
     sessionId = attached.sessionId;
     stage = 'page setup';
     await cdp.send('Page.enable', {}, sessionId);
+    // The launch page may exist without being the active tab. Keyboard input
+    // and clipboard access need the capture page to have window focus.
+    await cdp.send('Page.bringToFront', {}, sessionId);
     if (options.cpuThrottlingRate !== undefined) {
       await cdp.send('Emulation.setCPUThrottlingRate', { rate: options.cpuThrottlingRate }, sessionId);
     }

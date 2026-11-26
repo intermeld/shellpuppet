@@ -4,6 +4,8 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { captureViewer } from '../../src/daemon/screenshot.js';
 
+const commands: string[] = [];
+
 // Announce a private DevTools endpoint using the same file as Chromium.
 vi.mock('node:child_process', async original => ({
   ...await original<typeof import('node:child_process')>(),
@@ -24,14 +26,16 @@ vi.mock('ws', () => ({ default: class extends EventEmitter {
     const { id, method, params } = JSON.parse(data) as {
       id: number; method: string; params: { expression?: string };
     };
+    commands.push(method);
     const delay = method === 'Page.navigate' ? 86_000 : params.expression === 'interaction' ? 8_000 : 0;
     setTimeout(() => this.emit('message', JSON.stringify({ id, result: {
+      targetInfos: [{ targetId: 'page', type: 'page', url: 'about:blank' }],
       targetId: 'page', sessionId: 'session', result: { value: true },
     } })), delay);
   }
 } }));
 
-beforeEach(() => { vi.useFakeTimers({ now: 0 }); });
+beforeEach(() => { commands.length = 0; vi.useFakeTimers({ now: 0 }); });
 afterEach(() => { vi.useRealTimers(); });
 
 it.each([
@@ -44,6 +48,8 @@ it.each([
     drive: true, probeOnly: true, probe: 'ready', interact, setupTimeoutMs, timeoutMs: 90_000 })
     .then(result => result.probe, (error: unknown) => String(error));
   await vi.advanceTimersByTimeAsync(100_000);
+  expect(commands.indexOf('Page.bringToFront')).toBeGreaterThan(commands.indexOf('Page.enable'));
+  expect(commands.indexOf('Page.bringToFront')).toBeLessThan(commands.indexOf('Page.navigate'));
   if (completes) {
     expect(await outcome).toBe(true);
     expect(interact).toHaveBeenCalledTimes(1);
