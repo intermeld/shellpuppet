@@ -382,6 +382,22 @@ export function captureBrowserArgs(profileDir: string, width: number, height: nu
   ];
 }
 
+/** Reuse the launch page once registered; retain the old path if it never appears. */
+export async function capturePageTarget(cdp: Pick<DevTools, 'send'>, deadline: number): Promise<string> {
+  const pageDeadline = Math.min(deadline, Date.now() + 2_000);
+  for (;;) {
+    const { targetInfos } = await cdp.send<{ targetInfos: { targetId: string; type: string; url: string }[] }>(
+      'Target.getTargets',
+    );
+    const initial = targetInfos.find((target) => target.type === 'page' && target.url === 'about:blank');
+    if (initial !== undefined) return initial.targetId;
+    if (Date.now() >= pageDeadline) break;
+    await sleep(Math.min(50, pageDeadline - Date.now()));
+  }
+  const { targetId } = await cdp.send<{ targetId: string }>('Target.createTarget', { url: 'about:blank' });
+  return targetId;
+}
+
 /**
  * Open the viewer page headless, wait for its first snapshot to be drawn,
  * and return the pixels and the rows. Throws when the browser will not start,
@@ -419,14 +435,9 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
     ws = await connect(endpoint, deadline);
     cdp = new DevTools(ws, deadline);
 
-    // Chromium already opened the about:blank page passed on its command line.
-    // Creating another tab leaves the capture in the background, where its
-    // document is hidden and animation frames may stop under load.
-    const { targetInfos } = await cdp.send<{ targetInfos: { targetId: string; type: string; url: string }[] }>(
-      'Target.getTargets',
-    );
-    const targetId = targetInfos.find((target) => target.type === 'page' && target.url === 'about:blank')?.targetId;
-    if (targetId === undefined) throw new Error('The browser did not open its initial page.');
+    // The command-line page can register after DevTools accepts a connection.
+    // Reuse it when present rather than leaving the capture in a background tab.
+    const targetId = await capturePageTarget(cdp, deadline);
     const attached = await cdp.send<{ sessionId: string }>('Target.attachToTarget', {
       targetId,
       flatten: true,
