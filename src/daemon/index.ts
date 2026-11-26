@@ -9,12 +9,14 @@ import { removeClaimCredentials } from '../core/types.js';
 import { Daemon, AlreadyRunningError } from './server.js';
 import * as path from 'node:path';
 import { createAuditor } from './audit.js';
-import { DEFAULT_VIEWER_LAUNCH_MODE, readDaemonConfig, signatureOverBudgetLog } from './config.js';
+import { DEFAULT_VIEWER_LAUNCH_MODE, signatureOverBudgetLog } from './config.js';
+import { parseConfigCandidate, unavailableConfig } from './configReload.js';
+import { ConfigPermissions, readPrivateConfig } from './configWatcher.js';
 import { useDialogSignatures } from '../core/dialogs.js';
 import { useAgentSignatures } from '../core/reasoning.js';
 import { createFileLogger } from './logger.js';
 import { assertNodeVersion } from './meta.js';
-import { daemonLogPath, shellpuppetHome } from './paths.js';
+import { daemonLogPath, ensureHome, shellpuppetHome } from './paths.js';
 import { releaseWrappedDaemon, WRAPPED_START_IPC } from './wrappedStart.js';
 
 async function main(): Promise<void> {
@@ -27,7 +29,11 @@ async function main(): Promise<void> {
   // Shape-validated (design §4.3 fail-closed): a malformed policy section
   // arrives here as deny-all with the problem in its refusal reason. It must
   // never be silently ignored, because ignoring it is fail-open.
-  const { config, problems } = readDaemonConfig(home);
+  ensureHome(home);
+  const permissions = new ConfigPermissions(home);
+  const bootConfig = await readPrivateConfig(home, permissions.check).then(read => parseConfigCandidate(read.text),
+    () => unavailableConfig('Could not verify permissions or read config.json.'));
+  const { config, problems } = bootConfig;
   // Recognised by every session's prompt detection from here on. The entries
   // that did not compile are included in the configuration problems. A signature
   // built-in or from config, that runs past its time budget on a screen is
@@ -46,6 +52,7 @@ async function main(): Promise<void> {
 
   const daemon = new Daemon({
     home,
+    bootConfig: { candidate: bootConfig, permissions },
     logger,
     ...(supervised ? { afterPublish: releaseWrappedDaemon } : {}),
     audit: createAuditor(home, { captureContent: config.audit?.captureContent ?? false }, logger),

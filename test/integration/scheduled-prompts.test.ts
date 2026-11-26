@@ -27,6 +27,9 @@ it('reloads additions, edits and removals and retains the last readable section'
     await eventually(async () => JSON.stringify(await list()).includes('daily-check'));
     const changed = { ...schedule, cron: '0 10 * * 1', whenBusy: 'queue' };
     save([changed, { ...schedule, name: 'broken', message: 3 }]);
+    await eventually(() => /schedules.*invalid/i.test(logged()), 3000);
+    expect(await list()).toMatchObject([{ name: schedule.name, cron: schedule.cron }]);
+    save([changed]);
     await eventually(async () => JSON.stringify(await list()).includes('0 10 * * 1'));
     const saved = await list();
     expect(saved).toMatchObject([{ name: schedule.name, whenBusy: 'queue', lastOutcome: null }]);
@@ -46,10 +49,9 @@ it('reloads additions, edits and removals and retains the last readable section'
     expect((await api(td.port, td.token, '/messages/claims', { body: { name: 'sample' } })).status).not.toBe(201);
     save([]);
     await eventually(async () => JSON.stringify(await list()) === '[]');
-    for (const action of ['added', 'changed', 'removed']) {
-      expect(logged()).toContain('"' + action + '":["daily-check"]');
-    }
-    expect(logged()).toContain('broken');
+    expect(logged()).toContain('schedules');
+    expect(logged()).not.toContain('daily-check');
+    expect(logged()).not.toContain('broken');
     expect(logged()).not.toContain(schedule.message);
   } finally { await td.stop(); }
 });

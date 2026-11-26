@@ -1,10 +1,6 @@
-import * as fs from 'node:fs';
-import * as path from 'node:path';
 import { parseCron } from '../core/cron.js';
 import type { Cron } from '../core/cron.js';
 import { NAME_PATTERN } from '../core/mailbox.js';
-import type { Logger } from '../core/types.js';
-import { configPath } from './paths.js';
 
 export interface Schedule {
   readonly name: string;
@@ -22,6 +18,8 @@ interface Entry {
 
 interface ScheduleChanges {
   problems: string[];
+  /** Fixed schema paths and validator reasons, safe to show on reload. */
+  rejection?: string;
   added: string[];
   changed: string[];
   removed: string[];
@@ -54,11 +52,19 @@ export class ScheduleStore {
   read(): readonly Schedule[] { return [...this.entries.values()].map(entry => entry.config); }
   get(name: string): Entry | undefined { return this.entries.get(name); }
 
+  withSchedules(section: readonly Schedule[]): ScheduleStore {
+    const next = new ScheduleStore();
+    next.entries = this.entries;
+    next.replace(section);
+    return next;
+  }
+
   replace(section: unknown): ScheduleChanges {
     const changes: ScheduleChanges = { problems: [], added: [], changed: [], removed: [] };
     if (section === undefined) section = [];
     if (!Array.isArray(section)) {
-      changes.problems.push('schedules must be an array');
+      changes.rejection = 'schedules must be an array';
+      changes.problems.push(changes.rejection);
       return changes;
     }
     const names = new Set<string>();
@@ -73,6 +79,7 @@ export class ScheduleStore {
     for (const [index, raw] of (section as unknown[]).entries()) {
       const entry = validate(raw, duplicates);
       if (typeof entry === 'string') {
+        changes.rejection ??= `schedules[${String(index)}] invalid: ${entry}.`;
         const name = isRecord(raw) && typeof raw['name'] === 'string' ? JSON.stringify(raw['name']) : String(index);
         changes.problems.push(`schedules[${name}] ${entry}`);
         continue;
@@ -89,48 +96,6 @@ export class ScheduleStore {
     this.entries = next;
     return changes;
   }
-}
-
-/** Watch the parent so an editor can replace config.json with a rename. */
-export function watchSchedules(
-  home: string, store: ScheduleStore, logger: Logger,
-  onConfigChange?: (raw: Record<string, unknown>, initial: boolean) => void,
-): () => void {
-  const file = configPath(home);
-  let debounce: NodeJS.Timeout | undefined;
-  let previousSection: string | undefined;
-  let initial = true;
-  function reload(): void {
-    let section: unknown;
-    let root: Record<string, unknown> = {};
-    try {
-      const parsed: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
-      if (!isRecord(parsed)) throw new Error();
-      root = parsed;
-      section = root['schedules'];
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        logger.warn('CONFIG PROBLEM', { problem: 'config.json is unreadable, invalid JSON or not an object. Keeping previous schedules.' });
-        return;
-      }
-    }
-    onConfigChange?.(root, initial);
-    initial = false;
-    const contents = JSON.stringify(section === undefined ? [] : section);
-    if (contents === previousSection) return;
-    previousSection = contents;
-    const { problems, added, changed, removed } = store.replace(section);
-    for (const problem of problems) logger.warn('CONFIG PROBLEM', { problem });
-    if (added.length || changed.length || removed.length) logger.info('Schedules updated', { added, changed, removed });
-  }
-  const watcher = fs.watch(home, { persistent: false }, (_event, name) => {
-    if (name !== null && name !== path.basename(file)) return;
-    clearTimeout(debounce);
-    debounce = setTimeout(reload, 100);
-  });
-  watcher.on('error', () => logger.warn('Could not watch config.json for schedule changes.'));
-  reload();
-  return () => { watcher.close(); clearTimeout(debounce); };
 }
 
 export interface ScheduleOutcome {
@@ -151,7 +116,11 @@ export class PromptScheduler {
   private readonly running = new Set<string>();
   private readonly last = new WeakMap<Schedule, LastOutcome>();
 
-  constructor(private readonly store: ScheduleStore, private readonly now: () => number,
+  private get store(): ScheduleStore {
+    return typeof this.source === 'function' ? this.source() : this.source;
+  }
+
+  constructor(private readonly source: ScheduleStore | (() => ScheduleStore), private readonly now: () => number,
     private readonly deliver: (schedule: Schedule, current: () => boolean) => Promise<ScheduleOutcome>,
     private readonly audit: (schedule: Schedule, result: ScheduleOutcome) => void) {}
 

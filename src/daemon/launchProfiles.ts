@@ -478,9 +478,8 @@ export function parseLauncher(
   if (allowance.problem !== undefined) problems.push(allowance.problem);
   const entries = raw['profiles'];
   if (entries === undefined) {
-    problems.push(
-      'launcher has no profiles list: no dashboard launch profiles are loaded (an empty list is fine)',
-    );
+    if (raw['sessionLaunch'] !== undefined) problems.push('launcher.sessionLaunch requires a profiles list. No launch permission granted.');
+    else if (raw['launchesPerMinute'] === undefined) problems.push('launcher has no profiles list: no dashboard launch profiles are loaded (an empty list is fine)');
     return { launcher: { profiles, problems, launchesPerMinute: allowance.value }, problems };
   }
   if (!Array.isArray(entries)) {

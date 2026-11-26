@@ -200,6 +200,10 @@ export function configPath(home: string): string {
 /** Repair existing homes too, before reading a credential or publishing one. */
 export function ensureHome(home: string, deadline?: number, reserveLauncher = false): string | undefined {
   fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+  const directory = fs.lstatSync(home);
+  if (!directory.isDirectory() || (process.getuid && directory.uid !== process.getuid())) {
+    throw new Error('The ShellPuppet home must be an ordinary directory owned by the current user.');
+  }
   if (process.platform === 'win32') {
     const secured = secureWindowsHome(fs.realpathSync.native(home), deadline, reserveLauncher ? path.resolve(home) : undefined);
     privateWindowsHome = secured;

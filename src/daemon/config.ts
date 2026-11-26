@@ -132,6 +132,7 @@ export interface MessagingRelations {
 }
 
 export interface ParsedDaemonConfig {
+  scheduleRejection?: string;
   config: DaemonConfig;
   /** Human-readable problems. The daemon logs each one loudly at startup. */
   problems: string[];
@@ -468,7 +469,7 @@ export function buildMessagingPolicy(
 }
 
 /** The fail-closed result for a config whose intent is unknowable. */
-function unknowableConfig(reason: string, problem: string): ParsedDaemonConfig {
+export function unknowableConfig(reason: string, problem: string): ParsedDaemonConfig {
   return {
     config: { policy: denyAllPolicy(reason), sessionEnv: 'clean' },
     problems: [problem],
@@ -487,6 +488,7 @@ export function parseDaemonConfig(raw: unknown): ParsedDaemonConfig {
 
   const problems: string[] = [];
   const config: DaemonConfig = {};
+  let scheduleRejection: string | undefined;
   for (const key of Object.keys(raw)) {
     if (!TOP_LEVEL_KEYS.has(key)) {
       problems.push(`config.json has an unknown key "${key}": ignored (typo?)`);
@@ -497,7 +499,9 @@ export function parseDaemonConfig(raw: unknown): ParsedDaemonConfig {
 
   if (raw['schedules'] !== undefined) {
     const store = new ScheduleStore();
-    problems.push(...store.replace(raw['schedules']).problems);
+    const changes = store.replace(raw['schedules']);
+    problems.push(...changes.problems);
+    scheduleRejection = changes.rejection;
     config.schedules = store.read();
   }
 
@@ -526,9 +530,9 @@ export function parseDaemonConfig(raw: unknown): ParsedDaemonConfig {
         problems.push('daemon.startWithOnlyIfEnvContains must be a non-blank string of at most 256 characters: starting directly');
         valid = false;
       }
-      if (valid && isStringArray(startWith)) {
+      if (valid && (isStringArray(startWith) || typeof condition === 'string')) {
         config.daemon = {
-          startWith,
+          ...(isStringArray(startWith) ? { startWith } : {}),
           ...(typeof condition === 'string' ? { startWithOnlyIfEnvContains: condition } : {}),
         };
       }
@@ -700,11 +704,11 @@ export function parseDaemonConfig(raw: unknown): ParsedDaemonConfig {
     );
   }
 
-  return { config, problems };
+  return { config, problems, ...(scheduleRejection ? { scheduleRejection } : {}) };
 }
 
 /** Locate a JSON syntax error without using V8's message, which may quote config text. */
-function jsonErrorLocation(raw: string): { line: number; column: number } {
+export function jsonErrorLocation(raw: string): { line: number; column: number } {
   class InvalidJson extends Error {
     constructor(readonly offset: number) { super('invalid JSON'); }
   }

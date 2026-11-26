@@ -1,0 +1,141 @@
+import { EventEmitter } from 'node:events';
+import * as fs from 'node:fs';
+import { join } from 'node:path';
+import { expect, it, vi } from 'vitest';
+import { ConfigWatcher, readPrivateConfig } from '../../src/daemon/configWatcher.js';
+import { makeTempHome, removeTempHome } from '../integration/helpers.js';
+import { ConfigReload, parseConfigCandidate } from '../../src/daemon/configReload.js';
+
+it.each([
+  { launcher: { launchesPerMinute: 4, sessionLaunch: [42] } }, { mcp: null }, { mcp: { unknown: true } },
+  { audit: { unknown: true } }, { policy: { mode: 'allow-all', deny: ['['] } },
+  { sessionEnv: ['bad name'] }, { launcher: { profiles: [{ name: 'desk', command: 'node', envFromDaemon: [42] }] } },
+  { agents: { signatures: [{ name: 'desk', measured: 42, answer: { start: { text: 'x' } }, composer: { text: '>' } }] } },
+  { prompts: { dialogs: [{ name: 'x', title: 'x', choices: 'x', unknown: true }] } },
+  { daemon: { startWithOnlyIfEnvContains: false } },
+])('rejects a malformed field even when its section is inactive', raw => {
+  expect(parseConfigCandidate(JSON.stringify(raw)).reason).toBeDefined();
+});
+
+it.each([
+  { launcher: { launchesPerMinute: 4 } }, { messaging: { enabled: true } },
+  { viewer: { launchMode: 'none' } },
+  { launcher: { profiles: [{ name: 'desk', command: 'node' }] },
+    messaging: { enabled: true, allow: [{ group: 'work', members: ['desk'] }] } },
+])('accepts defaults, aliases and valid advisory cases', raw => {
+  expect(parseConfigCandidate(JSON.stringify(raw)).reason).toBeUndefined();
+});
+
+it('coalesces rename bursts, retries a failed watch, notices lost events and cancels outstanding reads', async () => {
+  vi.useFakeTimers();
+  let changed!: (name: string | null) => void;
+  const watcher = Object.assign(new EventEmitter(), { close: vi.fn() });
+  let registrations = 0;
+  let value = 'one';
+  let release: (() => void) | undefined;
+  const seen: string[] = [];
+  const health: string[] = [];
+  const reader = new ConfigWatcher({
+    watch: callback => {
+      changed = callback;
+      if (++registrations === 1) throw new Error('unavailable');
+      return watcher;
+    },
+    read: async () => {
+      const text = value;
+      if (value === 'slow') await new Promise<void>(resolve => { release = resolve; });
+      return { text, current: () => value === text };
+    },
+    receive: candidate => { seen.push(candidate.text!); },
+    fail: () => undefined,
+    health: state => { health.push(state); },
+  });
+  try {
+    await reader.start();
+    expect(seen).toEqual(['one']);
+    expect(health).toContain('polling');
+    value = 'two';
+    await vi.advanceTimersByTimeAsync(2000);
+    expect(seen.at(-1)).toBe('two');
+    expect(health.at(-1)).toBe('watching');
+    value = 'three';
+    changed('other');
+    await vi.advanceTimersByTimeAsync(100);
+    expect(seen.at(-1)).toBe('two');
+    changed(null);
+    await vi.advanceTimersByTimeAsync(50);
+    changed('config.json');
+    await vi.advanceTimersByTimeAsync(100);
+    expect(seen.at(-1)).toBe('three');
+    value = 'slow';
+    changed('config.json');
+    await vi.advanceTimersByTimeAsync(100);
+    value = 'latest';
+    changed('config.json');
+    release!();
+    await vi.advanceTimersByTimeAsync(101);
+    expect(seen).not.toContain('slow');
+    expect(seen.at(-1)).toBe('latest');
+    value = 'slow';
+    changed(null);
+    await vi.advanceTimersByTimeAsync(100);
+    reader.stop();
+    release!();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(seen.at(-1)).toBe('latest');
+  } finally { reader.stop(); vi.useRealTimers(); }
+});
+
+it.skipIf(process.platform === 'win32')('rejects links and permission-only changes and detects replacement before publication', async () => {
+  const home = makeTempHome();
+  const file = join(home, 'config.json');
+  try {
+    const original = await readPrivateConfig(home);
+    expect(original.current()).toBe(true);
+    fs.renameSync(file, file + '.old');
+    fs.symlinkSync(file + '.old', file);
+    expect(original.current()).toBe(false);
+    await expect(readPrivateConfig(home)).rejects.toThrow(/permission/i);
+    fs.unlinkSync(file);
+    fs.renameSync(file + '.old', file);
+    fs.chmodSync(file, 0o666);
+    await expect(readPrivateConfig(home)).rejects.toThrow(/permission/i);
+  } finally { removeTempHome(home); }
+});
+
+it('holds an in-flight schedule through invalid siblings and invalidates it on accepted removal', async () => {
+  const { PromptScheduler } = await import('../../src/daemon/schedules.js');
+  const entry = { name: 'waiting', session: 'worker', cron: '* * * * *', message: 'work', whenBusy: 'queue' };
+  let owns = true;
+  const audit = vi.fn();
+  const reload = new ConfigReload(parseConfigCandidate(JSON.stringify({ schedules: [entry] })),
+    { ownsHome: () => owns, audit, changed: () => undefined, log: () => undefined });
+  const save = (raw: unknown) => reload.reconcile({ text: JSON.stringify(raw), current: () => true });
+  let now = 0;
+  let current!: () => boolean;
+  let finish!: () => void;
+  const scheduler = new PromptScheduler(() => reload.state.schedules, () => now, async (_schedule, valid) => {
+    current = valid;
+    await new Promise<void>(resolve => { finish = resolve; });
+    return { outcome: 'aborted' };
+  }, () => undefined);
+  scheduler.start();
+  try {
+    now = 60_000;
+    const tick = scheduler.tick();
+    save({ schedules: [entry, { ...entry, name: 'bad', cron: 'invalid' }] });
+    expect(current()).toBe(true);
+    expect(reload.status.outcome).toBe('rejected');
+    save({ schedules: [entry], launcher: { launchesPerMinute: 9 } });
+    expect(current()).toBe(true);
+    owns = false;
+    save({});
+    expect(current()).toBe(true);
+    owns = true;
+    save({});
+    expect(current()).toBe(false);
+    expect(audit).toHaveBeenCalledTimes(2);
+    finish();
+    await tick;
+  } finally { scheduler.stop(); }
+});

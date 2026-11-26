@@ -30,6 +30,7 @@ import { inspectDaemonState, readDaemonState, shellpuppetHome } from '../daemon/
 import { clearRestartHold, readRestartHold, writeRestartHold } from '../daemon/restartHold.js';
 import { observedProcessExit, readLinuxProcessIdentity } from '../daemon/liveness.js';
 import { planPassedEnv } from '../mcp/config.js';
+import type { ConfigReloadStatus } from '../daemon/configReload.js';
 import { isEnvNamesProblem, readDaemonConfig } from '../daemon/config.js';
 import { agentNameFor } from '../core/reasoning.js';
 import { knownKeys } from '../core/keys.js';
@@ -1169,7 +1170,7 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
         ...daemonOnly,
       })
         .then((response) =>
-          response.status === 200 ? (response.body as { mode: string; exposed: string[] }) : undefined,
+          response.status === 200 ? (response.body as { mode: string; exposed: string[]; configReload?: ConfigReloadStatus }) : undefined,
         )
         .catch(() => undefined);
       if (wantJson) {
@@ -1180,7 +1181,8 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
           sessions: list,
           startedWrapped,
           ...(holdRemainingSeconds !== undefined ? { holdRemainingSeconds } : {}),
-          ...(environment !== undefined ? { sessionEnv: environment } : {}),
+          ...(environment !== undefined ? { sessionEnv: { mode: environment.mode, exposed: environment.exposed } } : {}),
+          ...(environment?.configReload ? { configReload: environment.configReload } : {}),
         });
       } else {
         console.log(
@@ -1189,6 +1191,13 @@ async function daemonVerb(parsed: ParsedArgs, wantJson: boolean): Promise<void> 
             (holdRemainingSeconds !== undefined ? `, restart hold ends in ${String(holdRemainingSeconds)} s` : '') +
             (environment !== undefined ? `, session environment ${environment.mode}` : ''),
         );
+        const reload = environment?.configReload;
+        if (reload) {
+          console.log(`Config ${reload.outcome} (revision ${String(reload.revision)}, watcher ${reload.watcher}).` +
+            (reload.reason ? ' ' + reload.reason : ''));
+          console.log('Last attempt ' + reload.lastAttempt + ', last accepted ' + (reload.lastAccepted ?? 'never') + '.');
+          if (reload.needsDaemonRestart.length) console.log('Needs daemon restart for ' + reload.needsDaemonRestart.join(', ') + '.');
+        } else console.log('Config reload status unavailable.');
         if (environment !== undefined && environment.exposed.length > 0) {
           console.error(
             `warning: sessionEnv "passthrough" hands every session the daemon's whole ` +

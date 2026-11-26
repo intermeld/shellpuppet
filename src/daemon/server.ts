@@ -22,7 +22,10 @@ import { Mailbox, MailboxError, NAME_PATTERN, buildNudge } from '../core/mailbox
 import type { MailboxEntry, SavedClaim } from '../core/mailbox.js';
 import { buildMessagingPolicy, DEFAULT_NUDGE_INTERVAL_MS, DEFAULT_NUDGES_PER_MINUTE } from './config.js';
 import { NudgeScheduler } from './nudgeScheduler.js';
-import { ScheduleStore, PromptScheduler, watchSchedules } from './schedules.js';
+import { ConfigReload, parseConfigCandidate, unavailableConfig } from './configReload.js';
+import type { ConfigCandidate } from './configReload.js';
+import { ConfigPermissions, ConfigWatcher, readPrivateConfig } from './configWatcher.js';
+import { ScheduleStore, PromptScheduler } from './schedules.js';
 import type { Schedule, ScheduleOutcome } from './schedules.js';
 import type { NudgeAbortReason } from '../core/session.js';
 import type { MessagingConfig } from './config.js';
@@ -73,7 +76,7 @@ import {
   tokensEqual,
   viewerCookie,
 } from './auth.js';
-import { NULL_AUDITOR } from './audit.js';
+import { createAuditor, NULL_AUDITOR } from './audit.js';
 import { findBrowser, launchDashboard, launchViewer } from './viewerLauncher.js';
 import type { ViewerLaunchResult } from './viewerLauncher.js';
 import {
@@ -114,7 +117,7 @@ import {
   resolveAnyFolder,
 } from './launchProfiles.js';
 import type { LaunchFolder, LaunchProfile, LauncherConfig } from './launchProfiles.js';
-import { DEFAULT_LAUNCHES_PER_MINUTE, listRootFolders, parseLaunchesPerMinute, resolveRootFolder } from './launchProfiles.js';
+import { DEFAULT_LAUNCHES_PER_MINUTE, listRootFolders, resolveRootFolder } from './launchProfiles.js';
 import { chooseFolder, FOLDER_PICKER_TIMEOUT_MS, FolderPickerFailureError, FolderPickerUnavailableError, FolderPickerTimeoutError } from './folderPicker.js';
 
 const DEFAULT_IDLE_MS = 30 * 60_000;
@@ -274,6 +277,8 @@ const DASHBOARD_PROOF_META = '<meta name="sp-csrf" content="">';
 const DASHBOARD_FONT_META = '<meta name="sp-dashboard-font-size" content="">';
 
 export interface DaemonOptions {
+  /** The standalone entry and its initial effective configuration share one private read. */
+  bootConfig?: { candidate: ConfigCandidate; permissions: ConfigPermissions };
   home: string;
   logger: Logger;
   messaging?: MessagingConfig;
@@ -637,10 +642,12 @@ export class Daemon {
   private readonly nudges: NudgeScheduler;
   private readonly queuedMessageNudges = new Map<string, { at: number; messageIds: string[]; heldIds: Set<string> }>();
   private readonly inboxReadVersions = new Map<string, number>();
-  private readonly schedules = new ScheduleStore();
+  private reload?: ConfigReload;
+  private get schedules(): ScheduleStore { return this.reload!.state.schedules; }
   private readonly pendingSchedules = new Map<string, string>();
   private readonly promptScheduler: PromptScheduler;
-  private stopScheduleWatch?: () => void;
+  private configWatcher?: ConfigWatcher;
+  private configPermissions?: ConfigPermissions;
   private readonly server: http.Server;
   /** Protocol accepted by dashboard authentication for this specific upgrade. */
   private readonly dashboardUpgradeProtocols = new WeakMap<http.IncomingMessage, string>();
@@ -759,7 +766,9 @@ export class Daemon {
   private readonly sessionEnv: SessionEnvMode;
   /** The profiles the dashboard may name, and the entries that did not load. */
   private readonly launchProfiles: LauncherConfig;
-  private launchesPerMinute: number;
+  private get launchesPerMinute(): number {
+    return this.reload?.state.launchesPerMinute ?? this.launchProfiles.launchesPerMinute ?? DEFAULT_LAUNCHES_PER_MINUTE;
+  }
   private readonly daemonEnv: NodeJS.ProcessEnv;
   private readonly omitInheritedNoColor: boolean;
   private readonly cliPath: string;
@@ -801,7 +810,6 @@ export class Daemon {
     };
     this.sessionEnv = options.sessionEnv ?? DEFAULT_SESSION_ENV;
     this.launchProfiles = options.launchProfiles ?? { profiles: [], problems: [] };
-    this.launchesPerMinute = this.launchProfiles.launchesPerMinute ?? DEFAULT_LAUNCHES_PER_MINUTE;
     this.daemonEnv = { ...(options.daemonEnv ?? process.env) };
     this.omitInheritedNoColor = hasAgentShellNoColor(this.daemonEnv);
     this.cliPath = fileURLToPath(new URL('../../dist/cli/index.js', import.meta.url));
@@ -834,7 +842,7 @@ export class Daemon {
       perMinute: options.messaging?.nudgesPerMinute ?? DEFAULT_NUDGES_PER_MINUTE,
       deliver: (id) => this.deliverNudge(id),
     });
-    this.promptScheduler = new PromptScheduler(this.schedules, () => this.now(),
+    this.promptScheduler = new PromptScheduler(() => this.schedules, () => this.now(),
       (schedule, current) => this.deliverScheduled(schedule, current),
       (schedule, { sessionId, outcome, reason }) => this.audit.record('daemon', 'input', sessionId, {
         source: 'schedule', name: schedule.name, session: schedule.session, outcome, reason,
@@ -916,10 +924,47 @@ export class Daemon {
   }
 
   // ------------------------------------------------------------------ start
-  async start(): Promise<{ port: number; token: string }> {
-    const { home } = this.options;
-    ensureHome(home);
+  private async prepareConfig(home: string): Promise<void> {
+    if (!this.options.bootConfig) ensureHome(home);
+    this.configPermissions = this.options.bootConfig?.permissions ?? new ConfigPermissions(home);
+    const read = () => readPrivateConfig(home, this.configPermissions?.check);
+    let boot = this.options.bootConfig?.candidate;
+    if (!boot) {
+      try { boot = parseConfigCandidate((await read()).text); }
+      catch { boot = unavailableConfig('Could not verify permissions or read config.json.'); }
+      // Embedded callers can inject initial live settings independently of the file.
+      boot = { ...boot, config: { ...boot.config, messaging: this.options.messaging ?? boot.config.messaging,
+        launcher: boot.config.launcher ?? this.launchProfiles } };
+    }
+    const append = this.audit.recordRequired ?? createAuditor(home).recordRequired!;
+    const ownsHome = () => {
+      try { this.requireHomeOwner(); return !this.stopping; }
+      catch { this.configWatcher?.stop(); this.configPermissions?.close(); return false; }
+    };
+    const reload = this.reload = new ConfigReload(boot, {
+      ownsHome,
+      log: (message, reason) => reason ? this.logger.warn(message, { reason }) : this.logger.info(message),
+      audit: (action, sections) => append('daemon', action, undefined, { sections }),
+      changed: () => undefined,
+    }, this.options.bootConfig ? undefined : 'no-window');
+    this.configWatcher = new ConfigWatcher({
+      watch: notify => fs.watch(home, { persistent: false }, (_event, name) => notify(name)),
+      read, receive: candidate => reload.reconcile(candidate), fail: reason => { if (ownsHome()) reload.reject(reason); },
+      health: state => {
+        if (state === 'polling' && reload.status.watcher !== state) this.logger.warn('Config watcher unavailable, polling config.json.');
+        reload.status.watcher = state;
+      },
+    });
+  }
 
+  async start(): Promise<{ port: number; token: string }> {
+    try { return await this.startInHome(); }
+    catch (error) { this.configPermissions?.close(); this.configWatcher?.stop(); throw error; }
+  }
+
+  private async startInHome(): Promise<{ port: number; token: string }> {
+    const { home } = this.options;
+    await this.prepareConfig(home);
     // Defer to an incumbent that is running, even one too busy to answer its
     // health check; clear a record whose daemon has gone (design §2.3).
     const existing = readDaemonState(home);
@@ -1095,12 +1140,9 @@ export class Daemon {
         });
     }, this.options.promptScanIntervalMs ?? PROMPT_SCAN_INTERVAL_MS);
     this.promptScanTimer.unref();
-    this.stopScheduleWatch = watchSchedules(home, this.schedules, this.logger, (raw, initial) => {
-      if (initial && raw['launcher'] === undefined) return;
-      const allowance = parseLaunchesPerMinute(raw['launcher']);
-      this.launchesPerMinute = allowance.value;
-      if (!initial && allowance.problem !== undefined) this.logger.warn('CONFIG PROBLEM', { problem: allowance.problem });
-    });
+    if (this.reload?.status.reason) this.logger.warn('Degraded configuration at startup', { reason: this.reload.status.reason });
+    await this.configWatcher!.start();
+    if (this.stopping) throw new Error('Daemon stopped during startup.');
     this.promptScheduler.start();
 
     this.logger.info('daemon started', {
@@ -1217,7 +1259,8 @@ export class Daemon {
     if (this.stopPromise === null) {
       this.stopping = true;
       this.promptScheduler.stop();
-      this.stopScheduleWatch?.();
+      this.configWatcher?.stop();
+      this.configPermissions?.close();
       this.shutdownRecords = this.saveShutdownRecords(opts);
       this.stopPromise = this.doStop();
     }
@@ -3269,7 +3312,7 @@ export class Daemon {
       // Behind the token, unlike /health: names of credential-shaped
       // variables are not for anyone who can reach the port.
       if (req.method === 'GET' && segments.length === 1 && segments[0] === 'environment') {
-        json(res, 200, this.environmentReport());
+        json(res, 200, { ...this.environmentReport(), configReload: this.reload?.status });
         return;
       }
 
