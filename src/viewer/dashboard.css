@@ -21,8 +21,11 @@ button.active { color: #9dd4ff; border-color: #4b9adc; background: #173249; }
 .messages-tools h2 { margin: 0; font-size: 16px; }
 #messages-content { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(220px, 1fr) minmax(260px, 2fr); gap: 10px; }
 #messages-list, #messages-detail { min-height: 0; overflow: auto; border: 1px solid #455366; border-radius: 4px; padding: 8px; }
+#messages-content.unread-age { grid-template-columns: minmax(0, 1fr); }
+#messages-detail[hidden] { display: none; }
 #messages-list { display: flex; flex-direction: column; gap: 5px; margin: 0; list-style: none; }
 .message-row { text-align: left; white-space: normal; overflow-wrap: anywhere; }
+.unread-age-row { border-bottom: 1px solid #303b4a; padding: 6px 2px; overflow-wrap: anywhere; }
 .message-row[aria-current="true"] { border-color: #79b8f5; background: #173249; }
 #messages-detail { white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; }
 .pane-message-count[hidden] { display: none; }

@@ -157,6 +157,7 @@ Usage:
       start a daemon: one that has gone is reported as not running.
       stop: --hold [seconds] prevents auto-start for 120 s by default (1 to 600).
   shellpuppet mcp                                   Run the MCP stdio server (long-running)
+  shellpuppet messages unread [--json]             Owner-only unread messages by age, without text
   shellpuppet msg send <to> <text|->                Send a message; - reads standard input
   shellpuppet msg inbox|outbox|directory|wait      Read messages and live names
   shellpuppet msg claim <name> [--replace]          Claim a name, or recover it after losing the code
@@ -383,6 +384,27 @@ async function main(): Promise<void> {
 
   const connection = await ensureDaemon({ logger: stderrLogger });
   surfaceWarnings(connection);
+
+  if (verb === 'messages') {
+    if (parsed.positionals.length !== 1 || parsed.positionals[0] !== 'unread' || parsed.lists.size > 0 ||
+      [...parsed.flags.keys()].some((key) => key !== 'json')) {
+      fail(2, 'Usage: shellpuppet messages unread [--json]');
+    }
+    const payload = await call(connection, 'GET', '/messages/unread-age');
+    if (wantJson) printJson(payload);
+    else {
+      const rows = payload['messages'] as Array<{ id: string; from: { name: string };
+        to: { name: string }; state: string; ageMs: number }>;
+      if (rows.length === 0) console.log('No unread messages.');
+      else {
+        console.log('Age (s)\tState\tID\tFrom\tTo');
+        for (const row of rows) console.log([
+          String(Math.floor(row.ageMs / 1000)), row.state, row.id, row.from.name, row.to.name,
+        ].join('\t'));
+      }
+    }
+    return;
+  }
 
   if (verb === 'msg' || verb === 'inbox') {
     const sub = verb === 'inbox' ? 'inbox' : parsed.positionals[0];
