@@ -11,6 +11,7 @@ version may change behaviour, and every such change is listed here.
 
 - Sessions started from a daemon launched inside an agent tool shell no longer inherit that shell's `NO_COLOR` through an `"all"` dashboard profile or global passthrough. Explicitly named values remain available.
 - Later messages no longer add a second queued mailbox nudge while the first still awaits an inbox read or an idle composer.
+- Busy sessions with a background-task count in the mode line can receive queued message nudges.
 
 ## [0.5.0] - 2026-11-26
 
