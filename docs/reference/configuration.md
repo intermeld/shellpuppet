@@ -633,10 +633,15 @@ number, default 30). Each authenticated outside use, including a profile launch,
 restarts the timer. A request marked as coming from inside a session leaves the
 timer unchanged. A pending `msg wait` keeps the claim active. On lapse
 its unread messages become `not-delivered`.
-The daemon checks waiting messages on its existing screen scan. Only an idle
-supported session with an empty composer receives a fixed nudge; other messages
-stay in the inbox. The nudge names the `session_inbox` MCP tool, so a session
-that should read messages needs the ShellPuppet MCP server. The daemon
+The daemon checks waiting messages on its existing screen scan. A supported
+session with an empty idle composer receives a fixed nudge; a supported agent
+may also queue one while a turn is busy and its composer is empty. Other
+messages stay in the inbox. While that queued line is pending, later messages
+wait without another nudge. A consuming inbox read, a settled empty idle
+composer, the session ending, or five minutes ends the hold; any messages still
+unread are then eligible for a nudge. The audit records held message IDs with
+reason `queued-nudge-pending`. The nudge names the `session_inbox` MCP tool, so
+a session that should read messages needs the ShellPuppet MCP server. The daemon
 writes the line, pauses for at least 150 milliseconds, checks that the composer
 and waiting messages are unchanged, then sends the agent's submit key.
 

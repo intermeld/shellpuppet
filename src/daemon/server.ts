@@ -626,6 +626,8 @@ function startShapeError(body: JsonBody): string | null {
   return null;
 }
 
+const QUEUED_NUDGE_MAX_MS = 5 * 60_000;
+
 export class Daemon {
   private readonly options: DaemonOptions;
   private readonly logger: Logger;
@@ -633,6 +635,8 @@ export class Daemon {
   private readonly manager: SessionManager;
   private readonly mailbox: Mailbox;
   private readonly nudges: NudgeScheduler;
+  private readonly queuedMessageNudges = new Map<string, { at: number; messageIds: string[]; heldIds: Set<string> }>();
+  private readonly inboxReadVersions = new Map<string, number>();
   private readonly schedules = new ScheduleStore();
   private readonly pendingSchedules = new Map<string, string>();
   private readonly promptScheduler: PromptScheduler;
@@ -844,6 +848,11 @@ export class Daemon {
     });
     this.mailbox.on('state', (event) => {
       const entry = this.mailbox.log().find((item) => item.id === event.id);
+      if (event.state === 'read' && entry !== undefined) {
+        const id = entry.to.id;
+        this.inboxReadVersions.set(id, (this.inboxReadVersions.get(id) ?? 0) + 1);
+        this.queuedMessageNudges.delete(id);
+      }
       this.emitMessageEvent({ type: 'message-state', ...event }, entry);
       this.emitDashboardMessageEvent({ type: 'message-state', ...event });
     });
@@ -2822,6 +2831,8 @@ export class Daemon {
   private endMailboxParticipant(id: string): void {
     for (const [name, pendingId] of this.pendingSchedules) if (pendingId === id) this.pendingSchedules.delete(name);
     this.nudges.remove(id);
+    this.queuedMessageNudges.delete(id);
+    this.inboxReadVersions.delete(id);
     // Audit before end can trim old tombstones from retained history.
     for (const entry of this.mailbox.log({ participantId: id })) {
       if (entry.to.id === id && (entry.state === 'waiting' || entry.state === 'nudged')) {
@@ -2848,7 +2859,10 @@ export class Daemon {
 
   private async deliverNudge(id: string): Promise<'sent' | 'wait' | 'done'> {
     const session = this.manager.get(id);
-    if (session === undefined || session.exited || this.mailbox.participant(id)?.kind !== 'session') return 'done';
+    if (session === undefined || session.exited || this.mailbox.participant(id)?.kind !== 'session') {
+      this.queuedMessageNudges.delete(id);
+      return 'done';
+    }
     const pendingIds = session.nudgePendingLine() !== null ? [...session.nudgePendingIds()] : [];
     // A scheduled body has no mailbox ids. It can clear on proof of consumption,
     // but a later inbox message can never authorise its submit key.
@@ -2903,13 +2917,30 @@ export class Daemon {
         staleMessageIds: covered.filter((messageId) => !unread.some((entry) => entry.id === messageId)) });
       return 'sent';
     }
+    const queued = this.queuedMessageNudges?.get(id);
+    if (queued !== undefined) {
+      const state = session.nudgeState(this.now());
+      if (this.now() - queued.at >= QUEUED_NUDGE_MAX_MS || (state.ready && !state.queued)) {
+        this.queuedMessageNudges.delete(id);
+      } else {
+        const waitingIds = unread.filter((entry) => entry.state === 'waiting').map((entry) => entry.id);
+        const newlyHeld = waitingIds.filter((messageId) => !queued.heldIds.has(messageId));
+        if (newlyHeld.length > 0) {
+          for (const messageId of newlyHeld) queued.heldIds.add(messageId);
+          this.audit.record('daemon', 'nudge-held', id, { reason: 'queued-nudge-pending',
+            messageIds: newlyHeld, count: newlyHeld.length, queuedMessageIds: queued.messageIds });
+        }
+        return waitingIds.length > 0 ? 'wait' : 'done';
+      }
+    }
     // Only a message that has not been nudged yet starts a nudge. One that was
     // nudged but is still unread (the agent did not read its inbox) is listed
-    // in the line again when a later message arrives, so delivery never stops.
+    // in the line again when a later message arrives after any queued hold ends.
     const ids = unread.filter((entry) => entry.state === 'waiting').map((entry) => entry.id);
     if (ids.length === 0) return 'done';
     if (!session.hasPainted() || !session.nudgeReady(this.now())) return 'wait';
     const line = buildNudge(unread);
+    const readVersion = this.inboxReadVersions?.get(id) ?? 0;
     const result = await this.deliverLine(session, line, undefined, ids, () => {
       const current = this.mailbox.inbox(id, { markRead: false });
       return ids.every(messageId => current.some(entry => entry.id === messageId && entry.state === 'waiting'));
@@ -2919,6 +2950,9 @@ export class Daemon {
     }
     if (result.outcome !== 'sent' && result.outcome !== 'queued') return 'wait';
     this.mailbox.markNudged(ids);
+    if (result.outcome === 'queued' && (this.inboxReadVersions?.get(id) ?? 0) === readVersion) {
+      this.queuedMessageNudges.set(id, { at: this.now(), messageIds: ids, heldIds: new Set() });
+    }
     this.audit.record('daemon', 'nudge', id, { messageIds: ids, count: ids.length,
       ...(result.outcome === 'queued' ? { queued: true } : {}) });
     return 'sent';
