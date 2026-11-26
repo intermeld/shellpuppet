@@ -377,11 +377,6 @@ export function captureBrowserArgs(profileDir: string, width: number, height: nu
     '--no-first-run',
     '--no-default-browser-check',
     '--hide-scrollbars',
-    // Dashboard integration captures switch between tabs. Chromium must keep
-    // rendering the background tabs while their real focus state changes.
-    '--disable-background-timer-throttling',
-    '--disable-renderer-backgrounding',
-    '--disable-backgrounding-occluded-windows',
     ...QUIET_BROWSER_SWITCHES,
     'about:blank',
   ];
