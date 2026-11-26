@@ -5,23 +5,19 @@ import { buildNudge } from '../../src/core/mailbox.js';
 import { NUDGE_SUBMIT_DELAY_MS } from '../../src/core/session.js';
 import { createAuditor, auditLogPath } from '../../src/daemon/audit.js';
 import { createFileLogger } from '../../src/daemon/logger.js';
-import { api, eventually, makeTempHome, repoRoot, startTestDaemon } from './helpers.js';
+import { api, eventually, makeTempHome } from './helpers.js';
+import { startNudgeDaemon } from './nudge-fixture.js';
 
 describe('fixed message nudges through a real terminal', () => {
   it('recovers a pending line after its named message was read through the inbox', async () => {
     const home = makeTempHome('nudge-stale-pending-');
-    const td = await startTestDaemon({ home, audit: createAuditor(home), promptScanIntervalMs: 30_000,
-      messaging: { enabled: true, allow: [{ group: 'peers', members: ['sender'] }],
-        nudgeIntervalMs: 60_000 } });
-    (td.daemon as unknown as { mailbox: { policy: (from: unknown, to: unknown) => boolean } }).mailbox.policy = () => true;
+    const td = await startNudgeDaemon({ home, audit: createAuditor(home), promptScanIntervalMs: 30_000,
+      messaging: { enabled: true, allow: [{ group: 'peers', members: ['sender'], roles: ['chair'] }],
+        nudgeIntervalMs: 60_000 } }, { recipient: 'late' });
     try {
       const input = path.join(home, 'recipient.input');
       const readSignal = path.join(home, 'recipient.read');
-      const fixture = path.join(repoRoot, 'test', 'fixtures', 'nudge-tui.mjs');
-      const started = await api(td.port, td.token, '/sessions', { body: {
-        command: process.execPath, args: [fixture, 'late', input, readSignal],
-        shell: false, openViewer: false, cols: 120, rows: 34, label: 'recipient', agent: 'claude',
-      } });
+      const started = await td.launch('recipient');
       expect(started.status).toBe(200);
       const session = td.daemon['manager'].get(String(started.body['id']))!;
       const claim = await api(td.port, td.token, '/messages/claims', { body: { name: 'sender' } });
@@ -63,18 +59,13 @@ describe('fixed message nudges through a real terminal', () => {
 
   it('clears a pending body after the composer stays empty for a quiet period', async () => {
     const home = makeTempHome('nudge-clearable-');
-    const td = await startTestDaemon({ home, audit: createAuditor(home), promptScanIntervalMs: 250,
-      messaging: { enabled: true, allow: [{ group: 'peers', members: ['sender'] }],
-        nudgeIntervalMs: 1_000 } });
-    // Nudge delivery is independent of group admission.
-    (td.daemon as unknown as { mailbox: { policy: (from: unknown, to: unknown) => boolean } }).mailbox.policy = () => true;
+    const td = await startNudgeDaemon({ home, audit: createAuditor(home), promptScanIntervalMs: 250,
+      messaging: { enabled: true, allow: [{ group: 'peers', members: ['sender'], roles: ['chair'] }],
+        nudgeIntervalMs: 1_000 } }, { recipient: 'clearable' });
+
     try {
       const input = path.join(home, 'recipient.input');
-      const fixture = path.join(repoRoot, 'test', 'fixtures', 'nudge-tui.mjs');
-      const started = await api(td.port, td.token, '/sessions', { body: {
-        command: process.execPath, args: [fixture, 'clearable', input, path.join(home, 'unused.read')],
-        shell: false, openViewer: false, cols: 120, rows: 34, label: 'recipient', agent: 'claude',
-      } });
+      const started = await td.launch('recipient');
       expect(started.status).toBe(200);
       const id = String(started.body['id']);
       const session = td.daemon['manager'].get(id)!;
@@ -110,18 +101,13 @@ describe('fixed message nudges through a real terminal', () => {
 
   it.each(['late', 'dim-extra'] as const)('does not type a second body after %s paint aborts', async (mode) => {
     const home = makeTempHome(`nudge-${mode}-`);
-    const td = await startTestDaemon({ home, audit: createAuditor(home), promptScanIntervalMs: 250,
-      messaging: { enabled: true, allow: [{ group: 'peers', members: ['sender'] }],
-        nudgeIntervalMs: 1_000 } });
-    // Nudge delivery is independent of group admission.
-    (td.daemon as unknown as { mailbox: { policy: (from: unknown, to: unknown) => boolean } }).mailbox.policy = () => true;
+    const td = await startNudgeDaemon({ home, audit: createAuditor(home), promptScanIntervalMs: 250,
+      messaging: { enabled: true, allow: [{ group: 'peers', members: ['sender'], roles: ['chair'] }],
+        nudgeIntervalMs: 1_000 } }, { recipient: mode });
+
     try {
       const input = path.join(home, 'recipient.input');
-      const fixture = path.join(repoRoot, 'test', 'fixtures', 'nudge-tui.mjs');
-      const started = await api(td.port, td.token, '/sessions', { body: {
-        command: process.execPath, args: [fixture, mode, input, path.join(home, 'unused.read')],
-        shell: false, openViewer: false, cols: 120, rows: 34, label: 'recipient', agent: 'claude',
-      } });
+      const started = await td.launch('recipient');
       expect(started.status).toBe(200);
       const claim = await api(td.port, td.token, '/messages/claims', { body: { name: 'sender' } });
       const headers = { 'x-shellpuppet-claim': String(claim.body['claimId']),
@@ -157,24 +143,17 @@ describe('fixed message nudges through a real terminal', () => {
   it('types once only to an idle covered session and records a text-free audit', async () => {
     const home = makeTempHome('nudge-delivery-');
     const logFile = path.join(home, 'daemon.log');
-    const td = await startTestDaemon({ home, logger: createFileLogger(logFile),
+    const td = await startNudgeDaemon({ home, logger: createFileLogger(logFile),
       audit: createAuditor(home, { captureContent: true }), promptScanIntervalMs: 250,
       messaging: { enabled: true, allow: [{ group: 'peers',
-        members: ['sender', 'outside'] }], nudgeIntervalMs: 1_000 } });
-    // This fixture exercises nudge delivery; group admission has separate tests.
-    (td.daemon as unknown as { mailbox: { policy: (from: unknown, to: unknown) => boolean } }).mailbox.policy = () => true;
+        members: ['sender', 'outside'], roles: ['chair'] }], nudgeIntervalMs: 1_000 } }, { ready: 'ready', draft: 'draft', shell: 'shell' });
+
     try {
-      const fixture = path.join(repoRoot, 'test', 'fixtures', 'nudge-tui.mjs');
       const files = (name: string) => ({ input: path.join(home, `${name}.input`),
         signal: path.join(home, `${name}.read`) });
       const started = new Map<string, string>();
       for (const name of ['ready', 'draft', 'shell']) {
-        const file = files(name);
-        const response = await api(td.port, td.token, '/sessions', { body: {
-          command: process.execPath, args: [fixture, name, file.input, file.signal],
-          shell: false, openViewer: false, cols: 120, rows: 34, label: name,
-          ...(name === 'shell' ? {} : { agent: 'claude' }),
-        } });
+        const response = await td.launch(name);
         expect(response.status).toBe(200);
         started.set(name, String(response.body['id']));
       }

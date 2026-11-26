@@ -3,22 +3,18 @@ import * as path from 'node:path';
 import { expect, it } from 'vitest';
 import { buildNudge } from '../../src/core/mailbox.js';
 import { createAuditor, auditLogPath } from '../../src/daemon/audit.js';
-import { api, eventually, makeTempHome, repoRoot, startTestDaemon } from './helpers.js';
+import { api, eventually, makeTempHome } from './helpers.js';
+import { startNudgeDaemon } from './nudge-fixture.js';
 
 it('holds a later message until a queued nudge is followed by a consuming inbox read', async () => {
   const home = makeTempHome('nudge-one-queued-');
-  const td = await startTestDaemon({ home, audit: createAuditor(home), promptScanIntervalMs: 250,
-    messaging: { enabled: true, allow: [{ group: 'peers', members: ['sender'] }],
-      nudgeIntervalMs: 1_000 } });
-  (td.daemon as unknown as { mailbox: { policy: (from: unknown, to: unknown) => boolean } }).mailbox.policy = () => true;
+  const td = await startNudgeDaemon({ home, audit: createAuditor(home), promptScanIntervalMs: 250,
+    messaging: { enabled: true, allow: [{ group: 'peers', members: ['sender'], roles: ['chair'] }],
+      nudgeIntervalMs: 1_000 } }, { recipient: 'queueing' });
   try {
     const input = path.join(home, 'recipient.input');
     const readSignal = path.join(home, 'recipient.read');
-    const fixture = path.join(repoRoot, 'test', 'fixtures', 'nudge-tui.mjs');
-    const started = await api(td.port, td.token, '/sessions', { body: {
-      command: process.execPath, args: [fixture, 'queueing', input, readSignal],
-      shell: false, openViewer: false, cols: 120, rows: 34, label: 'recipient', agent: 'claude',
-    } });
+    const started = await td.launch('recipient');
     expect(started.status).toBe(200);
     const id = String(started.body['id']);
     const session = td.daemon['manager'].get(id)!;

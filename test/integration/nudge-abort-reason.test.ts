@@ -3,22 +3,18 @@ import * as path from 'node:path';
 import { expect, it } from 'vitest';
 import { buildNudge } from '../../src/core/mailbox.js';
 import { createAuditor, auditLogPath } from '../../src/daemon/audit.js';
-import { api, eventually, makeTempHome, repoRoot, startTestDaemon } from './helpers.js';
+import { api, eventually, makeTempHome } from './helpers.js';
+import { startNudgeDaemon } from './nudge-fixture.js';
 
 it('records a screen change when a visible nudge is resized before submit', async () => {
   const home = makeTempHome('nudge-audit-resize-');
-  const td = await startTestDaemon({ home, audit: createAuditor(home), promptScanIntervalMs: 250,
-    messaging: { enabled: true, allow: [{ group: 'peers', members: ['sender'] }],
-      nudgeIntervalMs: 1_000 } });
-  // Nudge delivery is independent of group admission.
-  (td.daemon as unknown as { mailbox: { policy: (from: unknown, to: unknown) => boolean } }).mailbox.policy = () => true;
+  const td = await startNudgeDaemon({ home, audit: createAuditor(home), promptScanIntervalMs: 250,
+    messaging: { enabled: true, allow: [{ group: 'peers', members: ['sender'], roles: ['chair'] }],
+      nudgeIntervalMs: 1_000 } }, { recipient: 'ready' });
+
   try {
     const input = path.join(home, 'recipient.input');
-    const fixture = path.join(repoRoot, 'test', 'fixtures', 'nudge-tui.mjs');
-    const started = await api(td.port, td.token, '/sessions', { body: {
-      command: process.execPath, args: [fixture, 'ready', input, path.join(home, 'unused.read')],
-      shell: false, openViewer: false, cols: 120, rows: 34, label: 'recipient', agent: 'claude',
-    } });
+    const started = await td.launch('recipient');
     expect(started.status).toBe(200);
     const id = String(started.body['id']);
     const session = td.daemon['manager'].get(id)!;
