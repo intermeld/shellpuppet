@@ -12,6 +12,16 @@ const IDENTITY_NAMES = ['SHELLPUPPET_SESSION', 'SHELLPUPPET_SESSION_TOKEN',
   'SHELLPUPPET_DAEMON_INSTANCE', 'SHELLPUPPET_CLI', 'SHELLPUPPET_HOME'];
 
 describe('buildSessionEnv with variables of the session’s own', () => {
+  it('omits agent-shell NO_COLOR from passthrough inheritance but keeps explicit values', () => {
+    const fromAgent = { CLAUDECODE: 'synthetic-parent', NO_COLOR: '1', OTHER_SETTING: 'kept' };
+    const inherited = buildSessionEnv('passthrough', 'linux', fromAgent);
+    expect(inherited['NO_COLOR']).toBeUndefined();
+    expect(inherited['OTHER_SETTING']).toBe('kept');
+    expect(buildSessionEnv('passthrough', 'linux', fromAgent, { NO_COLOR: 'chosen' })['NO_COLOR']).toBe('chosen');
+    expect(buildSessionEnv(['NO_COLOR'], 'linux', fromAgent)['NO_COLOR']).toBe('1');
+    expect(buildSessionEnv('passthrough', 'linux', { NO_COLOR: '1' })['NO_COLOR']).toBe('1');
+  });
+
   it('keeps session identity out of all environment copies and passed values', () => {
     const source = Object.fromEntries(IDENTITY_NAMES.map((name) => [name, 'old']));
     for (const mode of ['passthrough', [...IDENTITY_NAMES]] as SessionEnvMode[]) {

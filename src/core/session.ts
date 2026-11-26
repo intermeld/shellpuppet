@@ -14,7 +14,7 @@
  * No stdout/stderr: logging via the injected Logger only (lint-enforced).
  */
 
-import { agentResumeIds, moduleFor, programName } from '../agents/index.js';
+import { agentResumeIds, hasAgentShellNoColor, moduleFor, programName } from '../agents/index.js';
 import { nudgeVerdict, NUDGE_QUIET_MS } from './nudge.js';
 import type { NudgeBlock } from './nudge.js';
 import type { AgentModule, AgentSource } from '../agents/types.js';
@@ -535,6 +535,8 @@ export interface SessionDeps {
   pidWaitMs?: number;
   /** Environment hygiene mode (design §4.6). Defaults to `DEFAULT_SESSION_ENV`. */
   sessionEnv?: SessionEnvMode;
+  /** Start-time decision to omit inherited NO_COLOR from passthrough. */
+  omitInheritedNoColor?: boolean;
   /** Windows tree killer override, for tests only. Defaults to `taskkillTrees`. */
   treeKiller?: TreeKiller;
   /**
@@ -714,6 +716,7 @@ export function buildSessionEnv(
   source: NodeJS.ProcessEnv = process.env,
   passed: Record<string, string> = {},
   reserved: ReadonlySet<string> = RESERVED_FEATURE_CREDENTIALS,
+  omitInheritedNoColor = hasAgentShellNoColor(source, platform),
 ): Record<string, string> {
   const env: Record<string, string> = {};
   // Session-owned names are reserved in every casing. Windows also reads
@@ -725,7 +728,8 @@ export function buildSessionEnv(
       : reserved.has(name));
   if (mode === 'passthrough') {
     for (const [key, value] of Object.entries(source)) {
-      if (value !== undefined && !isReserved(key)) env[key] = value;
+      if (value !== undefined && !isReserved(key)
+        && !(omitInheritedNoColor && (platform === 'win32' ? key.toUpperCase() : key) === 'NO_COLOR')) env[key] = value;
     }
   } else {
     const baseline = CLEAN_ENV_KEYS[platform === 'win32' ? 'win32' : 'posix'];
@@ -963,6 +967,8 @@ export class Session implements WaitTarget {
       this.platform,
       process.env,
       options.env,
+      RESERVED_FEATURE_CREDENTIALS,
+      deps.omitInheritedNoColor,
     );
     if (this.launchProfile) {
       if (deps.identity && this.agentModule?.resumeIdMarkers) {

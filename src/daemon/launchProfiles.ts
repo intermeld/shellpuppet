@@ -23,7 +23,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { envValue } from '../core/environment.js';
 import { NAME_PATTERN } from '../core/mailbox.js';
-import { SESSION_MARKERS } from '../agents/index.js';
+import { hasAgentShellNoColor, SESSION_MARKERS } from '../agents/index.js';
 import { ENV_NAME_PATTERN, RESERVED_FEATURE_CREDENTIALS, SESSION_IDENTITY_ENV_NAMES, SESSION_IDENTITY_ENV_RULE } from '../core/types.js';
 import { compilePolicy } from '../core/policy.js';
 import type { CompiledPolicy } from '../core/policy.js';
@@ -542,7 +542,8 @@ export function parseLauncher(
 /**
  * The daemon values selected by a profile's `envFromDaemon`: listed names or
  * every valid name for "all". Unset names, reserved credentials, ShellPuppet's
- * session variables and the all-profile exclusions are skipped. Only owned string values are copied:
+ * session variables and the all-profile exclusions are skipped. An inherited
+ * NO_COLOR from an agent tool shell is skipped for "all" only. Only owned string values are copied:
  * `constructor` and `toString` are inherited functions, not variables.
  * The caller gets values to set and the names copied; neither is logged here.
  */
@@ -550,13 +551,15 @@ export function copyDaemonEnv(
   names: readonly string[] | 'all',
   source: NodeJS.ProcessEnv,
   reserved: ReadonlySet<string> = RESERVED_FEATURE_CREDENTIALS,
+  omitInheritedNoColor = hasAgentShellNoColor(source),
 ): { env: Record<string, string>; copied: string[] } {
   const env: Record<string, string> = {};
   const copied: string[] = [];
   for (const name of names === 'all' ? Object.keys(source) : names) {
     const upperName = name.toUpperCase();
     if (names === 'all'
-      && (!ENV_NAME_PATTERN.test(name) || ALL_PROFILE_ENV_EXCLUSIONS.has(process.platform === 'win32' ? upperName : name))) continue;
+      && (!ENV_NAME_PATTERN.test(name) || ALL_PROFILE_ENV_EXCLUSIONS.has(process.platform === 'win32' ? upperName : name)
+        || (omitInheritedNoColor && (process.platform === 'win32' ? upperName : name) === 'NO_COLOR'))) continue;
     if (SESSION_IDENTITY_ENV_NAMES.has(upperName)
       || upperName.startsWith('SHELLPUPPET_')
       || name === '__proto__') continue;

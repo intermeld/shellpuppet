@@ -22,6 +22,13 @@ export const BUILT_IN_SIGNATURES: readonly AgentSignature[] = AGENT_MODULES.filt
 /** Parent-session markers from every module, excluded from every "all" launch profile. */
 export const SESSION_MARKERS: ReadonlySet<string> = new Set(AGENT_MODULES.flatMap(module => module.env?.sessionMarkers ?? []));
 
+/** Only a known parent-session marker plus NO_COLOR identifies this inherited output setting. */
+export function hasAgentShellNoColor(env: NodeJS.ProcessEnv, platform = process.platform): boolean {
+  if (envValue(env, 'NO_COLOR', platform) === undefined) return false;
+  return Object.keys(env).some(name => typeof env[name] === 'string' &&
+    SESSION_MARKERS.has(platform === 'win32' ? name.toUpperCase() : name));
+}
+
 export function moduleFor(name: string): AgentModule | undefined {
   return AGENT_MODULES.find(module => module.name === name);
 }
