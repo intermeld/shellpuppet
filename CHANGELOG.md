@@ -7,6 +7,10 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+### Added
+
+- The local owner can list unread messages by age without message text in the CLI or dashboard.
+
 ## [0.5.1] - 2026-11-26
 
 Message nudge fixes: pointer input no longer holds or aborts nudges, a queued nudge is not repeated, and busy Claude Code sessions with background tasks are nudged. Also default-encoded mouse reports from the viewer and colour kept when the daemon starts from an agent tool shell.
