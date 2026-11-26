@@ -39,6 +39,9 @@ together. Existing sessions and outside claims use the new rules and limits.
 Removing a permission hides retained incoming mail from that pair and stops its
 nudges. Restoring the permission lets the original recipient read the mail again.
 
+On Windows, one persistent local PowerShell process checks the directory and
+file ACLs on every reread. The daemon reuses that process for later checks.
+
 Run `shellpuppet daemon status` (or add `--json`) for the effective revision,
 watcher health, last attempt, last acceptance and any rejected edit. The daemon
 checks the whole file, including settings that need a restart. Invalid JSON, a
@@ -800,9 +803,10 @@ that number is the live cap instead, and the rate still applies. A refusal
 starts nothing. These caps apply to both profile launch routes: a client token's
 `POST /sessions` keeps its existing behaviour.
 Set `launcher.launchesPerMinute` to an integer from 1 to 60. An invalid value
-is reported as a configuration problem and uses eight. Pending starts count
-towards the allowance; failed and cancelled starts release their slot at once.
-Changes to this setting take effect when you save `config.json`.
+at startup uses the default of eight. An invalid edit leaves the current
+limit in force. A valid save changes the allowance and counts pending starts
+and earlier launches within the same minute. Failed and cancelled starts
+release their slot at once.
 
 Under the Windows default shell, ShellPuppet joins `command` and `args` with
 spaces and runs the line through `cmd.exe /d /s /c`. The array keeps each
