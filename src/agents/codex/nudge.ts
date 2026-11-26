@@ -11,7 +11,7 @@ const PLACEHOLDER = 'Ask Codex to do anything';
  * Codex draws its model and context below the composer, sometimes followed
  * by a shortcuts hint. The 80-column captures show only the model line.
  */
-const MODEL_STATUS = /^ {2}GPT-\S+ x?high\s+·\s+Context \d+% left\s+·\s+weekly \d+% left\b/u;
+const MODEL_STATUS = /^ {2}GPT-\S+ x?high(?: fast)?\s+·\s+Context \d+% left\s+·\s+weekly \d+% left\b/u;
 const SHORTCUTS = /^\s*(?:← for agents\s+·\s+)?\? for shortcuts\s*$/u;
 
 /**
@@ -30,6 +30,12 @@ function placeholderInk(line: StyledLine): boolean {
 
 export function readiness(view: NudgeView): NudgeReadiness {
   return readingReadiness(view, reading, {
+    // The cursor owns the live input row when that row bears the marker.
+    // Otherwise the shared matcher keeps its previous bottom-up selection.
+    selectComposer: (lines, current, composer) => {
+      const at = current.cursor?.y;
+      return at !== undefined && lines[at]?.wrapped !== true && composer.test(lines[at]?.text ?? '') ? at : undefined;
+    },
     placeholder: PLACEHOLDER,
     continuations: true,
     placeholderInk,

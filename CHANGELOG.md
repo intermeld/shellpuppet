@@ -17,6 +17,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Explicit submit to Codex is no longer withheld as "not seen" in fast mode, whose footer adds a word the check did not accept, or while a slash command suggestion is shown above the input.
 - After a Hermes turn, waiting messages can be nudged when the completed summary lists extra activity and the grey footer clips a timer.
 - Waiting time and stall alerts restart after input to a held prompt, including when the next prompt has the same question and choices. Redraws without input retain the timer.
 - Codex recognises a repeated short prompt in its live composer when an earlier copy belongs to a completed turn. Grok recognises a padded welcome footer after typed send hints appear.
