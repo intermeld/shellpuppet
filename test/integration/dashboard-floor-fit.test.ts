@@ -322,12 +322,20 @@ it('scrolls a short Focus menu to its Restart and Dismiss actions', async (conte
       phase = 'clicking Restart';
       await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...before.point, button: 'left', clickCount: 1 });
       await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...before.point, button: 'left', clickCount: 1 });
+      let restarted = '';
       await eventually(async () => {
         const result = await api(daemon!.port, daemon!.token, '/sessions');
-        return ((result.body['sessions'] as { id: string }[]) ?? [])
-          .some(item => item.id !== primary && item.id !== launched);
+        restarted = ((result.body['sessions'] as { id: string }[]) ?? [])
+          .find(item => item.id !== primary && item.id !== launched)?.id ?? '';
+        return restarted !== '';
       }, 15_000, 100, 'Restart to launch another session');
       failureState = { ...failureState, restartSessionCreated: true };
+      phase = 'waiting for the restarted pane to settle';
+      await eventually(async () => await evaluate(`document.querySelector(
+        ${JSON.stringify(`.pane[data-session=${JSON.stringify(restarted)}]`)})?.isConnected === true`) === true,
+      15_000, 100, 'the restarted pane to appear in the dashboard');
+      await evaluate('window.__settlePanes(3)');
+      failureState = { ...failureState, restartedPaneSettled: true };
       phase = 'focusing Dismiss';
       const keyboard = await evaluate(`(async () => {
         const card = document.querySelector(${JSON.stringify(cardSelector)});
