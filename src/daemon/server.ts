@@ -5245,7 +5245,7 @@ export class Daemon {
    * exit notice); TEXT frames are JSON control messages. Incoming text frames
    * are either JSON controls (resize) or bytes for the program: a person's
    * keystrokes, or the viewer's terminal answering the program
-   * (terminalReports.ts).
+   * (terminalReports.ts). Incoming binary frames carry raw onBinary input.
    */
   private attachSocket(
     ws: WebSocket,
@@ -5433,10 +5433,11 @@ export class Daemon {
 
     /** Whether this socket has been told that the session's input has failed. */
     let toldInputFailed = false;
-    const onViewerMessage = async (message: Buffer | string): Promise<void> => {
+    const onViewerMessage = async (message: Buffer | string, isBinary: boolean): Promise<void> => {
       this.lastActivity = Date.now();
-      const text = typeof message === 'string' ? message : message.toString('utf8');
-      try {
+      const bytes = isBinary ? Buffer.from(message as Buffer) : null;
+      const text = bytes === null ? (typeof message === 'string' ? message : message.toString('utf8')) : '';
+      if (!isBinary) try {
         const parsed: unknown = JSON.parse(text);
         if (typeof parsed === 'object' && parsed !== null &&
             (parsed as { type?: string }).type === 'release-grid') {
@@ -5716,8 +5717,12 @@ export class Daemon {
       // sequences, so this is not always one keystroke.) .catch keeps the exit
       // race, the session dying mid-write, from escaping as an unhandled
       // rejection.
-      const report = terminalReportKind(text);
-      void session.write(text, { terminalReport: report !== null, humanInput: report === null }).catch((error: unknown) => {
+      const mouseReport = bytes !== null && bytes.length === 6 && bytes[0] === 0x1b &&
+        bytes[1] === 0x5b && bytes[2] === 0x4d;
+      const report = bytes === null ? terminalReportKind(text) : mouseReport ? 'mouse' : null;
+      void (bytes === null
+        ? session.write(text, { terminalReport: report !== null, humanInput: report === null })
+        : session.writeBinary(bytes)).catch((error: unknown) => {
         this.logger.warn('viewer input failed', {
           id: session.id,
           error: String(error),
@@ -5731,20 +5736,20 @@ export class Daemon {
       if (report !== null) {
         this.audit.record(actor, 'report', session.id, {
           kind: report,
-          chars: text.length,
-          ...(this.audit.captureContent ? { data: text } : {}),
+          chars: bytes?.length ?? text.length,
+          ...(this.audit.captureContent ? { data: bytes === null ? text : bytes.toString('latin1') } : {}),
         });
         return;
       }
       this.audit.record(actor, 'input', session.id, {
-        chars: text.length,
+        chars: bytes?.length ?? text.length,
       });
       this.broadcastControl(session.id, { type: 'input-source', source: 'human' });
     };
-    ws.on('message', (message: Buffer | string) => {
+    ws.on('message', (message: Buffer | string, isBinary: boolean) => {
       if (actor === 'dashboard' && ws.readyState !== ws.OPEN) return;
       this.callerContext.run(options.callerSession, () => {
-        void onViewerMessage(message).catch((error: unknown) => {
+        void onViewerMessage(message, isBinary).catch((error: unknown) => {
           this.logger.warn('viewer message failed', { id: session.id, error: String(error) });
         });
       });

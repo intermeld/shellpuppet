@@ -361,6 +361,19 @@ in the reading agent's context.
   cursor-position reply in columns 2 to 16 of the first row, and nothing
   tells the two apart, so both are `input`. A read-only credential is dropped
   here as anywhere else.
+- **Mouse input follows its terminal encoding.** When a programme enables
+  default mouse tracking without SGR encoding, the viewer or dashboard sends
+  each six-byte `ESC [ M` report as one binary WebSocket frame. Each character
+  from xterm's binary event becomes exactly one byte, including coordinates
+  above column 95. The daemon writes those bytes to the session in order and
+  audits a whole default mouse frame as a `mouse` report, without changing the
+  last-input indicator. SGR mouse reports and typed input remain text frames.
+  A read-only pane does not send either kind of input, and a read-only
+  credential is also enforced by the daemon.
+  On Windows, ConPTY's UTF-8 input pipe replaces non-UTF-8 bytes such as
+  `0x84` before a programme reads them; the daemon still sends the original
+  bytes to that pipe. Programmes needing extended coordinates there should
+  enable SGR mouse encoding.
 
 ### Injection drill: run per release candidate, recorded as observed
 
