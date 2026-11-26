@@ -10,6 +10,8 @@ import type { NudgeReadiness, NudgeView } from './types.js';
 
 /** How one module treats the composer its signature already names. */
 export interface ReadingNudgeRule {
+  /** Select a live composer, or defer to the signature's previous selection. */
+  selectComposer?: (lines: readonly StyledLine[], view: NudgeView, composer: RegExp) => number | undefined;
   /** Composer text that is a placeholder, once the prompt glyph is removed. */
   placeholder: string;
   /** Keep rows after the composer until the signature's frame or status row. */
@@ -272,7 +274,7 @@ export function readingReadiness(view: NudgeView, reading: AgentSignature, rule:
   const viewport = linesOf(view);
   if (viewport === null) return 'unknown';
   const lines = unwrapBelowRules(viewport, rule);
-  const at = composerIndex(lines, composer);
+  const at = rule.selectComposer?.(lines, view, composer) ?? composerIndex(lines, composer);
   if (at < 0) return 'unknown';
   const busy = turnIsBusy(lines, reading, at);
   if (busy && rule.queueWhileBusy !== true && view.whenBusy === undefined) return 'busy';
