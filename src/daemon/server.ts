@@ -101,7 +101,7 @@ import { daemonRunning } from './liveness.js';
 import type { DaemonState, DaemonStateFile } from './paths.js';
 import { restoreRestartSource, retryRestartSource, snapshotSourceId } from './restartSource.js';
 import { packageVersion } from './meta.js';
-import { terminalReportKind } from './terminalReports.js';
+import { terminalReportBatchKind } from './terminalReports.js';
 import { ViewerSync } from './viewerSync.js';
 import { SessionFeed } from './sessionFeed.js';
 import type { FeedFrame, FeedSummary } from './sessionFeed.js';
@@ -2868,27 +2868,49 @@ export class Daemon {
     // but a later inbox message can never authorise its submit key.
     if (session.nudgePendingLine() !== null && pendingIds.length === 0 &&
         !await this.clearScheduledBody(session)) return 'wait';
-    const clearedIds = pendingIds.length > 0 && await session.clearConsumedNudge() ? pendingIds : [];
     const unread = this.mailbox.inbox(id, { markRead: false });
+    const stale = pendingIds.length > 0 &&
+      pendingIds.every((messageId) => !unread.some((entry) => entry.id === messageId));
+    if (stale) {
+      const line = session.nudgePendingLine();
+      if (line === null || !session.discardStalePendingNudge(line, pendingIds)) return 'wait';
+      this.audit.record('daemon', 'nudge-pending-stale', id, {
+        messageIds: pendingIds, count: pendingIds.length,
+      });
+    }
+    const clearedIds = !stale && pendingIds.length > 0 && await session.clearConsumedNudge() ? pendingIds : [];
     if (clearedIds.length > 0) {
       this.audit.record('daemon', 'nudge-cleared', id, { messageIds: clearedIds,
         waitingMessageIds: unread.map((entry) => entry.id) });
     }
+    // Resolve a retained line before the queued-message hold below. It may
+    // receive its own submit key, but another body must never be typed over it.
     const pending = session.nudgePendingLine();
     if (pending !== null) {
       if (session.nudgePendingIds().length === 0) return 'wait';
-      const ids = unread.filter((entry) => entry.state === 'waiting').map((entry) => entry.id);
-      if (ids.length === 0) return 'done';
       const covered = session.nudgePendingIds();
-      if (!session.nudgePendingUntouched()) {
+      const auditPending = (reason: string): void => {
+        if (session.nudgePendingAuditOnce()) this.audit.record('daemon', 'nudge-pending', id, {
+          messageIds: [...covered], count: covered.length, reason,
+        });
+      };
+      const ids = unread.filter((entry) => entry.state === 'waiting').map((entry) => entry.id);
+      if (ids.length === 0) { auditPending('messages-changed'); return 'done'; }
+      if (!covered.every((messageId) => unread.some((entry) => entry.id === messageId))) {
+        auditPending('messages-changed');
+        return 'wait';
+      }
+      if (!session.nudgePendingSafeToSubmit()) {
         if (session.nudgeReadyWithLine(pending) && session.nudgePendingTouchRefusal()) {
           this.audit.record('daemon', 'nudge-aborted', id, {
             messageIds: [...covered], count: covered.length, reason: 'person-input-since',
+            ...session.nudgePendingBodyMeta(),
           });
         }
+        auditPending('person-input-since');
         return 'wait';
       }
-      if (!session.nudgeReadyWithLine(pending)) return 'wait';
+      if (!session.nudgeReadyWithLine(pending)) { auditPending('line-not-seen'); return 'wait'; }
       const inputVersion = session.nudgeInputVersion();
       const queuedInputVersion = session.nudgeQueuedInputVersion();
       const screenRevision = session.nudgeScreenRevision();
@@ -2896,10 +2918,13 @@ export class Daemon {
         const waitingIds = this.mailbox.inbox(id, { markRead: false })
           .filter((entry) => entry.state === 'waiting').map((entry) => entry.id);
         return !session.exited && !session.getStalled() &&
+          session.nudgePendingSafeToSubmit() &&
           session.nudgeInputVersion() === inputVersion &&
           session.nudgeQueuedInputVersion() === queuedInputVersion &&
           session.nudgeScreenRevision() === screenRevision &&
           session.answerablePrompt(screen) === null && session.nudgePendingIds().length > 0 &&
+          covered.every((messageId) => this.mailbox.inbox(id, { markRead: false })
+            .some((entry) => entry.id === messageId)) &&
           waitingIds.length === ids.length &&
           ids.every((messageId) => waitingIds.includes(messageId));
       });
@@ -2907,8 +2932,10 @@ export class Daemon {
         if (session.nudgePendingTouchRefusal()) {
           this.audit.record('daemon', 'nudge-aborted', id, {
             messageIds: [...covered], count: covered.length, reason: 'person-input-since',
+            ...session.nudgePendingBodyMeta(),
           });
         }
+        auditPending('person-input-since');
         return 'wait';
       }
       this.mailbox.markNudged(ids);
@@ -2946,7 +2973,8 @@ export class Daemon {
       return ids.every(messageId => current.some(entry => entry.id === messageId && entry.state === 'waiting'));
     });
     if (result.outcome === 'aborted') {
-      this.audit.record('daemon', 'nudge-aborted', id, { messageIds: ids, count: ids.length, reason: result.reason });
+      this.audit.record('daemon', 'nudge-aborted', id, { messageIds: ids, count: ids.length, reason: result.reason,
+        ...session.nudgePendingBodyMeta() });
     }
     if (result.outcome !== 'sent' && result.outcome !== 'queued') return 'wait';
     this.mailbox.markNudged(ids);
@@ -3038,6 +3066,14 @@ export class Daemon {
         return { outcome: 'aborted', reason };
       }
     } catch (error) {
+      const pendingBody = session.nudgePendingBodyMeta();
+      if (ids.length > 0 && pendingBody.pendingBody) {
+        const reason = error instanceof SessionInputFailedError ? 'input-failed'
+          : error instanceof SessionProgramEndedError ? 'session-ended' : 'write-failed';
+        this.audit.record('daemon', 'nudge-aborted', session.id, {
+          messageIds: ids, count: ids.length, reason, ...pendingBody,
+        });
+      }
       if (error instanceof SessionInputFailedError) return { outcome: 'skipped', reason: 'input-failed' };
       if (error instanceof SessionProgramEndedError) return { outcome: 'skipped', reason: 'session-ended' };
       throw error;
@@ -3707,6 +3743,8 @@ export class Daemon {
           json(res, 400, { error: 'data (string) is required.' });
           return;
         }
+        const report = (submitMode === undefined || submitMode === 'off') && body['submit'] !== true
+          ? terminalReportBatchKind(data) : null;
         // Awaited: long input is chunked (Session.write), so verify below must
         // not read the screen until every chunk has actually been written.
         // The write resolves with the screen as it was just before this input
@@ -3723,9 +3761,9 @@ export class Daemon {
         const submit = body['submit'] === true;
         let written: Awaited<ReturnType<typeof session.writeWithResult>>;
         try {
-          written = submitMode === undefined
-            ? await session.writeWithResult(data)
-            : await session.writeWithResult(data, { submitMode });
+          written = await session.writeWithResult(data, {
+            ...(submitMode !== undefined ? { submitMode } : {}), terminalReport: report !== null,
+          });
         } catch (error) {
           json(res, 409, {
             error:
@@ -3740,9 +3778,14 @@ export class Daemon {
             ? { outcome: 'not-requested' as const }
             : submitOutcome(written, true);
         const bytes = submitMode === undefined ? data.length : written.inputBytes ?? 0;
-        this.audit.record(actor, 'input', id, { chars: bytes,
-          ...(submitMode !== undefined ? { submitMode, ...reporting } : reporting ? { submit: true, ...reporting } : {}) });
-        this.broadcastControl(id, { type: 'input-source', source: 'agent' });
+        if (report !== null) {
+          this.audit.record(actor, 'report', id, { kind: report, chars: bytes,
+            ...(this.audit.captureContent ? { data } : {}) });
+        } else {
+          this.audit.record(actor, 'input', id, { chars: bytes,
+            ...(submitMode !== undefined ? { submitMode, ...reporting } : reporting ? { submit: true, ...reporting } : {}) });
+          this.broadcastControl(id, { type: 'input-source', source: 'agent' });
+        }
         // §3.1: TUIs silently swallow input while loading or when a panel has
         // stolen focus. verify re-reads the screen and reports whether the
         // text landed (best effort: hidden-input prompts and heavy
@@ -5719,7 +5762,7 @@ export class Daemon {
       // rejection.
       const mouseReport = bytes !== null && bytes.length === 6 && bytes[0] === 0x1b &&
         bytes[1] === 0x5b && bytes[2] === 0x4d;
-      const report = bytes === null ? terminalReportKind(text) : mouseReport ? 'mouse' : null;
+      const report = bytes === null ? terminalReportBatchKind(text) : mouseReport ? 'mouse' : null;
       void (bytes === null
         ? session.write(text, { terminalReport: report !== null, humanInput: report === null })
         : session.writeBinary(bytes)).catch((error: unknown) => {

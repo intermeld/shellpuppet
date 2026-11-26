@@ -455,7 +455,10 @@ message whom, and a clock.
   identifies the ids covered by the pending body and those waiting later,
   without message text. A recovered line may name a message already read;
   the agent reads its inbox and gets whatever is waiting. A pending body
-  clears without Enter only after input
+  whose every named message is no longer unread is stale: the daemon forgets
+  the pending body and audits its ids and count once, without sending Enter or
+  erasing the text. A later nudge waits until the composer is positively empty.
+  A pending body that is not stale clears without Enter only after input
   ending in the submit key has gone in, the session was then seen busy and
   afterwards idle with a positively empty composer; or after a positively
   empty composer and unchanged screen have persisted for 30 seconds since

@@ -33,6 +33,8 @@ async function pending(settleMs: number): Promise<{
   };
   expect(await session.writeNudgeWithReason('fixed body\r', (_screen, phase) => phase === 'before')).toBe('aborted-line-not-seen');
   expect(session.nudgePendingLine()).toBe('fixed body');
+  expect(session.nudgePendingBodyMeta()).toEqual({ pendingBody: true, typedChars: 10, submitSent: false });
+  expect(session.nudgePendingSafeToSubmit()).toBe(true);
   return { session, pty, read };
 }
 
@@ -74,7 +76,26 @@ it('treats a terminal report as untouched but the same bytes on the ordinary pat
   await session.write(focusIn, { terminalReport: true });
   expect(session.nudgePendingLine()).toBe('fixed body');
   expect(session.nudgePendingUntouched()).toBe(true);
+  expect(session.nudgePendingSafeToSubmit()).toBe(true);
   await session.write(focusIn);
   expect(session.nudgePendingLine()).toBe('fixed body');
   expect(session.nudgePendingUntouched()).toBe(false);
+  expect(session.nudgePendingSafeToSubmit()).toBe(false);
+}, 10_000);
+
+it('never treats a partly accepted body as safe to submit', async () => {
+  const pty = new InputPty();
+  let attempts = 0;
+  vi.spyOn(pty, 'write').mockImplementation((data) => {
+    if (++attempts === 2) throw new Error('input stopped');
+    pty.writes.push(data);
+  });
+  const session = new Session('partial-body', { command: process.execPath, shell: false }, {
+    platform: 'linux', spawn: () => pty,
+  });
+  const body = 'x'.repeat(1_025);
+  await expect(session.writeNudgeWithReason(`${body}\r`, () => true)).rejects.toThrow('input stopped');
+  expect(session.nudgePendingLine()).toBe(body);
+  expect(session.nudgePendingBodyMeta()).toEqual({ pendingBody: true, typedChars: 1_024, submitSent: false });
+  expect(session.nudgePendingSafeToSubmit()).toBe(false);
 }, 10_000);

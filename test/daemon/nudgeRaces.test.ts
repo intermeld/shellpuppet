@@ -132,6 +132,44 @@ describe('a nudge the agent never answered', () => {
 });
 
 describe('a queued nudge awaiting the recipient', () => {
+  it('does not type another line while an aborted body and a queued hold coexist', async () => {
+    const mailbox = new Mailbox({ enabled: true, policy: () => true });
+    mailbox.register({ kind: 'session', id: 'recipient', name: 'recipient' });
+    const sender = mailbox.claim('sender');
+    const first = mailbox.send(sender.claimId, 'recipient', 'first');
+    mailbox.markNudged([first.id]);
+    const second = mailbox.send(sender.claimId, 'recipient', 'second');
+    let pending: string | null = 'retained body';
+    let writes = 0;
+    const audit: string[] = [];
+    const session = {
+      exited: false,
+      nudgePendingLine: () => pending,
+      nudgePendingIds: () => [first.id],
+      clearConsumedNudge: () => Promise.resolve(false),
+      nudgePendingSafeToSubmit: () => false,
+      nudgeReadyWithLine: () => false,
+      nudgePendingAuditOnce: () => false,
+      nudgeState: () => ({ ready: true, queued: true }),
+      writeNudgeWithReason: () => { writes++; return Promise.resolve('sent'); },
+    };
+    const daemon = Object.create(Daemon.prototype) as Daemon;
+    Object.assign(daemon, {
+      manager: { get: () => session }, mailbox, now: () => 10_000,
+      queuedMessageNudges: new Map([['recipient', {
+        at: 9_999, messageIds: [first.id], heldIds: new Set<string>(),
+      }]]),
+      audit: { record: (_actor: string, action: string) => audit.push(action) },
+    });
+    expect(await daemon['deliverNudge']('recipient')).toBe('wait');
+    expect(writes).toBe(0);
+    expect(mailbox.outbox(sender.claimId).find((entry) => entry.id === second.id)?.state).toBe('waiting');
+    pending = null;
+    expect(await daemon['deliverNudge']('recipient')).toBe('wait');
+    expect(writes).toBe(0);
+    expect(audit).toContain('nudge-held');
+  });
+
   it('holds a later message without typing a second queued line', async () => {
     const mailbox = new Mailbox({ enabled: true, policy: () => true });
     mailbox.register({ kind: 'session', id: 'recipient', name: 'recipient' });

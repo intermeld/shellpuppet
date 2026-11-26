@@ -32,6 +32,8 @@
 
 /** What a terminal report says, as the audit log names it. */
 export type TerminalReportKind =
+  | 'mouse'
+  | 'multiple'
   | 'focus-in'
   | 'focus-out'
   | 'cursor-position'
@@ -85,7 +87,17 @@ const REPORTS: readonly { kind: TerminalReportKind; pattern: RegExp }[] = [
  * filed as something nobody typed, so those stay input.
  */
 const MODIFIED_F3 = /^\x1b\[1;(?:[2-9]|1[0-6])R$/;
+// CoreMouseService.eventCode uses two button/action bits, three modifier bits,
+// and one of the move or wheel bits. The bundled browser emits wheel up/down.
+const SGR_MOUSE = /^\x1b\[<(0|[1-9]\d{0,4});(0|[1-9]\d{0,4});(0|[1-9]\d{0,4})[Mm]$/;
 /* eslint-enable no-control-regex */
+
+function mouseCodeValid(code: number): boolean {
+  if (code > 95) return false;
+  if ((code & 64) !== 0) return (code & 3) <= 1;
+  // SGR names the released button, so button NONE is only valid for movement.
+  return (code & 32) !== 0 || (code & 3) !== 3;
+}
 
 /**
  * The kind of terminal report a viewer message is, or `null` when it is
@@ -93,5 +105,44 @@ const MODIFIED_F3 = /^\x1b\[1;(?:[2-9]|1[0-6])R$/;
  */
 export function terminalReportKind(message: string): TerminalReportKind | null {
   if (MODIFIED_F3.test(message)) return null;
+  const sgrMouse = SGR_MOUSE.exec(message);
+  if (sgrMouse !== null) {
+    const code = Number(sgrMouse[1]);
+    // The encoder uses lowercase m only for ordinary-button release.
+    return mouseCodeValid(code) && (message.endsWith('M') || code < 32) &&
+      Number(sgrMouse[2]) <= 10_000 && Number(sgrMouse[3]) <= 10_000
+      ? 'mouse' : null;
+  }
   return REPORTS.find(({ pattern }) => pattern.test(message))?.kind ?? null;
+}
+
+const MAX_REPORT_BYTES = 128;
+
+/** A whole input made only of complete reports; anything mixed is typing. */
+export function terminalReportBatchKind(message: string): TerminalReportKind | null {
+  if (message.length === 0 || message.length > MAX_REPORT_BYTES) return null;
+  const single = terminalReportKind(message);
+  if (single !== null) return single;
+  let offset = 0;
+  let count = 0;
+  while (offset < message.length) {
+    if (message[offset] !== '\x1b') return null;
+    let next = offset + 3;
+    for (; next <= message.length; next++) {
+      if (terminalReportKind(message.slice(offset, next)) !== null) break;
+    }
+    if (next > message.length) return null;
+    offset = next;
+    count++;
+  }
+  return count > 1 ? 'multiple' : null;
+}
+
+/** Classify and forward each viewer frame without waiting for another frame. */
+export class TerminalReportStream {
+  constructor(private readonly deliver: (data: string, kind: TerminalReportKind | null) => void) {}
+
+  push(data: string): void {
+    this.deliver(data, terminalReportBatchKind(data));
+  }
 }

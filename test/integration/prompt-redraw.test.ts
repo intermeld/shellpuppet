@@ -2,7 +2,7 @@
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { afterAll, beforeAll, expect, it } from 'vitest';
+import { afterAll, beforeAll, expect, it, vi } from 'vitest';
 import { api, connectWs, eventually, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 import { museWrappedAnsi } from '../fixtures/museWrapped.js';
@@ -27,6 +27,7 @@ it('restarts a held prompt after input, while reports and redraws keep its clock
       answerablePrompt(screen: string): ReturnType<typeof detectPrompt>;
       promptInputVersion(): number;
       nudgeInputVersion(): number;
+      write(data: string, options?: { terminalReport?: boolean; humanInput?: boolean }): Promise<string>;
     } | undefined };
     promptStates: Map<string, { since: number; alerted: boolean }>;
     sessionFeed: { subscribe(listener: (frame: { type: string; changed?: string[];
@@ -63,8 +64,11 @@ it('restarts a held prompt after input, while reports and redraws keep its clock
     expect(scanner.promptStates.get(id)?.since).toBe(1_000);
 
     const reportVersion = session.nudgeInputVersion();
+    const write = vi.spyOn(session, 'write');
     viewer.ws.send('\x1b[I');
-    await eventually(() => session.nudgeInputVersion() > reportVersion);
+    await eventually(() => write.mock.calls.some(([data, options]) =>
+      data === '\x1b[I' && options?.terminalReport === true));
+    expect(session.nudgeInputVersion()).toBe(reportVersion);
     expect(session.promptInputVersion()).toBe(0);
     now = 7_000;
     await scanner.scanForPromptStalls();
