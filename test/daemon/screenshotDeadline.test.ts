@@ -11,9 +11,38 @@ import { EventEmitter } from 'node:events';
 import {
   DEFAULT_CAPTURE_TIMEOUT_MS,
   DevTools,
+  capturePageTarget,
   MAX_CAPTURE_TIMEOUT_MS,
   MIN_CAPTURE_TIMEOUT_MS,
 } from '../../src/daemon/screenshot.js';
+
+describe('capture page selection', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('waits for the initial page before creating another target', async () => {
+    vi.useFakeTimers();
+    const send = vi.fn((method: string): Promise<unknown> => {
+      if (method !== 'Target.getTargets') throw new Error(`Unexpected ${method}`);
+      return Promise.resolve({ targetInfos: send.mock.calls.length === 1 ? [] :
+        [{ targetId: 'initial', type: 'page', url: 'about:blank' }] });
+    });
+    const selected = capturePageTarget({ send } as unknown as Pick<DevTools, 'send'>, Date.now() + 5_000);
+    await vi.advanceTimersByTimeAsync(50);
+    expect(await selected).toBe('initial');
+    expect(send).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back to creating a page when the initial page never registers', async () => {
+    vi.useFakeTimers();
+    const send = vi.fn((method: string): Promise<unknown> => Promise.resolve(method === 'Target.getTargets'
+      ? { targetInfos: [] } : { targetId: 'fallback' }));
+    const selected = capturePageTarget({ send } as unknown as Pick<DevTools, 'send'>, Date.now() + 5_000);
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(await selected).toBe('fallback');
+    expect(send.mock.calls.at(-1)?.[0]).toBe('Target.createTarget');
+    expect(send.mock.calls.length).toBeGreaterThan(2);
+  });
+});
 
 /** A socket that takes every message and answers none of them. */
 class MuteSocket {
