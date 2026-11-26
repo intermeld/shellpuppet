@@ -10,6 +10,7 @@ const capture = mode === 'draft' ? 'claude-prompt-typed'
   : mode === 'queueing' ? 'claude-thinking' : 'claude-answered';
 const initialScreen = fs.readFileSync(path.join(here, 'reasoning', `${capture}.ansi`));
 let lateBody = '';
+let lateCleared = false;
 process.stdout.write(initialScreen);
 process.stdin.setRawMode?.(true);
 process.stdin.resume();
@@ -23,7 +24,14 @@ process.stdin.on('data', (bytes) => {
     return;
   }
   if (mode === 'late-person' && bytes.toString() === 'x') return;
-  if (mode === 'late' || mode === 'late-person' || mode === 'queued-paste') {
+  if (mode === 'late' && bytes.toString() === '\x15') {
+    lateCleared = true;
+    lateBody = '';
+    process.stdout.write('\x1b[2J\x1b[H');
+    process.stdout.write(initialScreen);
+    return;
+  }
+  if ((mode === 'late' && !lateCleared) || mode === 'late-person' || mode === 'queued-paste') {
     // The PTY accepted the bytes, but this program has not painted them yet.
     lateBody += bytes.toString();
     return;
@@ -38,7 +46,7 @@ process.stdin.on('data', (bytes) => {
       ' extra\x1b[0m\r\n' + '\x1b[0;38;2;136;136;136m' + '─'.repeat(120) + '\x1b[0m');
     return;
   }
-  if (mode !== 'ready' && mode !== 'queueing' && mode !== 'mouse-ready') return;
+  if (mode !== 'ready' && mode !== 'queueing' && mode !== 'mouse-ready' && mode !== 'late') return;
   const data = mode === 'mouse-ready'
     ? bytes.toString().replace(/\x1b\[<\d+;\d+;\d+[Mm]/g, '') : bytes.toString();
   if (data === '') return;

@@ -2868,8 +2868,17 @@ export class Daemon {
     // but a later inbox message can never authorise its submit key.
     if (session.nudgePendingLine() !== null && pendingIds.length === 0 &&
         !await this.clearScheduledBody(session)) return 'wait';
-    const clearedIds = pendingIds.length > 0 && await session.clearConsumedNudge() ? pendingIds : [];
     const unread = this.mailbox.inbox(id, { markRead: false });
+    const stale = pendingIds.length > 0 &&
+      pendingIds.every((messageId) => !unread.some((entry) => entry.id === messageId));
+    if (stale) {
+      const line = session.nudgePendingLine();
+      if (line === null || !session.discardStalePendingNudge(line, pendingIds)) return 'wait';
+      this.audit.record('daemon', 'nudge-pending-stale', id, {
+        messageIds: pendingIds, count: pendingIds.length,
+      });
+    }
+    const clearedIds = !stale && pendingIds.length > 0 && await session.clearConsumedNudge() ? pendingIds : [];
     if (clearedIds.length > 0) {
       this.audit.record('daemon', 'nudge-cleared', id, { messageIds: clearedIds,
         waitingMessageIds: unread.map((entry) => entry.id) });

@@ -95,52 +95,67 @@ it('withholds Enter when another waiting message arrives at the pending-line sub
   expect(mailbox.outbox(sender.claimId).filter((entry) => entry.state === 'nudged')).toHaveLength(3);
 });
 
-it('keeps a pending body when a named message was read, even if another waits', async () => {
+it('discards a stale pending body and nudges a later message after the composer clears', async () => {
   const mailbox = new Mailbox({ enabled: true, policy: () => true });
   mailbox.register({ kind: 'session', id: 'recipient', name: 'recipient' });
   const sender = mailbox.claim('sender');
   const first = mailbox.send(sender.claimId, 'recipient', 'first');
+  const coveredSecond = mailbox.send(sender.claimId, 'recipient', 'covered second');
   const pendingLine = buildNudge(mailbox.inbox('recipient', { markRead: false }));
-  mailbox.inbox('recipient');
+  mailbox.inbox('recipient', { limit: 1 });
   let submits = 0;
-  let pendingRecorded = false;
+  let pending: string | null = pendingLine;
+  let composerEmpty = false;
+  const delivered: string[] = [];
   const audit: { action: string; meta: Record<string, unknown> }[] = [];
   const session = {
     exited: false,
-    nudgePendingLine: () => pendingLine,
-    nudgePendingIds: () => [first.id],
+    nudgePendingLine: () => pending,
+    nudgePendingIds: () => pending === null ? [] : [first.id, coveredSecond.id],
+    discardStalePendingNudge: () => { pending = null; return true; },
     nudgePendingUntouched: () => true,
     nudgePendingSafeToSubmit: () => true,
-    nudgePendingAuditOnce: () => {
-      if (pendingRecorded) return false;
-      pendingRecorded = true;
-      return true;
-    },
+    nudgePendingAuditOnce: () => true,
     nudgePendingTouchRefusal: () => false,
     clearConsumedNudge: () => Promise.resolve(false),
     nudgeReadyWithLine: (line: string) => line === pendingLine,
+    hasPainted: () => true,
+    nudgeReady: () => composerEmpty,
     nudgeInputVersion: () => 1,
     nudgeQueuedInputVersion: () => 0,
     nudgeScreenRevision: () => 0,
     getStalled: () => undefined,
     answerablePrompt: () => null,
     submitPendingNudge: () => { submits++; return Promise.resolve(true); },
-    writeNudgeWithReason: () => { throw new Error('A second body must not be written'); },
+    writeNudgeWithReason: () => { throw new Error('Delivery is mocked below'); },
   };
   const daemon = Object.create(Daemon.prototype) as Daemon;
   Object.assign(daemon, {
-    manager: { get: () => session }, mailbox,
+    manager: { get: () => session }, mailbox, options: {},
     audit: { record: (_actor: string, action: string, _id: string, meta: Record<string, unknown>) =>
       audit.push({ action, meta }) },
+    deliverLine: (_session: unknown, line: string) => {
+      delivered.push(line);
+      return Promise.resolve({ outcome: 'sent' });
+    },
   });
-  // Each refusal leaves the original body in place and cannot write a second copy.
+  // The old body stays on screen, but it no longer owns daemon pending state.
+  expect(await daemon['deliverNudge']('recipient')).toBe('wait');
+  expect(pending).toBe(pendingLine);
+  mailbox.inbox('recipient');
   expect(await daemon['deliverNudge']('recipient')).toBe('done');
+  expect(pending).toBeNull();
   expect(submits).toBe(0);
   const waiting = mailbox.send(sender.claimId, 'recipient', 'second');
   expect(await daemon['deliverNudge']('recipient')).toBe('wait');
-  expect(await daemon['deliverNudge']('recipient')).toBe('wait');
+  expect(delivered).toEqual([]);
+  composerEmpty = true;
+  expect(await daemon['deliverNudge']('recipient')).toBe('sent');
   expect(submits).toBe(0);
-  expect(mailbox.outbox(sender.claimId).find((entry) => entry.id === waiting.id)?.state).toBe('waiting');
-  expect(audit.filter((entry) => entry.action === 'nudge-pending')).toEqual([{ action: 'nudge-pending',
-    meta: { messageIds: [first.id], count: 1, reason: 'messages-changed' } }]);
+  expect(delivered).toEqual([buildNudge([{ id: waiting.id,
+    from: { id: sender.claimId, name: 'sender' } }])]);
+  expect(mailbox.outbox(sender.claimId).find((entry) => entry.id === waiting.id)?.state).toBe('nudged');
+  expect(audit.filter((entry) => entry.action === 'nudge-pending-stale')).toEqual([{
+    action: 'nudge-pending-stale', meta: { messageIds: [first.id, coveredSecond.id], count: 2 },
+  }]);
 });

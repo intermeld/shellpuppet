@@ -12,7 +12,7 @@ version may change behaviour, and every such change is listed here.
 - Sessions started from a daemon launched inside an agent tool shell no longer inherit that shell's `NO_COLOR` through an `"all"` dashboard profile or global passthrough. Explicitly named values remain available.
 - Later messages no longer add a second queued mailbox nudge while the first still awaits an inbox read or an idle composer.
 - Busy sessions with a background-task count in the mode line can receive queued message nudges.
-- SGR mouse and focus reports no longer hold or abort message nudges; an aborted nudge retains and audits its line, and retries only when its original draft and unread messages are proven safe.
+- SGR mouse and focus reports no longer hold or abort message nudges; an aborted nudge retains and audits its line, retries only when its original draft and unread messages are proven safe, and frees later nudges after all messages named by a stale line have been read.
 
 ## [0.5.0] - 2026-11-26
 

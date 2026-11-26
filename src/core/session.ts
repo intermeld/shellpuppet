@@ -1416,6 +1416,22 @@ export class Session implements WaitTarget {
     this.pendingTouchRefusalAudited = true;
     return true;
   }
+  /** Forget a stale mailbox body without writing to or clearing the terminal. */
+  discardStalePendingNudge(line: string, messageIds: readonly string[]): boolean {
+    if (this.writingNudge || this.pendingNudgeLine !== line || messageIds.length === 0 ||
+        this.pendingNudgeIds.length !== messageIds.length ||
+        !messageIds.every((id, index) => this.pendingNudgeIds[index] === id)) return false;
+    this.pendingNudgeLine = null;
+    this.pendingNudgeIds = [];
+    this.pendingNudgeTypedChars = 0;
+    this.pendingNudgeWholeBody = false;
+    this.pendingNudgeAuditRecorded = false;
+    this.pendingNudgeTouched = false;
+    this.pendingTouchRefusalAudited = false;
+    this.pendingTurnSubmitted = false;
+    this.pendingTurnBusy = false;
+    return true;
+  }
   /** Clear after an observed submitted turn or a whole quiet period of proven emptiness. */
   async clearConsumedNudge(): Promise<boolean> {
     if (this.pendingNudgeLine === null || this.writingNudge) return false;
