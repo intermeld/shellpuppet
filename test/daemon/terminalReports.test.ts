@@ -245,13 +245,47 @@ describe('complete and split mouse reports', () => {
   it('joins only unambiguous fragments on one stream and forwards the original bytes once', () => {
     const delivered: { data: string; kind: string | null }[] = [];
     const stream = new TerminalReportStream((data, kind) => delivered.push({ data, kind }));
-    stream.push(`${ESC}[<`);
-    stream.push('35;12;7M');
-    stream.push(`${ESC}[M`);
-    stream.push(' *%');
+    stream.push(`${ESC}[<35;12;`);
+    stream.push('7M');
+    stream.push(`${ESC}[M *%`);
     expect(delivered).toEqual([
       { data: `${ESC}[<35;12;7M`, kind: 'mouse' },
       { data: `${ESC}[M *%`, kind: 'mouse' },
+    ]);
+  });
+
+  it.each([`${ESC}[<`, `${ESC}[<35;`])('keeps a failed mouse prefix separate from a following focus report: %j',
+    (prefix) => {
+    const delivered: { data: string; kind: string | null }[] = [];
+    const stream = new TerminalReportStream((data, kind) => delivered.push({ data, kind }));
+    stream.push(prefix);
+    stream.push(`${ESC}[I`);
+    expect(delivered).toEqual([
+      { data: prefix, kind: null },
+      { data: `${ESC}[I`, kind: 'focus-in' },
+    ]);
+  });
+
+  it('treats a split X10 continuation as keyboard input', () => {
+    const delivered: { data: string; kind: string | null }[] = [];
+    const stream = new TerminalReportStream((data, kind) => delivered.push({ data, kind }));
+    stream.push(`${ESC}[M `);
+    stream.push('xy');
+    expect(delivered).toEqual([
+      { data: `${ESC}[M `, kind: null },
+      { data: 'xy', kind: null },
+    ]);
+  });
+
+  it('forwards a lone mouse opener and the next keyboard frame without delay', () => {
+    const delivered: { data: string; kind: string | null }[] = [];
+    const stream = new TerminalReportStream((data, kind) => delivered.push({ data, kind }));
+    stream.push(`${ESC}[<`);
+    expect(delivered).toEqual([{ data: `${ESC}[<`, kind: null }]);
+    stream.push('xy');
+    expect(delivered).toEqual([
+      { data: `${ESC}[<`, kind: null },
+      { data: 'xy', kind: null },
     ]);
   });
 
@@ -273,13 +307,13 @@ describe('complete and split mouse reports', () => {
     try {
       const delivered: { data: string; kind: string | null }[] = [];
       const stream = new TerminalReportStream((data, kind) => delivered.push({ data, kind }));
-      stream.push(`${ESC}[<`);
+      stream.push(`${ESC}[<35;`);
       expect(delivered).toEqual([]);
       vi.advanceTimersByTime(50);
-      expect(delivered).toEqual([{ data: `${ESC}[<`, kind: null }]);
-      stream.push(`${ESC}[M`);
+      expect(delivered).toEqual([{ data: `${ESC}[<35;`, kind: null }]);
+      stream.push(`${ESC}[<35;12;`);
       stream.flush();
-      expect(delivered.at(-1)).toEqual({ data: `${ESC}[M`, kind: null });
+      expect(delivered.at(-1)).toEqual({ data: `${ESC}[<35;12;`, kind: null });
     } finally { vi.useRealTimers(); }
   });
 });

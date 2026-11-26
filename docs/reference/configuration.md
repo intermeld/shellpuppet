@@ -81,9 +81,10 @@ and mailbox nudges. Each further typed input restarts the wait. Complete mouse
 reports (SGR or normal/X10) and focus in/out reports from a viewer, or sent as
 one API input, are forwarded unchanged to the programme but do not count as
 typing or interrupt a nudge. A write containing a keyboard byte still counts
-as typing. A viewer can split a mouse report after its distinctive prefix;
-ambiguous fragments such as a lone Escape count as typing so a key is never
-held waiting for more bytes. A report prefix that stays incomplete for 40 ms
+as typing. A viewer can split an SGR report after its button code and first
+semicolon. A lone `ESC[<`, a split normal/X10 report, and ambiguous fragments
+such as a lone Escape count as typing so a key is never held waiting for more
+bytes. A report prefix that stays incomplete for 40 ms
 or exceeds 128 bytes is forwarded as typing. The bundled terminal does not
 send urxvt 1015 reports, so that shape counts as typing. A confirmed typed
 submission ends the wait early. During the wait a scheduled run skips with reason

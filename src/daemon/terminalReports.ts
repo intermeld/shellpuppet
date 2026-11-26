@@ -125,12 +125,11 @@ export function terminalReportBatchKind(message: string): TerminalReportKind | n
   return count > 1 ? 'multiple' : null;
 }
 
-/** Only unambiguous mouse prefixes may wait for a later WebSocket frame. */
+/** Only an SGR prefix beyond its opener may wait for another viewer frame. */
 function mousePrefix(message: string): boolean {
   if (message.length > MAX_REPORT_BYTES) return false;
   /* eslint-disable no-control-regex -- these prefixes are escape sequences */
-  return /^\x1b\[<(?:\d{0,6})(?:;\d{0,6}){0,2}[Mm]?$/u.test(message) ||
-    /^\x1b\[M[\x20-\xff]{0,2}$/u.test(message);
+  return /^\x1b\[<\d{1,6};\d{0,6}(?:;\d{0,6})?[Mm]?$/u.test(message);
   /* eslint-enable no-control-regex */
 }
 
@@ -142,17 +141,30 @@ export class TerminalReportStream {
   constructor(private readonly deliver: (data: string, kind: TerminalReportKind | null) => void) {}
 
   push(data: string): void {
-    const whole = this.pending + data;
-    const kind = terminalReportBatchKind(whole);
+    if (this.pending !== '') {
+      const combined = this.pending + data;
+      const continuedKind = terminalReportBatchKind(combined);
+      if (continuedKind !== null) {
+        this.clear();
+        this.deliver(combined, continuedKind);
+        return;
+      }
+      if (data !== '' && !data.includes('\x1b') && mousePrefix(combined)) {
+        this.pending = combined;
+        return;
+      }
+      // This frame did not complete the prefix. Keep its provenance: a fresh
+      // focus report or keyboard frame must be classified on its own.
+      this.flush();
+    }
+    const kind = terminalReportBatchKind(data);
     if (kind !== null) {
-      this.clear();
-      this.deliver(whole, kind);
-    } else if (mousePrefix(whole)) {
-      this.pending = whole;
+      this.deliver(data, kind);
+    } else if (mousePrefix(data)) {
+      this.pending = data;
       this.timer ??= setTimeout(() => this.flush(), FRAGMENT_WAIT_MS);
     } else {
-      this.clear();
-      this.deliver(whole, null);
+      this.deliver(data, null);
     }
   }
 
