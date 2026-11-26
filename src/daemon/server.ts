@@ -677,6 +677,14 @@ export class Daemon {
   private readonly dashboardSocketCredential = new WeakMap<WebSocket, string>();
   /** External geometry acts invalidate a temporary wider read's restoration. */
   private readonly geometryEpoch = new Map<string, number>();
+  /** One daemon order for layout notices and deliberate grid choices. */
+  private readonly geometryOrder = new Map<string, number>();
+  private readonly choiceRevision = new Map<string, number>();
+  private readonly controllerChoiceRevision = new Map<string, number>();
+  private readonly explicitResizeRevision = new Map<string, number>();
+  private readonly dashboardLayouts = new WeakMap<WebSocket, {
+    id: number; realId: number; order: number; eligible: boolean
+  }>();
   private readonly widerReads = new Map<string, { abort: AbortController; done: Promise<void>; isTemporary: () => boolean }>();
   /** Subscribers to the daemon-wide event stream (`/events`). */
   private readonly eventSockets = new Map<WebSocket, string | undefined>();
@@ -3948,12 +3956,13 @@ export class Daemon {
           await session.resize(cols, rows, { hold, onApplied: () => {
             this.audit.record(actor, 'resize', id, { cols, rows, hold });
             this.geometryEpoch.set(id, (this.geometryEpoch.get(id) ?? 0) + 1);
+            this.explicitResizeRevision.set(id, this.recordGeometryChoice(id));
             // An API resize takes the grid away from whichever viewport had it.
             this.geometryController.delete(id);
             this.dashboardGeometryOwner.delete(id);
             this.dashboardCredentialOwner.delete(id);
             this.dashboardTransferable.delete(id);
-            this.announceGeometry(id, session);
+            this.announceGeometry(id, session, { clientResize: true });
           } });
         } catch (error) {
           if (!(error instanceof SessionProgramEndedError)) throw error;
@@ -4345,6 +4354,10 @@ export class Daemon {
     this.dashboardCredentialOwner.delete(id);
     this.dashboardTransferable.delete(id);
     this.geometryEpoch.delete(id);
+    this.geometryOrder.delete(id);
+    this.choiceRevision.delete(id);
+    this.controllerChoiceRevision.delete(id);
+    this.explicitResizeRevision.delete(id);
   }
 
   /** Whether a live viewport is currently driving this session's grid. */
@@ -4353,6 +4366,32 @@ export class Daemon {
     if (controller === undefined) return false;
     if (controller.readyState === controller.OPEN) return true;
     this.geometryController.delete(sessionId);
+    return false;
+  }
+
+  private nextGeometryOrder(id: string): number {
+    const order = (this.geometryOrder.get(id) ?? 0) + 1;
+    this.geometryOrder.set(id, order);
+    return order;
+  }
+
+  private recordGeometryChoice(id: string, controller = false): number {
+    const revision = this.nextGeometryOrder(id);
+    this.choiceRevision.set(id, revision);
+    if (controller) this.controllerChoiceRevision.set(id, revision);
+    return revision;
+  }
+
+  /** A document can reserve its grid only while its credential and proof are valid. */
+  private hasDashboardGeometryOwner(id: string): boolean {
+    const owner = this.dashboardGeometryOwner.get(id);
+    if (owner === undefined) return false;
+    if (this.tokens.verifyDashboardToken(this.dashboardCredentialOwner.get(id)) &&
+        (this.dashboardTransferable.has(id) || this.tokens.acceptsDashboardProof(dashboardProofFromProtocol(owner)))) return true;
+    this.dashboardGeometryOwner.delete(id);
+    this.dashboardCredentialOwner.delete(id);
+    this.dashboardTransferable.delete(id);
+    this.recordGeometryChoice(id);
     return false;
   }
 
@@ -5089,11 +5128,15 @@ export class Daemon {
   private announceGeometry(
     sessionId: string,
     session: Session,
-    options: { resync?: boolean } = {},
+    options: { resync?: boolean; clientResize?: boolean; acceptedTakeId?: number } = {},
   ): void {
     for (const [ws, sync] of this.sessionSockets.get(sessionId) ?? []) {
       if (ws.readyState === ws.OPEN) {
-        ws.send(JSON.stringify(this.geometryFrame(session, ws)));
+        ws.send(JSON.stringify({ ...this.geometryFrame(session, ws),
+          ...(options.clientResize ? { clientResize: true,
+            layoutFence: this.dashboardLayouts.get(ws)?.realId ?? 0 } : {}),
+          ...(ws === this.geometryController.get(sessionId) && options.acceptedTakeId !== undefined
+            ? { acceptedTakeId: options.acceptedTakeId } : {}) }));
       }
       if (options.resync !== false) sync.resync();
     }
@@ -5109,8 +5152,13 @@ export class Daemon {
 
   /** What one watcher is told about the grid, from its own point of view. */
   private geometryFrame(session: Session, ws: WebSocket): Record<string, unknown> {
+    const reserved = this.dashboardSocketCredential.has(ws) && this.hasDashboardGeometryOwner(session.id);
+    const controlled = this.hasGeometryController(session.id);
     return {
       type: 'geometry',
+      choiceRevision: this.choiceRevision.get(session.id) ?? 0,
+      controllerChoiceRevision: this.controllerChoiceRevision.get(session.id) ?? 0,
+      explicitResizeRevision: this.explicitResizeRevision.get(session.id) ?? 0,
       ...(this.widerReads.get(session.id)?.isTemporary() ? { temporary: true } : {}),
       cols: session.cols,
       rows: session.rows,
@@ -5120,8 +5168,7 @@ export class Daemon {
       max: { cols: MAX_VIEWPORT_COLS, rows: MAX_VIEWPORT_ROWS },
       // An adopting dashboard must distinguish a fresh session from one
       // already taken in another window before scheduling its initial fit.
-      owned: this.hasGeometryController(session.id) ||
-        (this.dashboardSocketCredential.has(ws) && this.dashboardGeometryOwner.has(session.id)),
+      owned: controlled || reserved,
       // Only a controller's explicit assignment handover offers its grid to
       // another dashboard pane while the old socket is closing.
       dashboardTransferable: this.gridOfferedTo(session.id, ws),
@@ -5248,13 +5295,14 @@ export class Daemon {
       credential.kind === 'dashboard' &&
       // The returning document can restore its grid while a release to a
       // different assignment belongs to that recipient alone.
-      this.dashboardGeometryOwner.has(session.id) &&
+      this.hasDashboardGeometryOwner(session.id) &&
       (!this.dashboardTransferable.has(session.id) || this.gridOfferedTo(session.id, ws)) &&
       tokensEqual(this.dashboardGeometryOwner.get(session.id)!, ws.protocol) &&
       !session.exited &&
       !this.hasGeometryController(session.id)
     ) {
       this.geometryController.set(session.id, ws);
+      this.recordGeometryChoice(session.id, true);
       this.dashboardTransferable.delete(session.id);
       this.announceGeometry(session.id, session, { resync: false });
     } else if (
@@ -5262,9 +5310,10 @@ export class Daemon {
       !readOnly &&
       !passive &&
       !this.hasGeometryController(session.id) &&
-      !this.dashboardGeometryOwner.has(session.id)
+      !this.hasDashboardGeometryOwner(session.id)
     ) {
       this.geometryController.set(session.id, ws);
+      this.recordGeometryChoice(session.id, true);
       this.dashboardGeometryOwner.delete(session.id);
       this.dashboardCredentialOwner.delete(session.id);
       this.dashboardTransferable.delete(session.id);
@@ -5365,13 +5414,43 @@ export class Daemon {
           }
           return;
         }
+        if (typeof parsed === 'object' && parsed !== null &&
+            (parsed as { type?: string }).type === 'layout') {
+          const notice = parsed as { layoutId?: unknown; eligible?: unknown; real?: unknown };
+          if (credential.kind === 'dashboard' && this.dashboardFeedCurrent(ws) &&
+              Number.isSafeInteger(notice.layoutId) && Number(notice.layoutId) > 0 &&
+              typeof notice.eligible === 'boolean') {
+            const id = Number(notice.layoutId);
+            if (id > (this.dashboardLayouts.get(ws)?.id ?? 0)) {
+              const prior = this.dashboardLayouts.get(ws);
+              const real = notice.real === true;
+              this.dashboardLayouts.set(ws, { id, realId: real ? id : (prior?.realId ?? 0),
+                order: real ? this.nextGeometryOrder(session.id) : (prior?.order ?? 0),
+                eligible: notice.eligible });
+            }
+          }
+          return;
+        }
         if (
           typeof parsed === 'object' &&
           parsed !== null &&
           (parsed as { type?: string }).type === 'resize'
         ) {
-          const { cols, rows, take, acceptOffer } = parsed as {
-            cols?: number; rows?: number; take?: unknown; acceptOffer?: unknown };
+          const { cols, rows, take, acceptOffer, automatic, takeId, choiceRevision, layoutId } = parsed as {
+            cols?: number; rows?: number; take?: unknown; acceptOffer?: unknown; automatic?: unknown;
+            takeId?: unknown; choiceRevision?: unknown; layoutId?: unknown };
+          const autoTake = automatic === true && take === true && acceptOffer !== true &&
+            credential.kind === 'dashboard';
+          const requestId = Number.isSafeInteger(takeId) && Number(takeId) > 0 ? Number(takeId) : undefined;
+          const refuseAuto = (staleLayoutId = false): void => {
+            if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ ...this.geometryFrame(session, ws),
+              refusedTakeId: requestId, ...(staleLayoutId ? { staleLayoutId: true } : {}) }));
+          };
+          if (automatic === true && (!autoTake || requestId === undefined ||
+              !Number.isSafeInteger(choiceRevision) || !Number.isSafeInteger(layoutId))) {
+            refuseAuto();
+            return;
+          }
           // Fit, Enlarge, Focus and Restore are a resize that says `take`.
           // A passive socket's other resizes, including one a dashboard pane
           // sends because the window moved, are not that act: the grid stays,
@@ -5393,44 +5472,113 @@ export class Daemon {
             if (session.geometryHeld) {
               // Held against viewports. Answer with the real grid so the page
               // stops proposing one it will never be given.
-              ws.send(JSON.stringify(this.geometryFrame(session, ws)));
+              if (autoTake) refuseAuto();
+              else ws.send(JSON.stringify(this.geometryFrame(session, ws)));
               return;
             }
             const wanted = {
               cols: Math.min(cols, MAX_VIEWPORT_COLS),
               rows: Math.min(rows, MAX_VIEWPORT_ROWS),
             };
-            if (!this.widerReads.has(session.id) && acceptOffer !== true) {
-              // Wider restores and conditional offer takes check ownership
-              // in the session's resize queue below.
-              const handedOver = this.geometryController.get(session.id) !== ws;
-              const changed = wanted.cols !== session.cols || wanted.rows !== session.rows;
-              let applied = false;
+            if (autoTake) {
               try {
-                if (changed) await session.resize(wanted.cols, wanted.rows);
+                let applied = false;
+                let changedAtApply = false;
+                let staleLayoutId = false;
+                const shouldApply = (): boolean => {
+                  if (session.geometryHeld || session.exited || ws.readyState !== ws.OPEN ||
+                      !this.sessionSockets.get(session.id)?.has(ws) || !this.dashboardFeedCurrent(ws)) return false;
+                  const layout = this.dashboardLayouts.get(ws);
+                  if (Number(layoutId) !== (layout?.id ?? 0)) {
+                    staleLayoutId = true;
+                    return false;
+                  }
+                  if (layout?.eligible === false) return false;
+                  const ownerPresent = this.hasGeometryController(session.id);
+                  if (ownerPresent && this.geometryController.get(session.id) !== ws) return false;
+                  const reserved = this.hasDashboardGeometryOwner(session.id);
+                  if (reserved && this.geometryController.get(session.id) !== ws) return false;
+                  const explicit = this.explicitResizeRevision.get(session.id) ?? 0;
+                  if (explicit > (this.controllerChoiceRevision.get(session.id) ?? 0) &&
+                      (layout?.order ?? 0) <= explicit) return false;
+                  const current = this.choiceRevision.get(session.id) ?? 0;
+                  if (Number(choiceRevision) !== current &&
+                      !(layout !== undefined && layout.id === Number(layoutId) && layout.order > current)) return false;
+                  changedAtApply = wanted.cols !== session.cols || wanted.rows !== session.rows;
+                  return true;
+                };
+                const onApplied = (): void => {
+                  applied = true;
+                  const handedOver = this.geometryController.get(session.id) !== ws;
+                  this.geometryController.set(session.id, ws);
+                  this.dashboardGeometryOwner.set(session.id, ws.protocol);
+                  this.dashboardCredentialOwner.set(session.id, credential.dashboardToken);
+                  this.dashboardTransferable.delete(session.id);
+                  this.recordGeometryChoice(session.id, true);
+                  this.geometryEpoch.set(session.id, (this.geometryEpoch.get(session.id) ?? 0) + 1);
+                  if (changedAtApply) this.audit.record(actor, 'resize', session.id, {
+                    cols: wanted.cols, rows: wanted.rows, hold: false,
+                  });
+                  if (changedAtApply || handedOver) this.announceGeometry(session.id, session,
+                    { resync: changedAtApply, acceptedTakeId: requestId });
+                  else ws.send(JSON.stringify({ ...this.geometryFrame(session, ws), acceptedTakeId: requestId }));
+                };
+                await session.resize(wanted.cols, wanted.rows,
+                  { shouldApply, skipIfSame: true, onApplied });
+                if (!applied) refuseAuto(staleLayoutId);
+              } catch (error) {
+                refuseAuto();
+                if (!(error instanceof SessionProgramEndedError)) this.logger.warn('viewer resize failed', {
+                  id: session.id, error: String(error),
+                });
+              }
+              return;
+            }
+            if (!this.widerReads.has(session.id) && acceptOffer !== true) {
+              let applied = false;
+              let changedAtApply = false;
+              const shouldApply = (): boolean => {
+                if (session.geometryHeld || session.exited || ws.readyState !== ws.OPEN ||
+                    !this.sessionSockets.get(session.id)?.has(ws)) return false;
+                changedAtApply = wanted.cols !== session.cols || wanted.rows !== session.rows;
+                return true;
+              };
+              const onApplied = (): void => {
                 applied = true;
+                const handedOver = this.geometryController.get(session.id) !== ws;
+                this.geometryController.set(session.id, ws);
+                this.recordGeometryChoice(session.id, true);
+                this.dashboardTransferable.delete(session.id);
+                this.geometryEpoch.set(session.id, (this.geometryEpoch.get(session.id) ?? 0) + 1);
+                if (credential.kind === 'dashboard') {
+                  this.dashboardGeometryOwner.set(session.id, ws.protocol);
+                  this.dashboardCredentialOwner.set(session.id, credential.dashboardToken);
+                } else {
+                  this.dashboardGeometryOwner.delete(session.id);
+                  this.dashboardCredentialOwner.delete(session.id);
+                }
+                if (changedAtApply) {
+                  this.audit.record(actor, 'resize', session.id, {
+                    cols: wanted.cols, rows: wanted.rows, hold: false,
+                  });
+                  this.announceGeometry(session.id, session);
+                } else if (handedOver) this.announceGeometry(session.id, session, { resync: false });
+                else if (take === true) ws.send(JSON.stringify(this.geometryFrame(session, ws)));
+              };
+              try {
+                if (wanted.cols !== session.cols || wanted.rows !== session.rows) {
+                  await session.resize(wanted.cols, wanted.rows,
+                    { shouldApply, skipIfSame: true, onApplied });
+                } else {
+                  await session.resizeIfCurrent(wanted.cols, wanted.rows, shouldApply,
+                    () => onApplied(), true);
+                }
+                if (!applied && ws.readyState === ws.OPEN)
+                  ws.send(JSON.stringify(this.geometryFrame(session, ws)));
               } catch (error) {
                 if (error instanceof SessionProgramEndedError) return;
                 this.logger.warn('viewer resize failed', { id: session.id, error: String(error) });
               }
-              this.geometryController.set(session.id, ws);
-              this.dashboardTransferable.delete(session.id);
-              this.geometryEpoch.set(session.id, (this.geometryEpoch.get(session.id) ?? 0) + 1);
-              if (credential.kind === 'dashboard') {
-                this.dashboardGeometryOwner.set(session.id, ws.protocol);
-                this.dashboardCredentialOwner.set(session.id, credential.dashboardToken);
-              } else {
-                this.dashboardGeometryOwner.delete(session.id);
-                this.dashboardCredentialOwner.delete(session.id);
-              }
-              if (changed && applied) {
-                this.audit.record(actor, 'resize', session.id, {
-                  cols: wanted.cols, rows: wanted.rows, hold: false,
-                });
-              }
-              if (changed) this.announceGeometry(session.id, session);
-              else if (handedOver) this.announceGeometry(session.id, session, { resync: false });
-              else if (take === true) ws.send(JSON.stringify(this.geometryFrame(session, ws)));
               return;
             }
             try {
@@ -5445,6 +5593,7 @@ export class Daemon {
                   // The controller change and epoch belong to the same queued
                   // act as the resize, before a queued wider restore can run.
                   this.geometryController.set(session.id, ws);
+                  this.recordGeometryChoice(session.id, true);
                   this.dashboardTransferable.delete(session.id);
                   this.geometryEpoch.set(session.id, (this.geometryEpoch.get(session.id) ?? 0) + 1);
                   if (credential.kind === 'dashboard') {
@@ -5579,6 +5728,7 @@ export class Daemon {
         // does not inherit it.
         if (this.geometryController.get(session.id) === ws) {
           this.geometryController.delete(session.id);
+          this.recordGeometryChoice(session.id);
           this.announceGeometry(session.id, session, { resync: false });
         }
         this.lastActivity = Date.now();

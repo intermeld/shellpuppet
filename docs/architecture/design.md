@@ -2005,12 +2005,32 @@ and are never pulled down to the shared floor. It sends at most
 one resize per pane for the settled change and leaves a grid held by another
 client alone. The first takeover in another window or viewer makes the pane
 follow that grid until Fit, Enlarge or a drag on that pane with Auto fit on
-takes it back. The initial geometry frame distinguishes an unowned session,
+takes it back while the controller is live. When that live controller leaves,
+an above-floor pane with Auto fit on fits if no valid reservation remains.
+An expired reservation alone does not prompt an open follower to fit.
+The initial geometry frame distinguishes an unowned session,
 which still receives its initial fit, from one already owned elsewhere. A
-dashboard follower fits automatically only after the controlling window hands
-the pane over because it was moved to another window, including Pop out;
+dashboard follower with a valid reservation fits automatically only after the
+controlling window hands the pane over because it was moved to another window,
+including Pop out;
 a reload, reconnect, closed pane or closed window does not give another window or viewer
-the grid. A drag changes only the page during pointer movement. On release, panes that
+the grid while its reservation remains valid. An unheld HTTP, MCP or CLI resize
+keeps its grid until that pane's next real layout change, deliberate Fit or
+later controller grid choice. After that controller leaves, an above-floor pane
+can fit again. A reconnecting pane registers its current layout on the new
+session socket before an automatic fit. If the daemon rejects a stale layout ID,
+the pane registers once more and retries once. The daemon orders layout notices
+and grid choices per session; it checks automatic takes when their queued resize
+applies. A virtual reconnect registration cannot supersede an explicit resize
+that took effect while the pane was disconnected. The geometry frame carries
+that explicit choice so the pane can retain its hold; the daemon checks it again
+when applying an automatic take. A completed HTTP resize is later than a fit
+already queued, and a layout
+notice reaching
+the daemon afterwards can fit even if its browser has not received the resize
+announcement. Events that overlap in transit follow their daemon receipt order,
+without comparing process clocks. The HTTP resize response follows application
+in the session queue. A drag changes only the page during pointer movement. On release, panes that
 grew fit their real terminal under the same Auto fit and geometry ownership
 rules; panes that shrank below the floor also fit to exactly 80 by 24. Panes
 that shrank but remain above it keep their grid and scale their text. With Auto

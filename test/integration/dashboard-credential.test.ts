@@ -17,7 +17,7 @@ import { createAuditor } from '../../src/daemon/audit.js';
 import { DASHBOARD_PROOF_LIMIT, VIEWER_GRANT_TTL_MS } from '../../src/daemon/auth.js';
 import type { ViewerLaunchResult } from '../../src/daemon/viewerLauncher.js';
 import { createFileLogger } from '../../src/daemon/logger.js';
-import { api, eventually, makeTempHome, startTestDaemon } from './helpers.js';
+import { api, connectWs, eventually, makeTempHome, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 
 const PAGE_CSP = "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:";
@@ -198,9 +198,13 @@ interface FeedClient {
   close: () => void;
 }
 
-async function openSocket(port: number, route: string, cookie: string, proof: string): Promise<WebSocket> {
+async function openSocket(port: number, route: string, cookie: string, proof: string,
+  onFrame?: (frame: Record<string, unknown>) => void): Promise<WebSocket> {
   const ws = new WebSocket(`ws://127.0.0.1:${port}${route}`, [`sp-csrf.${proof}`], {
     headers: eventsHeaders(port, cookie),
+  });
+  if (onFrame) ws.on('message', (data: Buffer | string, isBinary: boolean) => {
+    if (!isBinary) onFrame(JSON.parse(String(data)) as Record<string, unknown>);
   });
   await once(ws, 'open');
   return ws;
@@ -898,6 +902,45 @@ describe('the document proof', () => {
         expect(String(reason)).toBe('Dashboard access expired');
       }
     } finally { failLaunch(); }
+  });
+
+  it('retires a following stream without a release frame and keeps the current document usable', async () => {
+    const daemon = await startDash();
+    const id = await startQuiet(daemon, 'retired-follower');
+    const driver = await connectWs(daemon.port, id, daemon.token);
+    try {
+      await driver.waitForControl(frame => frame.control === 'yours');
+      const oldOpen = await openDashboard(daemon);
+      const oldPage = await redeem(daemon, oldOpen.grant);
+      const oldGeometry: Record<string, unknown>[] = [];
+      const oldStream = await openSocket(daemon.port, `/sessions/${id}/stream`,
+        cookiePair(oldPage.headers), csrfMeta(oldPage.body)!,
+        frame => { if (frame['type'] === 'geometry') oldGeometry.push(frame); });
+      await eventually(() => oldGeometry.some(frame => frame['owned'] === true));
+      const nextOpen = await openDashboard(daemon);
+      const retired = once(oldStream, 'close');
+      const nextPage = await redeem(daemon, nextOpen.grant);
+      const [code, reason] = await retired as [number, Buffer];
+      expect(code).toBe(1008);
+      expect(String(reason)).toBe('Dashboard access expired');
+      const countAtRetirement = oldGeometry.length;
+      const currentCookie = cookiePair(nextPage.headers);
+      const currentProof = csrfMeta(nextPage.body)!;
+      const list = await raw(daemon.port, 'GET', '/sessions', readHeaders({
+        cookie: currentCookie, 'x-shellpuppet-csrf': currentProof,
+      }));
+      expect(list.status).toBe(200);
+      expect(list.body).toContain(id);
+      const currentGeometry: Record<string, unknown>[] = [];
+      const currentStream = await openSocket(daemon.port, `/sessions/${id}/stream`,
+        currentCookie, currentProof,
+        frame => { if (frame['type'] === 'geometry') currentGeometry.push(frame); });
+      await eventually(() => currentGeometry.some(frame => frame['owned'] === true));
+      driver.close();
+      await eventually(() => currentGeometry.some(frame => frame['owned'] === false));
+      expect(oldGeometry).toHaveLength(countAtRetirement);
+      currentStream.close();
+    } finally { driver.close(); }
   });
 
   it('any script that can read this origin can act as the dashboard, and HttpOnly is not the control', async () => {
