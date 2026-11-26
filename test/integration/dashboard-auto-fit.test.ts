@@ -697,10 +697,28 @@ it('keeps pane control through Enlarge, a closed session, and Restore in two win
     drive: true, probeOnly: true, timeoutMs: 120_000,
     beforeNavigateScript: `(() => {
       window.__resizes = [];
+      window.__fitFrames = [];
+      window.__fitSteps = [];
+      window.__fitPhase = 'initial';
+      window.__recordFitStep = step => window.__fitSteps.push({
+        step, at: performance.now(), viewport: [innerWidth, innerHeight], scale: devicePixelRatio,
+        share: document.getElementById('share-count')?.textContent,
+        panes: [...document.querySelectorAll('.pane')].map(card => ({
+          id: card.dataset.session, size: card.querySelector('.pane-size')?.textContent,
+          width: card.querySelector('.pane-term')?.clientWidth,
+          height: card.querySelector('.pane-term')?.clientHeight,
+          geometry: window.__dashboardDiagnostics?.streams.findLast(entry =>
+            entry.socket.readyState === 1 && entry.url.endsWith('/sessions/' + card.dataset.session + '/stream'))
+            ?.geometry.at(-1),
+        })),
+        resizes: window.__resizes.slice(),
+      });
       const send = WebSocket.prototype.send;
       WebSocket.prototype.send = function(data) {
          if (typeof data === 'string' && data.includes('"type":"resize"')) {
-           const frame = { url: this.url, ...JSON.parse(data) };
+           const frame = { url: this.url, ...JSON.parse(data), at: performance.now(),
+             phase: window.__fitPhase, caller: new Error().stack?.split(String.fromCharCode(10)).slice(1, 5).join(' | ') };
+           window.__fitFrames.push(frame);
            if (window.__delayRestoredTake && frame.take) {
              setTimeout(() => { window.__resizes.push(frame); send.call(this, data); }, 4500);
              return;
@@ -757,7 +775,9 @@ it('keeps pane control through Enlarge, a closed session, and Restore in two win
         };
       })()`);
       await send('Page.bringToFront');
-      await evaluate(`document.querySelector('.pane[data-session="${ids[1]}"] button[aria-label="Enlarge"]').click()`);
+      await evaluate(`(() => { window.__fitPhase = 'enlarge'; window.__recordFitStep('before Enlarge');
+        document.querySelector('.pane[data-session="${ids[1]}"] button[aria-label="Enlarge"]').click();
+        window.__recordFitStep('after Enlarge'); })()`);
       await waitFor('Enlarge', () => evaluate(`({ count: document.querySelectorAll('.pane').length,
         restore: !!document.querySelector('.pane button[aria-label="Restore"]') })`),
       value => (value as { count: number; restore: boolean })?.count === 1 && (value as { restore: boolean }).restore);
@@ -765,15 +785,22 @@ it('keeps pane control through Enlarge, a closed session, and Restore in two win
       await evaluateSecond(`window.__resizes.length = 0`);
       await movePanes(evaluate, [ids[4]!], 'primary');
       await waitFor('primary sharing five sessions', () => share(evaluate), value => value === '4 of 5 here, 2 windows');
-      await evaluate(`(() => { window.__resizes.length = 0; window.__delayRestoredTake = true;
-        document.querySelector('.pane button[aria-label="Restore"]').click(); })()`);
+      await evaluate(`(() => { window.__fitPhase = 'restore'; window.__recordFitStep('before Restore');
+        window.__resizes.length = 0; window.__delayRestoredTake = true;
+        document.querySelector('.pane button[aria-label="Restore"]').click();
+        window.__recordFitStep('after Restore'); })()`);
       const state = `(() => ({
         share: document.getElementById('share-count')?.textContent,
+        viewport: [innerWidth, innerHeight], scale: devicePixelRatio,
+        steps: window.__fitSteps?.slice(), frames: window.__fitFrames?.slice(),
         panes: [...document.querySelectorAll('.pane')].map(card => {
           const stream = window.__dashboardDiagnostics.streams.findLast(entry =>
             entry.socket.readyState === 1 && entry.url.endsWith('/sessions/' + card.dataset.session + '/stream'));
           const geometry = stream?.geometry.at(-1);
-          return { id: card.dataset.session, size: card.querySelector('.pane-size')?.textContent, geometry };
+          const term = card.querySelector('.pane-term');
+          return { id: card.dataset.session, size: card.querySelector('.pane-size')?.textContent,
+            width: term?.clientWidth, height: term?.clientHeight,
+            font: term && getComputedStyle(term).fontSize, geometry };
         }),
         resizes: window.__resizes.slice(),
       }))()`;
@@ -786,6 +813,7 @@ it('keeps pane control through Enlarge, a closed session, and Restore in two win
       await waitFor('acknowledged restored takes', readFirst, value => owns(value, 4));
       await send('Page.bringToFront', {}, attached.sessionId);
       await waitFor('acknowledged second window fit', readSecond, value => owns(value, 1));
+      await evaluate(`window.__recordFitStep('after acknowledgements')`);
       const first = await readFirst();
       const second = await readSecond();
       return { ...first as object, second };

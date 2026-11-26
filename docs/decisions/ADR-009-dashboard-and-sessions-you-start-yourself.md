@@ -107,6 +107,7 @@ client token must remain outside the browser.
   limit retain their larger-text fitting rule.
   Fit, Enlarge and Restore take geometry control and resize the real terminal; Restore sends
   the previous grid above the floor or 80 by 24 below it when Auto fit is off.
+  Restore cancels any queued Enlarge fit on the same pane.
   Each pane has Enlarge and Restore. Focus gives one
   session most of the window. The browser's full-screen key can make the
   dashboard full screen. An enlarged or focused pane also resizes the real

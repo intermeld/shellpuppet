@@ -2003,7 +2003,8 @@ layout, window, text size, font load or display-scale change settles for 250 ms.
 This includes visible unheld Focus main panes: they refit to their own space
 and are never pulled down to the shared floor. It sends at most
 one resize per pane for the settled change and leaves a grid held by another
-client alone. The first takeover in another window or viewer makes the pane
+client alone. A later Restore cancels a queued Enlarge fit for the same pane.
+The first takeover in another window or viewer makes the pane
 follow that grid until Fit, Enlarge or a drag on that pane with Auto fit on
 takes it back while the controller is live. When that live controller leaves,
 an above-floor pane with Auto fit on fits if no valid reservation remains.

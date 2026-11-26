@@ -453,6 +453,8 @@ controller's grid choice. After that controller leaves, an above-floor pane
 can fit again. Pending automatic fits are checked when the daemon applies them,
 after earlier queued work. Reconnecting a pane does not itself end an explicit
 resize's protection.
+When you restore a pane promptly after enlarging it, the earlier queued fit is
+cancelled so only the restored layout takes the grid.
 
 In Focus, drag the boundary between the large pane and its strip. In Grid,
 drag a boundary between columns or rows. Focus a boundary and use the arrow
