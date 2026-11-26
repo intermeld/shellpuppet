@@ -51,6 +51,7 @@ async function exercise(count: number, action: (primary: Primary, openChild: (us
       probe: `(() => document.getElementById('connection')?.textContent === 'Connected' &&
         document.querySelectorAll('#panes .pane').length === ${count})()`,
       interact: async (primary) => {
+        expect(await primary.evaluate('document.visibilityState'), 'dashboard capture must start visible').toBe('visible');
         await until(async () => await primary.evaluate(`document.getElementById('share-count')?.textContent?.includes('1 window')`) ? true : null);
         const targets = async (): Promise<Target[]> => ((await primary.send('Target.getTargets', {}, true)) as
           { targetInfos: Target[] }).targetInfos.filter((target) => target.type === 'page');
