@@ -480,6 +480,10 @@ whose names look like credentials. It does so once in `daemon.log` at start
 and in `shellpuppet daemon status`, and gives names, never values (see
 `configuration.md`). The names are a guide: a variable can hold a secret
 without its name saying so, which is why the default is clean.
+When the daemon starts with a known parent-session marker and `NO_COLOR`,
+inherited `NO_COLOR` is omitted from passthrough sessions. An explicit
+session environment name or a permitted client environment name keeps it.
+The daemon logs that name once, without its value.
 `TERM` and `COLORTERM` are always injected regardless. The program a session
 runs can still set variables of its own: a shell started in a session runs
 the user's start-up files (a PowerShell profile, `~/.bashrc`), and those can
@@ -508,8 +512,12 @@ A session the dashboard starts is under the same clean default. The profile
 may name `envFromDaemon`, or set it to `"all"`. Listed names or, for `"all"`,
 the daemon's whole environment are copied from the daemon's
 environment, which is the environment of whichever client first started the
-daemon, into that profile's sessions only. The page cannot send a value. A
-listed name that is unset does not refuse the start; the dashboard shows the
+daemon, into that profile's sessions only. The page cannot send a value.
+When that starting environment contains a known parent-session marker and
+`NO_COLOR`, `"all"` omits the inherited `NO_COLOR`; an explicit
+`envFromDaemon` list can still copy it. The daemon logs the omitted name
+once, never its value. The page cannot choose this rule for a later start.
+A listed name that is unset does not refuse the start; the dashboard shows the
 name and not the value. `agents.passEnv` is not read on this path, because
 there is no client environment to copy from. A name you want a
 dashboard-started agent CLI to see is written in that profile's
