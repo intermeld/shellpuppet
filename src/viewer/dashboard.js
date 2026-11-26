@@ -12,6 +12,10 @@
   const messagesToggle = document.getElementById('messages-toggle');
   const messagesView = document.getElementById('messages-view');
   const messagesFilter = document.getElementById('messages-filter');
+  const messagesFilterWrap = document.getElementById('messages-filter-wrap');
+  const messagesHistory = document.getElementById('messages-history');
+  const messagesUnreadAge = document.getElementById('messages-unread-age');
+  const messagesContent = document.getElementById('messages-content');
   const messagesList = document.getElementById('messages-list');
   const messagesDetail = document.getElementById('messages-detail');
   const messagesOff = document.getElementById('messages-off');
@@ -39,6 +43,8 @@
   strip.id = 'strip';
   const panes = new Map();
   let messageEntries = [];
+  let unreadAgeEntries = [];
+  let messageMode = 'history';
   let unreadCounts = {};
   let messageGroups = [];
   let messagingEnabled = false;
@@ -46,6 +52,7 @@
   let messageFetching = false;
   let messageDirty = false;
   let messageTimer = null;
+  let ageRefreshTimer = null;
   let lastMessageFetch = 0;
   let messageRetryDelay = 0;
   let messageFilter = '';
@@ -56,7 +63,32 @@
   function unreadCount(id) {
     return unreadCounts[id] ?? 0;
   }
+  function renderUnreadAge() {
+    messagesFilterWrap.hidden = true;
+    messagesDetail.hidden = true;
+    messagesContent.classList.add('unread-age');
+    messagesList.setAttribute('aria-label', 'Unread messages by age');
+    messagesOff.hidden = true;
+    messagesEmpty.textContent = 'No unread messages.';
+    messagesEmpty.hidden = unreadAgeEntries.length > 0;
+    messagesContent.hidden = unreadAgeEntries.length === 0;
+    messagesList.replaceChildren();
+    for (const entry of unreadAgeEntries) {
+      const row = document.createElement('li');
+      row.className = 'unread-age-row';
+      const seconds = Math.floor(entry.ageMs / 1000);
+      const age = seconds < 60 ? `${seconds}s` : `${Math.floor(seconds / 60)}m`;
+      row.textContent = `${age} · ${entry.state} · ${entry.id} · ${entry.from.name} (${entry.from.id}) → ${entry.to.name} (${entry.to.id}) · sent ${new Date(entry.sentAt).toLocaleString()}`;
+      messagesList.append(row);
+    }
+  }
   function renderMessages() {
+    if (messageMode === 'unread') { renderUnreadAge(); return; }
+    messagesFilterWrap.hidden = false;
+    messagesDetail.hidden = false;
+    messagesContent.classList.remove('unread-age');
+    messagesList.setAttribute('aria-label', 'Message history');
+    messagesEmpty.textContent = 'No messages yet.';
     const participantLabel = (participant) => `${participant.name}${participant.kind === 'claim' || participant.id.startsWith('claim_') ? ' (outside claim)' : ''}`;
     const options = [{ value: '', label: 'All' }];
     const participants = new Map();
@@ -142,11 +174,14 @@
   }
   async function loadMessages() {
     messageTimer = null;
+    clearTimeout(ageRefreshTimer);
+    ageRefreshTimer = null;
     if (messageFetching || !messageDirty) return;
     messageDirty = false;
     messageFetching = true;
     lastMessageFetch = Date.now();
-    const full = !messagesView.hidden;
+    const full = !messagesView.hidden && messageMode === 'history';
+    const unread = !messagesView.hidden && messageMode === 'unread';
     try {
       const response = await fetch(`/dashboard/messages${full ? '' : '?summary=1'}`, {
         headers: { 'x-shellpuppet-csrf': proof },
@@ -156,21 +191,40 @@
       messagingEnabled = result.enabled === true;
       unreadCounts = result.counts;
       for (const item of panes.values()) updateMessageBadge(item);
-      if (full && !messagesView.hidden) {
+      if (full && !messagesView.hidden && messageMode === 'history') {
         messageEntries = result.messages;
         messageGroups = result.groups;
         renderMessages();
       }
-      if (full !== !messagesView.hidden) messageDirty = true;
+      if (unread && !messagesView.hidden && messageMode === 'unread') {
+        const ageResponse = await fetch('/dashboard/messages/unread-age', {
+          headers: { 'x-shellpuppet-csrf': proof },
+        });
+        if (!ageResponse.ok) throw new Error('The unread message ages could not be read.');
+        const ageResult = await ageResponse.json();
+        unreadAgeEntries = ageResult.messages;
+        renderMessages();
+      }
+      if (full !== (!messagesView.hidden && messageMode === 'history') ||
+        unread !== (!messagesView.hidden && messageMode === 'unread')) messageDirty = true;
       messageRetryDelay = 0;
     } catch {
-      showError('The message history could not be read.');
+      showError('The message view could not be read.');
       // Keep the update pending: the socket may stay open with no further
       // event, so retry rather than leave the badge stale.
       messageDirty = true;
       messageRetryDelay = Math.min(messageRetryDelay * 2 || 1000, 30_000);
     }
-    finally { messageFetching = false; if (messageDirty) scheduleMessageRefresh(); }
+    finally {
+      messageFetching = false;
+      if (messageDirty) scheduleMessageRefresh();
+      else if (!messagesView.hidden && messageMode === 'unread') {
+        ageRefreshTimer = setTimeout(() => {
+          ageRefreshTimer = null;
+          scheduleMessageRefresh();
+        }, 60_000);
+      }
+    }
   }
   function scheduleMessageRefresh() {
     messageDirty = true;
@@ -178,7 +232,25 @@
     messageTimer = setTimeout(() => { void loadMessages(); },
       Math.max(messageRetryDelay, 250 - (Date.now() - lastMessageFetch)));
   }
+  function setMessageMode(mode) {
+    if (messageMode === mode) return;
+    messageMode = mode;
+    messageEntries = [];
+    unreadAgeEntries = [];
+    messageSelection = null;
+    messagesHistory.setAttribute('aria-pressed', String(mode === 'history'));
+    messagesUnreadAge.setAttribute('aria-pressed', String(mode === 'unread'));
+    clearTimeout(messageTimer);
+    messageTimer = null;
+    clearTimeout(ageRefreshTimer);
+    ageRefreshTimer = null;
+    renderMessages();
+    scheduleMessageRefresh();
+  }
   function openMessages(filter = '') {
+    messageMode = 'history';
+    messagesHistory.setAttribute('aria-pressed', 'true');
+    messagesUnreadAge.setAttribute('aria-pressed', 'false');
     messageFilter = filter;
     messagesView.hidden = false;
     root.hidden = true;
@@ -197,6 +269,9 @@
     messagesToggle.classList.remove('active');
     messagesToggle.focus();
     messageEntries = [];
+    unreadAgeEntries = [];
+    clearTimeout(ageRefreshTimer);
+    ageRefreshTimer = null;
     scheduleMessageRefresh();
   }
   const PREF = 'shellpuppet.dashboard';
@@ -1695,6 +1770,8 @@
   messagesToggle.addEventListener('click', () => {
     if (messagesView.hidden) openMessages(); else closeMessages();
   });
+  messagesHistory.addEventListener('click', () => { setMessageMode('history'); });
+  messagesUnreadAge.addEventListener('click', () => { setMessageMode('unread'); });
   messagesFilter.addEventListener('change', () => {
     messageFilter = messagesFilter.value;
     messageSelection = null;
@@ -1723,6 +1800,7 @@
     endActiveDivider?.();
     clearTimeout(retry);
     clearTimeout(messageTimer);
+    clearTimeout(ageRefreshTimer);
     clearTimeout(autoFitTimer);
     window.cancelAnimationFrame(fontFitFrame);
     feed?.close();

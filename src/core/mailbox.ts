@@ -81,6 +81,16 @@ export interface MailboxEntry {
   state: MessageState;
 }
 
+/** Owner-only metadata projection. It never contains message text. */
+export interface UnreadAgeEntry {
+  id: string;
+  from: { id: string; name: string };
+  to: { id: string; name: string };
+  state: 'waiting' | 'nudged';
+  sentAt: number;
+  ageMs: number;
+}
+
 /** What `send` hands back: the id, the recipient instance and the state now. */
 export interface SendResult {
   id: string;
@@ -636,6 +646,21 @@ export class Mailbox extends EventEmitter {
     );
     const kept = limit === undefined ? all : all.slice(Math.max(0, all.length - Math.max(0, limit)));
     return kept.map((message) => Mailbox.entry(message));
+  }
+
+  /** Oldest unread messages first, using only fields safe for the owner metadata view. */
+  unreadAge(at: number): UnreadAgeEntry[] {
+    return this.messages
+      .filter((message) => message.state === 'waiting' || message.state === 'nudged')
+      .sort((left, right) => left.time - right.time || left.seq - right.seq)
+      .map((message) => ({
+        id: message.id,
+        from: { id: message.from.id, name: message.from.name },
+        to: { id: message.toId, name: message.toName },
+        state: message.state as 'waiting' | 'nudged',
+        sentAt: message.time,
+        ageMs: Math.max(0, at - message.time),
+      }));
   }
 
   // ------------------------------------------------------------------ waiting

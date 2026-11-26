@@ -16,6 +16,15 @@ can claim a free outside name or replace a held outside claim when messaging is 
 The daemon writes the caller, name and both claim ids to the audit before
 revoking the previous proof. Unverified proofs receive a fixed recovery hint. A granted name can launch every configured profile, including
 profiles with daemon credentials.
+The local owner's client token can read an unread-by-age metadata list at
+`GET /messages/unread-age`; the dashboard cookie can read the same list at
+`GET /dashboard/messages/unread-age` only with a valid document proof and
+same-origin request. The list shows who messages whom, when, and whether
+each message remains `waiting` or `nudged`. It contains no message text.
+Session identities, claim proofs and viewer cookies do not grant this view.
+Anyone who holds the full client token already has broad local authority;
+do not share it to delegate this view.
+
 The audit log and event stream record only metadata about each message.
 `audit.captureContent` enables content capture only for recognised terminal reports.
 

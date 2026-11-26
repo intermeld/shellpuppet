@@ -1735,8 +1735,18 @@ export class Daemon {
     this.writeSessionList(res, url);
   }
 
+  /** Build the metadata response without creating a text-bearing mailbox entry. */
+  private writeUnreadAge(res: http.ServerResponse, actor: string): void {
+    const messages = this.mailbox.unreadAge(this.now());
+    res.setHeader('Cache-Control', 'no-store');
+    this.audit.record(actor, 'unread-age-read', undefined, { count: messages.length });
+    this.lastActivity = Date.now();
+    json(res, 200, { messages });
+  }
+
   /** Owner-wide history is available only with the dashboard cookie and document proof. */
-  private serveDashboardMessages(req: http.IncomingMessage, res: http.ServerResponse, url: URL): void {
+  private serveDashboardMessages(req: http.IncomingMessage, res: http.ServerResponse, url: URL,
+    unreadAge = false): void {
     const presented = this.dashboardCookiePresented(req.headers.cookie);
     if (this.dashboardCookieToken(req.headers.cookie) === null) {
       if (presented) this.auditDashboardRefusal(req, 'unauthenticated');
@@ -1751,6 +1761,10 @@ export class Daemon {
     if (!this.tokens.acceptsDashboardProof(headerOne(req, 'x-shellpuppet-csrf'))) {
       this.auditDashboardRefusal(req, 'proof');
       json(res, 403, { error: 'Forbidden.' });
+      return;
+    }
+    if (unreadAge) {
+      this.writeUnreadAge(res, 'dashboard');
       return;
     }
     const messages = this.mailbox.log();
@@ -2639,6 +2653,10 @@ export class Daemon {
       this.serveDashboardMessages(req, res, url);
       return;
     }
+    if (req.method === 'GET' && url.pathname === '/dashboard/messages/unread-age') {
+      this.serveDashboardMessages(req, res, url, true);
+      return;
+    }
     if (req.method === 'POST' && url.pathname === '/dashboard/launch') {
       await this.handleDashboardLaunch(req, res);
       return;
@@ -3310,6 +3328,19 @@ export class Daemon {
           json(res, 415, { error: 'The launch body must be JSON.' }); return;
         }
         await this.launchProfile(req, res, { launcher: caller });
+        return;
+      }
+
+      if (req.method === 'GET' && url.pathname === '/messages/unread-age') {
+        res.setHeader('Cache-Control', 'no-store');
+        if (this.callerContext.getStore() !== undefined ||
+          req.headers['x-shellpuppet-inside-session'] !== undefined ||
+          req.headers['x-shellpuppet-claim'] !== undefined ||
+          req.headers['x-shellpuppet-claim-secret'] !== undefined) {
+          json(res, 403, { error: 'Owner access is required.' });
+          return;
+        }
+        this.writeUnreadAge(res, actor);
         return;
       }
 

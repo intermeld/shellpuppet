@@ -7,6 +7,10 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+### Added
+
+- The local owner can list unread messages by age without message text in the CLI or dashboard.
+
 ### Fixed
 
 - Sessions started from a daemon launched inside an agent tool shell no longer inherit that shell's `NO_COLOR` through an `"all"` dashboard profile or global passthrough. Explicitly named values remain available.

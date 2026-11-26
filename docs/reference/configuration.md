@@ -683,6 +683,18 @@ not-delivered messages per sender are retained. The daemon holds at most
 then the oldest read messages, to make room. Unread messages for live
 recipients are never dropped.
 
+The local owner can inspect unread messages by age with
+`shellpuppet messages unread` (`--json` for structured output), or in the
+dashboard's **Messages → Unread by age** view. Both list only message ID,
+sender and recipient IDs and names, `waiting` or `nudged` state, send time
+and elapsed age. They never include message text. The CLI uses
+`GET /messages/unread-age` with the full client token; the dashboard uses
+`GET /dashboard/messages/unread-age` with its cookie and document proof.
+Participants, claims and viewer links cannot use either route. The owner
+view remains available if messaging is switched off while unread mail is
+still in memory. Message text remains in the existing owner message-history
+view and each participant's own inbox, outbox and log.
+
 ## Dashboard launch profiles
 
 Set `dashboard.fontSize` to an integer from 8 to 32 for the dashboard's initial
