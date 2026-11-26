@@ -118,7 +118,28 @@ it.skipIf(!browser)('delivers default mouse clicks above column 95 in viewer and
               return pane;
             } };
           } });`,
-        probe: "window.mouseTerm && document.querySelector('.xterm-rows')?.textContent.includes('READY')",
+        probe: `(async () => {
+          const point = () => {
+            const term = window.mouseTerm;
+            if (!term || term.cols !== 120 || term.modes.mouseTrackingMode === 'none' ||
+                document.fonts.status !== 'loaded' ||
+                !term.element.querySelector('.xterm-rows')?.textContent.includes('READY')) return null;
+            const screen = term.element.querySelector('.xterm-screen');
+            if (!screen) return null;
+            const rect = screen.getBoundingClientRect();
+            const x = rect.left + 99.5 * rect.width / term.cols;
+            const y = rect.top + 4.5 * rect.height / term.rows;
+            if (!Number.isFinite(x) || !Number.isFinite(y) || rect.width <= 0 || rect.height <= 0 ||
+                !term.element.contains(document.elementFromPoint(x, y))) return null;
+            return { x, y, width: rect.width, height: rect.height };
+          };
+          const first = point();
+          if (!first) return false;
+          await new Promise(resolve => requestAnimationFrame(resolve));
+          const second = point();
+          return second && first.x === second.x && first.y === second.y &&
+            first.width === second.width && first.height === second.height;
+        })()`,
         interact: async ({ evaluate, send }: { evaluate: (expression: string) => Promise<unknown>;
           send: (method: string, params?: Record<string, unknown>) => Promise<unknown> }) => {
           const grid = await evaluate(`(() => {
@@ -129,7 +150,7 @@ it.skipIf(!browser)('delivers default mouse clicks above column 95 in viewer and
           })()`) as { left: number; top: number; width: number; height: number; cols: number; mode: string };
           expect(grid.cols).toBe(120);
           expect(grid.mode).not.toBe('none');
-          const point = { x: grid.left + 99.2 * grid.width, y: grid.top + 4.5 * grid.height,
+          const point = { x: grid.left + 99.5 * grid.width, y: grid.top + 4.5 * grid.height,
             button: 'left', clickCount: 1 };
           await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...point, buttons: 1 });
           await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...point, buttons: 0 });
