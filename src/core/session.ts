@@ -1318,6 +1318,18 @@ export class Session implements WaitTarget {
     return this.writeWithResult(data, options).then((result) => result.before);
   }
 
+  /** Queue raw terminal bytes without applying text paste or submit rules. */
+  writeBinary(data: Buffer): Promise<void> {
+    this.inputQueueVersion++;
+    const queued = this.writeChain.then(() => {
+      this.refuseIfInputFailed();
+      this.refuseIfEnded();
+      this.pty.write(data);
+    });
+    this.writeChain = queued.then(() => undefined, () => undefined);
+    return queued;
+  }
+
   /** Write and report what a module can establish about a typed submission. */
   writeWithResult(data: string, options: { terminalReport?: boolean; humanInput?: boolean; submitMode?: 'auto' | 'on' | 'off' } = {}): Promise<TypedWriteResult> {
     this.inputQueueVersion++;

@@ -1617,6 +1617,10 @@ writes each reply to the program, which asked for it. A message that is exactly 
 the bundled xterm.js sends on its own is audited as `report`, with its kind and length
 (content only under `audit.captureContent`), never as `input`; anything else stays
 `input`. `src/daemon/terminalReports.ts` holds the set, read from xterm.js's source.
+Default-encoded mouse reports arrive separately as six-byte binary WebSocket
+frames. The daemon recognises a whole `ESC [ M` frame as a `mouse` report and
+writes its bytes directly to the PTY; other binary frames remain input. A
+read-only credential drops both text and binary input.
 
 The MCP adapter identifies its calling client from the MCP `initialize` handshake's
 `clientInfo` (name/version) for the actor field.
@@ -1725,8 +1729,11 @@ setting, never their values. Free-form client starts retain their usual environm
   or rectangular selection according to the program's mouse tracking mode.
   The Shift override uses xterm's macOS platform check. An iPad reporting
   its mobile platform keeps xterm's continuous Shift selection across rows.
-- **Register `term.onData` exactly once.** Registering it inside the connect path would
-  stack a listener per reconnect and send every keystroke N times.
+- **Register `term.onData` and `term.onBinary` exactly once.** Registering either
+  inside the connect path would stack a listener per reconnect and duplicate
+  input. `onData` uses text WebSocket frames; `onBinary` sends one binary frame
+  per event with one byte per character. The daemon writes the latter as a
+  Buffer through the session's input queue.
 - **Fit to the window** via `@xterm/addon-fit`, reporting new geometry over the WebSocket so
   the daemon resizes both the PTY and the headless renderer.
 - **Scrollback.** xterm.js scrollback is native: keep it enabled (≥5,000 lines) so the

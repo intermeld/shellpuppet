@@ -10,6 +10,9 @@ function fixture(captureMode = false, withNotice = false, initialRow = 0) {
   const screen = { clientWidth: 889, clientHeight: 606, addEventListener() {}, removeEventListener() {}, getBoundingClientRect: () => ({ top: 0, bottom: 240, height: 240 }) };
   const notice = { style: { top: '', bottom: '' }, getBoundingClientRect: () => ({ height: 20 }) };
   let move: (row: number) => void = () => {};
+  let input: (data: string) => void = () => {};
+  let binaryInput: (data: string) => void = () => {};
+  const sent: (string | Uint8Array)[] = [];
   const calls: string[] = [];
   const writes: (() => void)[] = [];
   const frames: (() => void)[] = [];
@@ -41,7 +44,8 @@ function fixture(captureMode = false, withNotice = false, initialRow = 0) {
       move = row => { this.buffer.active.cursorY = row; callback(); };
       return { dispose() {} };
     }
-    onData() {}
+    onData(callback: (data: string) => void) { input = callback; }
+    onBinary(callback: (data: string) => void) { binaryInput = callback; }
     write(data: string | Uint8Array, done: () => void) {
       calls.push(data.length === 0 ? 'marker' : 'write');
       writes.push(done);
@@ -57,6 +61,7 @@ function fixture(captureMode = false, withNotice = false, initialRow = 0) {
   class Socket {
     readyState = 1;
     set onmessage(callback: typeof message) { message = callback; }
+    send(data: string | Uint8Array) { sent.push(data); }
     close() {}
   }
   const window = Object.assign(new EventTarget(), {
@@ -75,12 +80,14 @@ function fixture(captureMode = false, withNotice = false, initialRow = 0) {
     Terminal, WebSocket: Socket, ArrayBuffer, Uint8Array, Date, setTimeout, clearTimeout,
   });
   const pane = (Reflect.get(window, 'ShellPuppetPane') as { create(config: unknown): {
-    belowDashboardFloor(): boolean; destroy(): void; relayout(deliberate: boolean): void; setFontOverride(value: number): void;
+    belowDashboardFloor(): boolean; destroy(): void; relayout(deliberate: boolean): void;
+    setFontOverride(value: number): void; setReadOnly(value: boolean): void;
   } }).create({ container: { parentElement: withNotice ? screen : null, dataset: {} },
     elements: withNotice ? { promptAlert: { parentElement: notice } } : {}, sessionId: 'fixture',
     captureMode, initialFontOverride: 13 });
   return {
-    pane, calls, window, move, notice, clipboard, document, textarea,
+    pane, calls, window, move, notice, clipboard, document, textarea, sent,
+    input: (data: string) => input(data), binaryInput: (data: string) => binaryInput(data),
     osc: (data: string) => osc(data),
     gesture(type = 'keydown', trusted = true, values: Record<string, unknown> = {}) {
       const event = new Event(type);
@@ -97,6 +104,31 @@ function fixture(captureMode = false, withNotice = false, initialRow = 0) {
     paint: () => { while (frames.length > 0) frames.shift()!(); },
   };
 }
+
+describe('pane binary input', () => {
+  it('sends one byte per onBinary character in one binary frame', () => {
+    const f = fixture();
+    try {
+      f.sent.length = 0;
+      f.binaryInput('\x1b[M \x84%');
+      expect(f.sent).toHaveLength(1);
+      expect(f.sent[0]).toBeInstanceOf(Uint8Array);
+      expect(Array.from(f.sent[0] as Uint8Array)).toEqual([0x1b, 0x5b, 0x4d, 0x20, 0x84, 0x25]);
+      f.input('x');
+      expect(f.sent[1]).toBe('x');
+    } finally { f.pane.destroy(); }
+  });
+
+  it('suppresses binary reports while the pane is read-only', () => {
+    const f = fixture();
+    try {
+      f.pane.setReadOnly(true);
+      f.sent.length = 0;
+      f.binaryInput('\x1b[M \x84%');
+      expect(f.sent).toHaveLength(0);
+    } finally { f.pane.destroy(); }
+  });
+});
 
 describe('OSC 52 clipboard writes', () => {
   it('validates the OSC handler payload as canonical base64 and UTF-8 up to one MiB', () => {
