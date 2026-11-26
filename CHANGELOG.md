@@ -9,7 +9,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
-- Viewer and dashboard panes now forward default-encoded mouse reports to the session byte-for-byte, including coordinates above column 95.
+- Viewer and dashboard panes now forward default-encoded mouse reports to the session byte-for-byte.
 
 ## [0.5.0] - 2026-11-26
 
