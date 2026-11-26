@@ -7,6 +7,10 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-11-26
+
+Submit by default for known agents, dashboard Auto fit, a confirmed daemon stop, a configurable launch allowance and fixes for Hermes, Codex and dashboard panes.
+
 ### Added
 
 - `launcher.launchesPerMinute` sets the dashboard and granted session launch allowance from 1 to 60 starts per minute. It defaults to eight and updates when configuration changes.
