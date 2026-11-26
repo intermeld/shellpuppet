@@ -109,6 +109,8 @@ describe('the switches that keep a launched browser quiet', () => {
     for (const flag of EXPECTED) expect(spawned[0]?.args, flag).toContain(flag);
     expectOneFeatureList(spawned[0]?.args);
     expect(spawned[0]?.args).toContain('--headless=new');
+    for (const flag of ['--disable-background-timer-throttling', '--disable-renderer-backgrounding',
+      '--disable-backgrounding-occluded-windows']) expect(spawned[0]?.args).toContain(flag);
     // The page is loaded through DevTools, after the switches.
     expect(spawned[0]?.args.at(-1)).toBe('about:blank');
   });

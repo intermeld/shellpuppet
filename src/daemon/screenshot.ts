@@ -377,6 +377,11 @@ export function captureBrowserArgs(profileDir: string, width: number, height: nu
     '--no-first-run',
     '--no-default-browser-check',
     '--hide-scrollbars',
+    // Dashboard integration captures switch between tabs. Chromium must keep
+    // rendering the background tabs while their real focus state changes.
+    '--disable-background-timer-throttling',
+    '--disable-renderer-backgrounding',
+    '--disable-backgrounding-occluded-windows',
     ...QUIET_BROWSER_SWITCHES,
     'about:blank',
   ];
@@ -419,9 +424,14 @@ export async function captureViewer(options: CaptureOptions): Promise<Capture> {
     ws = await connect(endpoint, deadline);
     cdp = new DevTools(ws, deadline);
 
-    const { targetId } = await cdp.send<{ targetId: string }>('Target.createTarget', {
-      url: 'about:blank',
-    });
+    // Chromium already opened the about:blank page passed on its command line.
+    // Creating another tab leaves the capture in the background, where its
+    // document is hidden and animation frames may stop under load.
+    const { targetInfos } = await cdp.send<{ targetInfos: { targetId: string; type: string; url: string }[] }>(
+      'Target.getTargets',
+    );
+    const targetId = targetInfos.find((target) => target.type === 'page' && target.url === 'about:blank')?.targetId;
+    if (targetId === undefined) throw new Error('The browser did not open its initial page.');
     const attached = await cdp.send<{ sessionId: string }>('Target.attachToTarget', {
       targetId,
       flatten: true,
