@@ -13,7 +13,7 @@ class RecordingPty implements IPty {
   onExit(): { dispose(): void } { return { dispose(): void {} }; }
   resize(): void {}
   clear(): void {}
-  write(data: string): void { this.writes.push(data); }
+  write(data: string | Buffer): void { this.writes.push(data as string); }
   kill(): void {}
   pause(): void {}
   resume(): void {}
@@ -48,5 +48,28 @@ it('still aborts for a mixed report and keyboard write', async () => {
   expect(await nudge).toBe('aborted-other-input-arrived');
   await forwarded;
   expect(pty.writes).toEqual(['notice', mixed]);
+  expect(live.recentInput).toBe(true);
+});
+
+it('forwards a binary mouse report during a nudge without aborting Enter or holding later nudges', async () => {
+  const { session: live, pty } = session();
+  const nudge = live.writeNudgeWithReason('notice\r', () => true);
+  while (pty.writes.length === 0) await new Promise(resolve => setTimeout(resolve, 1));
+  const click = Buffer.from([0x1b, 0x5b, 0x4d, 0x20, 0x84, 0x25]);
+  const forwarded = live.writeBinary(click, { terminalReport: true });
+  expect(await nudge).toBe('sent');
+  await forwarded;
+  expect(pty.writes.slice(0, 2)).toEqual(['notice', '\r']);
+  expect(pty.writes[2]).toEqual(click);
+  expect(live.recentInput).toBe(false);
+});
+
+it('counts non-report binary input as typing: it aborts a nudge and starts the input hold', async () => {
+  const { session: live, pty } = session();
+  const nudge = live.writeNudgeWithReason('notice\r', () => true);
+  while (pty.writes.length === 0) await new Promise(resolve => setTimeout(resolve, 1));
+  const typed = live.writeBinary(Buffer.from('x'));
+  expect(await nudge).toBe('aborted-other-input-arrived');
+  await typed;
   expect(live.recentInput).toBe(true);
 });

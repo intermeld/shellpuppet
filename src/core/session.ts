@@ -1326,16 +1326,35 @@ export class Session implements WaitTarget {
   }
 
   /** Queue raw terminal bytes without applying text paste or submit rules. */
-  writeBinary(data: Buffer): Promise<void> {
+  writeBinary(data: Buffer, options: { terminalReport?: boolean } = {}): Promise<void> {
+    const terminalReport = options.terminalReport === true;
+    // Every frame keeps submit ordering; only non-report bytes count as typing.
     this.writeQueueVersion++;
-    this.inputQueueVersion++;
+    if (!terminalReport) this.inputQueueVersion++;
     const queued = this.writeChain.then(() => {
       this.refuseIfInputFailed();
       this.refuseIfEnded();
+      if (!terminalReport && data.length > 0) this.noteBinaryInput();
       this.pty.write(data);
     });
     this.writeChain = queued.then(() => undefined, () => undefined);
     return queued;
+  }
+
+  /** The human-input bookkeeping a text write does, for raw bytes that are not a terminal report. */
+  private noteBinaryInput(): void {
+    if (this.pendingNudgeLine !== null) this.pendingNudgeTouched = true;
+    this.recentInputUntil = Date.now() + RECENT_INPUT_MS;
+    if (this.stallTracker.reason !== 'server-lost' && this.stallState?.reason !== 'server-lost') {
+      this.stallTracker.noteInput();
+      this.clearStallTimer();
+      this.publishStall(undefined);
+    }
+    const { screen, lines } = this.renderer.snapshot();
+    this.lastInputAt = Date.now();
+    this.inputVersion++;
+    this.promptInputRevision++;
+    this.stalePrompts.noteInput(screen, this.agent, this.renderer.promptStyles(lines));
   }
 
   /** Write and report what a module can establish about a typed submission. */

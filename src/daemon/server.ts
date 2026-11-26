@@ -5765,7 +5765,7 @@ export class Daemon {
       const report = bytes === null ? terminalReportBatchKind(text) : mouseReport ? 'mouse' : null;
       void (bytes === null
         ? session.write(text, { terminalReport: report !== null, humanInput: report === null })
-        : session.writeBinary(bytes)).catch((error: unknown) => {
+        : session.writeBinary(bytes, { terminalReport: mouseReport })).catch((error: unknown) => {
         this.logger.warn('viewer input failed', {
           id: session.id,
           error: String(error),
