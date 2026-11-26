@@ -58,7 +58,7 @@ function replay(trace: Trace, layoutTimes: number[] = [], initial = { row: 22, s
     element = { querySelector: (selector: string) => selector === '.xterm-screen' ? screen : null };
     _core = { _coreBrowserService: { onDprChange: () => ({ dispose() {} }) } };
     onCursorMove(callback: () => void) { move = callback; return { dispose() {} }; }
-    open() {} onData() {} attachCustomKeyEventHandler() {} dispose() {}
+    open() {} onData() {} onBinary() {} attachCustomKeyEventHandler() {} dispose() {}
   }
   const window = {
     performance: { now },
