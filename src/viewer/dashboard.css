@@ -40,15 +40,18 @@ button.active { color: #9dd4ff; border-color: #4b9adc; background: #173249; }
 #main-pane .pane, #panes.enlarged > .pane { width: 100%; height: 100%; }
 #strip { min-width: 0; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 6px; }
 #strip .pane { flex: 0 0 170px; }
-.pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: #101722; border: 1px solid #303b4a; border-radius: 5px; }
+.pane { display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: #101722; border: 1px solid #303b4a; border-radius: 5px; container-type: inline-size; }
 .pane.selected { border-color: #6cb6ff; }
 .pane.attention { border-color: #e8b85f; }
-.pane.below-floor .pane-head::after { content: 'Below 80×24 floor'; color: #e8b85f; font-size: 11px; }
-.pane-head { display: flex; align-items: center; flex-wrap: wrap; gap: 5px; min-height: 38px; padding: 4px 7px; background: #141922; cursor: grab; }
-.pane-label { font-weight: bold; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.pane-purpose { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pane-head { display: flex; align-items: center; flex: 0 0 38px; gap: 5px; min-width: 0; padding: 4px 7px; overflow: hidden; white-space: nowrap; background: #141922; cursor: grab; }
+.pane-label { flex: 0 1 35%; font-weight: bold; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pane-purpose { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pane-role, .pane-state, .pane-size, .pane-head .badge, .pane-floor { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.pane-head .badge:empty, .pane-floor[hidden] { display: none; }
+.pane-floor { color: #e8b85f; font-size: 11px; }
 .pane-head .spacer { min-width: 0; }
-.pane-head button { padding: 2px 5px; font-size: 11px; }
+.pane-head button { flex: none; padding: 2px 5px; font-size: 11px; }
+.pane-menu-button.has-status::after { content: ' ●'; color: #e8b85f; }
 .badge { color: #f0c674; font-weight: bold; }
 .pane-wrap { flex: 1; min-height: 0; position: relative; padding: 6px; overflow: clip; }
 .pane-term { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
@@ -72,8 +75,18 @@ button.active { color: #9dd4ff; border-color: #4b9adc; background: #173249; }
 #launcher[hidden], #folder-field[hidden], #bounded-folder[hidden], #any-folder[hidden], #watch-only[hidden], #profile-problems[hidden] { display: none; }
 select { font: inherit; color: #d7e3ee; background: #1c2633; border: 1px solid #455366; border-radius: 4px; }
 #profile-problems { margin: 0; padding: 4px 12px; background: #3d2f14; color: #e8b85f; }
-.pane-menu { display: flex; flex-wrap: wrap; gap: 5px; padding: 4px 7px; background: #101820; border-bottom: 1px solid #303b4a; }
+.pane-menu { display: flex; flex: 0 1 auto; flex-wrap: wrap; gap: 5px; min-height: 0; max-height: min(50%, calc(100% - 38px)); padding: 4px 7px; overflow-y: auto; overscroll-behavior: contain; background: #101820; border-bottom: 1px solid #303b4a; }
 .pane-menu[hidden] { display: none; }
+.pane-menu-status { flex: 1 1 100%; white-space: normal; overflow-wrap: anywhere; color: #e8b85f; }
+.pane-menu-status[hidden] { display: none; }
+.pane-menu .pane-collapsed-control { display: none; }
+@container (max-width: 652px) {
+  .pane-head .pane-optional-control { display: none; }
+  .pane-head .pane-role, .pane-head .pane-state, .pane-head .pane-size, .pane-head .pane-message-count { display: none; }
+  .pane-head .badge:not(:empty), .pane-head .pane-floor:not([hidden]) { flex: 0 1 auto; min-width: 12px; }
+  .pane-menu .pane-collapsed-control { display: inline-block; }
+}
+.pane-menu .pane-menu-message-count[hidden] { display: none; }
 .pane.ended { border-color: #8b97a6; }
 .pane-state:empty { display: none; }
 .xterm-viewport { overflow-y: auto !important; }

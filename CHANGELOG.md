@@ -20,6 +20,7 @@ version may change behaviour, and every such change is listed here.
 - A delayed Enlarge fit no longer runs after the same dashboard pane is restored, preventing a duplicate take of its restored grid.
 - Explicit submit to Codex is no longer withheld as "not seen" in fast mode, whose footer adds a word the check did not accept, or while a slash command suggestion is shown above the input.
 - Auto fit now fits an above-floor dashboard pane when its live grid controller leaves. An explicit unheld resize lasts until a real layout change, deliberate Fit or later controller grid choice, including across a pane reconnect. A reconnecting pane registers its layout before fitting and retries one stale layout refusal.
+- Dashboard pane headers keep a fixed height when labels, purposes or launch details are long. Truncated text and status remain readable through hover titles or the pane menu, including a visible cue for waiting and below-floor states. Narrow panes place extra controls in a scrollable menu so actions remain reachable in a short Focus strip.
 - After a Hermes turn, waiting messages can be nudged when the completed summary lists extra activity and the grey footer clips a timer.
 - Waiting time and stall alerts restart after input to a held prompt, including when the next prompt has the same question and choices. Redraws without input retain the timer.
 - Codex recognises a repeated short prompt in its live composer when an earlier copy belongs to a completed turn. Grok recognises a padded welcome footer after typed send hints appear.
