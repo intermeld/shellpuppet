@@ -1,12 +1,14 @@
 import * as fs from 'node:fs';
 import { join } from 'node:path';
-import { execFile } from 'node:child_process';
+import { once } from 'node:events';
+import { readDaemonState } from '../../src/daemon/paths.js';
+import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { expect, it } from 'vitest';
 import { viewerCookie } from '../../src/daemon/auth.js';
 import { createAuditor } from '../../src/daemon/audit.js';
 import { createFileLogger } from '../../src/daemon/logger.js';
-import { api, eventually, makeTempHome, repoRoot, startTestDaemon } from './helpers.js';
+import { api, eventually, makeTempHome, removeTempHome, distDaemonEntry, repoRoot, startTestDaemon } from './helpers.js';
 
 it('accepts one whole revision, preserves rejected and pending state, and redacts diagnostics', async () => {
   const home = makeTempHome();
@@ -151,3 +153,45 @@ it.skipIf(process.platform !== 'win32')('rechecks Windows file permissions on id
     expect(status().revision).toBe(before);
   } finally { await td.stop(); }
 }, 30_000);
+
+it('keeps configured names and regex text out of startup diagnostics and subsequent reloads', async () => {
+  const home = makeTempHome();
+  const file = join(home, 'config.json');
+  const log = join(home, 'daemon.log');
+  const viewer = { launchMode: 'no-window' };
+  const pattern = '[private-pattern-sentinel';
+  const schedules = [{ name: 'private-schedule-sentinel', session: 'desk', cron: 'invalid', message: 'private-message-sentinel' }];
+  const prompts = { dialogs: [{ name: 'private-dialog-sentinel', title: pattern, choices: 'Choice' }] };
+  const agents = { signatures: [{ name: 'private-agent-sentinel', composer: { text: pattern }, answer: { start: { text: 'Answer' } } }] };
+  fs.writeFileSync(file, JSON.stringify({ viewer, schedules, prompts, agents }));
+  const child = spawn(process.execPath, [distDaemonEntry], {
+    env: { ...process.env, SHELLPUPPET_HOME: home }, windowsHide: true, stdio: 'ignore',
+  });
+  const ended = once(child, 'exit');
+  try {
+    const logs = () => fs.readFileSync(log, 'utf8');
+    const locations = ['schedules[0]', 'prompts.dialogs[0]', 'agents.signatures[0]'];
+    await eventually(() => fs.existsSync(log) && locations.every(location => logs().includes(location)), 15_000);
+    const state = readDaemonState(home)!;
+    const status = async () => (await api(state.port, state.token, '/environment')).body['configReload'] as
+      { outcome: string; reason?: string };
+    expect(logs()).not.toContain('-sentinel');
+    expect(logs()).toContain('CONFIG PROBLEM');
+    expect(await status()).toMatchObject({ outcome: 'degraded startup' });
+    for (const [section, invalid] of [['prompts.dialogs[0]', { prompts }], ['agents.signatures[0]', { agents }],
+      ['schedules[0]', { schedules }]] as const) {
+      fs.writeFileSync(file, JSON.stringify({ viewer, ...invalid }));
+      await eventually(async () => (await status()).reason?.includes(section) === true, 5000);
+      expect(JSON.stringify(await status())).not.toContain('-sentinel');
+    }
+    expect(logs()).not.toContain('-sentinel');
+  } finally {
+    const state = readDaemonState(home);
+    try {
+      if (state) await api(state.port, state.token, '/daemon/shutdown', { body: { force: true } });
+      else child.kill();
+    } catch { child.kill(); }
+    await ended;
+    removeTempHome(home);
+  }
+}, 45_000);

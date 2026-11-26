@@ -16,8 +16,19 @@ export interface ConfigCandidate {
   text?: string;
   config: DaemonConfig;
   framing: boolean;
-  problems: string[];
+  diagnostics: string[];
   reason?: string;
+}
+
+function advisory(problem: string): string | undefined {
+  if (problem === 'messaging is enabled without allow rules: no participants may message each other') {
+    return 'messaging.allow is empty. No participants may message each other.';
+  }
+  if (problem.startsWith('messaging member "')) return 'messaging.allow includes a launch profile name. Sessions join by role.';
+  if (problem === 'launcher has no profiles list: no dashboard launch profiles are loaded (an empty list is fine)') {
+    return 'launcher.profiles is absent. No dashboard launch profiles are loaded.';
+  }
+  return undefined;
 }
 
 function safeProblem(problem: string): string {
@@ -28,6 +39,7 @@ function safeProblem(problem: string): string {
   if (location.startsWith('messaging.allow[') && problem.includes('ignoring members')) {
     return location + '.members contains an invalid participant name.';
   }
+  if (problem.includes('does not compile')) return location + ' contains an invalid regular expression.';
   if (problem.includes('unknown key')) return location + ' contains an unsupported key.';
   return location + ' contains an invalid value.';
 }
@@ -74,16 +86,23 @@ export function parseConfigCandidate(text?: string): ConfigCandidate {
   const parsed = parseDaemonConfig(raw);
   const mcp = record(raw) ? raw['mcp'] : undefined;
   const framing = !record(mcp) || mcp['untrustedFraming'] !== false;
-  const problem = parsed.problems.find(p =>
-    p !== 'messaging is enabled without allow rules: no participants may message each other' &&
-    !p.startsWith('messaging member "') &&
-    p !== 'launcher has no profiles list: no dashboard launch profiles are loaded (an empty list is fine)');
-  const reason = parsed.scheduleRejection ?? (problem ? safeProblem(problem) : record(raw) ? extraProblem(raw, parsed.config) : undefined);
-  return { ...parsed, framing, text, reason };
+  const diagnostics = new Set(parsed.scheduleDiagnostics);
+  let reason = parsed.scheduleDiagnostics?.[0];
+  for (const problem of parsed.problems) {
+    if (problem.startsWith('schedules') && parsed.scheduleDiagnostics?.length) continue;
+    const note = advisory(problem);
+    const diagnostic = note ?? safeProblem(problem);
+    diagnostics.add(diagnostic);
+    if (!note) reason ??= diagnostic;
+  }
+  reason ??= record(raw) ? extraProblem(raw, parsed.config) : undefined;
+  if (reason) diagnostics.add(reason);
+  return { config: parsed.config, diagnostics: [...diagnostics], framing, text, reason };
 }
 
 export function unavailableConfig(reason: string): ConfigCandidate {
-  return { ...unknowableConfig(reason, reason + ' Refusing all commands.'), reason, framing: true };
+  const problem = reason + ' Refusing all commands.';
+  return { config: unknowableConfig(reason, problem).config, diagnostics: [problem], reason, framing: true };
 }
 
 function fields(candidate: ConfigCandidate, defaultViewer: ViewerLaunchMode) {

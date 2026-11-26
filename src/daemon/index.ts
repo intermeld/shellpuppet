@@ -33,7 +33,7 @@ async function main(): Promise<void> {
   permissions.secureHome();
   const bootConfig = await readPrivateConfig(home, permissions.check).then(read => parseConfigCandidate(read.text),
     () => unavailableConfig('Could not verify permissions or read config.json.'));
-  const { config, problems } = bootConfig;
+  const { config, diagnostics } = bootConfig;
   // Recognised by every session's prompt detection from here on. The entries
   // that did not compile are included in the configuration problems. A signature
   // built-in or from config, that runs past its time budget on a screen is
@@ -91,7 +91,7 @@ async function main(): Promise<void> {
   try {
     // start() secures this home before publishing the daemon state or writing diagnostics.
     await daemon.start();
-    for (const problem of problems) logger.warn('CONFIG PROBLEM', { problem });
+    for (const problem of diagnostics) logger.warn('CONFIG PROBLEM', { problem });
   } catch (error) {
     if (error instanceof AlreadyRunningError) {
       logger.info('deferring to the running daemon', {

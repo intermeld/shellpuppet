@@ -19,7 +19,7 @@ interface Entry {
 interface ScheduleChanges {
   problems: string[];
   /** Fixed schema paths and validator reasons, safe to show on reload. */
-  rejection?: string;
+  diagnostics: string[];
   added: string[];
   changed: string[];
   removed: string[];
@@ -60,11 +60,11 @@ export class ScheduleStore {
   }
 
   replace(section: unknown): ScheduleChanges {
-    const changes: ScheduleChanges = { problems: [], added: [], changed: [], removed: [] };
+    const changes: ScheduleChanges = { problems: [], diagnostics: [], added: [], changed: [], removed: [] };
     if (section === undefined) section = [];
     if (!Array.isArray(section)) {
-      changes.rejection = 'schedules must be an array';
-      changes.problems.push(changes.rejection);
+      changes.diagnostics.push('schedules must be an array');
+      changes.problems.push('schedules must be an array');
       return changes;
     }
     const names = new Set<string>();
@@ -79,7 +79,7 @@ export class ScheduleStore {
     for (const [index, raw] of (section as unknown[]).entries()) {
       const entry = validate(raw, duplicates);
       if (typeof entry === 'string') {
-        changes.rejection ??= `schedules[${String(index)}] invalid: ${entry}.`;
+        changes.diagnostics.push(`schedules[${String(index)}] invalid: ${entry}.`);
         const name = isRecord(raw) && typeof raw['name'] === 'string' ? JSON.stringify(raw['name']) : String(index);
         changes.problems.push(`schedules[${name}] ${entry}`);
         continue;

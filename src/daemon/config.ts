@@ -132,9 +132,9 @@ export interface MessagingRelations {
 }
 
 export interface ParsedDaemonConfig {
-  scheduleRejection?: string;
+  scheduleDiagnostics?: string[];
   config: DaemonConfig;
-  /** Human-readable problems. The daemon logs each one loudly at startup. */
+  /** Detailed parser problems for callers. Daemon logs use redacted diagnostics. */
   problems: string[];
 }
 
@@ -488,7 +488,7 @@ export function parseDaemonConfig(raw: unknown): ParsedDaemonConfig {
 
   const problems: string[] = [];
   const config: DaemonConfig = {};
-  let scheduleRejection: string | undefined;
+  let scheduleDiagnostics: string[] | undefined;
   for (const key of Object.keys(raw)) {
     if (!TOP_LEVEL_KEYS.has(key)) {
       problems.push(`config.json has an unknown key "${key}": ignored (typo?)`);
@@ -501,7 +501,7 @@ export function parseDaemonConfig(raw: unknown): ParsedDaemonConfig {
     const store = new ScheduleStore();
     const changes = store.replace(raw['schedules']);
     problems.push(...changes.problems);
-    scheduleRejection = changes.rejection;
+    scheduleDiagnostics = changes.diagnostics;
     config.schedules = store.read();
   }
 
@@ -704,7 +704,7 @@ export function parseDaemonConfig(raw: unknown): ParsedDaemonConfig {
     );
   }
 
-  return { config, problems, ...(scheduleRejection ? { scheduleRejection } : {}) };
+  return { config, problems, ...(scheduleDiagnostics?.length ? { scheduleDiagnostics } : {}) };
 }
 
 /** Locate a JSON syntax error without using V8's message, which may quote config text. */
