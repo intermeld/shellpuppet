@@ -5767,7 +5767,6 @@ export class Daemon {
 
     ws.on('close', () => {
       this.callerContext.run(options.callerSession, () => {
-        reportStream.flush();
         unsubscribeData();
         unsubscribeExit();
         sync.close();

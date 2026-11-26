@@ -45,10 +45,6 @@ export type TerminalReportKind =
 
 /* eslint-disable no-control-regex -- escape sequences are what this table matches */
 const REPORTS: readonly { kind: TerminalReportKind; pattern: RegExp }[] = [
-  // The bundled terminal sends SGR (including pixel coordinates) or the
-  // three-character normal/X10 payload. urxvt 1015 is unsupported there.
-  { kind: 'mouse', pattern: /^\x1b\[<(?:0|[1-9]\d{0,5});(?:0|[1-9]\d{0,5});(?:0|[1-9]\d{0,5})[Mm]$/ },
-  { kind: 'mouse', pattern: /^\x1b\[M[\x20-\xff]{3}$/ },
   // Focus reporting: the page gained or lost focus, or had it or not when
   // the program set DECSET 1004 (CoreBrowserTerminal `_handleTextAreaFocus`,
   // `_handleTextAreaBlur` and `_reportFocus`).
@@ -91,7 +87,18 @@ const REPORTS: readonly { kind: TerminalReportKind; pattern: RegExp }[] = [
  * filed as something nobody typed, so those stay input.
  */
 const MODIFIED_F3 = /^\x1b\[1;(?:[2-9]|1[0-6])R$/;
+// CoreMouseService.eventCode uses two button/action bits, three modifier bits,
+// and one of the move or wheel bits. The bundled browser emits wheel up/down.
+const SGR_MOUSE = /^\x1b\[<(0|[1-9]\d{0,4});(0|[1-9]\d{0,4});(0|[1-9]\d{0,4})[Mm]$/;
+const X10_MOUSE = /^\x1b\[M([\x20-\xff])([\x21-\xff])([\x21-\xff])$/;
 /* eslint-enable no-control-regex */
+
+function mouseCodeValid(code: number, sgr: boolean): boolean {
+  if (code > 95) return false;
+  if ((code & 64) !== 0) return (code & 3) <= 1;
+  // SGR names the released button; only normal/X10 uses button NONE for up.
+  return !sgr || (code & 32) !== 0 || (code & 3) !== 3;
+}
 
 /**
  * The kind of terminal report a viewer message is, or `null` when it is
@@ -99,11 +106,18 @@ const MODIFIED_F3 = /^\x1b\[1;(?:[2-9]|1[0-6])R$/;
  */
 export function terminalReportKind(message: string): TerminalReportKind | null {
   if (MODIFIED_F3.test(message)) return null;
+  const sgrMouse = SGR_MOUSE.exec(message);
+  if (sgrMouse !== null) {
+    const code = Number(sgrMouse[1]);
+    return mouseCodeValid(code, true) && Number(sgrMouse[2]) <= 10_000 && Number(sgrMouse[3]) <= 10_000
+      ? 'mouse' : null;
+  }
+  const x10Mouse = X10_MOUSE.exec(message);
+  if (x10Mouse !== null) return mouseCodeValid((x10Mouse[1] ?? '').charCodeAt(0) - 32, false) ? 'mouse' : null;
   return REPORTS.find(({ pattern }) => pattern.test(message))?.kind ?? null;
 }
 
 const MAX_REPORT_BYTES = 128;
-const FRAGMENT_WAIT_MS = 40;
 
 /** A whole input made only of complete reports; anything mixed is typing. */
 export function terminalReportBatchKind(message: string): TerminalReportKind | null {
@@ -125,58 +139,11 @@ export function terminalReportBatchKind(message: string): TerminalReportKind | n
   return count > 1 ? 'multiple' : null;
 }
 
-/** Only an SGR prefix beyond its opener may wait for another viewer frame. */
-function mousePrefix(message: string): boolean {
-  if (message.length > MAX_REPORT_BYTES) return false;
-  /* eslint-disable no-control-regex -- these prefixes are escape sequences */
-  return /^\x1b\[<\d{1,6};\d{0,6}(?:;\d{0,6})?[Mm]?$/u.test(message);
-  /* eslint-enable no-control-regex */
-}
-
-/** Preserve frame order while allowing a split mouse report to complete. */
+/** Classify and forward each viewer frame without waiting for another frame. */
 export class TerminalReportStream {
-  private pending = '';
-  private timer: ReturnType<typeof setTimeout> | undefined;
-
   constructor(private readonly deliver: (data: string, kind: TerminalReportKind | null) => void) {}
 
   push(data: string): void {
-    if (this.pending !== '') {
-      const combined = this.pending + data;
-      const continuedKind = terminalReportBatchKind(combined);
-      if (continuedKind !== null) {
-        this.clear();
-        this.deliver(combined, continuedKind);
-        return;
-      }
-      if (data !== '' && !data.includes('\x1b') && mousePrefix(combined)) {
-        this.pending = combined;
-        return;
-      }
-      // This frame did not complete the prefix. Keep its provenance: a fresh
-      // focus report or keyboard frame must be classified on its own.
-      this.flush();
-    }
-    const kind = terminalReportBatchKind(data);
-    if (kind !== null) {
-      this.deliver(data, kind);
-    } else if (mousePrefix(data)) {
-      this.pending = data;
-      this.timer ??= setTimeout(() => this.flush(), FRAGMENT_WAIT_MS);
-    } else {
-      this.deliver(data, null);
-    }
-  }
-
-  flush(): void {
-    const pending = this.pending;
-    this.clear();
-    if (pending !== '') this.deliver(pending, null);
-  }
-
-  private clear(): void {
-    if (this.timer !== undefined) clearTimeout(this.timer);
-    this.timer = undefined;
-    this.pending = '';
+    this.deliver(data, terminalReportBatchKind(data));
   }
 }
