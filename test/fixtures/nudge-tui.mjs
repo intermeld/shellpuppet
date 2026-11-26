@@ -6,7 +6,8 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const mode = process.argv[2];
 const inputFile = process.argv[3];
 const readSignal = process.argv[4];
-const capture = mode === 'draft' ? 'claude-prompt-typed' : 'claude-answered';
+const capture = mode === 'draft' ? 'claude-prompt-typed'
+  : mode === 'queueing' ? 'claude-thinking' : 'claude-answered';
 const initialScreen = fs.readFileSync(path.join(here, 'reasoning', `${capture}.ansi`));
 let lateBody = '';
 process.stdout.write(initialScreen);
@@ -37,8 +38,17 @@ process.stdin.on('data', (bytes) => {
       ' extra\x1b[0m\r\n' + '\x1b[0;38;2;136;136;136m' + '─'.repeat(120) + '\x1b[0m');
     return;
   }
-  if (mode !== 'ready') return;
+  if (mode !== 'ready' && mode !== 'queueing') return;
   const data = bytes.toString();
+  if (mode === 'queueing') {
+    if (data === '\r') {
+      process.stdout.write('\x1b[2J\x1b[H');
+      process.stdout.write(initialScreen);
+    } else {
+      process.stdout.write('\x1b[31;1H\x1b[2K❯\u00a0' + data);
+    }
+    return;
+  }
   if (data === '\r' || data === '\x15') {
     process.stdout.write('\x1b[2J\x1b[H');
     process.stdout.write(initialScreen);
@@ -62,7 +72,8 @@ setInterval(async () => {
   if (read || !fs.existsSync(readSignal)) return;
   read = true;
   const state = JSON.parse(fs.readFileSync(path.join(process.env.SHELLPUPPET_HOME, 'daemon.json'), 'utf8'));
-  const response = await fetch(`http://127.0.0.1:${state.port}/messages/inbox`, {
+  const limit = fs.readFileSync(readSignal, 'utf8') === 'read-one' ? '?limit=1' : '';
+  const response = await fetch(`http://127.0.0.1:${state.port}/messages/inbox${limit}`, {
     headers: {
       authorization: `Bearer ${state.token}`,
       'x-shellpuppet-session': process.env.SHELLPUPPET_SESSION,

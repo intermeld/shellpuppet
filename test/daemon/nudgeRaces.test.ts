@@ -130,3 +130,76 @@ describe('a nudge the agent never answered', () => {
     expect(mailbox.outbox(sender.claimId).map((entry) => entry.state)).toEqual(['nudged', 'nudged']);
   });
 });
+
+describe('a queued nudge awaiting the recipient', () => {
+  it('holds a later message without typing a second queued line', async () => {
+    const mailbox = new Mailbox({ enabled: true, policy: () => true });
+    mailbox.register({ kind: 'session', id: 'recipient', name: 'recipient' });
+    const sender = mailbox.claim('sender');
+    const first = mailbox.send(sender.claimId, 'recipient', 'first');
+    const written: string[] = [];
+    const audit: Array<{ action: string; meta: Record<string, unknown> }> = [];
+    let inputVersion = 0;
+    let now = 10_000;
+    let idle = false;
+    let screen = 'busy screen';
+    const session = {
+      exited: false,
+      hasPainted: () => true,
+      nudgeReady: () => true,
+      nudgeState: () => ({ ready: true, queued: !idle }),
+      snapshot: () => Promise.resolve({ screen, exited: false }),
+      answerablePrompt: () => null,
+      lastChangeAt: () => 100,
+      nudgeInputVersion: () => inputVersion,
+      nudgeQueuedInputVersion: () => 0,
+      nudgeScreenRevision: () => 0,
+      getStalled: () => undefined,
+      nudgeSubmit: () => '\r',
+      nudgePendingLine: () => null,
+      nudgeReadyWithLine: () => true,
+      writeNudgeWithReason: (data: string, ready: (screen: string, phase: 'before' | 'submit') => boolean) => {
+        if (!ready(screen, 'before')) return Promise.resolve('wait');
+        inputVersion++;
+        if (!ready(screen, 'submit')) return Promise.resolve('wait');
+        written.push(data);
+        return Promise.resolve('sent');
+      },
+    };
+    const daemon = Object.create(Daemon.prototype) as Daemon;
+    Object.assign(daemon, {
+      manager: { get: () => session }, mailbox, now: () => now,
+      queuedMessageNudges: new Map(), inboxReadVersions: new Map(),
+      audit: { record: (_actor: string, action: string, _id: string, meta: Record<string, unknown>) =>
+        audit.push({ action, meta }) },
+    });
+    expect(await daemon['deliverNudge']('recipient')).toBe('sent');
+    const second = mailbox.send(sender.claimId, 'recipient', 'second');
+    expect(await daemon['deliverNudge']('recipient')).toBe('wait');
+    screen = 'new turn screen';
+    expect(await daemon['deliverNudge']('recipient')).toBe('wait');
+    mailbox.inbox('recipient', { markRead: false });
+    expect(await daemon['deliverNudge']('recipient')).toBe('wait');
+    expect(written).toHaveLength(1);
+    expect(mailbox.outbox(sender.claimId).map((entry) => entry.state)).toEqual(['nudged', 'waiting']);
+    expect(audit.filter((entry) => entry.action === 'nudge-held')).toEqual([{
+      action: 'nudge-held', meta: { reason: 'queued-nudge-pending', messageIds: [second.id],
+        count: 1, queuedMessageIds: [first.id] },
+    }]);
+    idle = true;
+    expect(await daemon['deliverNudge']('recipient')).toBe('sent');
+    expect(written).toHaveLength(2);
+    expect(mailbox.outbox(sender.claimId).find((entry) => entry.id === second.id)?.state).toBe('nudged');
+    idle = false;
+    mailbox.send(sender.claimId, 'recipient', 'third');
+    expect(await daemon['deliverNudge']('recipient')).toBe('sent');
+    mailbox.send(sender.claimId, 'recipient', 'fourth');
+    expect(await daemon['deliverNudge']('recipient')).toBe('wait');
+    now += 5 * 60_000;
+    expect(await daemon['deliverNudge']('recipient')).toBe('sent');
+    expect(written).toHaveLength(4);
+    session.exited = true;
+    expect(await daemon['deliverNudge']('recipient')).toBe('done');
+    expect(daemon['queuedMessageNudges'].size).toBe(0);
+  });
+});
