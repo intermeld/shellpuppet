@@ -1431,23 +1431,44 @@ describe('viewer assets and the WS frame protocol (§5)', () => {
 
   it.skipIf(process.platform !== 'win32')('refuses temporary growth before first output without queuing a native resize', async () => {
     const local = await startTestDaemon({ policy: { mode: 'allow-all' } });
+    const manager = (local.daemon as unknown as { manager: SessionManager }).manager;
+    const create = manager.create.bind(manager);
+    let output: { pause(): void; resume(): void } | undefined;
+    // node-pty becomes ready on its first output-socket data event. Stop that
+    // event before the start response so the HTTP request cannot race it.
+    manager.create = (options) => {
+      const session = create(options);
+      output = (session['pty'] as unknown as { _socket: { pause(): void; resume(): void } })._socket;
+      output.pause();
+      return session;
+    };
+    const release = path.join(local.home, 'release-first-output');
     try {
       const started = await api(local.port, local.token, '/sessions', { body: {
         command: process.execPath,
-        args: ['-e', 'setInterval(() => {}, 1000)'],
+        args: ['-e', `const fs = require('node:fs'); const timer = setInterval(() => {
+          if (fs.existsSync(${JSON.stringify(release)})) { clearInterval(timer); console.log('released'); }
+        }, 10);`],
         shell: false, openViewer: false, cols: 80, rows: 24,
       } });
       expect(started.status).toBe(200);
-      const session = (local.daemon as unknown as { manager: SessionManager }).manager.get(String(started.body['id']))!;
+      const session = manager.get(String(started.body['id']))!;
       const terminal = session['pty'] as unknown as { _isReady: boolean; _deferreds: unknown[]; cols: number; rows: number };
       expect(terminal._isReady).toBe(false);
       const deferred = terminal._deferreds.length;
       const response = await api(local.port, local.token,
         `/sessions/${session.id}/snapshot?wider=150x45&widerTimeout=3000`);
       expect(response.status).toBe(409);
+      expect(response.body['error']).toContain('before its first output');
+      expect(terminal._isReady).toBe(false);
       expect([session.cols, session.rows, terminal.cols, terminal.rows]).toEqual([80, 24, 80, 24]);
       expect(terminal._deferreds.length).toBe(deferred);
-    } finally { await local.stop(); }
+    } finally {
+      manager.create = create;
+      fs.writeFileSync(release, '');
+      output?.resume();
+      await local.stop();
+    }
   });
 
   it('tells each viewport whether the grid is theirs, adopted or held', async () => {
