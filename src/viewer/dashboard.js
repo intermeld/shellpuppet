@@ -199,6 +199,7 @@
     ? saved.fontSize : saved.fontSize === null ? null
       : Number.isInteger(configuredFont) && configuredFont >= 8 && configuredFont <= 32 ? configuredFont : null;
   let autoFitTimer = null;
+  const pendingAutoFits = new Set();
   let fontFitFrame = null;
   let assignmentSettleUntil = 0;
   let assignmentSettleStartedAt = 0;
@@ -210,7 +211,6 @@
   } catch { /* Track sizes are optional. */ }
   let activeDivider = null;
   let endActiveDivider = null;
-  const focusOpenFits = new Set();
   const incomingFits = new Set();
   let prefix = typeof saved.prefix === 'string' && /^[a-z]$/.test(saved.prefix) ? saved.prefix : 'a';
   let choosingPrefix = false;
@@ -398,21 +398,50 @@
     document.getElementById('text-auto').textContent = fontSize === null ? 'Auto text' : `${fontSize} px`;
     document.getElementById('text-auto').classList.toggle('active', fontSize === null);
   }
-  function scheduleAutoFit() {
+  function paneFitSignature(item) {
+    if (!item.client || !visible(item)) return null;
+    return JSON.stringify([item.id, item.term.clientWidth, item.term.clientHeight,
+      fontSize, window.devicePixelRatio, item.metricsRevision || 0]);
+  }
+  function scheduleAutoFit(items = shown(), reason = 'layout') {
     scheduleFontFit();
+    for (const item of items) {
+      const signature = paneFitSignature(item);
+      const changed = signature !== item.fitSignature;
+      if (changed) {
+        item.fitSignature = signature;
+        item.client?.registerLayout(autoFit && signature !== null);
+      } else if (reason === 'connect') item.client?.registerLayout(autoFit && signature !== null, false);
+      if (signature !== null && (changed || reason !== 'layout')) pendingAutoFits.add(item);
+      if (signature === null) pendingAutoFits.delete(item);
+    }
     clearTimeout(autoFitTimer);
     if (activeDivider) return;
-    if (!autoFit) { focusOpenFits.clear(); return; }
+    if (!autoFit) { pendingAutoFits.clear(); return; }
+    if (pendingAutoFits.size === 0) return;
     autoFitTimer = setTimeout(() => {
       autoFitTimer = null;
-      if (window.performance.now() < assignmentSettleUntil) { scheduleAutoFit(); return; }
-      assignmentSettleStartedAt = 0;
-      assignmentSettleUntil = 0;
-      for (const item of shown()) {
-        if (!visible(item) || item.client?.isTemporaryGeometry()) continue;
-        item.client?.autoFitGrid(80, 24, focusOpenFits.has(item.id) || incomingFits.has(item.id));
+      if (window.performance.now() < assignmentSettleUntil) {
+        autoFitTimer = setTimeout(() => flushAutoFits(), assignmentSettleUntil - window.performance.now());
+        return;
       }
+      flushAutoFits();
     }, assignmentSettleUntil ? Math.max(0, assignmentSettleUntil - window.performance.now()) : 250);
+  }
+  function flushAutoFits() {
+    autoFitTimer = null;
+    if (window.performance.now() < assignmentSettleUntil) {
+      autoFitTimer = setTimeout(flushAutoFits, assignmentSettleUntil - window.performance.now());
+      return;
+    }
+    assignmentSettleStartedAt = 0;
+    assignmentSettleUntil = 0;
+    for (const item of pendingAutoFits) {
+      if (!visible(item) || item.client?.isTemporaryGeometry()) continue;
+      item.client?.autoFitGrid(80, 24,
+        incomingFits.has(item.id) && item.client?.hasTransferOffer());
+    }
+    pendingAutoFits.clear();
   }
   function fitFonts() {
     const visiblePanes = shown().filter((item) => item.client && visible(item));
@@ -765,18 +794,19 @@
       elements: { banner: item.banner, copyNotice: item.copyNotice, promptAlert: item.prompt,
         size: item.size, overflowNote: item.overflowNote },
       onAttentionChange: () => updateAttention(),
-      onGeometryReady: () => scheduleAutoFit(),
+      onGeometryReady: (reason) => scheduleAutoFit([item], reason === 'connect' ? 'connect' : 'ready'),
       onGeometryChange: () => scheduleFontFit(),
-      onMetricsChange: () => scheduleAutoFit(),
+      onMetricsChange: () => { item.metricsRevision = (item.metricsRevision || 0) + 1; scheduleAutoFit([item]); },
       onOutsideGeometry: () => {
-        focusOpenFits.delete(item.id);
         incomingFits.delete(item.id);
         scheduleFontFit();
       },
-      onGridTaken: () => { focusOpenFits.delete(item.id); incomingFits.delete(item.id); },
+      onGridTaken: () => { incomingFits.delete(item.id); },
     });
   }
   function deactivate(item, reassigned = false) {
+    pendingAutoFits.delete(item);
+    item.fitSignature = null;
     if (!item.client) return;
     const client = item.client;
     item.client = null;
@@ -1166,7 +1196,6 @@
         const id = frame.move.session;
         movedSessions.add(id);
         pendingOpen.delete(id);
-        focusOpenFits.delete(id);
         for (const [target, session] of pendingWindowMoves) {
           if (session === id) pendingWindowMoves.delete(target);
         }
@@ -1238,7 +1267,6 @@
       pendingWindowMoves.clear();
       pendingOpen.clear();
       movedSessions.clear();
-      focusOpenFits.clear();
       endActiveDivider?.();
       applyAssignment([], {});
       root.replaceChildren();
@@ -1324,7 +1352,7 @@
       enlarged = null;
       persist();
       arrange('focus open');
-      if (autoFit) { focusOpenFits.add(id); scheduleAutoFit(); }
+      if (autoFit) scheduleAutoFit([panes.get(id)], 'focus-open');
       else fitWhenReady(id, ownPair());
     }
   }
@@ -1530,6 +1558,8 @@
     if (data.type === 'preferences' && typeof data.autoFit === 'boolean' &&
         (data.fontSize === null || (Number.isInteger(data.fontSize) && data.fontSize >= 8 && data.fontSize <= 32))) {
       autoFit = data.autoFit;
+      if (!autoFit) for (const item of panes.values()) item.client?.withdrawAutoFit();
+      else for (const item of panes.values()) item.client?.resumeAutoFit();
       setFontSize(data.fontSize, false);
     }
   }
@@ -1588,7 +1618,9 @@
     assignmentSettleUntil = 0;
     assignmentSettleStartedAt = 0;
     autoFit = !autoFit;
-    renderPreferences(); persist(); scheduleAutoFit(); broadcastPreferences();
+    if (!autoFit) for (const item of panes.values()) item.client?.withdrawAutoFit();
+    else for (const item of panes.values()) item.client?.resumeAutoFit();
+    renderPreferences(); persist(); scheduleAutoFit(shown(), 'toggle'); broadcastPreferences();
   });
   document.getElementById('designated-window').addEventListener('click', () => {
     if (feed?.readyState === WebSocket.OPEN) feed.send(JSON.stringify({ type: 'window-designate' }));

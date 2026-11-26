@@ -13,6 +13,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Auto fit now fits an above-floor dashboard pane when its live grid controller leaves. An explicit unheld resize lasts until a real layout change, deliberate Fit or later controller grid choice, including across a pane reconnect. A reconnecting pane registers its layout before fitting and retries one stale layout refusal.
 - After a Hermes turn, waiting messages can be nudged when the completed summary lists extra activity and the grey footer clips a timer.
 - Waiting time and stall alerts restart after input to a held prompt, including when the next prompt has the same question and choices. Redraws without input retain the timer.
 - Codex recognises a repeated short prompt in its live composer when an earlier copy belongs to a completed turn. Grok recognises a padded welcome footer after typed send hints appear.

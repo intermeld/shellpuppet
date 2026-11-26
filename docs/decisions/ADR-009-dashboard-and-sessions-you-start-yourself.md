@@ -90,9 +90,17 @@ client token must remain outside the browser.
   main panes, which refit to their own space and are never pulled down to the
   shared floor. The first takeover in another window or viewer leaves the
   pane following until Fit, Enlarge or a drag on that pane with Auto fit on
-  takes it back. An unowned session still receives its initial fit.
-  Turning Auto fit off makes
-  layout, window, font load and display-scale changes fit the displayed text
+  takes it back while that controller is live. An above-floor pane with Auto fit
+  on also fits when its controller leaves and no valid reservation remains.
+  A reservation that expires without a connected controller does not trigger
+  an automatic fit in an already open follower. An unowned session still
+  receives its initial fit. An unheld HTTP, MCP or CLI resize keeps its grid
+  until that pane's next layout change, a deliberate takeover or a later
+  controller grid choice. Once that controller leaves, an above-floor pane
+  can fit again. A reconnecting pane registers its layout on its new socket,
+  but that registration does not undo an explicit resize missed while disconnected.
+  Turning Auto fit off makes layout, window, font load and display-scale changes
+  fit the displayed text
   without changing the grid or the saved text preference. An uncapped grid
   shrinks only as far as needed below the remembered text size and recovers
   that size when it fits again. Owned grids at a configured column or row

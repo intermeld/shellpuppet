@@ -1016,6 +1016,39 @@ describe('the cookie still opens nothing else', () => {
 });
 
 describe('a remembered dashboard grid stays with its dashboard while the socket is away', () => {
+  it('refuses another document automatic fit but allows its deliberate Fit', async () => {
+    const daemon = await startPane();
+    const id = await startGrid(daemon, 'reserved-grid');
+    const { cookie, proof } = await openDashboard(daemon);
+    const owner = await connectDash(daemon.port, id, cookie, proof);
+    owner.send(JSON.stringify({ type: 'resize', cols: 178, rows: 52, take: true }));
+    await owner.waitForControl(frame => frame['type'] === 'geometry' && frame['control'] === 'yours' &&
+      frame['cols'] === 178);
+    owner.close();
+    await eventually(() => !(daemon.daemon as unknown as { geometryController: Map<string, unknown> })
+      .geometryController.has(id));
+    const page = await raw(daemon.port, 'GET', '/dashboard', {
+      'sec-fetch-mode': 'navigate', 'sec-fetch-dest': 'document', 'sec-fetch-site': 'same-origin', cookie,
+    });
+    const otherProof = csrfMeta(page.body);
+    expect(otherProof).toMatch(/^[0-9a-f]{64}$/);
+    const follower = await connectDash(daemon.port, id, cookie, otherProof);
+    try {
+      const initial = await follower.waitForControl(frame => frame['type'] === 'geometry');
+      expect(initial).toMatchObject({ cols: 178, rows: 52, control: 'adopt', owned: true });
+      follower.send(JSON.stringify({ type: 'layout', layoutId: 1, eligible: true, real: true }));
+      follower.send(JSON.stringify({ type: 'resize', cols: 130, rows: 40, take: true,
+        automatic: true, takeId: 1, choiceRevision: initial['choiceRevision'], layoutId: 1 }));
+      expect(await follower.waitForControl(frame => frame['refusedTakeId'] === 1))
+        .toMatchObject({ cols: 178, rows: 52, control: 'adopt' });
+      expect(await gridOf(daemon, id)).toMatchObject({ cols: 178, rows: 52 });
+      follower.send(JSON.stringify({ type: 'resize', cols: 130, rows: 40, take: true }));
+      expect(await follower.waitForControl(frame => frame['type'] === 'geometry' &&
+        frame['control'] === 'yours' && frame['cols'] === 130)).toMatchObject({ rows: 40 });
+      expect(await gridOf(daemon, id)).toMatchObject({ cols: 130, rows: 40 });
+    } finally { follower.close(); }
+  }, 120_000);
+
   for (const kind of ['client', 'viewer'] as const) {
     it(`a ${kind} socket that arrives follows it until a deliberate resize`, async () => {
       const daemon = await startPane();

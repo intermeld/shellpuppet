@@ -439,11 +439,20 @@ still use larger text to fill its pane. The saved text choice stays unchanged.
 Right-click menus stay under the pointer even at the smallest text sizes.
 
 A held session keeps its grid. As soon as you take a session in another window
-or viewer, the dashboard follows that grid until you press Fit, Enlarge or
-drag that pane's track with Auto fit on. These panes show
+or viewer, the dashboard follows that grid while the controller is live. You
+can take it sooner with Fit, Enlarge or a drag on that pane with Auto fit on.
+These panes show
 their whole screen at the shared text size when it fits, or smaller text when
 their grid needs it. They may therefore look smaller beside the 80 by 24 panes.
 Wheel scrolling and the history scrollbar remain usable at the reduced size.
+With Auto fit on, an above-floor pane also fits when its live controller leaves
+and no valid dashboard reservation remains. A reserved pane keeps following;
+Fit remains available. An unheld resize through HTTP, MCP or the CLI keeps its
+grid until that pane's next layout change, a deliberate Fit or a later live
+controller's grid choice. After that controller leaves, an above-floor pane
+can fit again. Pending automatic fits are checked when the daemon applies them,
+after earlier queued work. Reconnecting a pane does not itself end an explicit
+resize's protection.
 
 In Focus, drag the boundary between the large pane and its strip. In Grid,
 drag a boundary between columns or rows. Focus a boundary and use the arrow
