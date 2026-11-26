@@ -1882,14 +1882,20 @@ export class Session implements WaitTarget {
    * by node-pty and run later; one that finds the program ended by then is
    * dropped (`windowsPtyStart.ts`).
    */
-  resize(cols: number, rows: number, options: { hold?: boolean; onApplied?: () => void; temporarySignal?: AbortSignal } = {}): void | Promise<void> {
+  resize(cols: number, rows: number, options: { hold?: boolean; onApplied?: () => void; temporarySignal?: AbortSignal;
+    shouldApply?: () => boolean; skipIfSame?: boolean } = {}): void | Promise<void> {
+    const apply = (): void => {
+      if (options.shouldApply?.() === false) return;
+      if (!options.skipIfSame || cols !== this.renderer.cols || rows !== this.renderer.rows)
+        this.resizeNow(cols, rows, options);
+      options.onApplied?.();
+    };
     if (this.agentModule?.input?.resizeBehindSubmit === true && this.submissionsQueued > 0) {
-      const queued = this.writeChain.then(() => { this.resizeNow(cols, rows, options); options.onApplied?.(); });
+      const queued = this.writeChain.then(apply);
       this.writeChain = queued.then(() => undefined, () => undefined);
       return queued;
     }
-    this.resizeNow(cols, rows, options);
-    options.onApplied?.();
+    apply();
   }
 
   /** Decide and apply a geometry act together at its place in the submit queue. */

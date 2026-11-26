@@ -152,7 +152,21 @@ window.ShellPuppetPane = (() => {
     let pendingTakeGrid = false;
     let pendingTakeSize = null;
     let pendingTakeSocket = null;
-    let followingExternal = false;
+    let followedGrid = null;
+    let choiceRevision = 0;
+    let layoutId = 0;
+    let realLayoutId = 0;
+    let nextTakeId = 0;
+    let pendingAuto = null;
+    let dirtyAuto = false;
+    let explicitHold = false;
+    let explicitHoldControllerRevision = 0;
+    let lastExplicitResizeRevision = 0;
+    let clearedExplicitResizeRevision = 0;
+    let pendingRealLayout = false;
+    let autoFitRequested = false;
+    let layoutEligible = false;
+    let layoutRecoveryUsed = false;
     let transferOffered = false;
     let temporaryGeometry = false;
     let dashboardFontLimit = null;
@@ -1165,6 +1179,27 @@ window.ShellPuppetPane = (() => {
       elements.inputSource.className = `hint ${who}`;
     }
 
+    function registerDashboardLayout(eligible, real) {
+      if (dashboardProof === null || !ws || ws.readyState !== 1 || !geometryDecided) return false;
+      autoFitRequested = eligible;
+      layoutId++;
+      if (real) {
+        realLayoutId = layoutId;
+        layoutRecoveryUsed = false;
+        pendingRealLayout = false;
+      }
+      const allowed = eligible && (real || !explicitHold) &&
+        !(followedGrid === 'unowned' && belowDashboardFloor());
+      layoutEligible = allowed;
+      dirtyAuto = allowed;
+      if (real) {
+        explicitHold = false;
+        clearedExplicitResizeRevision = lastExplicitResizeRevision;
+      }
+      ws.send(JSON.stringify({ type: 'layout', layoutId, eligible: allowed, real }));
+      return true;
+    }
+
     function connect() {
       if (destroyed) return;
       ws = new WebSocket(`ws://${location.host}/sessions/${encodeURIComponent(sessionId)}/stream${passive ? '?drive=0' : ''}`,
@@ -1189,9 +1224,11 @@ window.ShellPuppetPane = (() => {
         if (elements.banner) elements.banner.hidden = true;
         retriesLeft = 8;
         geometryDecided = false;
+        pendingAuto = null;
+        dirtyAuto = false;
+        layoutRecoveryUsed = false;
         if (pendingTakeSocket !== socket) {
           pendingTakeGrid = false;
-          pendingTakeSize = null;
           pendingTakeSocket = null;
         }
       };
@@ -1245,6 +1282,10 @@ window.ShellPuppetPane = (() => {
           } else if (control && control.type === 'geometry') {
             const firstGeometry = !geometryDecided;
             geometryDecided = true;
+            if (typeof control.choiceRevision === 'number') {
+              if (control.choiceRevision < choiceRevision) return;
+              choiceRevision = control.choiceRevision;
+            }
             controlMode = captureMode ? 'adopt' : control.control || 'adopt';
             const wasOffered = transferOffered;
             transferOffered = controlMode === 'adopt' && control.dashboardTransferable === true;
@@ -1252,16 +1293,17 @@ window.ShellPuppetPane = (() => {
             temporaryGeometry = control.temporary === true;
             if (pendingTakeSocket !== null && pendingTakeSocket !== socket) {
               pendingTakeGrid = false;
-              pendingTakeSize = null;
               pendingTakeSocket = null;
             }
             if (controlMode === 'held') {
               pendingTakeGrid = false;
-              pendingTakeSize = null;
               pendingTakeSocket = null;
             }
+            const previouslyFollowed = followedGrid;
+            if (dashboardProof !== null && firstGeometry && controlMode === 'adopt' &&
+                control.owned !== true) followedGrid = null;
             if (dashboardProof !== null && firstGeometry && controlMode === 'yours') {
-              followingExternal = false;
+              followedGrid = null;
               pendingTakeGrid = false;
               pendingTakeSize = null;
               pendingTakeSocket = null;
@@ -1269,27 +1311,74 @@ window.ShellPuppetPane = (() => {
             }
             if (dashboardProof !== null && (!firstGeometry || control.owned === true)) {
               if (controlMode === 'yours' && pendingTakeGrid) {
-                followingExternal = false;
+                followedGrid = null;
+                explicitHold = false;
                 pendingTakeGrid = false;
                 pendingTakeSize = null;
                 pendingTakeSocket = null;
                 onGridTaken();
-              } else if (controlMode === 'adopt' && !followingExternal && !transferOffered) {
+              } else if (controlMode === 'adopt' && !transferOffered) {
                 pendingTakeGrid = false;
                 pendingTakeSize = null;
                 pendingTakeSocket = null;
-                followingExternal = true;
-                onOutsideGeometry();
+                followedGrid = control.owned ? 'owned' : 'unowned';
+                if (previouslyFollowed !== followedGrid) onOutsideGeometry();
               } else if (transferOffered) {
-                followingExternal = false;
+                followedGrid = null;
               }
             }
+            if (controlMode === 'yours') followedGrid = null;
+            const controllerRevision = Number.isSafeInteger(control.controllerChoiceRevision)
+              ? control.controllerChoiceRevision : 0;
+            const explicitRevision = Number.isSafeInteger(control.explicitResizeRevision)
+              ? control.explicitResizeRevision : 0;
+            lastExplicitResizeRevision = Math.max(lastExplicitResizeRevision, explicitRevision);
+            let holdCleared = false;
+            if (control.clientResize) {
+              explicitHold = realLayoutId <= (control.layoutFence ?? realLayoutId);
+              if (explicitHold) {
+                explicitHoldControllerRevision = controllerRevision;
+                dirtyAuto = false;
+              } else clearedExplicitResizeRevision = lastExplicitResizeRevision;
+            } else if (explicitHold && controllerRevision > explicitHoldControllerRevision) {
+              explicitHold = false;
+              holdCleared = true;
+            } else if (firstGeometry && explicitRevision > controllerRevision) {
+              if (explicitRevision > clearedExplicitResizeRevision) {
+                explicitHold = true;
+                explicitHoldControllerRevision = controllerRevision;
+                dirtyAuto = false;
+              } else pendingRealLayout = true;
+            }
+            const resolvedAuto = pendingAuto &&
+              (control.acceptedTakeId === pendingAuto.id || control.refusedTakeId === pendingAuto.id);
+            const staleLayout = resolvedAuto && control.refusedTakeId === pendingAuto.id &&
+              control.staleLayoutId === true && !layoutRecoveryUsed;
+            if (resolvedAuto) pendingAuto = null;
             applyGeometry(control.cols, control.rows, control.max);
-            if (firstGeometry || (transferOffered && !wasOffered) || (wasTemporary && !temporaryGeometry)) onGeometryReady();
+            if (holdCleared && autoFitRequested && !layoutEligible) {
+              layoutRecoveryUsed = false;
+              registerDashboardLayout(true, false);
+            }
+            const ownerLeft = previouslyFollowed === 'owned' && followedGrid === 'unowned' &&
+              !control.clientResize;
+            const choiceOwnerLeft = holdCleared && control.owned === false;
+            let retryLayout = false;
+            if (staleLayout && layoutEligible && !explicitHold && followedGrid !== 'owned' &&
+                controlMode !== 'held' && !temporaryGeometry) {
+              layoutRecoveryUsed = true;
+              retryLayout = registerDashboardLayout(true, false);
+            }
+            if (firstGeometry || ownerLeft || choiceOwnerLeft || (transferOffered && !wasOffered) ||
+                (wasTemporary && !temporaryGeometry) || (control.clientResize && dirtyAuto) ||
+                (resolvedAuto && dirtyAuto) || retryLayout ||
+                (controlMode === 'yours' && dirtyAuto && !pendingTakeGrid))
+              onGeometryReady(firstGeometry ? 'connect' : ownerLeft || choiceOwnerLeft ? 'release' : 'ready');
             if (controlMode === 'yours' && !temporaryGeometry && !captureMode && dashboardProof === null) requestFit();
           } else if (control && control.type === 'identity') {
             showIdentity(control);
           } else if (control && control.type === 'exited') {
+            pendingAuto = null;
             pendingTakeGrid = false;
             pendingTakeSize = null;
             pendingTakeSocket = null;
@@ -1312,9 +1401,10 @@ window.ShellPuppetPane = (() => {
       };
 
       ws.onclose = () => {
+        pendingAuto = null;
+        dirtyAuto = false;
         if (pendingTakeSocket === socket) {
           pendingTakeGrid = false;
-          pendingTakeSize = null;
           pendingTakeSocket = null;
         }
         if (destroyed) return;
@@ -1410,27 +1500,65 @@ window.ShellPuppetPane = (() => {
         if (geometryDecided) applyFontPreference(gridCols, gridRows);
         positionNotices();
       },
+      registerLayout(eligible, real = true) {
+        if (real && (!ws || ws.readyState !== 1 || !geometryDecided)) pendingRealLayout = true;
+        registerDashboardLayout(eligible, real || pendingRealLayout);
+      },
+      withdrawAutoFit() {
+        if (dashboardProof === null || !ws || ws.readyState !== 1 || !geometryDecided) return;
+        autoFitRequested = false;
+        layoutId++;
+        layoutEligible = false;
+        dirtyAuto = false;
+        ws.send(JSON.stringify({ type: 'layout', layoutId, eligible: false, real: false }));
+      },
+      resumeAutoFit() {
+        if (dashboardProof === null || !ws || ws.readyState !== 1 || !geometryDecided) return;
+        autoFitRequested = true;
+        layoutId++;
+        layoutEligible = !explicitHold && !(followedGrid === 'unowned' && belowDashboardFloor());
+        dirtyAuto = layoutEligible;
+        ws.send(JSON.stringify({ type: 'layout', layoutId, eligible: layoutEligible, real: false }));
+      },
       autoFitGrid(floorCols = 80, floorRows = 24, force = false) {
         if (destroyed) return false;
         if (dashboardProof === null || controlMode === 'held' || (temporaryGeometry && !force) ||
-            (followingExternal && !force) || !geometryDecided ||
+            ((followedGrid === 'owned' || explicitHold) && !force) || !geometryDecided ||
             !ws || ws.readyState !== 1 || sessionEnded) return false;
-        if (force) {
-          followingExternal = false;
-        }
+        if (force) followedGrid = null;
         let proposed = proposeDashboardGrid();
         if (proposed === null) {
           if (container.clientWidth <= 0 || container.clientHeight <= 0) return false;
           proposed = { cols: floorCols, rows: floorRows };
         }
         const belowFloor = belowDashboardFloor(floorCols, floorRows);
+        if (belowFloor && followedGrid === 'unowned' && !force) {
+          this.withdrawAutoFit();
+          return false;
+        }
         const cols = Math.min(gridMax.cols, belowFloor ? floorCols : Math.max(floorCols, proposed.cols));
         const rows = Math.min(gridMax.rows, belowFloor ? floorRows : Math.max(floorRows, proposed.rows));
-        if (cols === gridCols && rows === gridRows && !force && !transferOffered) return false;
-        if (pendingTakeSocket === ws && pendingTakeSize?.cols === cols && pendingTakeSize?.rows === rows) return false;
-        return this.takeGrid(cols, rows, transferOffered);
+        if (force || transferOffered) return this.takeGrid(cols, rows, transferOffered);
+        if (pendingTakeGrid && pendingTakeSocket === ws) {
+          if (pendingTakeSize?.cols !== cols || pendingTakeSize?.rows !== rows) dirtyAuto = true;
+          return false;
+        }
+        if (pendingAuto) {
+          if (pendingAuto.cols !== cols || pendingAuto.rows !== rows || pendingAuto.layoutId !== layoutId)
+            dirtyAuto = true;
+          return false;
+        }
+        if (cols === gridCols && rows === gridRows && controlMode === 'yours') return false;
+        const wanted = { cols, rows };
+        const id = ++nextTakeId;
+        pendingAuto = { id, socket: ws, layoutId, ...wanted };
+        dirtyAuto = false;
+        ws.send(JSON.stringify({ type: 'resize', ...wanted, take: true, automatic: true,
+          takeId: id, choiceRevision, layoutId }));
+        return true;
       },
       isTemporaryGeometry() { return temporaryGeometry; },
+      hasTransferOffer() { return transferOffered; },
       takeGrid(cols, rows, acceptOffer = false) {
         if (destroyed) return false;
         if (dashboardProof === null || !ws || ws.readyState !== 1 || !geometryDecided) return false;
@@ -1444,7 +1572,7 @@ window.ShellPuppetPane = (() => {
       fitGrid(floorCols = 80, floorRows = 24) {
         if (destroyed) return false;
         if (dashboardProof === null) return false;
-        followingExternal = false;
+        followedGrid = null;
         const proposed = proposeDashboardGrid();
         if (belowDashboardFloor(floorCols, floorRows)) return this.takeGrid(floorCols, floorRows);
         return proposed !== null && this.takeGrid(
