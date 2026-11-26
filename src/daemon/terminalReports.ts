@@ -90,14 +90,13 @@ const MODIFIED_F3 = /^\x1b\[1;(?:[2-9]|1[0-6])R$/;
 // CoreMouseService.eventCode uses two button/action bits, three modifier bits,
 // and one of the move or wheel bits. The bundled browser emits wheel up/down.
 const SGR_MOUSE = /^\x1b\[<(0|[1-9]\d{0,4});(0|[1-9]\d{0,4});(0|[1-9]\d{0,4})[Mm]$/;
-const X10_MOUSE = /^\x1b\[M([\x20-\xff])([\x21-\xff])([\x21-\xff])$/;
 /* eslint-enable no-control-regex */
 
-function mouseCodeValid(code: number, sgr: boolean): boolean {
+function mouseCodeValid(code: number): boolean {
   if (code > 95) return false;
   if ((code & 64) !== 0) return (code & 3) <= 1;
-  // SGR names the released button; only normal/X10 uses button NONE for up.
-  return !sgr || (code & 32) !== 0 || (code & 3) !== 3;
+  // SGR names the released button, so button NONE is only valid for movement.
+  return (code & 32) !== 0 || (code & 3) !== 3;
 }
 
 /**
@@ -109,11 +108,11 @@ export function terminalReportKind(message: string): TerminalReportKind | null {
   const sgrMouse = SGR_MOUSE.exec(message);
   if (sgrMouse !== null) {
     const code = Number(sgrMouse[1]);
-    return mouseCodeValid(code, true) && Number(sgrMouse[2]) <= 10_000 && Number(sgrMouse[3]) <= 10_000
+    // The encoder uses lowercase m only for ordinary-button release.
+    return mouseCodeValid(code) && (message.endsWith('M') || code < 32) &&
+      Number(sgrMouse[2]) <= 10_000 && Number(sgrMouse[3]) <= 10_000
       ? 'mouse' : null;
   }
-  const x10Mouse = X10_MOUSE.exec(message);
-  if (x10Mouse !== null) return mouseCodeValid((x10Mouse[1] ?? '').charCodeAt(0) - 32, false) ? 'mouse' : null;
   return REPORTS.find(({ pattern }) => pattern.test(message))?.kind ?? null;
 }
 

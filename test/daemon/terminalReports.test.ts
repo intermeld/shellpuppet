@@ -20,8 +20,7 @@ const ST = `${ESC}\\`;
 
 describe('terminalReportKind: the answers xterm.js sends on its own', () => {
   it.each([
-    `${ESC}[<0;10;5M`, `${ESC}[<0;10;5m`, `${ESC}[<64;10;5M`,
-    `${ESC}[M${String.fromCharCode(32, 42, 37)}`,
+    `${ESC}[<0;10;5M`, `${ESC}[<0;10;5m`, `${ESC}[<64;10;5M`, `${ESC}[<32;10;5M`,
   ])('recognises a complete mouse report as non-typing: %j', (message) => {
     expect(terminalReportKind(message)).toBe('mouse');
   });
@@ -132,6 +131,12 @@ describe('terminalReportKind: answers from a real xterm.js parser', () => {
 });
 
 describe('terminalReportKind: what a person sends stays input', () => {
+  it('treats a complete normal/X10-shaped input as typing', () => {
+    const message = `${ESC}[M *%`;
+    expect(terminalReportKind(message)).toBeNull();
+    expect(terminalReportBatchKind(message)).toBeNull();
+  });
+
   it.each<[string, string]>([
     ['a printable key', 'a'],
     ['a word', 'hello'],
@@ -228,8 +233,8 @@ describe('terminalReportKind: what a person sends stays input', () => {
     ['a mode state past 4', `${ESC}[?1004;5$y`],
     ['an impossible mouse button code', `${ESC}[<999999;1;1M`],
     ['a mouse coordinate past the supported bound', `${ESC}[<35;10001;1M`],
-    ['an impossible X10 button code', `${ESC}[M${String.fromCharCode(128, 42, 37)}`],
-    ['an X10 coordinate below one', `${ESC}[M${String.fromCharCode(32, 32, 37)}`],
+    ['a wheel report with a release terminator', `${ESC}[<64;10;5m`],
+    ['a movement report with a release terminator', `${ESC}[<32;10;5m`],
     ['a cursor row of 0', `${ESC}[0;1R`],
     ['a number with a leading zero', `${ESC}[01;1R`],
     ['device attributes under another terminal name', `${ESC}[?6c`],
@@ -262,7 +267,7 @@ describe('complete mouse reports and independent input frames', () => {
       { data: `${ESC}[<35;12;`, kind: null },
       { data: '7M', kind: null },
       { data: `${ESC}[<35;12;7M`, kind: 'mouse' },
-      { data: `${ESC}[M *%`, kind: 'mouse' },
+      { data: `${ESC}[M *%`, kind: null },
     ]);
   });
 

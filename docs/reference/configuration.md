@@ -77,14 +77,14 @@ either day can match. When either starts with `*`, both must match.
 Checks start at the next UTC minute. Missed minutes are discarded.
 
 Typing into a session starts a 10-second wait for both scheduled prompts
-and mailbox nudges. Each further typed input restarts the wait. Complete mouse
-reports (SGR or normal/X10) and focus in/out reports from a viewer, or sent as
-one API input, are forwarded unchanged to the programme but do not count as
-typing or interrupt a nudge. A write containing a keyboard byte still counts
-as typing. Each viewer frame or API input is classified on its own: a split
-SGR or normal/X10 report, any incomplete prefix, and a keyboard write mixed
-with a report count as typing and are forwarded immediately. Report batches
-over 128 bytes also count as typing. Mouse button codes and coordinates are
+and mailbox nudges. Each further typed input restarts the wait. Complete SGR
+mouse and focus in/out reports from a viewer, or sent as one API input, are
+forwarded unchanged to the programme but do not count as typing or interrupt a
+nudge. The viewer does not forward normal/X10 mouse reports; X10-shaped API
+input counts as typing. Each viewer frame or API input is classified on its
+own. A split SGR report, an incomplete prefix, or a keyboard write mixed with
+a report counts as typing and is forwarded immediately. Report batches over
+128 bytes also count as typing. Mouse button codes and coordinates are
 limited to values the bundled terminal can emit. The bundled terminal does not
 send urxvt 1015 reports, so that shape counts as typing. A confirmed typed
 submission ends the wait early. During the wait a scheduled run skips with reason
