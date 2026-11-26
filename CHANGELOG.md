@@ -7,6 +7,10 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Sessions started from a daemon launched inside an agent tool shell no longer inherit that shell's `NO_COLOR` through an `"all"` dashboard profile or global passthrough. Explicitly named values remain available.
+
 ## [0.5.0] - 2026-11-26
 
 Submit by default for known agents, dashboard Auto fit, a confirmed daemon stop, a configurable launch allowance and fixes for Hermes, Codex and dashboard panes.
@@ -21,7 +25,6 @@ Submit by default for known agents, dashboard Auto fit, a confirmed daemon stop,
 
 ### Fixed
 
-- Sessions started from a daemon launched inside an agent tool shell no longer inherit that shell's `NO_COLOR` through an `"all"` dashboard profile or global passthrough. Explicitly named values remain available.
 - A delayed Enlarge fit no longer runs after the same dashboard pane is restored, preventing a duplicate take of its restored grid.
 - Explicit submit to Codex is no longer withheld as "not seen" in fast mode, whose footer adds a word the check did not accept, or while a slash command suggestion is shown above the input.
 - Auto fit now fits an above-floor dashboard pane when its live grid controller leaves. An explicit unheld resize lasts until a real layout change, deliberate Fit or later controller grid choice, including across a pane reconnect. A reconnecting pane registers its layout before fitting and retries one stale layout refusal.
