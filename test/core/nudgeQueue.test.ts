@@ -126,7 +126,8 @@ describe('what lies below a busy composer', () => {
     styled: rows.map((text) => ({ text, spans: rules.includes(text)
       ? [{ from: 0, to: text.length, fg, bg: null, bold: false, dim, italic: false, inverse: false }] : [] })),
   });
-  const claudeBusy = (below: string[]) => inked(['❯ earlier request', '✻ Thinking… (12s · ↓ 300 tokens)', claudeRule, '❯',
+  const claudeBusy = (below: string[], draft = '') => inked(['❯ earlier request', '✻ Thinking… (12s · ↓ 300 tokens)',
+    claudeRule, draft === '' ? '❯' : `❯\u00a0${draft}`,
     claudeRule, ...below], [claudeRule], '#888888', false);
   const museBusy = (below: string[]) => inked(['❯ earlier request', '◇ Calling tools (12s · esc to interrupt)', museTop, '❯',
     claudeRule, ...below], [museTop, claudeRule], '#676c74', true);
@@ -139,6 +140,23 @@ describe('what lies below a busy composer', () => {
     // A background-task list is free text: the nudge waits for the turn to end.
     expect(muse.nudge!.readiness(museBusy(['main · ↓ to select', '└ ◇ Run the build  running',
       '  muse-wonder-1.0 · high · C:/work/project · Launch overrides']))).toBe('busy');
+  });
+
+  it('accepts a background-task count in any mode-line item position', () => {
+    const status = '  Opus 5.5 medium █░░░░░░░░░ 6%';
+    const modes = [
+      '  ⏵⏵ auto mode on · 1 background task · esc to interrupt · ↓ to manage',
+      '  ⏵⏵ auto mode on · esc to interrupt · 3 background tasks · ↓ to manage',
+      '  ⏵⏵ auto mode on · esc to interrupt · ↓ to manage · 3 background tasks',
+    ];
+    for (const mode of modes) {
+      const empty = claudeBusy([status, mode]);
+      expect(nudgeVerdict(claude, { ...empty, viewportRows: 24, unchangedMs: 0,
+        composerUnchangedMs: NUDGE_QUIET_MS })).toEqual({ ready: true, queued: true });
+      const line = '[ShellPuppet] Message m1 is waiting.';
+      expect(claude.nudge!.readiness({ ...claudeBusy([status, mode], line), expectedDraft: line })).toBe('ready');
+    }
+    expect(claude.nudge!.readiness(claudeBusy([status, modes[1]!, '  Choose an option']))).toBe('busy');
   });
 
   it('never queues when a panel is painted below the composer', () => {
