@@ -1,7 +1,7 @@
 /**
  * ShellPuppet pane: the terminal client for one session in one container.
  *
- * It owns frame handling, typing (with term.onData registered once), sizing,
+ * It owns frame handling, input (with term.onData and term.onBinary registered once), sizing,
  * reconnect and badges for one session. The page provides the container and
  * badge elements, and wires up its controls.
  *
@@ -9,13 +9,11 @@
  * live stream and the exit notice); TEXT frames are JSON control messages:
  * `identity`, `geometry`, `input-source`, `input-refused`, `exited`,
  * `prompt-stall`, `prompt-clear`, `session-stalled` and `session-stall-clear`.
- * What this pane sends is text: a JSON
- * resize message, or bytes for the program, which are either keystrokes or
- * the terminal's own answers to the program's queries. The daemon tells those
- * two apart.
+ * This pane sends text frames for JSON controls and onData input, and binary
+ * frames for onBinary input. The latter contains one byte per character.
  *
  * Three rules shape the pane:
- * - `term.onData` is registered exactly ONCE, never inside the connect path.
+ * - `term.onData` and `term.onBinary` are registered exactly ONCE, outside the connect path.
  *   Registering per-connect would stack a listener per reconnect and send
  *   every keystroke N times.
  * - The pane measures what grid this window would like, and asks
@@ -874,6 +872,12 @@ window.ShellPuppetPane = (() => {
     term.onData((data) => {
       if (destroyed || sessionEnded || readOnly) return;
       if (ws && ws.readyState === 1) ws.send(data);
+    });
+    term.onBinary((data) => {
+      if (destroyed || sessionEnded || readOnly || !ws || ws.readyState !== 1) return;
+      const bytes = new Uint8Array(data.length);
+      for (let i = 0; i < data.length; i++) bytes[i] = data.charCodeAt(i);
+      ws.send(bytes);
     });
 
     function showReadOnly() {

@@ -7,6 +7,10 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Viewer and dashboard panes now forward default-encoded mouse reports to the session byte-for-byte, including coordinates above column 95.
+
 ## [0.5.0] - 2026-11-26
 
 Submit by default for known agents, dashboard Auto fit, a confirmed daemon stop, a configurable launch allowance and fixes for Hermes, Codex and dashboard panes.
