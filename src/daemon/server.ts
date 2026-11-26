@@ -3055,6 +3055,14 @@ export class Daemon {
         return { outcome: 'aborted', reason };
       }
     } catch (error) {
+      const pendingBody = session.nudgePendingBodyMeta();
+      if (ids.length > 0 && pendingBody.pendingBody) {
+        const reason = error instanceof SessionInputFailedError ? 'input-failed'
+          : error instanceof SessionProgramEndedError ? 'session-ended' : 'write-failed';
+        this.audit.record('daemon', 'nudge-aborted', session.id, {
+          messageIds: ids, count: ids.length, reason, ...pendingBody,
+        });
+      }
       if (error instanceof SessionInputFailedError) return { outcome: 'skipped', reason: 'input-failed' };
       if (error instanceof SessionProgramEndedError) return { outcome: 'skipped', reason: 'session-ended' };
       throw error;
