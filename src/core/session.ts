@@ -828,6 +828,11 @@ export class Session implements WaitTarget {
   private inputQueueVersion = 0;
   /** A nudge body accepted by the PTY without a confirmed submit. */
   private pendingNudgeLine: string | null = null;
+  private pendingNudgeTypedChars = 0;
+  private pendingNudgeWholeBody = false;
+  private pendingNudgeInputVersion = 0;
+  private pendingNudgeQueueVersion = 0;
+  private pendingNudgeAuditRecorded = false;
   private nudgeSchedule?: string;
   private writingNudge = false;
   private pendingNudgeIds: string[] = [];
@@ -1388,6 +1393,21 @@ export class Session implements WaitTarget {
   }
 
   nudgePendingLine(): string | null { return this.pendingNudgeLine; }
+  nudgePendingBodyMeta(): { pendingBody: boolean; typedChars: number; submitSent: boolean } {
+    return { pendingBody: this.pendingNudgeLine !== null && this.pendingNudgeTypedChars > 0,
+      typedChars: this.pendingNudgeTypedChars, submitSent: false };
+  }
+  nudgePendingSafeToSubmit(): boolean {
+    return this.pendingNudgeLine !== null && this.pendingNudgeWholeBody &&
+      this.pendingNudgeTypedChars === this.pendingNudgeLine.length && !this.pendingNudgeTouched &&
+      this.pendingNudgeInputVersion === this.inputVersion &&
+      this.pendingNudgeQueueVersion === this.inputQueueVersion;
+  }
+  nudgePendingAuditOnce(): boolean {
+    if (this.pendingNudgeAuditRecorded) return false;
+    this.pendingNudgeAuditRecorded = true;
+    return true;
+  }
   pendingSchedule(): string | undefined { return this.pendingNudgeLine === null ? undefined : this.nudgeSchedule; }
   nudgePendingIds(): readonly string[] { return this.pendingNudgeIds; }
   nudgePendingUntouched(): boolean { return !this.pendingNudgeTouched; }
@@ -1411,6 +1431,9 @@ export class Session implements WaitTarget {
     if (!(this.pendingTurnBusy || Date.now() - this.pendingQuietSince >= this.pendingNudgeSettleMs)) return false;
     this.pendingNudgeLine = null;
     this.pendingNudgeIds = [];
+    this.pendingNudgeTypedChars = 0;
+    this.pendingNudgeWholeBody = false;
+    this.pendingNudgeAuditRecorded = false;
     this.pendingNudgeTouched = false;
     this.pendingTouchRefusalAudited = false;
     this.pendingTurnSubmitted = false;
@@ -1424,12 +1447,15 @@ export class Session implements WaitTarget {
       this.refuseIfInputFailed();
       await this.renderer.flush();
       this.refuseIfEnded();
-      if (this.pendingNudgeLine !== line || this.pendingNudgeTouched ||
+      if (this.pendingNudgeLine !== line || !this.nudgePendingSafeToSubmit() ||
         !ready(this.renderer.snapshot().screen) ||
         !this.nudgeReadyWithLine(line)) return false;
       this.pty.write(this.nudgeSubmit());
       this.pendingNudgeLine = null;
       this.pendingNudgeIds = [];
+      this.pendingNudgeTypedChars = 0;
+      this.pendingNudgeWholeBody = false;
+      this.pendingNudgeAuditRecorded = false;
       this.pendingNudgeTouched = false;
       this.pendingTouchRefusalAudited = false;
       this.pendingTurnSubmitted = false;
@@ -1650,13 +1676,19 @@ export class Session implements WaitTarget {
       if (nudge) {
         this.pendingNudgeLine = body;
         this.pendingNudgeIds = [...messageIds];
+        this.pendingNudgeTypedChars = 0;
+        this.pendingNudgeWholeBody = false;
+        this.pendingNudgeInputVersion = this.inputVersion;
+        this.pendingNudgeQueueVersion = this.inputQueueVersion;
+        this.pendingNudgeAuditRecorded = false;
         this.pendingNudgeTouched = false;
         this.pendingTouchRefusalAudited = false;
         this.pendingTurnSubmitted = false;
         this.pendingTurnBusy = false;
         this.pendingQuietSince = Date.now();
       }
-      await this.writeData(body);
+      await this.writeData(body, nudge ? (accepted) => { this.pendingNudgeTypedChars += accepted.length; } : undefined);
+      if (nudge) this.pendingNudgeWholeBody = this.pendingNudgeTypedChars === body.length;
       const bodyInputVersion = this.inputVersion;
       const bodyWrittenAt = Date.now();
       try {
@@ -1732,6 +1764,9 @@ export class Session implements WaitTarget {
         if (nudge) {
           this.pendingNudgeLine = null;
           this.pendingNudgeIds = [];
+          this.pendingNudgeTypedChars = 0;
+          this.pendingNudgeWholeBody = false;
+          this.pendingNudgeAuditRecorded = false;
           this.pendingNudgeTouched = false;
           this.pendingTouchRefusalAudited = false;
           this.pendingTurnSubmitted = false;
@@ -1813,10 +1848,11 @@ export class Session implements WaitTarget {
       message: 'Submit key retried once after the typed text remained in the composer.' };
   }
 
-  private async writeData(data: string): Promise<void> {
+  private async writeData(data: string, onAccepted?: (data: string) => void): Promise<void> {
     if (data.length <= WRITE_CHUNK_CHARS) {
       if (data !== '' && this.pendingNudgeLine !== null) this.pendingQuietSince = Date.now();
       this.pty.write(data);
+      onAccepted?.(data);
       return;
     }
 
@@ -1832,6 +1868,7 @@ export class Session implements WaitTarget {
       this.lastWriteWrapped = true;
       if (this.pendingNudgeLine !== null) this.pendingQuietSince = Date.now();
       this.pty.write(`${PASTE_START}${body}${PASTE_END}${trailer}`);
+      onAccepted?.(data);
       return;
     }
     this.lastWriteWrapped = false;
@@ -1852,6 +1889,7 @@ export class Session implements WaitTarget {
 
       if (this.pendingNudgeLine !== null) this.pendingQuietSince = Date.now();
       this.pty.write(data.slice(offset, end));
+      onAccepted?.(data.slice(offset, end));
       offset = end;
       if (offset < data.length) {
         await new Promise((resolve) => setTimeout(resolve, WRITE_CHUNK_DELAY_MS));

@@ -17,6 +17,8 @@ it('submits the original visible body after another message arrives', async () =
     nudgePendingLine: () => pendingLine,
     nudgePendingIds: () => [first.id],
     nudgePendingUntouched: () => true,
+    nudgePendingSafeToSubmit: () => true,
+    nudgePendingAuditOnce: () => true,
     nudgePendingTouchRefusal: () => false,
     clearConsumedNudge: () => Promise.resolve(false),
     nudgeReadyWithLine: (line: string) => visible && line === pendingLine,
@@ -46,38 +48,36 @@ it('submits the original visible body after another message arrives', async () =
   } });
 });
 
-it('submits an untouched pending body when its named message was read and another waits', async () => {
+it('keeps a pending body when a named message was read, even if another waits', async () => {
   const mailbox = new Mailbox({ enabled: true, policy: () => true });
   mailbox.register({ kind: 'session', id: 'recipient', name: 'recipient' });
   const sender = mailbox.claim('sender');
   const first = mailbox.send(sender.claimId, 'recipient', 'first');
   const pendingLine = buildNudge(mailbox.inbox('recipient', { markRead: false }));
   mailbox.inbox('recipient');
-  let visible = true;
-  let touched = false;
   let submits = 0;
-  let beforeSubmitCheck: (() => void) | undefined;
+  let pendingRecorded = false;
   const audit: { action: string; meta: Record<string, unknown> }[] = [];
   const session = {
     exited: false,
     nudgePendingLine: () => pendingLine,
     nudgePendingIds: () => [first.id],
-    nudgePendingUntouched: () => !touched,
+    nudgePendingUntouched: () => true,
+    nudgePendingSafeToSubmit: () => true,
+    nudgePendingAuditOnce: () => {
+      if (pendingRecorded) return false;
+      pendingRecorded = true;
+      return true;
+    },
     nudgePendingTouchRefusal: () => false,
     clearConsumedNudge: () => Promise.resolve(false),
-    nudgeReadyWithLine: (line: string) => visible && line === pendingLine,
+    nudgeReadyWithLine: (line: string) => line === pendingLine,
     nudgeInputVersion: () => 1,
     nudgeQueuedInputVersion: () => 0,
     nudgeScreenRevision: () => 0,
     getStalled: () => undefined,
     answerablePrompt: () => null,
-    submitPendingNudge: (_line: string, ready: (screen: string) => boolean) => {
-      beforeSubmitCheck?.();
-      beforeSubmitCheck = undefined;
-      if (!ready('screen')) return Promise.resolve(false);
-      submits++;
-      return Promise.resolve(true);
-    },
+    submitPendingNudge: () => { submits++; return Promise.resolve(true); },
     writeNudgeWithReason: () => { throw new Error('A second body must not be written'); },
   };
   const daemon = Object.create(Daemon.prototype) as Daemon;
@@ -90,22 +90,10 @@ it('submits an untouched pending body when its named message was read and anothe
   expect(await daemon['deliverNudge']('recipient')).toBe('done');
   expect(submits).toBe(0);
   const waiting = mailbox.send(sender.claimId, 'recipient', 'second');
-  touched = true;
   expect(await daemon['deliverNudge']('recipient')).toBe('wait');
-  touched = false;
-  visible = false;
-  expect(await daemon['deliverNudge']('recipient')).toBe('wait');
-  visible = true;
-  let later: ReturnType<typeof mailbox.send>;
-  beforeSubmitCheck = () => { later = mailbox.send(sender.claimId, 'recipient', 'third'); };
   expect(await daemon['deliverNudge']('recipient')).toBe('wait');
   expect(submits).toBe(0);
-  expect(await daemon['deliverNudge']('recipient')).toBe('sent');
-  expect(submits).toBe(1);
-  expect(mailbox.outbox(sender.claimId).find((entry) => entry.id === waiting.id)?.state).toBe('nudged');
-  expect(mailbox.outbox(sender.claimId).find((entry) => entry.id === later!.id)?.state).toBe('nudged');
-  expect(audit).toContainEqual({ action: 'nudge', meta: {
-    messageIds: [first.id], count: 1, waitingMessageIds: [waiting.id, later!.id],
-    staleMessageIds: [first.id],
-  } });
+  expect(mailbox.outbox(sender.claimId).find((entry) => entry.id === waiting.id)?.state).toBe('waiting');
+  expect(audit.filter((entry) => entry.action === 'nudge-pending')).toEqual([{ action: 'nudge-pending',
+    meta: { messageIds: [first.id], count: 1, reason: 'messages-changed' } }]);
 });

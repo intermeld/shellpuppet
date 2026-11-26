@@ -44,7 +44,8 @@ it('does not submit a pending line after a person has edited and restored it', a
     await eventually(() => session.nudgeReadyWithLine(line), 5_000);
     const audit = () => fs.existsSync(auditLogPath(home))
       ? fs.readFileSync(auditLogPath(home), 'utf8').split('\n').filter(Boolean)
-        .map((row) => JSON.parse(row) as { action: string; meta?: { reason?: string } }) : [];
+        .map((row) => JSON.parse(row) as { action: string; meta?: { reason?: string;
+          pendingBody?: boolean; typedChars?: number; submitSent?: boolean } }) : [];
     await eventually(() => audit().some((entry) => entry.action === 'nudge-aborted'), 10_000);
     expect(session.nudgePendingLine()).toBe(line);
     await td.daemon['nudges'].tick();
@@ -52,6 +53,10 @@ it('does not submit a pending line after a person has edited and restored it', a
     expect(session.nudgePendingLine()).toBe(line);
     expect(audit().some((entry) => entry.action === 'nudge-aborted' &&
       entry.meta?.reason === 'person-input-since')).toBe(true);
+    expect(audit().find((entry) => entry.action === 'nudge-aborted')?.meta)
+      .toMatchObject({ pendingBody: true, typedChars: line.length, submitSent: false });
+    expect(audit().filter((entry) => entry.action === 'nudge-pending' &&
+      entry.meta?.reason === 'person-input-since')).toHaveLength(1);
     await td.daemon['nudges'].tick();
     expect(fs.readFileSync(input, 'utf8')).toBe(`${line}x${line}`);
     expect(audit().filter((entry) => entry.action === 'nudge-aborted' &&

@@ -27,6 +27,7 @@ Submit by default for known agents, dashboard Auto fit, a confirmed daemon stop,
 
 ### Fixed
 
+- Mouse and focus reports no longer hold or abort message nudges; an aborted nudge retains and audits its line, and retries only when its original draft and unread messages are proven safe.
 - A delayed Enlarge fit no longer runs after the same dashboard pane is restored, preventing a duplicate take of its restored grid.
 - Explicit submit to Codex is no longer withheld as "not seen" in fast mode, whose footer adds a word the check did not accept, or while a slash command suggestion is shown above the input.
 - Auto fit now fits an above-floor dashboard pane when its live grid controller leaves. An explicit unheld resize lasts until a real layout change, deliberate Fit or later controller grid choice, including across a pane reconnect. A reconnecting pane registers its layout before fitting and retries one stale layout refusal.

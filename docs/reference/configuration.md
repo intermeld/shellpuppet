@@ -77,8 +77,16 @@ either day can match. When either starts with `*`, both must match.
 Checks start at the next UTC minute. Missed minutes are discarded.
 
 Typing into a session starts a 10-second wait for both scheduled prompts
-and mailbox nudges. Each further input restarts the wait. A confirmed typed
-submission ends it early. During the wait a scheduled run skips with reason
+and mailbox nudges. Each further typed input restarts the wait. Complete mouse
+reports (SGR or normal/X10) and focus in/out reports from a viewer, or sent as
+one API input, are forwarded unchanged to the programme but do not count as
+typing or interrupt a nudge. A write containing a keyboard byte still counts
+as typing. A viewer can split a mouse report after its distinctive prefix;
+ambiguous fragments such as a lone Escape count as typing so a key is never
+held waiting for more bytes. A report prefix that stays incomplete for 40 ms
+or exceeds 128 bytes is forwarded as typing. The bundled terminal does not
+send urxvt 1015 reports, so that shape counts as typing. A confirmed typed
+submission ends the wait early. During the wait a scheduled run skips with reason
 `recent-input`, including when `whenBusy` is `queue`.
 
 Save the file to apply an edit. Removing the section or file removes all
@@ -644,6 +652,18 @@ reason `queued-nudge-pending`. The nudge names the `session_inbox` MCP tool, so
 a session that should read messages needs the ShellPuppet MCP server. The daemon
 writes the line, pauses for at least 150 milliseconds, checks that the composer
 and waiting messages are unchanged, then sends the agent's submit key.
+If the check aborts after the body was written, the line remains pending.
+The daemon never erases it with backspaces. It submits that existing line only
+when the module proves the exact whole draft, no typing has arrived since the
+body began, and every message named by the line is still unread. It does not
+type the line twice. If the composer is positively empty after its quiet
+period, the daemon can clear the pending record and build a fresh nudge for
+waiting messages. An edited or unreadable composer, a partly accepted body,
+or a message already read through another route leaves the line pending for a
+person to resolve. The `nudge-aborted` audit records `pendingBody`,
+`typedChars`, and `submitSent` alongside its reason and message IDs; a
+`nudge-pending` record names the reason and message IDs once for an unsafe
+retry. Neither record includes message text.
 
 `allow` says who may message whom, in both directions:
 

@@ -57,7 +57,7 @@ describe('fixed message nudges through a real terminal', () => {
     }
   }, 45_000);
 
-  it('recovers a pending line after its named message was read through the inbox', async () => {
+  it('does not submit a pending line after its named message was read through the inbox', async () => {
     const home = makeTempHome('nudge-stale-pending-');
     const td = await startTestDaemon({ home, audit: createAuditor(home), promptScanIntervalMs: 30_000,
       messaging: { enabled: true, allow: [{ group: 'peers', members: ['sender'] }],
@@ -99,14 +99,12 @@ describe('fixed message nudges through a real terminal', () => {
       fs.writeFileSync(`${input}.paint`, 'paint');
       await eventually(() => session.nudgeReadyWithLine(line), 5_000);
       await td.daemon['nudges'].tick();
-      await eventually(() => fs.readFileSync(input, 'utf8') === `${line}\r`, 5_000);
-      expect((await outbox()).find((entry) => entry.id === second.body['id'])?.state).toBe('nudged');
-      const nudges = audit().filter((entry) => entry.action === 'nudge');
-      expect(nudges).toHaveLength(1);
-      expect(nudges[0]?.meta).toMatchObject({ messageIds: [first.body['id']],
-        waitingMessageIds: [second.body['id']], staleMessageIds: [first.body['id']] });
+      expect(fs.readFileSync(input, 'utf8')).toBe(line);
+      expect((await outbox()).find((entry) => entry.id === second.body['id'])?.state).toBe('waiting');
+      expect(audit().filter((entry) => entry.action === 'nudge')).toHaveLength(0);
+      expect(audit().filter((entry) => entry.action === 'nudge-pending')).toHaveLength(1);
       expect(fs.readFileSync(`${input}.events`, 'utf8').split('\n').filter(Boolean)
-        .map((row) => (JSON.parse(row) as { data: string }).data)).toEqual([line, '\r']);
+        .map((row) => (JSON.parse(row) as { data: string }).data)).toEqual([line]);
     } finally { await td.stop(); }
   }, 45_000);
 

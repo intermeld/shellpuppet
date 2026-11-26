@@ -2877,18 +2877,29 @@ export class Daemon {
     const pending = session.nudgePendingLine();
     if (pending !== null) {
       if (session.nudgePendingIds().length === 0) return 'wait';
-      const ids = unread.filter((entry) => entry.state === 'waiting').map((entry) => entry.id);
-      if (ids.length === 0) return 'done';
       const covered = session.nudgePendingIds();
-      if (!session.nudgePendingUntouched()) {
+      const auditPending = (reason: string): void => {
+        if (session.nudgePendingAuditOnce()) this.audit.record('daemon', 'nudge-pending', id, {
+          messageIds: [...covered], count: covered.length, reason,
+        });
+      };
+      const ids = unread.filter((entry) => entry.state === 'waiting').map((entry) => entry.id);
+      if (ids.length === 0) { auditPending('messages-changed'); return 'done'; }
+      if (!covered.every((messageId) => unread.some((entry) => entry.id === messageId))) {
+        auditPending('messages-changed');
+        return 'wait';
+      }
+      if (!session.nudgePendingSafeToSubmit()) {
         if (session.nudgeReadyWithLine(pending) && session.nudgePendingTouchRefusal()) {
           this.audit.record('daemon', 'nudge-aborted', id, {
             messageIds: [...covered], count: covered.length, reason: 'person-input-since',
+            ...session.nudgePendingBodyMeta(),
           });
         }
+        auditPending('person-input-since');
         return 'wait';
       }
-      if (!session.nudgeReadyWithLine(pending)) return 'wait';
+      if (!session.nudgeReadyWithLine(pending)) { auditPending('line-not-seen'); return 'wait'; }
       const inputVersion = session.nudgeInputVersion();
       const queuedInputVersion = session.nudgeQueuedInputVersion();
       const screenRevision = session.nudgeScreenRevision();
@@ -2896,10 +2907,13 @@ export class Daemon {
         const waitingIds = this.mailbox.inbox(id, { markRead: false })
           .filter((entry) => entry.state === 'waiting').map((entry) => entry.id);
         return !session.exited && !session.getStalled() &&
+          session.nudgePendingSafeToSubmit() &&
           session.nudgeInputVersion() === inputVersion &&
           session.nudgeQueuedInputVersion() === queuedInputVersion &&
           session.nudgeScreenRevision() === screenRevision &&
           session.answerablePrompt(screen) === null && session.nudgePendingIds().length > 0 &&
+          covered.every((messageId) => this.mailbox.inbox(id, { markRead: false })
+            .some((entry) => entry.id === messageId)) &&
           waitingIds.length === ids.length &&
           ids.every((messageId) => waitingIds.includes(messageId));
       });
@@ -2907,8 +2921,10 @@ export class Daemon {
         if (session.nudgePendingTouchRefusal()) {
           this.audit.record('daemon', 'nudge-aborted', id, {
             messageIds: [...covered], count: covered.length, reason: 'person-input-since',
+            ...session.nudgePendingBodyMeta(),
           });
         }
+        auditPending('person-input-since');
         return 'wait';
       }
       this.mailbox.markNudged(ids);
@@ -2946,7 +2962,8 @@ export class Daemon {
       return ids.every(messageId => current.some(entry => entry.id === messageId && entry.state === 'waiting'));
     });
     if (result.outcome === 'aborted') {
-      this.audit.record('daemon', 'nudge-aborted', id, { messageIds: ids, count: ids.length, reason: result.reason });
+      this.audit.record('daemon', 'nudge-aborted', id, { messageIds: ids, count: ids.length, reason: result.reason,
+        ...session.nudgePendingBodyMeta() });
     }
     if (result.outcome !== 'sent' && result.outcome !== 'queued') return 'wait';
     this.mailbox.markNudged(ids);
