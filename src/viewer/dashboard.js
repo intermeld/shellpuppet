@@ -69,6 +69,7 @@
     for (const group of messageGroups) options.push({ value: `group:${group.group}`, label: `Group: ${group.group}` });
     // A badge can open the view before the history arrives; keep its filter
     // rather than dropping it because no row has named that session yet.
+    if (messageFilter.startsWith('group:') && !options.some(option => option.value === messageFilter)) messageFilter = '';
     if (messageFilter && !options.some((option) => option.value === messageFilter)) {
       const id = messageFilter.startsWith('session:') ? messageFilter.slice(8) : messageFilter;
       const pane = panes.get(id);
@@ -95,7 +96,7 @@
     }).sort((a, b) => b.time - a.time || b.id.localeCompare(a.id));
     messagesOff.hidden = messagingEnabled;
     messagesEmpty.hidden = !messagingEnabled || filtered.length > 0;
-    document.getElementById('messages-content').hidden = !messagingEnabled || filtered.length === 0;
+    document.getElementById('messages-content').hidden = filtered.length === 0;
     const focusedId = document.activeElement?.dataset?.messageId;
     messagesList.replaceChildren();
     for (const entry of filtered) {
@@ -1277,7 +1278,7 @@
       renderShareCount();
       return;
     }
-    if (frame.type === 'message' || frame.type === 'message-state') {
+    if (frame.type === 'message' || frame.type === 'message-state' || frame.type === 'messaging-updated') {
       scheduleMessageRefresh();
       return;
     }

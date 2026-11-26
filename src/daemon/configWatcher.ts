@@ -4,7 +4,7 @@ import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { join } from 'node:path';
 import { promisify } from 'node:util';
-import { configPath } from './paths.js';
+import { configPath, ensureHome } from './paths.js';
 
 export interface ConfigRead {
   text?: string;
@@ -47,22 +47,35 @@ export class ConfigPermissions {
 
   constructor(private readonly home: string) {}
 
-  check = (includeFile: boolean): Promise<void> => {
-    if (!this.child) {
-      const script = `
+  secureHome(): void {
+    // Load PowerShell while the existing home hardener runs. The actual ACL read
+    // waits for hardening to finish, within the normal daemon startup deadline.
+    try {
+      if (process.platform === 'win32') this.startReader();
+      ensureHome(this.home);
+    } catch (error) { this.close(); throw error; }
+  }
+
+  private startReader(): ChildProcessWithoutNullStreams {
+    if (this.child) return this.child;
+    const script = `
 while ($null -ne ($line = [Console]::ReadLine())) {
   try { $ok = Test-ConfigPermissions ($line -eq '1') } catch { $ok = $false }
   [Console]::WriteLine([int]$ok)
   [Console]::Out.Flush()
 }`;
-      const child = this.child = spawn(powershell(), argsFor(script), { windowsHide: true, env: aclEnv(this.home), stdio: 'pipe' });
-      child.stderr.resume();
-      createInterface({ input: child.stdout }).on('line', line => { if (this.child === child) this.reply?.(line === '1'); });
-      const lost = () => { if (this.child === child) this.close(); };
-      child.on('error', lost);
-      child.stdin.on('error', lost);
-      child.once('close', lost);
-    }
+    const child = this.child = spawn(powershell(), argsFor(script), { windowsHide: true, env: aclEnv(this.home), stdio: 'pipe' });
+    child.stderr.resume();
+    createInterface({ input: child.stdout }).on('line', line => { if (this.child === child) this.reply?.(line === '1'); });
+    const lost = () => { if (this.child === child) this.close(); };
+    child.on('error', lost);
+    child.stdin.on('error', lost);
+    child.once('close', lost);
+    return child;
+  }
+
+  check = (includeFile: boolean): Promise<void> => {
+    const child = this.startReader();
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => this.close(), 10_000).unref();
       this.reply = ok => {
@@ -70,7 +83,7 @@ while ($null -ne ($line = [Console]::ReadLine())) {
         this.reply = undefined;
         if (ok) resolve(); else reject(new Error(permissionProblem));
       };
-      this.child!.stdin.write(includeFile ? '1\n' : '0\n');
+      child.stdin.write(includeFile ? '1\n' : '0\n');
     });
   };
 

@@ -20,9 +20,9 @@ import type { WebSocket } from 'ws';
 import { SessionManager, PolicyViolationError, SessionStartError } from '../core/manager.js';
 import { Mailbox, MailboxError, NAME_PATTERN, buildNudge } from '../core/mailbox.js';
 import type { MailboxEntry, SavedClaim } from '../core/mailbox.js';
-import { buildMessagingPolicy, DEFAULT_NUDGE_INTERVAL_MS, DEFAULT_NUDGES_PER_MINUTE } from './config.js';
+import { DEFAULT_NUDGE_INTERVAL_MS, DEFAULT_NUDGES_PER_MINUTE } from './config.js';
 import { NudgeScheduler } from './nudgeScheduler.js';
-import { ConfigReload, parseConfigCandidate, unavailableConfig } from './configReload.js';
+import { ConfigReload, parseConfigCandidate, prepareMessaging, unavailableConfig } from './configReload.js';
 import type { ConfigCandidate } from './configReload.js';
 import { ConfigPermissions, ConfigWatcher, readPrivateConfig } from './configWatcher.js';
 import { ScheduleStore, PromptScheduler } from './schedules.js';
@@ -92,7 +92,6 @@ import type { Auditor } from './audit.js';
 import {
   claimDaemonState,
   daemonStatePath,
-  ensureHome,
   writePrivateRecord,
   inspectDaemonState,
   readDaemonState,
@@ -779,6 +778,7 @@ export class Daemon {
   private readonly pendingProfileStarts = new Set<Session>();
   private readonly claimTimes: number[] = [];
   private claimCount = 0;
+  private expiredClaimsNeedSave = false;
   private folderPickerBusy = false;
   private folderPickerAbort: AbortController | null = null;
   private folderPickerDone: Promise<void> | null = null;
@@ -827,20 +827,20 @@ export class Daemon {
       this.endMailboxParticipant(id);
       this.sessionFeed.remove(id);
     });
+    const initialMessaging = prepareMessaging(options.messaging);
+    const live = () => this.reload?.state ?? initialMessaging;
     this.mailbox = new Mailbox({
-      enabled: options.messaging?.enabled === true,
-      reservedNames: new Set((options.messaging?.allow ?? []).flatMap((rule) => rule === 'parent-child' ? [] : rule.members)),
-      claimIdleMinutes: options.messaging?.claimIdleMinutes,
+      get enabled() { return live().messaging?.enabled === true; },
+      get reservedNames() { return live().reservedNames; },
+      get claimIdleMinutes() { return live().messaging?.claimIdleMinutes; },
+      get policy() { return live().policy; },
       now: () => this.now(),
-      policy: buildMessagingPolicy(options.messaging, {
-        parentOf: (id) => this.manager.get(id)?.parent,
-      }),
     });
     this.nudges = new NudgeScheduler({
       now: () => this.now(),
-      intervalMs: options.messaging?.nudgeIntervalMs ?? DEFAULT_NUDGE_INTERVAL_MS,
-      perMinute: options.messaging?.nudgesPerMinute ?? DEFAULT_NUDGES_PER_MINUTE,
-      deliver: (id) => this.deliverNudge(id),
+      get intervalMs() { return live().messaging?.nudgeIntervalMs ?? DEFAULT_NUDGE_INTERVAL_MS; },
+      get perMinute() { return live().messaging?.nudgesPerMinute ?? DEFAULT_NUDGES_PER_MINUTE; },
+      deliver: (id, eligible) => this.deliverNudge(id, eligible),
     });
     this.promptScheduler = new PromptScheduler(() => this.schedules, () => this.now(),
       (schedule, current) => this.deliverScheduled(schedule, current),
@@ -925,8 +925,8 @@ export class Daemon {
 
   // ------------------------------------------------------------------ start
   private async prepareConfig(home: string): Promise<void> {
-    if (!this.options.bootConfig) ensureHome(home);
     this.configPermissions = this.options.bootConfig?.permissions ?? new ConfigPermissions(home);
+    if (!this.options.bootConfig) this.configPermissions.secureHome();
     const read = () => readPrivateConfig(home, this.configPermissions?.check);
     let boot = this.options.bootConfig?.candidate;
     if (!boot) {
@@ -945,7 +945,14 @@ export class Daemon {
       ownsHome,
       log: (message, reason) => reason ? this.logger.warn(message, { reason }) : this.logger.info(message),
       audit: (action, sections) => append('daemon', action, undefined, { sections }),
-      changed: () => undefined,
+      changed: sections => {
+        if (!sections.includes('messaging')) return;
+        this.mailbox.permissionsChanged();
+        if (this.reload?.state.messaging?.enabled) {
+          for (const id of this.mailbox.waitingSessions()) this.nudges.queue(id);
+        } else this.nudges.clearPending();
+        this.emitDashboardMessageEvent({ type: 'messaging-updated' });
+      },
     }, this.options.bootConfig ? undefined : 'no-window');
     this.configWatcher = new ConfigWatcher({
       watch: notify => fs.watch(home, { persistent: false }, (_event, name) => notify(name)),
@@ -1050,7 +1057,7 @@ export class Daemon {
     try {
       const rows: unknown = JSON.parse(fs.readFileSync(claimsFile, 'utf8'));
       if (!Array.isArray(rows)) throw new Error('Expected saved launcher claims to be an array.');
-      this.claimCount = this.mailbox.restoreClaims(rows, this.options.messaging?.enabled ? this.launchProfiles.sessionLaunch ?? [] : []);
+      this.claimCount = this.mailbox.restoreClaims(rows, this.reload?.state.messaging?.enabled ? this.launchProfiles.sessionLaunch ?? [] : []);
       this.claimsRestored = true;
       this.saveLauncherClaims();
     } catch (error) {
@@ -1797,17 +1804,13 @@ export class Daemon {
       return;
     }
     const messages = this.mailbox.log();
-    const counts: Record<string, number> = {};
-    for (const entry of messages) {
-      if (entry.state === 'waiting' || entry.state === 'nudged')
-        counts[entry.to.id] = (counts[entry.to.id] ?? 0) + 1;
-    }
+    const counts = this.mailbox.unreadCounts();
     const summary = url.searchParams.get('summary') === '1';
-    const groups = (this.options.messaging?.allow ?? []).filter((rule) => typeof rule !== 'string')
+    const groups = (this.reload?.state.messaging?.allow ?? []).filter((rule) => typeof rule !== 'string')
       .map((rule) => ({ group: rule.group, members: rule.members, roles: rule.roles ?? [] }));
     this.audit.record('dashboard', 'msg-log', undefined, { count: messages.length });
     this.lastActivity = Date.now();
-    json(res, 200, { enabled: this.options.messaging?.enabled === true,
+    json(res, 200, { enabled: this.reload?.state.messaging?.enabled === true,
       counts, ...(summary ? {} : { messages, groups }) });
   }
 
@@ -2244,6 +2247,10 @@ export class Daemon {
     }
 
     if (this.stopping) { json(res, 503, { error: 'The daemon is stopping.' }); return; }
+    if (body['name'] !== undefined && this.isReservedClaimName(requestedName)) {
+      json(res, 400, { error: 'That name is reserved for an outside claim.' });
+      return;
+    }
     if (launcher) {
       const current = this.grantedLauncher(req, res);
       if (!current) return;
@@ -2850,6 +2857,10 @@ export class Daemon {
     this.lapseIdleClaims();
     let id = this.callerContext.getStore();
     if (id === undefined) {
+      if (!this.reload?.state.messaging?.enabled) {
+        json(res, 403, { error: 'Session launch permission required.' });
+        return undefined;
+      }
       const claim = this.presentedClaim(req, false);
       if (claim.refused) {
         json(res, 403, { error: 'Session launch permission required.', ...invalidClaim });
@@ -2877,7 +2888,7 @@ export class Daemon {
     this.queuedMessageNudges.delete(id);
     this.inboxReadVersions.delete(id);
     // Audit before end can trim old tombstones from retained history.
-    for (const entry of this.mailbox.log({ participantId: id })) {
+    for (const entry of this.mailbox.log()) {
       if (entry.to.id === id && (entry.state === 'waiting' || entry.state === 'nudged')) {
         this.messageAudit('msg-undelivered', entry);
       }
@@ -2893,14 +2904,21 @@ export class Daemon {
   }
 
   private lapseIdleClaims(): void {
+    const retryingSave = this.expiredClaimsNeedSave;
     for (const id of this.mailbox.expiredClaims()) {
+      const name = this.mailbox.participant(id)?.name;
+      if (name && this.launchProfiles.sessionLaunch?.includes(name)) this.expiredClaimsNeedSave = true;
       this.claimCount--;
       this.endMailboxParticipant(id);
       this.audit.record('daemon', 'msg-lapse', id);
     }
+    if (this.expiredClaimsNeedSave) {
+      try { this.saveLauncherClaims(); this.expiredClaimsNeedSave = false; }
+      catch { if (!retryingSave) this.logger.warn('Could not remove expired launcher claims from disk.'); }
+    }
   }
 
-  private async deliverNudge(id: string): Promise<'sent' | 'wait' | 'done'> {
+  private async deliverNudge(id: string, eligible = () => true): Promise<'sent' | 'wait' | 'done'> {
     const session = this.manager.get(id);
     if (session === undefined || session.exited || this.mailbox.participant(id)?.kind !== 'session') {
       this.queuedMessageNudges.delete(id);
@@ -2938,7 +2956,8 @@ export class Daemon {
       const submitted = await session.submitPendingNudge(pending, (screen) => {
         const waitingIds = this.mailbox.inbox(id, { markRead: false })
           .filter((entry) => entry.state === 'waiting').map((entry) => entry.id);
-        return !session.exited && !session.getStalled() &&
+        return eligible() && covered.every(messageId => this.mailbox.canReceive(id, messageId)) &&
+          !session.exited && !session.getStalled() &&
           session.nudgeInputVersion() === inputVersion &&
           session.nudgeQueuedInputVersion() === queuedInputVersion &&
           session.nudgeScreenRevision() === screenRevision &&
@@ -2983,11 +3002,12 @@ export class Daemon {
     if (ids.length === 0) return 'done';
     if (!session.hasPainted() || !session.nudgeReady(this.now())) return 'wait';
     const line = buildNudge(unread);
+    const permission = this.mailbox.deliveryPermission(id, unread.map(entry => entry.id));
     const readVersion = this.inboxReadVersions?.get(id) ?? 0;
     const result = await this.deliverLine(session, line, undefined, ids, () => {
       const current = this.mailbox.inbox(id, { markRead: false });
-      return ids.every(messageId => current.some(entry => entry.id === messageId && entry.state === 'waiting'));
-    });
+      return eligible() && permission() && ids.every(messageId => current.some(entry => entry.id === messageId && entry.state === 'waiting'));
+    }, undefined, permission);
     if (result.outcome === 'aborted') {
       this.audit.record('daemon', 'nudge-aborted', id, { messageIds: ids, count: ids.length, reason: result.reason });
     }
@@ -3036,7 +3056,7 @@ export class Daemon {
   }
 
   private async deliverLine(session: Session, line: string, whenBusy: Schedule['whenBusy'] | undefined,
-    ids: string[], currentDelivery: () => boolean, schedule?: string): Promise<ScheduleOutcome> {
+    ids: string[], currentDelivery: () => boolean, schedule?: string, permission?: () => boolean): Promise<ScheduleOutcome> {
     if (!session.hasPainted()) return { outcome: 'skipped', reason: 'unknown' };
     const inputVersion = session.nudgeInputVersion();
     const queuedInputVersion = session.nudgeQueuedInputVersion();
@@ -3074,7 +3094,7 @@ export class Daemon {
     };
     try {
       const result = await session.writeNudgeWithReason(line + session.nudgeSubmit(queued), ready, ids,
-        () => failedCheck, schedule, queued);
+        () => failedCheck, schedule, queued, permission);
       if (result === 'wait') return { outcome: 'skipped', reason: session.nudgePendingLine() !== null ? 'pending' : failedCheck };
       if (result.startsWith('aborted-')) {
         const reason = result.slice('aborted-'.length);
@@ -3101,19 +3121,20 @@ export class Daemon {
         if (!this.mailbox.nameTaken(candidate)) { name = candidate; break; }
       }
     }
-    this.mailbox.register({ kind: 'session', id: session.id, name, role: session.role });
+    this.mailbox.register({ kind: 'session', id: session.id, name, role: session.role, parent: session.parent });
     if (NAME_PATTERN.test(session.label)) session.label = name;
     session.onExit(() => this.endMailboxParticipant(session.id));
     if (session.exited) this.endMailboxParticipant(session.id);
   }
 
   private isReservedClaimName(name: string): boolean {
-    return (this.options.messaging?.allow ?? []).some((rule) => rule !== 'parent-child' && rule.members.includes(name));
+    return this.reload?.state.reservedNames.has(name) === true;
   }
 
   private async handleMessages(req: http.IncomingMessage, res: http.ServerResponse,
     url: URL, segments: string[], actor: string): Promise<void> {
-    if (this.options.messaging?.enabled !== true) {
+    const releasing = req.method === 'DELETE' && segments[1] === 'claims' && segments.length === 3;
+    if (!this.reload?.state.messaging?.enabled && !releasing) {
       json(res, 403, { error: 'Messaging is off.' });
       return;
     }
@@ -3207,6 +3228,7 @@ export class Daemon {
     }
     if (req.method === 'POST' && route === undefined) {
       const body = await readBody(req);
+      this.lapseIdleClaims();
       const result = this.mailbox.send(caller, body['to'] as string, body['text'] as string);
       json(res, 201, result);
       return;
@@ -3242,8 +3264,10 @@ export class Daemon {
           ...(url.searchParams.has('from') ? { from: url.searchParams.get('from')! } : {}),
           timeoutMs: Math.min(requested, MAX_WAIT_TIMEOUT_MS), signal: controller.signal,
         });
-        if (entry !== undefined) this.audit.record(actor, 'msg-read', caller, { count: 1, source: 'wait' });
-        if (!res.destroyed) json(res, 200, { message: entry ?? null });
+        this.mailbox.requireEnabled();
+        const visible = entry && this.mailbox.canReceive(caller, entry.id) ? entry : null;
+        if (visible) this.audit.record(actor, 'msg-read', caller, { count: 1, source: 'wait' });
+        if (!res.destroyed) json(res, 200, { message: visible });
       } catch (error) {
         if (!(error instanceof Error) || error.name !== 'AbortError') throw error;
       } finally { res.off('close', onClose); }
@@ -3312,7 +3336,8 @@ export class Daemon {
       // Behind the token, unlike /health: names of credential-shaped
       // variables are not for anyone who can reach the port.
       if (req.method === 'GET' && segments.length === 1 && segments[0] === 'environment') {
-        json(res, 200, { ...this.environmentReport(), configReload: this.reload?.status });
+        json(res, 200, { ...this.environmentReport(), configReload: this.reload?.status,
+          messagingEnabled: this.reload?.state.messaging?.enabled === true });
         return;
       }
 
@@ -4060,7 +4085,7 @@ export class Daemon {
       if (error instanceof ClaimAuditError) { json(res, 503, { error: error.message }); return; }
       if (error instanceof MailboxError) {
         const status = error.code === 'unknown-name' ? 404 :
-          error.code === 'not-allowed' || error.code === 'unknown-sender' ? 403 :
+          error.code === 'not-allowed' || error.code === 'unknown-sender' || error.code === 'messaging-disabled' ? 403 :
           error.code === 'duplicate-name' || error.code === 'mailbox-full' ? 409 : 400;
         const messages: Record<string, string> = {
           'invalid-name': 'A valid participant name is required.',
@@ -4798,7 +4823,7 @@ export class Daemon {
     const message = JSON.stringify({ ...event, at: new Date().toISOString() });
     for (const [ws, participant] of this.eventSockets) {
       if (ws.readyState === ws.OPEN && participant !== undefined &&
-          (participant === entry.from.id || participant === entry.to.id)) ws.send(message);
+          (participant === entry.from.id || participant === entry.to.id) && this.mailbox.maySeeEvent(participant, entry.id)) ws.send(message);
     }
   }
 
@@ -4889,6 +4914,7 @@ export class Daemon {
         return;
       }
       if (req.headers['x-shellpuppet-claim'] !== undefined || req.headers['x-shellpuppet-claim-secret'] !== undefined) {
+        if (!this.reload?.state.messaging?.enabled) { reject(403, 'Messaging is off'); return; }
         this.lapseIdleClaims();
       }
       const claim = this.presentedClaim(req);

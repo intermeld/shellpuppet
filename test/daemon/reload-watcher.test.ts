@@ -139,3 +139,14 @@ it('holds an in-flight schedule through invalid siblings and invalidates it on a
     await tick;
   } finally { scheduler.stop(); }
 });
+
+it('keeps degraded startup distinct from a successful repair', () => {
+  const initial = JSON.stringify({ schedules: [], messaging: { enabled: true, allow: 7 }, policy: { allow: 3 } });
+  const reload = new ConfigReload(parseConfigCandidate(initial),
+    { ownsHome: () => true, audit: vi.fn(), changed: () => undefined, log: () => undefined });
+  reload.reconcile({ text: initial, current: () => true });
+  expect(reload.status).toMatchObject({ revision: 0, outcome: 'degraded startup', lastAccepted: null });
+  reload.reconcile({ text: '{"messaging":{"enabled":true}}', current: () => true });
+  expect(reload.state.messaging?.enabled).toBe(true);
+  expect(reload.status).toMatchObject({ revision: 1, outcome: 'applied', needsDaemonRestart: ['policy.mode'] });
+});

@@ -453,11 +453,11 @@ export function buildMessagingPolicy(
   relations: MessagingRelations,
 ): MessagingPolicy {
   if (config === undefined || !config.enabled) return () => false;
-  return (from: ParticipantRef, to: ParticipantRef): boolean => {
+  return (from: ParticipantRef, to: ParticipantRef, parentChild?: boolean): boolean => {
     for (const rule of config.allow) {
       if (rule === 'parent-child') {
         if (from.kind !== 'session' || to.kind !== 'session') continue;
-        if (relations.parentOf(from.id) === to.id || relations.parentOf(to.id) === from.id) return true;
+        if (parentChild ?? (relations.parentOf(from.id) === to.id || relations.parentOf(to.id) === from.id)) return true;
         continue;
       }
       const member = (participant: ParticipantRef): boolean => participant.kind === 'claim'

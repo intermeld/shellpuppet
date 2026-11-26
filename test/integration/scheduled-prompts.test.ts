@@ -46,7 +46,7 @@ it('reloads additions, edits and removals and retains the last readable section'
       'schedule', 'list'], { env: { ...process.env, SHELLPUPPET_HOME: home } });
     expect(plain.stdout).toContain('daily-check\tworker\t0 10 * * 1\tqueue\ttrue');
     expect(plain.stdout).not.toContain(schedule.message);
-    expect((await api(td.port, td.token, '/messages/claims', { body: { name: 'sample' } })).status).not.toBe(201);
+    expect((await api(td.port, td.token, '/messages/claims', { body: { name: 'sample' } })).status).toBe(201);
     save([]);
     await eventually(async () => JSON.stringify(await list()) === '[]');
     expect(logged()).toContain('schedules');

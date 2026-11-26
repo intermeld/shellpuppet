@@ -826,6 +826,8 @@ export class Session implements WaitTarget {
   /** Non-empty input from a person or nudge, excluding terminal reports. */
   private promptInputRevision = 0;
   private inputQueueVersion = 0;
+  /** Recheck the permissions held when this particular mailbox body was written. */
+  private pendingNudgePermission?: () => boolean;
   /** A nudge body accepted by the PTY without a confirmed submit. */
   private pendingNudgeLine: string | null = null;
   private nudgeSchedule?: string;
@@ -1364,13 +1366,14 @@ export class Session implements WaitTarget {
   /** Queue a daemon nudge, reporting why a typed body could not be submitted. */
   writeNudgeWithReason(data: string, ready: (screen: string, phase: 'before' | 'submit') => boolean,
     messageIds: string[] = [], failedCheck: () => NudgeAbortReason = () => 'line-not-seen',
-    schedule?: string, queuedDelivery = false):
+    schedule?: string, queuedDelivery = false, permission?: () => boolean):
     Promise<'sent' | 'wait' | `aborted-${NudgeAbortReason}`> {
     let abortReason: NudgeAbortReason | null = null;
     const queued = this.writeChain.then(async () => {
       try {
         if (this.pendingNudgeLine !== null) return 'wait' as const;
         this.nudgeSchedule = schedule;
+        this.pendingNudgePermission = permission;
         this.writingNudge = true;
         const result = await this.writeInput(data, false, ready, (reason) => { abortReason = reason; }, this.nudgeSubmit(queuedDelivery),
           messageIds, failedCheck);
@@ -1410,6 +1413,7 @@ export class Session implements WaitTarget {
     }
     if (!(this.pendingTurnBusy || Date.now() - this.pendingQuietSince >= this.pendingNudgeSettleMs)) return false;
     this.pendingNudgeLine = null;
+    this.pendingNudgePermission = undefined;
     this.pendingNudgeIds = [];
     this.pendingNudgeTouched = false;
     this.pendingTouchRefusalAudited = false;
@@ -1424,11 +1428,12 @@ export class Session implements WaitTarget {
       this.refuseIfInputFailed();
       await this.renderer.flush();
       this.refuseIfEnded();
-      if (this.pendingNudgeLine !== line || this.pendingNudgeTouched ||
+      if (this.pendingNudgeLine !== line || this.pendingNudgeTouched || this.pendingNudgePermission?.() === false ||
         !ready(this.renderer.snapshot().screen) ||
         !this.nudgeReadyWithLine(line)) return false;
       this.pty.write(this.nudgeSubmit());
       this.pendingNudgeLine = null;
+      this.pendingNudgePermission = undefined;
       this.pendingNudgeIds = [];
       this.pendingNudgeTouched = false;
       this.pendingTouchRefusalAudited = false;
@@ -1729,6 +1734,7 @@ export class Session implements WaitTarget {
         }
         if (nudge) {
           this.pendingNudgeLine = null;
+          this.pendingNudgePermission = undefined;
           this.pendingNudgeIds = [];
           this.pendingNudgeTouched = false;
           this.pendingTouchRefusalAudited = false;

@@ -16,7 +16,7 @@ import { useDialogSignatures } from '../core/dialogs.js';
 import { useAgentSignatures } from '../core/reasoning.js';
 import { createFileLogger } from './logger.js';
 import { assertNodeVersion } from './meta.js';
-import { daemonLogPath, ensureHome, shellpuppetHome } from './paths.js';
+import { daemonLogPath, shellpuppetHome } from './paths.js';
 import { releaseWrappedDaemon, WRAPPED_START_IPC } from './wrappedStart.js';
 
 async function main(): Promise<void> {
@@ -29,8 +29,8 @@ async function main(): Promise<void> {
   // Shape-validated (design §4.3 fail-closed): a malformed policy section
   // arrives here as deny-all with the problem in its refusal reason. It must
   // never be silently ignored, because ignoring it is fail-open.
-  ensureHome(home);
   const permissions = new ConfigPermissions(home);
+  permissions.secureHome();
   const bootConfig = await readPrivateConfig(home, permissions.check).then(read => parseConfigCandidate(read.text),
     () => unavailableConfig('Could not verify permissions or read config.json.'));
   const { config, problems } = bootConfig;

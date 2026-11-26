@@ -62,6 +62,7 @@ export interface ParticipantRef {
 
 /** A daemon session joining the name registry. */
 export interface SessionRegistration {
+  parent?: string;
   kind: 'session';
   id: string;
   name: string;
@@ -126,7 +127,7 @@ export class MailboxError extends Error {
 }
 
 /** Who may message whom. Refuses everything when none is injected. */
-export type MessagingPolicy = (from: ParticipantRef, to: ParticipantRef) => boolean;
+export type MessagingPolicy = (from: ParticipantRef, to: ParticipantRef, parentChild?: boolean) => boolean;
 
 export interface MailboxDeps {
   /** Whether the configuration switches messaging on. */
@@ -148,6 +149,7 @@ export interface SavedClaim {
 }
 
 interface ParticipantRecord {
+  parent?: string;
   kind: ParticipantKind;
   id: string;
   name: string;
@@ -164,8 +166,13 @@ interface StoredMessage {
   seq: number;
   from: ParticipantRef;
   fromGeneration: number;
+  parentChild: boolean;
+  revocations: number;
   toId: string;
   toName: string;
+  toKind: ParticipantKind;
+  toRole?: 'chair' | 'delegate';
+  toGeneration: number;
   time: number;
   text: string;
   /** Cached UTF-8 length of the text, so the byte ceiling is cheap to check. */
@@ -189,11 +196,12 @@ function claimDigest(secret: string): string {
 // ------------------------------------------------------------------- the mailbox
 
 export class Mailbox extends EventEmitter {
-  private readonly enabled: boolean;
-  private readonly policy: MessagingPolicy;
+  private get enabled(): boolean { return this.deps.enabled; }
+  private allowed(from: ParticipantRef, to: ParticipantRef, parentChild?: boolean): boolean {
+    return this.enabled && this.deps.policy?.(from, to, parentChild) === true;
+  }
   private readonly now: () => number;
-  private readonly reservedNames: ReadonlySet<string>;
-  private readonly claimIdleMs: number;
+  private get claimIdleMs(): number { return (this.deps.claimIdleMinutes ?? 30) * 60_000; }
 
   private readonly participants = new Map<string, ParticipantRecord>();
   private readonly byName = new Map<string, string>();
@@ -202,14 +210,9 @@ export class Mailbox extends EventEmitter {
   private seq = 0;
   private generation = 0;
 
-  constructor(deps: MailboxDeps) {
+  constructor(private readonly deps: MailboxDeps) {
     super();
-    this.enabled = deps.enabled;
-    // An absent policy refuses everything: the safe default.
-    this.policy = deps.policy ?? (() => false);
     this.now = deps.now ?? Date.now;
-    this.reservedNames = deps.reservedNames ?? new Set();
-    this.claimIdleMs = (deps.claimIdleMinutes ?? 30) * 60_000;
   }
 
   /** Keep recent tombstones per sender, then enforce the daemon-wide budget. */
@@ -256,12 +259,12 @@ export class Mailbox extends EventEmitter {
       throw new MailboxError('duplicate-id', `A participant with the id "${session.id}" is already live.`);
     }
     this.checkName(session.name);
-    if (this.reservedNames.has(session.name)) throw new MailboxError('invalid-name', `The name "${session.name}" is reserved for an outside claim.`);
-    this.participants.set(session.id, { kind: 'session', id: session.id, name: session.name, role: session.role ?? 'delegate', generation: ++this.generation });
+    if (this.deps.reservedNames?.has(session.name)) throw new MailboxError('invalid-name', `The name "${session.name}" is reserved for an outside claim.`);
+    this.participants.set(session.id, { kind: 'session', id: session.id, name: session.name, parent: session.parent, role: session.role ?? 'delegate', generation: ++this.generation });
     this.byName.set(session.name, session.id);
   }
 
-  nameTaken(name: string): boolean { return this.byName.has(name) || this.reservedNames.has(name); }
+  nameTaken(name: string): boolean { return this.byName.has(name) || this.deps.reservedNames?.has(name) === true; }
 
   sessionIdByName(name: string): string | undefined {
     const id = this.byName.get(name);
@@ -277,7 +280,7 @@ export class Mailbox extends EventEmitter {
     const record = this.participants.get(id);
     if (record?.kind !== 'session') throw new MailboxError('unknown-sender', 'The session has ended.');
     if (record.name === name) return;
-    if (this.reservedNames.has(name)) throw new MailboxError('invalid-name', `The name "${name}" is reserved for an outside claim.`);
+    if (this.deps.reservedNames?.has(name)) throw new MailboxError('invalid-name', `The name "${name}" is reserved for an outside claim.`);
     this.checkName(name);
     this.byName.delete(record.name);
     record.name = name;
@@ -326,6 +329,7 @@ export class Mailbox extends EventEmitter {
     replace?: boolean;
     beforeCommit?: (next: SavedClaim, previousId?: string) => void;
   } = {}) {
+    this.requireEnabled();
     if (typeof name === 'string' && /^s[0-9]+$/.test(name)) {
       throw new MailboxError('invalid-name', 'Session id names are reserved for sessions.');
     }
@@ -349,7 +353,12 @@ export class Mailbox extends EventEmitter {
     // Finish required writes before retiring the old reader or changing delivery.
     options.beforeCommit?.(next, previousId);
     if (previousId !== undefined) {
-      for (const message of this.unreadFor(previousId)) message.toId = claimId;
+      for (const message of this.messages) {
+        if (message.toId === previousId && (message.state === 'waiting' || message.state === 'nudged')) {
+          message.toId = claimId;
+          message.toGeneration = this.generation + 1;
+        }
+      }
       this.end(previousId);
     }
     this.participants.set(claimId, { ...next, kind: 'claim', generation: ++this.generation });
@@ -455,7 +464,8 @@ export class Mailbox extends EventEmitter {
         typeof toName === 'string' && NAME_PATTERN.test(toName)
           ? `No live participant is named "${toName}".` : 'No live participant has that name.');
     }
-    if (!this.policy(from, to)) {
+    const parentChild = from.kind === 'session' && to.kind === 'session' && (from.parent === to.id || to.parent === from.id);
+    if (!this.allowed(from, to, parentChild)) {
       throw new MailboxError(
         'not-allowed',
         `Messages from ${from.name} to ${to.name} are not allowed by messaging.allow.`,
@@ -525,9 +535,9 @@ export class Mailbox extends EventEmitter {
       id: `m${String(this.seq)}`,
       seq: this.seq,
       from: { kind: from.kind, id: from.id, name: from.name, ...(from.role === 'chair' ? { role: from.role } : {}) },
-      fromGeneration: from.generation,
+      fromGeneration: from.generation, parentChild, revocations: 0,
       toId: to.id,
-      toName: to.name,
+      toName: to.name, toKind: to.kind, toRole: to.role, toGeneration: to.generation,
       time: now ?? this.now(),
       text,
       bytes,
@@ -565,12 +575,75 @@ export class Mailbox extends EventEmitter {
     }
   }
 
+  requireEnabled(): void {
+    if (!this.enabled) throw new MailboxError('messaging-disabled', 'Messaging is off.');
+  }
+
+  private receivable(message: StoredMessage): boolean {
+    const to = this.participants.get(message.toId);
+    return to?.generation === message.toGeneration && this.allowed(message.from, to, message.parentChild);
+  }
+
+  maySeeEvent(participant: string, id: string): boolean {
+    const m = this.messages.find(message => message.id === id);
+    if (!m) return false;
+    if (participant === m.toId && this.receivable(m)) return true;
+    return participant === m.from.id && this.participants.get(participant)?.generation === m.fromGeneration &&
+      this.allowed(m.from, { id: m.toId, name: m.toName, kind: m.toKind, role: m.toRole }, m.parentChild);
+  }
+
+  canReceive(reader: string, id: string): boolean {
+    const message = this.messages.find(m => m.id === id);
+    return message?.toId === reader && this.receivable(message);
+  }
+
+  /** A body already typed while permission was held cannot submit after a revoke/regrant. */
+  deliveryPermission(reader: string, ids: string[]): () => boolean {
+    const versions = new Map(this.messages.filter(m => m.toId === reader && ids.includes(m.id))
+      .map(m => [m.id, m.revocations]));
+    return () => versions.size === ids.length && this.messages.filter(m =>
+      m.toId === reader && versions.get(m.id) === m.revocations && this.receivable(m)).length === ids.length;
+  }
+
+  unreadCounts(): Record<string, number> {
+    const counts: Record<string, number> = {};
+    for (const message of this.messages) {
+      if ((message.state === 'waiting' || message.state === 'nudged') && this.receivable(message)) {
+        counts[message.toId] = (counts[message.toId] ?? 0) + 1;
+      }
+    }
+    return counts;
+  }
+
+  waitingSessions(): Set<string> {
+    const sessions = new Set<string>();
+    for (const message of this.messages) {
+      if (message.state === 'waiting' && message.toKind === 'session' && this.receivable(message)) sessions.add(message.toId);
+    }
+    return sessions;
+  }
+
+  permissionsChanged(): void {
+    for (const message of this.messages) if (!this.receivable(message)) message.revocations++;
+    for (const waiter of this.waiters) {
+      const reader = this.participants.get(waiter.readerId);
+      const from = waiter.from === undefined ? undefined : this.participants.get(waiter.from);
+      if (!this.enabled || (waiter.from !== undefined && (!from || !reader || !this.allowed(from, reader,
+        from.parent === reader.id || reader.parent === from.id)))) {
+        waiter.settle(undefined);
+      } else {
+        const entry = this.unreadFor(waiter.readerId, waiter.from)[0];
+        if (entry) waiter.settle(entry);
+      }
+    }
+  }
+
   // ------------------------------------------------------------------ reading
 
   private unreadFor(readerId: string, from?: string): StoredMessage[] {
     return this.messages.filter(
       (message) =>
-        message.toId === readerId &&
+        message.toId === readerId && this.receivable(message) &&
         (message.state === 'waiting' || message.state === 'nudged') &&
         (from === undefined || message.from.id === from),
     );
@@ -619,7 +692,7 @@ export class Mailbox extends EventEmitter {
     const sender = this.participants.get(senderId);
     if (sender === undefined || !this.enabled) return [];
     return [...this.participants.values()]
-      .filter((recipient) => this.policy(sender, recipient))
+      .filter((recipient) => this.allowed(sender, recipient, sender.parent === recipient.id || recipient.parent === sender.id))
       .map(({ kind, id, name, role }) => ({ kind, id, name, ...(role === 'chair' ? { role } : {}) }));
   }
 
@@ -632,7 +705,9 @@ export class Mailbox extends EventEmitter {
     const { participantId, limit } = opts;
     const all = this.messages.filter(
       (message) =>
-        participantId === undefined || message.from.id === participantId || message.toId === participantId,
+        participantId === undefined || (this.enabled && ((message.from.id === participantId &&
+          message.fromGeneration === this.participants.get(participantId)?.generation) ||
+          (message.toId === participantId && this.receivable(message)))),
     );
     const kept = limit === undefined ? all : all.slice(Math.max(0, all.length - Math.max(0, limit)));
     return kept.map((message) => Mailbox.entry(message));
@@ -651,6 +726,7 @@ export class Mailbox extends EventEmitter {
     readerId: string,
     opts: { from?: string; timeoutMs?: number; signal?: AbortSignal } = {},
   ): Promise<MailboxEntry | undefined> {
+    this.requireEnabled();
     const { timeoutMs, signal } = opts;
     const from = opts.from === undefined || this.participants.has(opts.from)
       ? opts.from
@@ -658,6 +734,9 @@ export class Mailbox extends EventEmitter {
     if (!this.participants.has(readerId)) return undefined;
     const waiting = this.unreadFor(readerId, from)[0];
     if (waiting !== undefined) return Mailbox.entry(waiting);
+    const sender = from === undefined ? undefined : this.participants.get(from);
+    const recipient = this.participants.get(readerId)!;
+    if (sender && !this.allowed(sender, recipient, sender.parent === readerId || recipient.parent === sender.id)) return undefined;
     if (signal?.aborted) {
       const error = new Error('The wait for a message was aborted.');
       error.name = 'AbortError';
@@ -676,7 +755,8 @@ export class Mailbox extends EventEmitter {
             waiter.signal.removeEventListener('abort', waiter.onAbort);
           }
           this.waiters.delete(waiter);
-          resolve(message === undefined ? undefined : Mailbox.entry(message));
+          if (!this.enabled) reject(new MailboxError('messaging-disabled', 'Messaging is off.'));
+          else resolve(message && this.receivable(message) ? Mailbox.entry(message) : undefined);
         },
       };
       if (timeoutMs !== undefined) {

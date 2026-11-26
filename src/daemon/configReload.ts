@@ -1,7 +1,7 @@
 import { isDeepStrictEqual } from 'node:util';
 import { compilePolicy } from '../core/policy.js';
 import { ENV_NAME_PATTERN } from '../core/types.js';
-import { DEFAULT_NUDGE_INTERVAL_MS, DEFAULT_NUDGES_PER_MINUTE, DEFAULT_VIEWER_LAUNCH_MODE,
+import { buildMessagingPolicy, DEFAULT_NUDGE_INTERVAL_MS, DEFAULT_NUDGES_PER_MINUTE, DEFAULT_VIEWER_LAUNCH_MODE,
   parseDaemonConfig, jsonErrorLocation, unknowableConfig } from './config.js';
 import type { DaemonConfig, MessagingConfig } from './config.js';
 import { DEFAULT_LAUNCHES_PER_MINUTE } from './launchProfiles.js';
@@ -108,7 +108,15 @@ function fields(candidate: ConfigCandidate, defaultViewer: ViewerLaunchMode) {
 }
 
 type Fields = ReturnType<typeof fields>;
-const live = new Set(['launcher.launchesPerMinute', 'schedules']);
+const live = new Set(['launcher.launchesPerMinute', 'schedules', 'messaging']);
+
+export function prepareMessaging(config: MessagingConfig | undefined) {
+  return {
+    messaging: config,
+    reservedNames: new Set((config?.allow ?? []).flatMap(rule => rule === 'parent-child' ? [] : rule.members)),
+    policy: buildMessagingPolicy(config, { parentOf: () => undefined }),
+  };
+}
 
 function differences(a: Fields, b: Fields): (keyof Fields)[] {
   return (Object.keys(a) as (keyof Fields)[]).filter(key => !isDeepStrictEqual(a[key], b[key]));
@@ -131,7 +139,7 @@ export class ConfigReload {
   private previousText?: string;
   private hadFile: boolean;
   private readFailed = false;
-  state: { schedules: ScheduleStore; launchesPerMinute: number; messaging: MessagingConfig };
+  state: { schedules: ScheduleStore; launchesPerMinute: number } & ReturnType<typeof prepareMessaging>;
   status: ConfigReloadStatus;
 
   constructor(candidate: ConfigCandidate, private readonly hooks: {
@@ -145,7 +153,7 @@ export class ConfigReload {
     this.hadFile = candidate.text !== undefined || candidate.reason !== undefined;
     const schedules = new ScheduleStore();
     schedules.replace(candidate.config.schedules);
-    this.state = { schedules, launchesPerMinute: this.boot['launcher.launchesPerMinute'], messaging: this.boot.messaging };
+    this.state = { schedules, launchesPerMinute: this.boot['launcher.launchesPerMinute'], ...prepareMessaging(this.boot.messaging) };
     const now = new Date().toISOString();
     this.status = { revision: candidate.reason ? 0 : 1, outcome: candidate.reason ? 'degraded startup' : 'unchanged',
       reason: candidate.reason, lastAttempt: now, lastAccepted: candidate.reason ? null : now,
@@ -174,7 +182,7 @@ export class ConfigReload {
     const pending = differences(this.boot, desired).filter(k => !live.has(k)).sort();
     const applied = changed.some(k => live.has(k));
     const sections = [...new Set(changed.map(k => k.split('.')[0]!))].sort();
-    const state = { ...this.state,
+    const state = { ...this.state, ...(changed.includes('messaging') ? prepareMessaging(desired.messaging) : {}),
       launchesPerMinute: desired['launcher.launchesPerMinute'],
       schedules: changed.includes('schedules') ? this.state.schedules.withSchedules(desired.schedules) : this.state.schedules };
     const now = new Date().toISOString();

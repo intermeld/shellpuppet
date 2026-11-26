@@ -3,7 +3,8 @@
 ## Messaging
 
 Messaging is off until `messaging.enabled` is set to `true` and an allow rule
-permits the sender and recipient. Restart the daemon after changing it.
+permits the sender and recipient. Saving the file updates existing sessions and claims.
+An MCP client that connected while messaging was off discovers the tools on its next connection.
 With `envFromDaemon: "all"`, `SHELLPUPPET_HOME` is always the daemon's own
 absolute home in a session, never a copied value.
 For a session to speak with sessions it started, in either direction:
@@ -32,10 +33,28 @@ reserved for outside claims. A session name never grants messaging rights.
 
 All configuration lives in one optional file: `~/.shellpuppet/config.json`
 (override the directory with the `SHELLPUPPET_HOME` environment variable).
-No file means all defaults. The daemon reloads `schedules` and
-`launcher.launchesPerMinute` when the file changes. Run
-`shellpuppet daemon restart` for every other daemon setting. The MCP adapter
-reads its own `mcp` section at launch.
+A new daemon uses defaults when the file is absent. After startup, saving a valid
+file applies all `messaging` fields, `schedules` and `launcher.launchesPerMinute`
+together. Existing sessions and outside claims use the new rules and limits.
+Removing a permission hides retained incoming mail from that pair and stops its
+nudges. Restoring the permission lets the original recipient read the mail again.
+
+Run `shellpuppet daemon status` (or add `--json`) for the effective revision,
+watcher health, last attempt, last acceptance and any rejected edit. The daemon
+checks the whole file, including settings that need a restart. Invalid JSON, a
+malformed entry, an unreadable replacement or a missing file keeps the previous
+settings. Omit a section in a valid file to restore its defaults, or save `{}`
+to reset all live settings. The audit records the changed section names.
+
+The following settings need a daemon restart for the daemon to use the new
+configuration. Status identifies the changed fields, including removals.
+
+| Settings | When the change takes effect |
+|---|---|
+| `launcher.profiles`, `launcher.sessionLaunch`, `policy` | The next daemon loads the launch catalogue, grants and command policy. |
+| `sessionEnv`, `envNames`, `agents`, `prompts` | The next daemon loads its environment and reader settings. The CLI and MCP adapter still select caller environment variables from the file at each session start. |
+| `idleMinutes`, `audit`, `viewer`, `dashboard` | The next daemon uses the new idle threshold, capture flag and display settings. |
+| `daemon`, `mcp` | The wrapper applies when starting a daemon. The MCP adapter reads its framing setting at adapter startup. |
 
 Dashboard launch profiles (`launcher.profiles`, decided in
 [ADR-009](../decisions/ADR-009-dashboard-and-sessions-you-start-yourself.md))
@@ -81,11 +100,9 @@ and mailbox nudges. Each further input restarts the wait. A confirmed typed
 submission ends it early. During the wait a scheduled run skips with reason
 `recent-input`, including when `whenBusy` is `queue`.
 
-Save the file to apply an edit. Removing the section or file removes all
-schedules. An unreadable file, invalid JSON, or a section of the wrong type
-keeps the previous schedules. An invalid entry is named in `daemon.log`
-and its valid siblings run. Duplicate names exclude every entry with that name.
-The log lists added, changed and removed names. Use `shellpuppet schedule list`
+Remove `schedules` in a valid save to clear the list. A malformed entry or a
+duplicate schedule name rejects the entire edit. An unchanged schedule keeps
+its last outcome and any delivery already in progress. Use `shellpuppet schedule list`
 to see the next run and the last outcome. The audit records the schedule name,
 target and outcome, including a reason for a skipped or aborted run.
 

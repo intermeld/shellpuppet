@@ -12,13 +12,14 @@ export class NudgeScheduler {
     intervalMs: number;
     perMinute: number;
     /** A delivered or obsolete batch is done; a busy batch remains pending. */
-    deliver(id: string): Promise<'sent' | 'wait' | 'done'>;
+    deliver(id: string, eligible: () => boolean): Promise<'sent' | 'wait' | 'done'>;
   }) {}
 
   queue(id: string): void {
     this.pending.add(id);
     this.requests.set(id, (this.requests.get(id) ?? 0) + 1);
   }
+  clearPending(): void { this.pending.clear(); }
   remove(id: string): void { this.pending.delete(id); this.lastSent.delete(id); this.requests.delete(id); }
 
   tick(): Promise<void> {
@@ -29,20 +30,23 @@ export class NudgeScheduler {
     return run;
   }
 
+  private eligible(id: string): boolean {
+    const now = this.options.now();
+    while (this.sentTimes.length > 0 && this.sentTimes[0]! <= now - 60_000) this.sentTimes.shift();
+    return now - (this.lastSent.get(id) ?? -Infinity) >= this.options.intervalMs && this.sentTimes.length < this.options.perMinute;
+  }
+
   private async check(): Promise<void> {
     let failure: Error | undefined;
     for (const id of this.pending) {
-      const now = this.options.now();
-      while (this.sentTimes.length > 0 && this.sentTimes[0]! <= now - 60_000) this.sentTimes.shift();
-      if (now - (this.lastSent.get(id) ?? -Infinity) < this.options.intervalMs ||
-        this.sentTimes.length >= this.options.perMinute) continue;
+      if (!this.eligible(id)) continue;
       const requested = this.requests.get(id) ?? 0;
       // One recipient failing (for example a program that ended mid-delivery) must not
       // hold up the others in this scan: it stays pending, and the first failure is still
       // reported once the scan has visited every recipient.
       let result: 'sent' | 'wait' | 'done';
       try {
-        result = await this.options.deliver(id);
+        result = await this.options.deliver(id, () => this.eligible(id));
       } catch (error) {
         failure ??= error instanceof Error ? error : new Error(String(error));
         continue;

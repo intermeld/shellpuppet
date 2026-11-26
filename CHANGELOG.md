@@ -7,6 +7,10 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+### Added
+
+- Messaging permissions and limits, schedules and the profile launch rate now reload together. `daemon status` reports rejected edits and settings that need a daemon restart.
+
 ### Fixed
 
 - Sessions started from a daemon launched inside an agent tool shell no longer inherit that shell's `NO_COLOR` through an `"all"` dashboard profile or global passthrough. Explicitly named values remain available.

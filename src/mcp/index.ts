@@ -13,6 +13,8 @@ import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { readMcpConfig } from './config.js';
 import { isEnvNamesProblem, readDaemonConfig } from '../daemon/config.js';
+import { parseConfigCandidate } from '../daemon/configReload.js';
+import { readPrivateConfig } from '../daemon/configWatcher.js';
 import { registerTools } from './tools.js';
 import type { PassLists } from './tools.js';
 import { assertNodeVersion, packageVersion } from '../daemon/meta.js';
@@ -27,6 +29,24 @@ const stderrLogger: Logger = {
   warn: (message, meta) => console.error(`shellpuppet-mcp warning: ${message}`, meta ?? ''),
   error: (message, meta) => console.error(`shellpuppet-mcp error: ${message}`, meta ?? ''),
 };
+
+/** Choose the initial catalogue without starting a daemon. Each invocation still uses its current permission. */
+async function messagingAtAttach(home: string): Promise<boolean> {
+  try {
+    const connection = await discoverDaemon({ home }, Date.now() + 2000);
+    if (connection) {
+      const response = await request(connection, 'GET', '/environment', undefined,
+        { home, autoStart: false, signal: AbortSignal.timeout(2000) });
+      if (response.status !== 200) return false;
+      const enabled = (response.body as { messagingEnabled?: boolean }).messagingEnabled;
+      if (typeof enabled === 'boolean') return enabled;
+    }
+    // Initial discovery without a running daemon, or with an older daemon.
+    const read = await readPrivateConfig(home);
+    const candidate = parseConfigCandidate(read.text);
+    return !candidate.reason && read.current() && candidate.config.messaging?.enabled === true;
+  } catch { return false; }
+}
 
 async function main(): Promise<void> {
   assertNodeVersion();
@@ -66,9 +86,7 @@ async function main(): Promise<void> {
     };
   };
   readPassLists();
-  // Messaging tools are offered only when messaging is switched on when this
-  // server starts; a change to config.json applies at the next MCP start.
-  const messaging = readDaemonConfig(home).config.messaging?.enabled === true;
+  const messaging = await messagingAtAttach(home);
   const releaseClaim = registerTools(server, {
     logger: stderrLogger,
     messaging,
