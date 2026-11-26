@@ -6,7 +6,7 @@
  * upgrades, bearer-token auth on the API, no CORS headers at all.
  */
 
-import { moduleFor } from '../agents/index.js';
+import { hasAgentShellNoColor, moduleFor } from '../agents/index.js';
 import * as fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -757,6 +757,7 @@ export class Daemon {
   private readonly launchProfiles: LauncherConfig;
   private launchesPerMinute: number;
   private readonly daemonEnv: NodeJS.ProcessEnv;
+  private readonly omitInheritedNoColor: boolean;
   private readonly cliPath: string;
   /** The global policy, kept here so a launch can report it before creating. */
   private readonly compiledPolicy: CompiledPolicy;
@@ -797,11 +798,13 @@ export class Daemon {
     this.sessionEnv = options.sessionEnv ?? DEFAULT_SESSION_ENV;
     this.launchProfiles = options.launchProfiles ?? { profiles: [], problems: [] };
     this.launchesPerMinute = this.launchProfiles.launchesPerMinute ?? DEFAULT_LAUNCHES_PER_MINUTE;
-    this.daemonEnv = options.daemonEnv ?? process.env;
+    this.daemonEnv = { ...(options.daemonEnv ?? process.env) };
+    this.omitInheritedNoColor = hasAgentShellNoColor(this.daemonEnv);
     this.cliPath = fileURLToPath(new URL('../../dist/cli/index.js', import.meta.url));
     this.compiledPolicy = compilePolicy(options.policy);
     this.manager = new SessionManager(compilePolicy(options.policy), this.logger, {
       sessionEnv: this.sessionEnv,
+      omitInheritedNoColor: this.omitInheritedNoColor,
       identity: {
         token: '',
         instanceId: this.instanceId,
@@ -1031,6 +1034,7 @@ export class Daemon {
     // Said once, at start, because passthrough leaks silently otherwise
     // (ADR-008): the names only, never the values.
     const { exposed } = this.environmentReport();
+    if (this.omitInheritedNoColor) this.logger.info('omitting inherited output setting from agent tool shell', { names: ['NO_COLOR'] });
     if (exposed.length > 0) {
       this.logger.warn(
         'sessionEnv "passthrough" hands every session the daemon environment, including ' +
@@ -2137,7 +2141,7 @@ export class Daemon {
       return;
     }
 
-    const { env, copied } = copyDaemonEnv(profile.envFromDaemon, this.daemonEnv);
+    const { env, copied } = copyDaemonEnv(profile.envFromDaemon, this.daemonEnv, undefined, this.omitInheritedNoColor);
     const envNames = Object.keys(env);
     const folderLabel = freeCwd !== undefined ? freeCwd : folder?.name ?? (rootCwd !== undefined ? folderName : undefined);
     const options = {

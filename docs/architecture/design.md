@@ -1688,6 +1688,12 @@ markers. These exclusions apply to every `"all"` profile: a Codex session
 started by a daemon that inherited Claude Code's environment must not inherit
 `CLAUDECODE` or `CLAUDE_CODE_MESSAGING_TOKEN`. Claude Code, Codex, OpenCode and
 Grok declare their markers in their modules; the registry supplies their union.
+When the daemon starts with a known parent-session marker and `NO_COLOR`,
+inherited `NO_COLOR` is omitted from `"all"` profiles and global passthrough
+sessions, and its name is logged once without its value. An explicit profile
+list, session environment list or permitted client environment name can still
+pass it. This decision is fixed at daemon start.
+
 The daemon retains `NODE_OPTIONS` and `GEMINI_CLI`, with the latter moving when
 a Gemini module exists. Marker names match without regard to case on Windows
 only. Explicit lists can still copy agent markers deliberately.

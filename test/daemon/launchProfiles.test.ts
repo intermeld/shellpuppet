@@ -360,6 +360,25 @@ describe('profile policy', () => {
 });
 
 describe('the daemon environment copy', () => {
+  it('omits inherited NO_COLOR from all only when a parent-session marker was present', () => {
+    const fromAgent = { CLAUDECODE: 'synthetic-parent', NO_COLOR: '1', OTHER_SETTING: 'kept' };
+    expect(copyDaemonEnv('all', fromAgent)).toEqual({
+      env: { OTHER_SETTING: 'kept' }, copied: ['OTHER_SETTING'],
+    });
+    expect(copyDaemonEnv('all', { NO_COLOR: '1', OTHER_SETTING: 'kept' })).toEqual({
+      env: { NO_COLOR: '1', OTHER_SETTING: 'kept' }, copied: ['NO_COLOR', 'OTHER_SETTING'],
+    });
+    expect(copyDaemonEnv(['NO_COLOR'], fromAgent)).toEqual({
+      env: { NO_COLOR: '1' }, copied: ['NO_COLOR'],
+    });
+  });
+
+  it.runIf(process.platform === 'win32')('recognises mixed-case markers and NO_COLOR on Windows', () => {
+    expect(copyDaemonEnv('all', { cLaUdEcOdE: 'synthetic-parent', nO_cOlOr: '1' })).toEqual({
+      env: {}, copied: [],
+    });
+  });
+
   it('preserves the complete exclusion set from before agent modules owned the markers', () => {
     // Frozen independently of the registry: a module must not silently drop a name.
     const originalExclusions = Object.freeze([

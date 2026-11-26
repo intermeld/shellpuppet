@@ -749,6 +749,41 @@ describe('policy sees the real command, and both caps bite', () => {
 });
 
 describe('envFromDaemon copies names from the daemon, never from the body', () => {
+  it('keeps inherited NO_COLOR out of all and free-form starts from an agent tool shell', async () => {
+    const daemonEnv: NodeJS.ProcessEnv = {
+      CLAUDECODE: 'synthetic-parent', NO_COLOR: 'synthetic-output-choice', OTHER_SETTING: 'kept',
+    };
+    const args = ['-e', 'console.log("COLOUR=" + (process.env.NO_COLOR ?? "missing") + ";OTHER=" + (process.env.OTHER_SETTING ?? "missing"))'];
+    const daemon = await startLaunchDaemon({ daemonEnv, launcher: profilesOf([
+      { name: 'all-env', command: process.execPath, args, shell: false, envFromDaemon: 'all' },
+      { name: 'named-env', command: process.execPath, args, shell: false, envFromDaemon: ['NO_COLOR'] },
+    ]) });
+    delete daemonEnv.CLAUDECODE; // The start-time decision must survive later source changes.
+
+    const all = await launch(daemon, { profile: 'all-env' });
+    expect(all.status).toBe(200);
+    const allId = String((JSON.parse(all.body) as Record<string, unknown>)['id']);
+    await waitForScreen(daemon, allId, 'COLOUR=missing;OTHER=kept');
+
+    const free = await api(daemon.port, daemon.token, '/sessions', {
+      method: 'POST', body: { command: process.execPath, args, shell: false, openViewer: false },
+    });
+    expect(free.status).toBe(200);
+    await waitForScreen(daemon, String(free.body['id']), 'COLOUR=missing;OTHER=missing');
+
+    const named = await launch(daemon, { profile: 'named-env' });
+    expect(named.status).toBe(200);
+    await waitForScreen(daemon, String((JSON.parse(named.body) as Record<string, unknown>)['id']),
+      'COLOUR=synthetic-output-choice;OTHER=missing');
+
+    const log = fs.readFileSync(daemon.logPath, 'utf8');
+    const notices = log.split('\n').filter(Boolean).map(line => JSON.parse(line) as Record<string, unknown>)
+      .filter(line => line['message'] === 'omitting inherited output setting from agent tool shell');
+    expect(notices).toHaveLength(1);
+    expect(notices[0]?.['meta']).toEqual({ names: ['NO_COLOR'] });
+    expect(log).not.toContain('synthetic-output-choice');
+  });
+
   it('keeps Claude parent-session markers out of a codex all profile', async () => {
     const daemon = await startLaunchDaemon({
       daemonEnv: {

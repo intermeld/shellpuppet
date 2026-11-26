@@ -513,6 +513,13 @@ variables that toolchains look for) and, on POSIX, the login name and locale.
   are a guide, not a complete list: a variable such as `DATABASE_URL` can hold
   a password without saying so.
 
+When the daemon starts with a known parent-session marker and `NO_COLOR` in
+its own environment, it omits that inherited `NO_COLOR` from passthrough
+sessions. A listed `sessionEnv` name or a permitted client environment name
+can still pass it deliberately. The daemon logs the omitted name once at
+start, never its value. Without a parent-session marker, passthrough keeps
+`NO_COLOR` as before.
+
 The daemon reads `sessionEnv` when it starts, so a change takes effect at the
 next daemon start. `shellpuppet daemon status` shows the mode in use.
 
@@ -821,6 +828,11 @@ array to pass one of the listed markers when needed. The `"all"` form also
 excludes `NODE_OPTIONS` and names that do not match
 `^[A-Za-z_][A-Za-z0-9_]*$`, including Windows drive pseudo-variables such as
 `=C:`. The unsafe `__proto__` name is excluded as well.
+If a known parent-session marker and `NO_COLOR` were present when the daemon
+started, `"all"` also omits inherited `NO_COLOR`. A profile that explicitly
+lists `NO_COLOR` still copies it. No other colour setting is filtered by
+this rule. The daemon logs the omitted variable name once, without its value.
+
 `TERM` and `COLORTERM` receive ShellPuppet's terminal values. With an array,
 the response and audit carry copied names; with `"all"`, they record only the
 setting `"all"`. They never carry values. `agents.passEnv` and `envNames` are
