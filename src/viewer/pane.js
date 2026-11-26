@@ -1132,6 +1132,7 @@ window.ShellPuppetPane = (() => {
         elements.size.textContent =
           `${cols}×${rows}` +
           (controlMode === 'held' ? ' (fixed)' : controlMode === 'adopt' ? ' (following)' : '');
+        elements.size.title = elements.size.textContent;
       }
       positionNotices();
       onGeometryChange();

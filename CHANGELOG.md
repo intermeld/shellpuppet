@@ -17,6 +17,7 @@ version may change behaviour, and every such change is listed here.
 
 ### Fixed
 
+- Dashboard pane headers keep a fixed height when labels, purposes or launch details are long. Truncated text and status remain readable through hover titles or the pane menu, including a visible cue for waiting and below-floor states. Narrow panes place extra controls in a scrollable menu so actions remain reachable in a short Focus strip.
 - After a Hermes turn, waiting messages can be nudged when the completed summary lists extra activity and the grey footer clips a timer.
 - Waiting time and stall alerts restart after input to a held prompt, including when the next prompt has the same question and choices. Redraws without input retain the timer.
 - Codex recognises a repeated short prompt in its live composer when an earlier copy belongs to a completed turn. Grok recognises a padded welcome footer after typed send hints appear.

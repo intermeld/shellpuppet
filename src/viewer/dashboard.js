@@ -119,9 +119,26 @@
   }
   function updateMessageBadge(item) {
     const count = unreadCount(item.id);
-    item.messageCount.hidden = count === 0;
-    item.messageCount.textContent = count ? `${count} ${count === 1 ? 'message' : 'messages'}` : '';
-    item.messageCount.setAttribute('aria-label', `${count} unread messages for ${item.label.textContent}`);
+    const text = count ? `${count} ${count === 1 ? 'message' : 'messages'}` : '';
+    for (const button of [item.messageCount, item.menuMessageCount]) {
+      button.hidden = count === 0;
+      button.textContent = text;
+      button.title = text;
+      button.setAttribute('aria-label', `${count} unread messages for ${item.label.textContent}`);
+    }
+    updateMenuStatus(item);
+  }
+  function updateMenuStatus(item) {
+    const floor = item.floor.hidden ? '' : item.floor.textContent;
+    const full = [item.role.textContent, item.badge.textContent, item.messageCount.textContent,
+      item.state.textContent, item.size.textContent, floor].filter(Boolean).join(' · ');
+    item.menuStatus.textContent = full;
+    item.menuStatus.title = full;
+    item.menuStatus.hidden = !full;
+    const urgent = [item.badge.textContent, floor].filter(Boolean).join(' · ');
+    item.menuButton.classList.toggle('has-status', Boolean(urgent));
+    item.menuButton.title = urgent || 'More pane controls';
+    item.menuButton.setAttribute('aria-description', item.menuButton.title);
   }
   async function loadMessages() {
     messageTimer = null;
@@ -419,11 +436,13 @@
     const below = new Set();
     let shared = Infinity;
     for (const item of visiblePanes) {
-      // The note can wrap the header. Test without it, then measure the
-      // remaining terminal space with the note in place.
+      // Update the notice after measuring the terminal area.
       item.card.classList.remove('below-floor');
+      item.floor.hidden = true;
       const isBelow = item.client.belowDashboardFloor();
       item.card.classList.toggle('below-floor', isBelow);
+      item.floor.hidden = !isBelow;
+      updateMenuStatus(item);
       if (isBelow) {
         below.add(item);
         const font = item.client.floorFontSize();
@@ -553,11 +572,16 @@
     space.className = 'spacer';
     const size = document.createElement('span');
     size.className = 'pane-size';
+    const floor = document.createElement('span');
+    floor.className = 'pane-floor';
+    floor.textContent = 'Below 80×24 floor';
+    floor.title = floor.textContent;
+    floor.hidden = true;
     const overflowNote = document.createElement('div');
     overflowNote.className = 'pane-overflow-note';
     overflowNote.textContent = 'Shift+wheel or drag the scrollbars to see the rest. Enlarge or Fit to show it whole.';
     overflowNote.hidden = true;
-    const item = { id: summary.id, summary, card, label, purpose, role, badge, messageCount, state, size, overflowNote, client: null, previousGrid: null };
+    const item = { id: summary.id, summary, card, label, purpose, role, badge, messageCount, state, size, floor, overflowNote, client: null, previousGrid: null };
     const renameForm = document.createElement('form');
     renameForm.className = 'pane-rename';
     renameForm.hidden = true;
@@ -616,10 +640,27 @@
     });
     item.left = makeButton('Move left', () => move(item.id, -1));
     item.right = makeButton('Move right', () => move(item.id, 1));
+    for (const control of [item.enlarge, item.pin, item.left, item.right]) {
+      control.classList.add('pane-optional-control');
+    }
     item.menuButton = makeButton('Menu', () => { item.menu.hidden = !item.menu.hidden; });
+    item.menuButton.classList.add('pane-menu-button');
     const menu = document.createElement('div');
     menu.className = 'pane-menu';
     menu.hidden = true;
+    item.menuStatus = document.createElement('div');
+    item.menuStatus.className = 'pane-menu-status';
+    item.menuStatus.hidden = true;
+    item.menuMessageCount = makeButton('', () => openMessages(`session:${item.id}`));
+    item.menuMessageCount.className = 'pane-collapsed-control pane-menu-message-count';
+    item.menuMessageCount.hidden = true;
+    item.menuEnlarge = makeButton('Enlarge', () => item.enlarge.click());
+    item.menuPin = makeButton('Pin', () => item.pin.click());
+    item.menuLeft = makeButton('Move left', () => item.left.click());
+    item.menuRight = makeButton('Move right', () => item.right.click());
+    for (const control of [item.menuEnlarge, item.menuPin, item.menuLeft, item.menuRight]) {
+      control.classList.add('pane-collapsed-control');
+    }
     item.kill = makeButton('Kill', () => { void killSession(item.id); });
     item.kill.dataset.action = 'kill';
     item.copy = makeButton('Copy session id', () => { void copySessionId(item.id); });
@@ -630,9 +671,10 @@
     item.restart.dataset.action = 'restart';
     item.dismiss = makeButton('Dismiss', () => dismiss(item.id));
     item.dismiss.dataset.action = 'dismiss';
-    menu.append(item.rename, item.kill, item.copy, item.pop, item.restart, item.dismiss);
+    menu.append(item.menuStatus, item.menuMessageCount, item.menuEnlarge, item.menuPin, item.menuLeft, item.menuRight,
+      item.rename, renameForm, item.kill, item.copy, item.pop, item.restart, item.dismiss);
     item.menu = menu;
-    head.append(label, renameForm, purpose, role, badge, messageCount, state, space, size, item.fit, item.enlarge,
+    head.append(label, purpose, role, badge, messageCount, state, space, size, floor, item.fit, item.enlarge,
       item.pin, item.left, item.right, item.menuButton);
     head.addEventListener('dblclick', (event) => {
       if (!event.target.closest('button')) item.enlarge.click();
@@ -681,14 +723,18 @@
   function updateCard(item) {
     const summary = item.summary;
     item.label.textContent = summary.label || summary.id;
+    item.label.title = item.label.textContent;
     item.purpose.textContent = [summary.purpose, summary.parent && summary.startedBy && `Started by ${summary.startedBy}`].filter(Boolean).join(' · ');
-    // Only a chair is marked in the header: a label on every pane would wrap a narrow header onto a second row.
+    item.purpose.title = item.purpose.textContent;
+    // Mark chairs explicitly; the label and purpose identify other panes.
     item.role.textContent = summary.role === 'chair' ? 'Chair' : '';
+    item.role.title = item.role.textContent;
     item.role.hidden = summary.role !== 'chair';
     item.card.dataset.role = summary.role === 'chair' ? 'chair' : 'delegate';
     item.badge.textContent = summary.stalled ? '● Stalled' : attention(item) ? '● Waiting' : '';
     item.badge.title = summary.stalled
-      ? `${summary.stalled.reason} since ${summary.stalled.since}: ${summary.stalled.description}` : '';
+      ? `${item.badge.textContent}: ${summary.stalled.reason} since ${summary.stalled.since}: ${summary.stalled.description}`
+      : item.badge.textContent;
     item.card.classList.toggle('attention', attention(item));
     item.card.classList.toggle('selected', selected === item.id);
     item.card.classList.toggle('ended', summary.exited === true);
@@ -696,10 +742,15 @@
       : summary.exitCode === null || summary.exitCode === undefined
         ? 'Ended: its output failed'
         : `Ended (code ${String(summary.exitCode)})`;
+    item.state.title = item.state.textContent;
     item.pin.textContent = pins.includes(item.id) ? 'Unpin' : 'Pin';
     item.enlarge.textContent = enlarged === item.id ? 'Restore' : 'Enlarge';
+    item.menuPin.textContent = item.pin.textContent;
+    item.menuEnlarge.textContent = item.enlarge.textContent;
     item.pin.setAttribute('aria-label', item.pin.textContent);
     item.enlarge.setAttribute('aria-label', item.enlarge.textContent);
+    item.menuPin.setAttribute('aria-label', item.menuPin.textContent);
+    item.menuEnlarge.setAttribute('aria-label', item.menuEnlarge.textContent);
     item.restart.hidden = launchBody(launches[item.id]) === null;
     item.dismiss.hidden = summary.exited !== true;
     item.card.setAttribute('aria-label', `${item.label.textContent} ${item.purpose.textContent}`);
@@ -766,7 +817,7 @@
         size: item.size, overflowNote: item.overflowNote },
       onAttentionChange: () => updateAttention(),
       onGeometryReady: () => scheduleAutoFit(),
-      onGeometryChange: () => scheduleFontFit(),
+      onGeometryChange: () => { updateMenuStatus(item); scheduleFontFit(); },
       onMetricsChange: () => scheduleAutoFit(),
       onOutsideGeometry: () => {
         focusOpenFits.delete(item.id);

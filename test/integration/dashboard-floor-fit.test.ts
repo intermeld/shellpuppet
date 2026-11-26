@@ -1,7 +1,10 @@
+import { writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeAll, expect, it } from 'vitest';
 import { captureDashboard } from './dashboardCapture.js';
+import { parseDaemonConfig } from '../../src/daemon/config.js';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
-import { api, startTestDaemon } from './helpers.js';
+import { api, eventually, makeTempHome, startTestDaemon } from './helpers.js';
 import type { TestDaemon } from './helpers.js';
 
 let browser: string | null = null;
@@ -21,6 +24,338 @@ interface PaneMeasurement {
   floorMaximum: number;
   gridMaximum: number;
 }
+
+it('keeps a detailed pane header from reducing its Auto fit area', async (context) => {
+  if (!browser) { context.skip(); return; }
+  const open = await setup();
+  const label = 'A detailed session label '.repeat(8);
+  const purpose = 'A longer purpose '.repeat(8) + ' · Started by a synthetic launcher with a long description';
+  const response = await api(daemon!.port, daemon!.token, '/sessions', { body: {
+    command: process.execPath, args: ['-e', 'setInterval(() => {}, 1000)'], shell: false,
+    openViewer: false, cwd: process.cwd(), cols: 96, rows: 24, label, purpose,
+  } });
+  expect(response.status).toBe(200);
+  await startSession();
+  const shot = await captureDashboard({ browser, viewerUrl: await open(), width: 1100, height: 700,
+    drive: true, timeoutMs: 120_000,
+    beforeNavigateScript: `${instrument}; localStorage.setItem('shellpuppet.dashboard', JSON.stringify({ mode: 'grid', fontSize: 10 }));`,
+    probe: `window.__paneClients?.size === 2 ? true : null`,
+    interact: async ({ evaluate }) => {
+      await evaluate(`window.__settlePanes(2)`);
+      return await evaluate(`(async () => {
+        for (const card of document.querySelectorAll('.pane')) {
+          card.style.width = '500px';
+          card.style.height = '340px';
+        }
+        const cards = [...document.querySelectorAll('.pane')];
+        for (const card of cards) window.__paneClients.get(card.dataset.session).relayout(false);
+        document.getElementById('auto-fit').click();
+        document.getElementById('auto-fit').click();
+        await window.__settlePanes(2);
+        const fitted = cards.map(card => ({
+          id: card.dataset.session, headHeight: card.querySelector('.pane-head').getBoundingClientRect().height,
+          termHeight: card.querySelector('.pane-term').getBoundingClientRect().height,
+          size: card.querySelector('.pane-size').textContent, below: card.classList.contains('below-floor'),
+          label: card.querySelector('.pane-label').textContent, purpose: card.querySelector('.pane-purpose').textContent
+        }));
+        for (const card of cards) {
+          card.style.width = '300px';
+          window.__paneClients.get(card.dataset.session).relayout(false);
+        }
+        document.getElementById('auto-fit').click();
+        document.getElementById('auto-fit').click();
+        await window.__settlePanes(2);
+        const card = cards[0];
+        const head = card.querySelector('.pane-head');
+        const fit = card.querySelector('button[aria-label="Fit"]');
+        const menuButton = card.querySelector('button[aria-label="Menu"]');
+        const inside = button => button.getBoundingClientRect().right <= head.getBoundingClientRect().right;
+        const narrow = {
+          headHeight: head.getBoundingClientRect().height,
+          labelWidth: card.querySelector('.pane-label').getBoundingClientRect().width,
+          purposeWidth: card.querySelector('.pane-purpose').getBoundingClientRect().width,
+          labelTitle: card.querySelector('.pane-label').title,
+          purposeTitle: card.querySelector('.pane-purpose').title,
+          fitVisible: getComputedStyle(fit).display !== 'none' && inside(fit),
+          menuVisible: getComputedStyle(menuButton).display !== 'none' && inside(menuButton),
+          collapsed: getComputedStyle(card.querySelector('.pane-head button[aria-label="Enlarge"]')).display === 'none'
+        };
+        menuButton.click();
+        const menu = card.querySelector('.pane-menu');
+        const pin = menu.querySelector('button[aria-label="Pin"]');
+        const right = menu.querySelector('button[aria-label="Move right"]');
+        const left = menu.querySelector('button[aria-label="Move left"]');
+        const menuActionsVisible = [pin, right, left, menu.querySelector('button[aria-label="Enlarge"]')]
+          .every(button => getComputedStyle(button).display !== 'none');
+        pin.click();
+        const pinned = menu.querySelector('button[aria-label="Unpin"]') !== null;
+        right.click();
+        const movedRight = [...document.querySelectorAll('#panes > .pane')].at(-1) === card;
+        left.click();
+        const movedLeft = [...document.querySelectorAll('#panes > .pane')][0] === card;
+        menu.querySelector('button[aria-label="Enlarge"]').click();
+        const enlarged = document.getElementById('panes').dataset.layout === 'enlarged';
+        menu.querySelector('button[aria-label="Restore"]').click();
+        const restored = document.getElementById('panes').dataset.layout === 'grid';
+        return { fitted, narrow, menuActionsVisible, pinned, movedRight, movedLeft, enlarged, restored };
+      })()`);
+    },
+  });
+  const result = shot.probe as {
+    fitted: { headHeight: number; termHeight: number; size: string; below: boolean; label: string; purpose: string }[];
+    narrow: { headHeight: number; labelWidth: number; purposeWidth: number; labelTitle: string; purposeTitle: string;
+      fitVisible: boolean; menuVisible: boolean; collapsed: boolean };
+    menuActionsVisible: boolean; pinned: boolean; movedRight: boolean; movedLeft: boolean;
+    enlarged: boolean; restored: boolean;
+  };
+  const panes = result.fitted;
+  expect(panes[0]!.label).toBe(label);
+  expect(panes[0]!.purpose).toBe(purpose);
+  expect(panes[0]!.headHeight, JSON.stringify(panes)).toBe(panes[1]!.headHeight);
+  expect(panes[0]!.termHeight, JSON.stringify(panes)).toBe(panes[1]!.termHeight);
+  expect(panes[0]!.size, JSON.stringify(panes)).toBe(panes[1]!.size);
+  expect(panes[0]!.below, JSON.stringify(panes)).toBe(panes[1]!.below);
+  expect(result.narrow.headHeight).toBe(panes[0]!.headHeight);
+  expect(result.narrow.labelWidth).toBeGreaterThan(0);
+  expect(result.narrow.purposeWidth).toBeGreaterThan(0);
+  expect(result.narrow.labelTitle).toBe(label);
+  expect(result.narrow.purposeTitle).toBe(purpose);
+  expect(result.narrow.fitVisible).toBe(true);
+  expect(result.narrow.menuVisible).toBe(true);
+  expect(result.narrow.collapsed).toBe(true);
+  expect(result.menuActionsVisible).toBe(true);
+  expect(result.pinned).toBe(true);
+  expect(result.movedRight).toBe(true);
+  expect(result.movedLeft).toBe(true);
+  expect(result.enlarged).toBe(true);
+  expect(result.restored).toBe(true);
+}, 180_000);
+
+it('keeps crowded narrow header statuses readable and the menu actionable', async (context) => {
+  if (!browser) { context.skip(); return; }
+  const open = await setup();
+  const id = await startSession();
+  const messages = `(() => {
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = (resource, options) => String(resource).startsWith('/dashboard/messages')
+      ? Promise.resolve(new Response(JSON.stringify({ enabled: true,
+          counts: { [${JSON.stringify(id)}]: 3 }, messages: [], groups: [] }),
+        { status: 200, headers: { 'content-type': 'application/json' } }))
+      : nativeFetch(resource, options);
+  })()`;
+  const shot = await captureDashboard({ browser, viewerUrl: await open(), width: 900, height: 650,
+    drive: true, timeoutMs: 120_000,
+    beforeNavigateScript: `${instrument}; ${messages}; localStorage.setItem('shellpuppet.dashboard', JSON.stringify({ mode: 'grid', fontSize: 10 }));`,
+    probe: `window.__paneClients?.size === 1 && document.querySelector('.pane-message-count')?.textContent === '3 messages' ? true : null`,
+    interact: async ({ evaluate }) => evaluate(`(async () => {
+      const id = ${JSON.stringify(id)};
+      const card = document.querySelector('.pane[data-session="' + id + '"]');
+      card.style.width = '300px'; card.style.height = '340px';
+      const client = window.__paneClients.get(id);
+      client.relayout(false);
+      document.getElementById('auto-fit').click();
+      document.getElementById('auto-fit').click();
+      await window.__settlePanes(1);
+      const sizeBefore = card.querySelector('.pane-size').textContent;
+      document.getElementById('auto-fit').click();
+      if (!client.takeGrid(90, 30)) throw Error('Could not change the grid');
+      const started = performance.now();
+      while (!card.querySelector('.pane-size').textContent.startsWith('90×30')) {
+        if (performance.now() - started > 10000) throw Error('Grid size did not change');
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      await window.__settlePanes(1);
+      const feed = window.__dashboardDiagnostics.streams.find(s => s.url.endsWith('/dashboard/events'))?.socket;
+      feed.onmessage({ data: JSON.stringify({ type: 'session-updated', session: {
+        id, label: 'Crowded status fixture', purpose: 'Synthetic purpose', role: 'chair',
+        waitingOnPrompt: { question: 'Synthetic prompt', options: [], waitingMs: 30000, alerted: true }
+      }, changed: ['role', 'waitingOnPrompt'] }) });
+      const head = card.querySelector('.pane-head');
+      const fields = Object.fromEntries(['role', 'badge', 'message-count', 'size', 'floor'].map(name => {
+        const element = card.querySelector(name === 'badge' ? '.pane-head .badge' : '.pane-' + name);
+        return [name, { text: element.textContent, title: element.title }];
+      }));
+      const fit = card.querySelector('button[aria-label="Fit"]');
+      const menuButton = card.querySelector('button[aria-label="Menu"]');
+      const within = button => button.getBoundingClientRect().right <= head.getBoundingClientRect().right;
+      const narrow = { headHeight: head.getBoundingClientRect().height,
+        below: card.classList.contains('below-floor'), fields,
+        sizeBefore, menuStatus: card.querySelector('.pane-menu-status').textContent,
+        menuTitle: menuButton.title, menuMarked: menuButton.classList.contains('has-status'),
+        fitVisible: within(fit), menuVisible: within(menuButton) };
+      menuButton.click();
+      const menuMessage = card.querySelector('.pane-menu-message-count');
+      narrow.menuMessage = { text: menuMessage.textContent, title: menuMessage.title,
+        visible: getComputedStyle(menuMessage).display !== 'none' };
+      menuMessage.click();
+      narrow.messagesOpened = !document.getElementById('messages-view').hidden;
+      return narrow;
+    })()`),
+  });
+  const result = shot.probe as {
+    headHeight: number; below: boolean; sizeBefore: string;
+    fields: Record<string, { text: string; title: string }>;
+    menuStatus: string; menuTitle: string; menuMarked: boolean; fitVisible: boolean; menuVisible: boolean;
+    menuMessage: { text: string; title: string; visible: boolean }; messagesOpened: boolean;
+  };
+  expect(result.headHeight).toBe(38);
+  expect(result.below).toBe(true);
+  expect(result.sizeBefore).not.toBe(result.fields['size']!.text);
+  expect(result.fields['role']).toEqual({ text: 'Chair', title: 'Chair' });
+  expect(result.fields['badge']).toEqual({ text: '● Waiting', title: '● Waiting' });
+  expect(result.fields['message-count']).toEqual({ text: '3 messages', title: '3 messages' });
+  expect(result.fields['size']!.title).toBe(result.fields['size']!.text);
+  expect(result.fields['floor']).toEqual({ text: 'Below 80×24 floor', title: 'Below 80×24 floor' });
+  for (const field of Object.values(result.fields)) expect(result.menuStatus).toContain(field.text);
+  expect(result.menuTitle).toContain('Waiting');
+  expect(result.menuTitle).toContain('Below 80×24 floor');
+  expect(result.menuMarked).toBe(true);
+  expect(result.fitVisible).toBe(true);
+  expect(result.menuVisible).toBe(true);
+  expect(result.menuMessage).toEqual({ text: '3 messages', title: '3 messages', visible: true });
+  expect(result.messagesOpened).toBe(true);
+}, 180_000);
+
+it('scrolls a short Focus menu to its Restart and Dismiss actions', async (context) => {
+  if (!browser) { context.skip(); return; }
+  const home = makeTempHome('dash-short-menu-');
+  const release = join(home, 'finish-programme');
+  const parsed = parseDaemonConfig({ launcher: { profiles: [{
+    name: 'short-menu', role: 'chair', label: 'Crowded status fixture',
+    purpose: 'A synthetic dashboard launch in the short Focus strip',
+    command: process.execPath,
+    args: ['-e', "const fs = require('node:fs'); setInterval(() => { if (fs.existsSync(process.argv[1])) process.exit(0); }, 25);", release],
+    shell: false,
+  }] } });
+  expect(parsed.problems).toEqual([]);
+  const urls: string[] = [];
+  daemon = await startTestDaemon({ home, launchProfiles: parsed.config.launcher,
+    launcher: (url) => { urls.push(url); return Promise.resolve({ launched: true, mode: 'isolated-app', browser: 'mock' }); },
+    idleCheckIntervalMs: 600_000,
+  });
+  const primary = await startSession();
+  expect((await api(daemon.port, daemon.token, '/dashboard/open', { body: {} })).status).toBe(200);
+  const messages = `(() => {
+    const nativeFetch = window.fetch.bind(window);
+    window.fetch = (resource, options) => String(resource).startsWith('/dashboard/messages')
+      ? Promise.resolve(new Response(JSON.stringify({ enabled: true,
+          counts: window.__crowdedId ? { [window.__crowdedId]: 3 } : {}, messages: [], groups: [] }),
+        { status: 200, headers: { 'content-type': 'application/json' } }))
+      : nativeFetch(resource, options);
+  })()`;
+  let phase = 'opening the dashboard';
+  const shot = await captureDashboard({ browser, viewerUrl: urls.at(-1)!, width: 1200, height: 720,
+    drive: true, timeoutMs: 120_000,
+    failureFacts: () => ({ phase }),
+    beforeNavigateScript: `${instrument}; ${messages}; localStorage.setItem('shellpuppet.dashboard', JSON.stringify({ mode: 'focus', autoFit: false }));`,
+    probe: `window.__paneClients?.size === 1 && !document.getElementById('start')?.disabled ? true : null`,
+    interact: async ({ evaluate, send }) => {
+      phase = 'launching the short pane';
+      await evaluate("document.getElementById('start').click()");
+      let launched = '';
+      await eventually(async () => {
+        const result = await api(daemon!.port, daemon!.token, '/sessions');
+        launched = ((result.body['sessions'] as { id: string }[]) ?? []).find(item => item.id !== primary)?.id ?? '';
+        return launched !== '';
+      }, 30_000, 100, 'the dashboard launch to create a session');
+      const cardSelector = `#strip .pane[data-session=${JSON.stringify(launched)}]`;
+      await eventually(async () => await evaluate(`(() => {
+        const card = document.querySelector(${JSON.stringify(cardSelector)});
+        return document.getElementById('panes').dataset.layout === 'focus' &&
+          !!card?.querySelector('.pane-size')?.textContent.includes('×');
+      })()`) === true, 30_000, 100, 'the launched pane to enter the Focus strip');
+      await evaluate(`(() => {
+        window.__crowdedId = ${JSON.stringify(launched)};
+        document.getElementById('messages-toggle').click();
+        document.getElementById('messages-toggle').click();
+      })()`);
+      await eventually(async () => await evaluate(`document.querySelector(${JSON.stringify(cardSelector)})
+        ?.querySelector('.pane-message-count')?.textContent === '3 messages'`) === true,
+      10_000, 100, 'the unread message count');
+      expect((await api(daemon!.port, daemon!.token, `/sessions/${launched}/resize`,
+        { body: { cols: 400, rows: 150 } })).status).toBe(200);
+      await eventually(async () => await evaluate(`document.querySelector(${JSON.stringify(cardSelector)})
+        ?.querySelector('.pane-size')?.textContent === '400×150 (following)'`) === true,
+      10_000, 100, 'the following grid');
+      writeFileSync(release, '');
+      await eventually(async () => (await api(daemon!.port, daemon!.token,
+        `/sessions/${launched}/snapshot`)).body['exited'] === true, 15_000, 100, 'the programme to exit');
+      await eventually(async () => await evaluate(`(() => {
+        const card = document.querySelector(${JSON.stringify(cardSelector)});
+        return card?.classList.contains('ended') && card?.classList.contains('below-floor') &&
+          !card.querySelector('button[aria-label="Restart"]').hidden &&
+          !card.querySelector('button[aria-label="Dismiss"]').hidden;
+      })()`) === true, 10_000, 100, 'the ended pane controls');
+      const before = await evaluate(`(() => {
+        const card = document.querySelector(${JSON.stringify(cardSelector)});
+        card.querySelector('button[aria-label="Menu"]').click();
+        const menu = card.querySelector('.pane-menu');
+        menu.scrollTop = menu.scrollHeight;
+        const restart = card.querySelector('button[aria-label="Restart"]');
+        const box = restart.getBoundingClientRect();
+        const menuBox = menu.getBoundingClientRect();
+        const cardBox = card.getBoundingClientRect();
+        return { width: cardBox.width, height: cardBox.height,
+          headHeight: card.querySelector('.pane-head').getBoundingClientRect().height,
+          menuHeight: menuBox.height, menuBottom: menuBox.bottom, cardBottom: cardBox.bottom,
+          terminalHeight: card.querySelector('.pane-term').getBoundingClientRect().height,
+          scrollMax: menu.scrollHeight - menu.clientHeight, scrollTop: menu.scrollTop,
+          status: card.querySelector('.pane-menu-status').textContent,
+          restartVisible: box.top >= menuBox.top && box.bottom <= menuBox.bottom,
+          point: { x: box.x + box.width / 2, y: box.y + box.height / 2 } };
+      })()`) as { width: number; height: number; headHeight: number; menuHeight: number;
+        menuBottom: number; cardBottom: number; terminalHeight: number; scrollMax: number;
+        scrollTop: number; status: string; restartVisible: boolean; point: { x: number; y: number } };
+      expect(before.restartVisible, JSON.stringify(before)).toBe(true);
+      phase = 'clicking Restart';
+      await send('Input.dispatchMouseEvent', { type: 'mousePressed', ...before.point, button: 'left', clickCount: 1 });
+      await send('Input.dispatchMouseEvent', { type: 'mouseReleased', ...before.point, button: 'left', clickCount: 1 });
+      await eventually(async () => {
+        const result = await api(daemon!.port, daemon!.token, '/sessions');
+        return ((result.body['sessions'] as { id: string }[]) ?? [])
+          .some(item => item.id !== primary && item.id !== launched);
+      }, 15_000, 100, 'Restart to launch another session');
+      const keyboard = await evaluate(`(async () => {
+        const card = document.querySelector(${JSON.stringify(cardSelector)});
+        const menu = card.querySelector('.pane-menu');
+        const dismiss = card.querySelector('button[aria-label="Dismiss"]');
+        dismiss.focus();
+        await new Promise(resolve => requestAnimationFrame(resolve));
+        const box = dismiss.getBoundingClientRect();
+        const viewport = menu.getBoundingClientRect();
+        return { focused: document.activeElement === dismiss,
+          visible: box.top >= viewport.top && box.bottom <= viewport.bottom,
+          scrollTop: menu.scrollTop };
+      })()`) as { focused: boolean; visible: boolean; scrollTop: number };
+      expect(keyboard.focused && keyboard.visible, JSON.stringify(keyboard)).toBe(true);
+      phase = 'pressing Space on Dismiss';
+      await send('Input.dispatchKeyEvent', { type: 'rawKeyDown', key: ' ', code: 'Space',
+        windowsVirtualKeyCode: 32, nativeVirtualKeyCode: 32 });
+      await send('Input.dispatchKeyEvent', { type: 'keyUp', key: ' ', code: 'Space',
+        windowsVirtualKeyCode: 32, nativeVirtualKeyCode: 32 });
+      await eventually(async () => await evaluate(`!document.querySelector(${JSON.stringify(cardSelector)})`) === true,
+        10_000, 100, 'Dismiss to remove the ended pane');
+      return { before, keyboard, dismissed: true };
+    },
+  });
+  const result = shot.probe as { before: { width: number; height: number; headHeight: number;
+    menuHeight: number; menuBottom: number; cardBottom: number; terminalHeight: number;
+    scrollMax: number; scrollTop: number; status: string; restartVisible: boolean };
+    keyboard: { focused: boolean; visible: boolean; scrollTop: number }; dismissed: boolean };
+  expect(result.before.width).toBe(300);
+  expect(result.before.height).toBe(170);
+  expect(result.before.headHeight).toBe(38);
+  expect(result.before.menuBottom).toBeLessThanOrEqual(result.before.cardBottom);
+  expect(result.before.terminalHeight).toBeGreaterThan(0);
+  expect(result.before.scrollMax).toBeGreaterThan(0);
+  expect(result.before.scrollTop).toBeGreaterThan(0);
+  expect(result.before.restartVisible).toBe(true);
+  for (const text of ['Chair', '3 messages', 'Ended', '400×150 (following)', 'Below 80×24 floor'])
+    expect(result.before.status).toContain(text);
+  expect(result.keyboard.focused).toBe(true);
+  expect(result.keyboard.visible).toBe(true);
+  expect(result.dismissed).toBe(true);
+}, 180_000);
 
 async function startSession(cols = 96, rows = 24, hold = false) {
   const response = await api(daemon!.port, daemon!.token, '/sessions', { body: {
