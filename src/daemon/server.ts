@@ -2874,6 +2874,8 @@ export class Daemon {
       this.audit.record('daemon', 'nudge-cleared', id, { messageIds: clearedIds,
         waitingMessageIds: unread.map((entry) => entry.id) });
     }
+    // Resolve a retained line before the queued-message hold below. It may
+    // receive its own submit key, but another body must never be typed over it.
     const pending = session.nudgePendingLine();
     if (pending !== null) {
       if (session.nudgePendingIds().length === 0) return 'wait';
