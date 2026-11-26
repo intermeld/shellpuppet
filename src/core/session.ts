@@ -845,7 +845,7 @@ export class Session implements WaitTarget {
   /** Why the input pipe failed (Windows), once it has: input is refused from then on. */
   private inputFailure: Error | null = null;
   private lastChange = Date.now();
-  /** When input was last written to the PTY. */
+  /** When typing or a nudge was last accepted, excluding terminal reports. */
   private lastInputAt = 0;
   private recentInputUntil = 0;
   /** Sticky: the rendered screen has shown something at least once. */
@@ -1320,7 +1320,7 @@ export class Session implements WaitTarget {
 
   /** Write and report what a module can establish about a typed submission. */
   writeWithResult(data: string, options: { terminalReport?: boolean; humanInput?: boolean; submitMode?: 'auto' | 'on' | 'off' } = {}): Promise<TypedWriteResult> {
-    this.inputQueueVersion++;
+    if (options.terminalReport !== true) this.inputQueueVersion++;
     const delayedSubmit = this.delayedSubmission(data) || options.submitMode === 'on' ||
       (options.submitMode === 'auto' && this.autoSubmitEligible());
     if (delayedSubmit) this.submissionsQueued++;
@@ -1603,7 +1603,7 @@ export class Session implements WaitTarget {
     // Recorded BEFORE the bytes go in, when the screen still shows what this
     // input is answering: the waiter's stale-prompt guard needs that prompt,
     // and its echo guard needs the input itself.
-    this.lastInputData = data;
+    if (!terminalReport) this.lastInputData = data;
     if (!nudge && !terminalReport && data.length > 0) {
       this.recentInputUntil = Date.now() + RECENT_INPUT_MS;
     }
@@ -1623,10 +1623,12 @@ export class Session implements WaitTarget {
     // waiting to paint its placeholder, so a new placeholder can only be this body's.
     const settledBefore = Date.now() - this.lastInputAt >= TYPED_PLACEHOLDER_SETTLE_MS &&
       Date.now() - this.lastChange >= TYPED_PLACEHOLDER_SETTLE_MS;
-    this.lastInputAt = Date.now();
-    this.inputVersion++;
+    if (!terminalReport) {
+      this.lastInputAt = Date.now();
+      this.inputVersion++;
+    }
     if (!terminalReport && data.length > 0) this.promptInputRevision++;
-    this.stalePrompts.noteInput(screen, this.agent, this.renderer.promptStyles(lines));
+    if (!terminalReport) this.stalePrompts.noteInput(screen, this.agent, this.renderer.promptStyles(lines));
 
     if (nudge || this.delayedSubmission(data)) {
       const submit = this.agentModule?.input?.submit;

@@ -38,8 +38,10 @@ process.stdin.on('data', (bytes) => {
       ' extra\x1b[0m\r\n' + '\x1b[0;38;2;136;136;136m' + '─'.repeat(120) + '\x1b[0m');
     return;
   }
-  if (mode !== 'ready' && mode !== 'queueing') return;
-  const data = bytes.toString();
+  if (mode !== 'ready' && mode !== 'queueing' && mode !== 'mouse-ready') return;
+  const data = mode === 'mouse-ready'
+    ? bytes.toString().replace(/\x1b\[<\d+;\d+;\d+[Mm]/g, '') : bytes.toString();
+  if (data === '') return;
   if (mode === 'queueing') {
     if (data === '\r') {
       process.stdout.write('\x1b[2J\x1b[H');

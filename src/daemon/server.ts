@@ -101,7 +101,7 @@ import { daemonRunning } from './liveness.js';
 import type { DaemonState, DaemonStateFile } from './paths.js';
 import { restoreRestartSource, retryRestartSource, snapshotSourceId } from './restartSource.js';
 import { packageVersion } from './meta.js';
-import { terminalReportKind } from './terminalReports.js';
+import { TerminalReportStream, terminalReportBatchKind } from './terminalReports.js';
 import { ViewerSync } from './viewerSync.js';
 import { SessionFeed } from './sessionFeed.js';
 import type { FeedFrame, FeedSummary } from './sessionFeed.js';
@@ -3707,6 +3707,8 @@ export class Daemon {
           json(res, 400, { error: 'data (string) is required.' });
           return;
         }
+        const report = (submitMode === undefined || submitMode === 'off') && body['submit'] !== true
+          ? terminalReportBatchKind(data) : null;
         // Awaited: long input is chunked (Session.write), so verify below must
         // not read the screen until every chunk has actually been written.
         // The write resolves with the screen as it was just before this input
@@ -3723,9 +3725,9 @@ export class Daemon {
         const submit = body['submit'] === true;
         let written: Awaited<ReturnType<typeof session.writeWithResult>>;
         try {
-          written = submitMode === undefined
-            ? await session.writeWithResult(data)
-            : await session.writeWithResult(data, { submitMode });
+          written = await session.writeWithResult(data, {
+            ...(submitMode !== undefined ? { submitMode } : {}), terminalReport: report !== null,
+          });
         } catch (error) {
           json(res, 409, {
             error:
@@ -3740,9 +3742,14 @@ export class Daemon {
             ? { outcome: 'not-requested' as const }
             : submitOutcome(written, true);
         const bytes = submitMode === undefined ? data.length : written.inputBytes ?? 0;
-        this.audit.record(actor, 'input', id, { chars: bytes,
-          ...(submitMode !== undefined ? { submitMode, ...reporting } : reporting ? { submit: true, ...reporting } : {}) });
-        this.broadcastControl(id, { type: 'input-source', source: 'agent' });
+        if (report !== null) {
+          this.audit.record(actor, 'report', id, { kind: report, chars: bytes,
+            ...(this.audit.captureContent ? { data } : {}) });
+        } else {
+          this.audit.record(actor, 'input', id, { chars: bytes,
+            ...(submitMode !== undefined ? { submitMode, ...reporting } : reporting ? { submit: true, ...reporting } : {}) });
+          this.broadcastControl(id, { type: 'input-source', source: 'agent' });
+        }
         // §3.1: TUIs silently swallow input while loading or when a panel has
         // stolen focus. verify re-reads the screen and reports whether the
         // text landed (best effort: hidden-input prompts and heavy
@@ -5433,6 +5440,20 @@ export class Daemon {
 
     /** Whether this socket has been told that the session's input has failed. */
     let toldInputFailed = false;
+    const reportStream = new TerminalReportStream((data, report) => {
+      this.callerContext.run(options.callerSession, () => {
+        void session.write(data, { terminalReport: report !== null, humanInput: report === null }).catch((error: unknown) => {
+          this.logger.warn('viewer input failed', { id: session.id, error: String(error) });
+        });
+        if (report !== null) {
+          this.audit.record(actor, 'report', session.id, { kind: report, chars: data.length,
+            ...(this.audit.captureContent ? { data } : {}) });
+        } else {
+          this.audit.record(actor, 'input', session.id, { chars: data.length });
+          this.broadcastControl(session.id, { type: 'input-source', source: 'human' });
+        }
+      });
+    });
     const onViewerMessage = async (message: Buffer | string): Promise<void> => {
       this.lastActivity = Date.now();
       const text = typeof message === 'string' ? message : message.toString('utf8');
@@ -5708,38 +5729,7 @@ export class Daemon {
         }
         return;
       }
-      // write() is async, so a failure arrives as a rejection and never as a
-      // synchronous throw: a try/catch here would be dead code. Not awaited:
-      // this is the viewer's data handler and must stay responsive, and
-      // ordering is guaranteed inside write() by its queue rather than here.
-      // (xterm hands us multi-character strings for pastes and escape
-      // sequences, so this is not always one keystroke.) .catch keeps the exit
-      // race, the session dying mid-write, from escaping as an unhandled
-      // rejection.
-      const report = terminalReportKind(text);
-      void session.write(text, { terminalReport: report !== null, humanInput: report === null }).catch((error: unknown) => {
-        this.logger.warn('viewer input failed', {
-          id: session.id,
-          error: String(error),
-        });
-      });
-      // The viewer's terminal answering the program, such as where the cursor
-      // is or that the window gained focus, is written above like a keystroke
-      // because the program asked for it. Nobody typed it, so it is audited
-      // as a report and leaves the "last input" indicator alone (§4.5, §5).
-      // Only reports allow opt-in content capture.
-      if (report !== null) {
-        this.audit.record(actor, 'report', session.id, {
-          kind: report,
-          chars: text.length,
-          ...(this.audit.captureContent ? { data: text } : {}),
-        });
-        return;
-      }
-      this.audit.record(actor, 'input', session.id, {
-        chars: text.length,
-      });
-      this.broadcastControl(session.id, { type: 'input-source', source: 'human' });
+      reportStream.push(text);
     };
     ws.on('message', (message: Buffer | string) => {
       if (actor === 'dashboard' && ws.readyState !== ws.OPEN) return;
@@ -5752,6 +5742,7 @@ export class Daemon {
 
     ws.on('close', () => {
       this.callerContext.run(options.callerSession, () => {
+        reportStream.flush();
         unsubscribeData();
         unsubscribeExit();
         sync.close();

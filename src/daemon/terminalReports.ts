@@ -32,6 +32,8 @@
 
 /** What a terminal report says, as the audit log names it. */
 export type TerminalReportKind =
+  | 'mouse'
+  | 'multiple'
   | 'focus-in'
   | 'focus-out'
   | 'cursor-position'
@@ -43,6 +45,10 @@ export type TerminalReportKind =
 
 /* eslint-disable no-control-regex -- escape sequences are what this table matches */
 const REPORTS: readonly { kind: TerminalReportKind; pattern: RegExp }[] = [
+  // The bundled terminal sends SGR (including pixel coordinates) or the
+  // three-character normal/X10 payload. urxvt 1015 is unsupported there.
+  { kind: 'mouse', pattern: /^\x1b\[<(?:0|[1-9]\d{0,5});(?:0|[1-9]\d{0,5});(?:0|[1-9]\d{0,5})[Mm]$/ },
+  { kind: 'mouse', pattern: /^\x1b\[M[\x20-\xff]{3}$/ },
   // Focus reporting: the page gained or lost focus, or had it or not when
   // the program set DECSET 1004 (CoreBrowserTerminal `_handleTextAreaFocus`,
   // `_handleTextAreaBlur` and `_reportFocus`).
@@ -94,4 +100,71 @@ const MODIFIED_F3 = /^\x1b\[1;(?:[2-9]|1[0-6])R$/;
 export function terminalReportKind(message: string): TerminalReportKind | null {
   if (MODIFIED_F3.test(message)) return null;
   return REPORTS.find(({ pattern }) => pattern.test(message))?.kind ?? null;
+}
+
+const MAX_REPORT_BYTES = 128;
+const FRAGMENT_WAIT_MS = 40;
+
+/** A whole input made only of complete reports; anything mixed is typing. */
+export function terminalReportBatchKind(message: string): TerminalReportKind | null {
+  if (message.length === 0 || message.length > MAX_REPORT_BYTES) return null;
+  const single = terminalReportKind(message);
+  if (single !== null) return single;
+  let offset = 0;
+  let count = 0;
+  while (offset < message.length) {
+    if (message[offset] !== '\x1b') return null;
+    let next = offset + 3;
+    for (; next <= message.length; next++) {
+      if (terminalReportKind(message.slice(offset, next)) !== null) break;
+    }
+    if (next > message.length) return null;
+    offset = next;
+    count++;
+  }
+  return count > 1 ? 'multiple' : null;
+}
+
+/** Only unambiguous mouse prefixes may wait for a later WebSocket frame. */
+function mousePrefix(message: string): boolean {
+  if (message.length > MAX_REPORT_BYTES) return false;
+  /* eslint-disable no-control-regex -- these prefixes are escape sequences */
+  return /^\x1b\[<(?:\d{0,6})(?:;\d{0,6}){0,2}[Mm]?$/u.test(message) ||
+    /^\x1b\[M[\x20-\xff]{0,2}$/u.test(message);
+  /* eslint-enable no-control-regex */
+}
+
+/** Preserve frame order while allowing a split mouse report to complete. */
+export class TerminalReportStream {
+  private pending = '';
+  private timer: ReturnType<typeof setTimeout> | undefined;
+
+  constructor(private readonly deliver: (data: string, kind: TerminalReportKind | null) => void) {}
+
+  push(data: string): void {
+    const whole = this.pending + data;
+    const kind = terminalReportBatchKind(whole);
+    if (kind !== null) {
+      this.clear();
+      this.deliver(whole, kind);
+    } else if (mousePrefix(whole)) {
+      this.pending = whole;
+      this.timer ??= setTimeout(() => this.flush(), FRAGMENT_WAIT_MS);
+    } else {
+      this.clear();
+      this.deliver(whole, null);
+    }
+  }
+
+  flush(): void {
+    const pending = this.pending;
+    this.clear();
+    if (pending !== '') this.deliver(pending, null);
+  }
+
+  private clear(): void {
+    if (this.timer !== undefined) clearTimeout(this.timer);
+    this.timer = undefined;
+    this.pending = '';
+  }
 }
