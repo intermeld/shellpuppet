@@ -22,6 +22,38 @@ function fixture(id: string): { session: Session; data: (text: string) => void; 
   return { session, data: text => { data(text); }, exit: () => { exit(); } };
 }
 
+describe('session mouse encoding', () => {
+  it.each([1005, 1006, 1015])('captures mode %i at the same point as the screen', async mode => {
+    const f = fixture('mouse');
+    const enable = '\x1b[?' + String(mode) + 'h';
+    try {
+      // Node-pty can deliver even the final h or l in a separate callback.
+      for (const char of '\x1b[?1003;' + String(mode) + 'h') f.data(char);
+      f.data('\x1b[?25lON');
+      const connected = f.session.viewerState();
+      const captured = f.session.captureViewerScreen(0, 0);
+      for (const char of '\x1b[?1002;' + String(mode) + 'l') f.data(char);
+      for (const state of [await connected, (await captured).state]) {
+        expect(state).toContain(enable);
+        expect(state).toContain('\x1b[?25l');
+        expect(state).toContain('ON');
+      }
+      expect(await f.session.viewerState()).not.toContain(enable);
+      expect((await f.session.captureViewerScreen(0, 0)).state).not.toContain(enable);
+    } finally { f.exit(); await f.session.kill(); }
+  });
+
+  it('keeps SGR across unrelated mode changes and drops it on a full reset', async () => {
+    const f = fixture('sgr');
+    try {
+      f.data('\x1b[?1006h\x1b[?1005h\x1b[?1015l\x1b[?1005l');
+      expect(await f.session.viewerState()).toContain('\x1b[?1006h');
+      f.data('\x1bc');
+      expect(await f.session.viewerState()).not.toContain('\x1b[?1006h');
+    } finally { f.exit(); await f.session.kill(); }
+  });
+});
+
 describe('session output at exit and kill', () => {
   it('drops late PTY data before it reaches either xterm or viewers', async () => {
     const f = fixture('late');
