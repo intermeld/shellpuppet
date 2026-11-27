@@ -48,6 +48,8 @@ describe('dashboard message refresh', () => {
       let lastMessageFetch = 0;
       let messageRetryDelay = 0;
       let messagingEnabled = false;
+      let messageMode = 'history';
+      let ageRefreshTimer = null;
       let unreadCounts = {};
       let messageEntries = [];
       let messageGroups = [];
@@ -66,7 +68,7 @@ describe('dashboard message refresh', () => {
       }
       ${source.slice(start, end)}
       ({ scheduleMessageRefresh, get calls() { return calls; }, get counts() { return unreadCounts; } })`,
-    { setTimeout, Date, outcomes }) as { scheduleMessageRefresh: () => void; calls: number; counts: Record<string, number> };
+    { setTimeout, clearTimeout, Date, outcomes }) as { scheduleMessageRefresh: () => void; calls: number; counts: Record<string, number> };
     refresh.scheduleMessageRefresh();
     await vi.advanceTimersByTimeAsync(300);
     expect(refresh.calls).toBe(1);
