@@ -2,6 +2,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { expect, it } from 'vitest';
 import { findBrowser } from '../../src/daemon/viewerLauncher.js';
+import { sessionFixture } from '../core/sessionFixture.js';
 import { captureViewer } from './browserCapture.js';
 import { captureDashboard } from './dashboardCapture.js';
 import { api, connectWs, eventually, startTestDaemon } from './helpers.js';
@@ -86,3 +87,50 @@ it.skipIf(!browser)('delivers mouse movement in the session encoding on attach, 
     } finally { observer.close(); }
   } finally { await td.stop(); }
 }, 240_000);
+
+it.skipIf(!browser)('replays cell and pixel mode changes with the same mouse reports as live xterm', async () => {
+  const track = '\x1b[?1003h';
+  const cell = '\x1b[?1006h';
+  const pixel = '\x1b[?1016h';
+  const wipe = '\x1bc\x1b[3J';
+  const changes = {
+    'pixel alone': pixel,
+    'pixel after cell': cell + pixel,
+    'cell after pixel': pixel + cell,
+    'cell reasserted': '\x1b[?1006;1016;1006h',
+    'both set together': '\x1b[?1006;1016h',
+    'pixel reset after cell': cell + '\x1b[?1016l',
+    'cell reset after pixel': pixel + '\x1b[?1006l',
+    'full reset after pixel': pixel + '\x1bc' + track,
+  };
+  const f = sessionFixture('mouse-reports');
+  try {
+    type MouseStreams = { name: string; live: string; viewer: string; frozen: string };
+    const streams: MouseStreams[] = [];
+    for (const [name, change] of Object.entries(changes)) {
+      const live = track + change;
+      f.data(wipe + live);
+      streams.push({ name, live, viewer: wipe + await f.session.viewerState(),
+        frozen: wipe + (await f.session.captureViewerScreen(0, 0)).state });
+    }
+    const result = await captureViewer({ browser: browser!,
+      viewerUrl: new URL('../fixtures/mouse-encoding.html', import.meta.url).href,
+      width: 1000, height: 700, drive: true, probeOnly: true, probe: 'typeof mouseReport === "function"',
+      interact: ({ evaluate }) => evaluate(`(async () => {
+        const reports = [];
+        for (const { name, live, viewer, frozen } of ${JSON.stringify(streams)}) {
+          reports.push({ name, live: await mouseReport(live),
+            viewer: await mouseReport(viewer), frozen: await mouseReport(frozen) });
+        }
+        return reports;
+      })()`),
+    });
+    const reports = result.probe as MouseStreams[];
+    expect(reports).toHaveLength(streams.length);
+    expect(reports[0]?.live).toBe('\x1b[<35;93;72M');
+    for (const { name, live, viewer, frozen } of reports) {
+      expect(live, name).toBeTruthy();
+      expect.soft({ viewer, frozen }, name).toEqual({ viewer: live, frozen: live });
+    }
+  } finally { f.exit(); await f.session.kill(); }
+}, 90_000);

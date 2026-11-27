@@ -316,47 +316,6 @@ export function bracketedPasteAfter(scan: string, current: boolean): boolean {
 /** One short of the longest mode sequence: enough to rejoin any split of one. */
 const MODE_SCAN_TAIL_CHARS = PASTE_MODE_ON.length - 1;
 
-/** Mouse encoding requests omitted by xterm's serialiser. */
-class MouseEncodings {
-  private readonly enabled = new Set<number>();
-  private unfinished = '';
-
-  scan(data: string): void {
-    const scan = this.unfinished + data;
-    this.unfinished = '';
-    // Match RIS, a private mode list, or the start of one at a read boundary.
-    // eslint-disable-next-line no-control-regex -- These are terminal control sequences.
-    for (const match of scan.matchAll(/\x1bc|(?:\x1b\[|\x9b)\?([\d;]*)([hl]|$)|(?:\x1b\[?|\x9b)$/g)) {
-      if (match[0] === TERMINAL_RESET) {
-        this.enabled.clear();
-        continue;
-      }
-      if (match[1] === undefined) {
-        this.unfinished = match[0]; // ESC or CSI
-        continue;
-      }
-      const parameters = match[1].split(';');
-      const partial = match[2] === '' ? parameters.pop() : undefined;
-      const encodings = parameters.map(Number).filter(p => p === 1005 || p === 1006 || p === 1015);
-      if (partial !== undefined) {
-        // Carry only relevant parameters and the number still being read.
-        // Five significant digits already exceed every encoding we track.
-        const last = partial.replace(/^0+/, '').slice(0, 5);
-        this.unfinished = '\x1b[?' + [...new Set(encodings), last].join(';');
-      } else {
-        for (const mode of encodings) {
-          if (match[2] === 'h') this.enabled.add(mode);
-          else this.enabled.delete(mode);
-        }
-      }
-    }
-  }
-
-  replay(): string {
-    return Array.from(this.enabled, mode => `\x1b[?${mode}h`).join('');
-  }
-}
-
 /**
  * A command that cannot be started as given: a bare name not on PATH, a path
  * that is not an executable file, or on Windows a script started without the
@@ -835,7 +794,6 @@ export class Session implements WaitTarget {
   lastWriteWrapped: boolean | null = null;
   /** Trailing output kept so a mode sequence split across PTY reads is still seen. */
   private modeScanTail = '';
-  private readonly mouseEncodings = new MouseEncodings();
   private readonly dataListeners = new Set<(data: string) => void>();
   private readonly exitListeners = new Set<(exitCode: number | null) => void>();
   private readonly readyListeners = new Set<() => void>();
@@ -1114,7 +1072,6 @@ export class Session implements WaitTarget {
       const scan = this.modeScanTail + data;
       this.bracketedPaste = bracketedPasteAfter(scan, this.bracketedPaste);
       this.cursorHidden = cursorHiddenAfter(scan, this.cursorHidden);
-      this.mouseEncodings.scan(data);
       this.modeScanTail = scan.slice(-MODE_SCAN_TAIL_CHARS);
       const rendered = this.renderer.write(data);
       if (this.agentModule?.stalls !== undefined) {
@@ -2348,10 +2305,6 @@ export class Session implements WaitTarget {
     }
   }
 
-  private viewerModeSuffix(): string {
-    return (this.cursorHidden ? CURSOR_HIDE : '') + this.mouseEncodings.replay();
-  }
-
   /**
    * The rendered terminal as bytes that rebuild it in a fresh terminal of the
    * same size (design §5): what a viewer receives on connect and after every
@@ -2363,10 +2316,10 @@ export class Session implements WaitTarget {
    * nothing received after it.
    */
   async viewerState(options: SerializeOptions = {}): Promise<string> {
-    // Capture the modes at the same output boundary as the renderer.
-    const modes = this.viewerModeSuffix();
+    // Capture cursor visibility at the same output boundary as the renderer.
+    const hidden = this.cursorHidden;
     const state = await this.renderer.serialize(options);
-    return state + modes;
+    return hidden ? state + CURSOR_HIDE : state;
   }
 
   /** The filter's styled rows and the viewer replay from one rendered frame. */
@@ -2376,9 +2329,9 @@ export class Session implements WaitTarget {
     cols: number;
     rows: number;
   }> {
-    const modes = this.viewerModeSuffix();
+    const hidden = this.cursorHidden;
     const captured = await this.renderer.capture({ above, scrollback });
-    return { ...captured, state: captured.state + modes };
+    return { ...captured, state: captured.state + (hidden ? CURSOR_HIDE : '') };
   }
 
   async snapshot(): Promise<ScreenSnapshot> {
