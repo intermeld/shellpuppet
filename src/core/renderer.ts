@@ -91,6 +91,8 @@ export class ScreenRenderer {
   private readonly agent: string;
   private term: XtermTerminal;
   private serializer: XtermSerializeAddon;
+  /** Last set or reset for each mouse encoding mode, in dispatch order. */
+  private readonly mouseEncodings = new Map<number, 'h' | 'l'>();
   /** Chain of pending writes, so `flush()` can await parser completion. */
   private pending: Promise<void> = Promise.resolve();
   private readonly foregroundReflows: (() => void)[] = [];
@@ -112,6 +114,23 @@ export class ScreenRenderer {
     });
     this.serializer = new SerializeAddon();
     this.term.loadAddon(this.serializer);
+    for (const final of ['h', 'l'] as const) {
+      this.term.parser.registerCsiHandler({ prefix: '?', final }, params => {
+        for (const mode of params) {
+          // xterm supplies primary parameters as numbers and subparameters as arrays.
+          if (mode !== 1005 && mode !== 1006 && mode !== 1015 && mode !== 1016) continue;
+          // Setting 1006 or 1016 selects the encoding. Resetting either selects
+          // the default, so reasserting a mode must move it to the end of replay.
+          this.mouseEncodings.delete(mode);
+          this.mouseEncodings.set(mode, final);
+        }
+        return false;
+      });
+    }
+    this.term.parser.registerEscHandler({ final: 'c' }, () => {
+      this.mouseEncodings.clear();
+      return false;
+    });
     this.width = this.term.cols;
     this.height = this.term.rows;
   }
@@ -330,13 +349,18 @@ export class ScreenRenderer {
     return new Promise((resolve) => {
       void this.enqueue('', () => {
         if (this.closed) { resolve(''); return; }
-        resolve(
-          this.serializer.serialize(
-            options.scrollback === undefined ? {} : { scrollback: options.scrollback },
-          ),
-        );
+        resolve(this.serializeBuffer(options.scrollback));
       });
     });
+  }
+
+  /** Called inside the FIFO marker so the buffer and modes describe the same frame. */
+  private serializeBuffer(scrollback?: number): string {
+    let state = this.serializer.serialize({ scrollback });
+    for (const [mode, final] of this.mouseEncodings) {
+      state += `\x1b[?${String(mode)}${final}`;
+    }
+    return state;
   }
 
   /** Read styled rows and replay bytes at the same parser boundary. */
@@ -358,7 +382,7 @@ export class ScreenRenderer {
       void this.enqueue('', () => {
         if (this.closed) { resolve({ ...empty, eraseColumns: [] }); return; }
         const view = this.styledLines({ above: options.above });
-        const state = this.serializer.serialize({ scrollback: options.scrollback });
+        const state = this.serializeBuffer(options.scrollback);
         const visible = view.lines.slice(view.firstVisible);
         const buffer = this.term.buffer.active;
         const cell = buffer.getNullCell();

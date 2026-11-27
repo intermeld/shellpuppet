@@ -1,0 +1,24 @@
+<!doctype html>
+<meta charset="utf-8">
+<link rel="stylesheet" href="../../node_modules/@xterm/xterm/css/xterm.css">
+<script src="../../node_modules/@xterm/xterm/lib/xterm.js"></script>
+<body>
+<script>
+  // Send the same movement to a fresh terminal for each live or replay stream.
+  async function mouseReport(bytes) {
+    const term = new Terminal({ cols: 80, rows: 24 });
+    try {
+      term.open(document.body);
+      await new Promise(resolve => term.write(bytes, resolve));
+      let report = '';
+      term.onData(data => { report += data; });
+      term.onBinary(data => { report += data; });
+      const screen = term.element.querySelector('.xterm-screen');
+      const { left, top } = screen.getBoundingClientRect();
+      screen.dispatchEvent(new MouseEvent('mousemove', {
+        bubbles: true, clientX: left + 93, clientY: top + 72,
+      }));
+      return report;
+    } finally { term.dispose(); }
+  }
+</script>

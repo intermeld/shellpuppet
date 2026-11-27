@@ -1,29 +1,9 @@
-import type { IPty } from 'node-pty';
 import { describe, expect, it, vi } from 'vitest';
-import { Session } from '../../src/core/session.js';
 import { ScreenRenderer } from '../../src/core/renderer.js';
-
-/** Real Session and xterm, with deterministic delivery at the PTY boundary. */
-function fixture(id: string): { session: Session; data: (text: string) => void; exit: () => void } {
-  let data: (text: string) => void = () => {};
-  let exit = (): void => {};
-  const pty = {
-    pid: 0, cols: 80, rows: 24, process: 'fixture', handleFlowControl: false,
-    onData(listener: (text: string) => void) { data = listener; return { dispose() {} }; },
-    onExit(listener: (event: { exitCode: number }) => void) {
-      exit = () => { listener({ exitCode: 0 }); };
-      return { dispose() {} };
-    },
-    write() {}, resize() {}, kill() {}, clear() {}, pause() {}, resume() {},
-  } satisfies IPty;
-  const session = new Session(id, { command: process.execPath, shell: false }, {
-    spawn: () => pty, queueConsoleHostEnd() {}, registerConsoleHostWindow() {},
-  });
-  return { session, data: text => { data(text); }, exit: () => { exit(); } };
-}
+import { sessionFixture as fixture } from './sessionFixture.js';
 
 describe('session mouse encoding', () => {
-  it.each([1005, 1006, 1015])('captures mode %i at the same point as the screen', async mode => {
+  it.each([1005, 1006, 1015, 1016])('captures mode %i at the same point as the screen', async mode => {
     const f = fixture('mouse');
     const enable = '\x1b[?' + String(mode) + 'h';
     try {
@@ -40,6 +20,27 @@ describe('session mouse encoding', () => {
       }
       expect(await f.session.viewerState()).not.toContain(enable);
       expect((await f.session.captureViewerScreen(0, 0)).state).not.toContain(enable);
+    } finally { f.exit(); await f.session.kill(); }
+  });
+
+  const sgr = '\x1b[?1006h';
+  const first32 = '\x1b[?' + '0;'.repeat(32);
+  it.each([
+    { name: 'set at parameter 32', chunks: ['\x1b[?' + '0;'.repeat(31) + '1006h'], enabled: true },
+    { name: 'set at parameter 33', chunks: [first32 + '1006h'], enabled: false },
+    { name: 'split set at parameter 33', chunks: [first32, '1006h'], enabled: false },
+    { name: 'reset at parameter 33', chunks: [sgr, first32 + '1006l'], enabled: true },
+    { name: 'DEL inside set', chunks: ['\x1b[?10\x7f06h'], enabled: true },
+    { name: 'BEL inside reset', chunks: [sgr, '\x1b[?10\x0706l'], enabled: false },
+    { name: 'primary parameter with subparameter', chunks: ['\x1b[?1003;1006:0h'], enabled: true },
+    { name: '1006 only in a subparameter', chunks: ['\x1b[?1003:1006h'], enabled: false },
+  ])('follows xterm dispatch for $name', async ({ chunks, enabled }) => {
+    const f = fixture('parameters');
+    try {
+      for (const chunk of chunks) f.data(chunk);
+      for (const state of [await f.session.viewerState(), (await f.session.captureViewerScreen(0, 0)).state]) {
+        expect.soft(state.includes(sgr)).toBe(enabled);
+      }
     } finally { f.exit(); await f.session.kill(); }
   });
 
