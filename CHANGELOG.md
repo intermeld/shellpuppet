@@ -7,6 +7,10 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-27
+
+Mouse movement over a viewer or dashboard pane no longer types stray characters into sessions that use SGR mouse reports, and the local owner can list unread messages by age.
+
 ### Added
 
 - The local owner can list unread messages by age without message text in the CLI or dashboard.
