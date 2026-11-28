@@ -1,8 +1,7 @@
-import fs from 'node:fs';
 import path from 'node:path';
 import type { Logger } from '../core/types.js';
 import {
-  isDaemonInstanceId, restartSourceId, writePrivateRecord,
+  HomeIdentityError, isDaemonInstanceId, readHomeRecord, restartSourceId, writePrivateRecord, type VerifiedHome,
   type DaemonStateFile, type RestartHandoff,
 } from './paths.js';
 
@@ -13,12 +12,13 @@ export function snapshotSourceId(value: unknown): string | null {
 }
 
 // null means absent, undefined means the evidence could not be inspected.
-function readId(home: string, file: string, id: (record: unknown) => string | null, logger?: Logger): string | null | undefined {
+function readId(home: VerifiedHome, file: string, id: (record: unknown) => string | null, logger?: Logger): string | null | undefined {
   try {
-    const value = id(JSON.parse(fs.readFileSync(path.join(home, file), 'utf8')));
+    const value = id(JSON.parse(readHomeRecord(home, file)));
     if (value === null) throw new Error('Invalid restart record.');
     return value;
   } catch (error) {
+    if (error instanceof HomeIdentityError) throw error;
     const code = (error as NodeJS.ErrnoException).code;
     if (code === 'ENOENT') return null;
     logger?.warn(`Could not read ${file}.`, { code });
@@ -52,7 +52,7 @@ function resolve(handoff: RestartHandoff, saved: string | null | undefined, snap
 }
 
 /** Recover from a credential-free handoff or from a crashed owner's live record. */
-export function restoreRestartSource(home: string, file: DaemonStateFile, logger: Logger): RestartHandoff {
+export function restoreRestartSource(home: VerifiedHome, file: DaemonStateFile, logger: Logger): RestartHandoff {
   const prior = file.kind === 'record' ? file.state : file.kind === 'restart-handoff' ? file.handoff : undefined;
   const owners = Array.isArray(prior?.restartCandidates) ? prior.restartCandidates.filter(isDaemonInstanceId) : [];
   if (file.kind === 'record' && isDaemonInstanceId(file.state.instanceId)) owners.push(file.state.instanceId);
@@ -66,20 +66,20 @@ export function restoreRestartSource(home: string, file: DaemonStateFile, logger
 }
 
 /** Retry verification when a granted read supplies a readable snapshot. */
-export function retryRestartSource(home: string, handoff: RestartHandoff, snapshot: string,
+export function retryRestartSource(home: VerifiedHome, handoff: RestartHandoff, snapshot: string,
   logger: Logger, beforePublish: () => void): RestartHandoff {
   const saved = readId(home, 'restart-source.json', restartSourceId);
   return recover(home, handoff, saved, snapshot, logger, beforePublish);
 }
 
-function recover(home: string, handoff: RestartHandoff, saved: string | null | undefined,
+function recover(home: VerifiedHome, handoff: RestartHandoff, saved: string | null | undefined,
   snapshot: string | null | undefined, logger: Logger, beforePublish?: () => void): RestartHandoff {
   const result = resolve(handoff, saved, snapshot);
   const selected = result.restartFrom;
   if (result.restartCandidates || !selected || selected === saved) return result;
   if (saved !== undefined) {
     try {
-      writePrivateRecord(path.join(home, 'restart-source.json'), { restartFrom: selected }, beforePublish);
+      writePrivateRecord(path.join(home.verifiedHome(), 'restart-source.json'), { restartFrom: selected }, beforePublish);
       return result;
     } catch (error) {
       logger.warn('Could not update restart-source.json.', { code: (error as NodeJS.ErrnoException).code });

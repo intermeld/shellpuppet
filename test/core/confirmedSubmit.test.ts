@@ -294,7 +294,7 @@ it.each(['restored viewer draft', 'transcript copy'])('omits an idle flag for a 
   let now = Date.now() + 61_000;
   const daemon = Object.create(Daemon.prototype) as Daemon;
   Object.assign(daemon, { manager: { list: () => [f.session.summary()], get: () => f.session },
-    schedules: { read: () => [] }, nudges: { tick() {} }, promptGraceTimers: new Map(), promptStates: new Map(),
+    reload: { state: { schedules: { read: () => [] } } }, nudges: { tick() {} }, promptGraceTimers: new Map(), promptStates: new Map(),
     options: {}, now: () => now, updateFeedSession() {} });
   await daemon['scanForPromptStalls']();
   expect(f.session.summary()).not.toHaveProperty('unsubmittedInput');

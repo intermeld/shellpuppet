@@ -9,7 +9,7 @@
  * route is allowed to perform, and leaves out any entry it cannot read whole.
  *
  * The rules are fail-closed in the same way as `config.ts`: an entry that
- * cannot be parsed is omitted and named in `daemon.log`, and its siblings
+ * cannot be parsed is omitted and identified by index in the log. Its siblings
  * still load. A broken launcher section never installs a deny-all policy,
  * because profiles are an addition to policy rather than the policy itself.
  *
@@ -133,6 +133,8 @@ export interface LaunchProfilePolicy {
 }
 
 export interface LaunchProfile {
+  /** Original position in launcher.profiles, before invalid entries were omitted. */
+  configIndex?: number;
   resume?: string[];
   name: string;
   role?: 'chair';
@@ -161,7 +163,7 @@ export interface LauncherConfig {
   sessionLaunch?: string[];
   launchesPerMinute?: number;
   profiles: LaunchProfile[];
-  /** Sentences naming each entry that did not load. Logged at daemon start. */
+  /** Detailed problems for the authenticated dashboard profile list. */
   problems: string[];
 }
 
@@ -222,6 +224,7 @@ function entryLabel(index: number, raw: unknown): string {
 
 /** A sentence naming the entry and why it did not load. */
 function leftOut(index: number, raw: unknown, reason: string): string {
+  if (/^policy\.(allow|deny)\[\d+\] does not compile$/.test(reason)) return `launcher.profiles[${String(index)}].${reason}`;
   return `${entryLabel(index, raw)} was left out: ${reason}`;
 }
 
@@ -231,12 +234,12 @@ function leftOut(index: number, raw: unknown, reason: string): string {
  * must also match. There is no `mode` and no `maxSessions` here: a profile
  * cannot widen either.
  */
-export function compileProfilePolicy(policy: LaunchProfilePolicy): CompiledPolicy {
+export function compileProfilePolicy(policy: LaunchProfilePolicy, profileIndex = 0): CompiledPolicy {
   return compilePolicy({
     mode: policy.allow !== undefined ? 'allowlist' : 'denylist',
     ...(policy.allow !== undefined ? { allow: policy.allow } : {}),
     ...(policy.deny !== undefined ? { deny: policy.deny } : {}),
-  });
+  }, `launcher.profiles[${String(profileIndex)}].policy`);
 }
 
 /** Why a policy object is unusable, or null. */
@@ -251,11 +254,11 @@ function profilePolicyProblem(raw: unknown): string | null {
     const list = raw[listName];
     if (list === undefined) continue;
     if (!isStringArray(list)) return `policy.${listName} must be an array of regex strings`;
-    for (const source of list) {
+    for (const [index, source] of list.entries()) {
       try {
         new RegExp(source, 'i');
       } catch {
-        return `policy.${listName} has an invalid pattern "${source}"`;
+        return `policy.${listName}[${String(index)}] does not compile`;
       }
     }
   }
@@ -478,9 +481,8 @@ export function parseLauncher(
   if (allowance.problem !== undefined) problems.push(allowance.problem);
   const entries = raw['profiles'];
   if (entries === undefined) {
-    problems.push(
-      'launcher has no profiles list: no dashboard launch profiles are loaded (an empty list is fine)',
-    );
+    if (raw['sessionLaunch'] !== undefined) problems.push('launcher.sessionLaunch requires a profiles list. No launch permission granted.');
+    else if (raw['launchesPerMinute'] === undefined) problems.push('launcher has no profiles list: no dashboard launch profiles are loaded (an empty list is fine)');
     return { launcher: { profiles, problems, launchesPerMinute: allowance.value }, problems };
   }
   if (!Array.isArray(entries)) {
@@ -526,7 +528,7 @@ export function parseLauncher(
         );
       }
     }
-    profiles.push(profile);
+    profiles.push({ ...profile, configIndex: index });
   }
 
   const grants = raw['sessionLaunch'];

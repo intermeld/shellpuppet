@@ -528,10 +528,13 @@ log reads record the caller and the number returned, never text.
 ### 2.6 Scheduled prompts
 
 The owner can give a named session a recurring prompt in `config.json`.
-The daemon watches the containing directory to handle editor saves by rename.
-It debounces changes and replaces the validated schedules in memory. Every
-other daemon setting takes effect at the next start. The store provides one
-read and replace API for future editors.
+The daemon watches the containing directory so editor saves by rename are
+observed. After a 100 ms debounce it validates the whole file. A local reread
+every two seconds also picks up missed events. A valid edit applies schedules
+and `launcher.launchesPerMinute` together. Messaging edits require a daemon restart.
+An invalid edit keeps the last accepted settings. Unchanged schedules keep
+their pending deliveries. The authenticated `/environment?include=config` response and
+`daemon status` identify changed fields that need a daemon restart.
 
 A timer aligns to UTC minute boundaries. Each tick considers the current
 minute once and resolves the target's current session name. A missed turn
@@ -1486,8 +1489,8 @@ runs first against `commandLine(command, args)` before the Windows wrap;
 profile `deny` may refuse it, and profile `allow` must match when present.
 The route accepts at most `launcher.launchesPerMinute` starts in any sliding
 sixty seconds (`429` after that). The setting is an integer from 1 to 60,
-defaults to eight, and reloads when the configuration changes. Invalid values
-are reported and use the default. Pending starts count, while failed and
+defaults to eight, and reloads after a valid save. An invalid value at startup uses the
+default. An invalid edit keeps the current limit. Pending starts count, while failed and
 cancelled starts release their slot at once. The route refuses at thirty-two
 live sessions when `policy.maxSessions` is unset (`403`). A configured
 `maxSessions` replaces

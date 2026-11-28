@@ -70,6 +70,7 @@ describe('evaluateCommand: allowlist', () => {
     const decision = evaluateCommand(belt, 'goose', ['session', '--dangerous']);
     expect(decision.allowed).toBe(false);
     expect(decision.rule).toBe('--dangerous');
+    expect(decision.reason).toBe('Command refused by deny rule policy.deny[0].');
   });
 
   it('matches case-insensitively: Windows commands are case-insensitive in reality', () => {
@@ -100,11 +101,10 @@ describe('evaluateCommand: denylist', () => {
 describe('evaluateCommand: malformed patterns fail closed', () => {
   it('refuses every command when an active policy has an invalid pattern', () => {
     const policy = compilePolicy({ mode: 'allowlist', allow: ['^goose', '(unclosed'] });
-    expect(policy.invalidPatterns).toEqual(['(unclosed']);
+    expect(policy.invalidPatternLocations).toEqual(['policy.allow[1]']);
     const decision = evaluateCommand(policy, 'goose', ['session']);
     expect(decision.allowed).toBe(false);
-    expect(decision.reason).toContain('(unclosed');
-    expect(decision.reason).toContain('config.json');
+    expect(decision.reason).toBe('policy.allow[1] does not compile.');
   });
 
   it('fails closed for a broken deny pattern too: a deny that cannot be evaluated must not silently allow', () => {

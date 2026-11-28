@@ -132,9 +132,19 @@ foreach ($root in $roots) {
 }
 `;
 
+function windowsHomeEnv(home: string) {
+  const files = ['daemon.json', 'launcher-claims.json', 'previous-sessions.json', 'restart-source.json', 'config.json', 'daemon.log', 'audit.log'];
+  return { SystemRoot: process.env['SystemRoot'] ?? 'C:\\Windows', SP_PRIVATE_HOME: path.resolve(home), SP_PRIVATE_FILES: files.join('|') };
+}
+
+function windowsHomeIdentity(home: string, identity: string): WindowsHome & { launcher?: string } {
+  const [sid, owner, launcher] = identity.trim().split('|');
+  if (!sid || !owner || !/^S-1-[0-9-]+$/.test(sid)) throw new Error('Missing Windows identity.');
+  return { path: path.resolve(home), sid, setFileOwner: owner !== sid, ...(launcher ? { launcher } : {}) };
+}
+
 function secureWindowsHome(home: string, deadline = Infinity, launchHome?: string): WindowsHome & { launcher?: string } {
   const powershell = systemTool('WindowsPowerShell', 'v1.0', 'powershell.exe');
-  const files = ['daemon.json', 'launcher-claims.json', 'previous-sessions.json', 'restart-source.json', 'config.json', 'daemon.log', 'audit.log'];
   try {
     const timeout = Math.min(15_000, deadline - Date.now());
     if (timeout <= 0) throw new Error('Home permission check deadline expired.');
@@ -143,14 +153,11 @@ function secureWindowsHome(home: string, deadline = Infinity, launchHome?: strin
     const identity = execFileSync(powershell, ['-NoProfile', '-NonInteractive', '-EncodedCommand',
       Buffer.from(script, 'utf16le').toString('base64')], {
       windowsHide: true, stdio: 'pipe', timeout, encoding: 'utf8',
-      env: { SystemRoot: process.env['SystemRoot'] ?? 'C:\\Windows', SP_PRIVATE_HOME: path.resolve(home),
-        SP_PRIVATE_FILES: files.join('|'), ...(launchHome === undefined ? {} : {
+      env: { ...windowsHomeEnv(home), ...(launchHome === undefined ? {} : {
           SP_LAUNCH_HOME: launchHome, SP_SCRIPT_NAME: 'daemon-start-' + randomUUID() + '.mjs',
         }) },
-    }).trim();
-    const [sid, owner, launcher] = identity.split('|');
-    if (!sid || !owner || !/^S-1-[0-9-]+$/.test(sid)) throw new Error('Missing Windows identity.');
-    return { path: path.resolve(home), sid, setFileOwner: owner !== sid, ...(launcher ? { launcher } : {}) };
+    });
+    return windowsHomeIdentity(home, identity);
   } catch {
     throw new Error('Could not verify owner-only Windows permissions in the ShellPuppet home.');
   }
@@ -197,15 +204,48 @@ export function configPath(home: string): string {
   return path.join(home, 'config.json');
 }
 
+interface HomeDirectory {
+  directory: string;
+  stat: fs.BigIntStats;
+}
+
+function prepareHomeDirectory(home: string): HomeDirectory {
+  fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+  const directory = fs.realpathSync.native(home);
+  const stat = fs.lstatSync(directory, { bigint: true });
+  if (!stat.isDirectory() || (process.getuid && stat.uid !== BigInt(process.getuid()))) {
+    throw new Error('The ShellPuppet home must be an ordinary directory owned by the current user.');
+  }
+  if (process.platform !== 'win32') {
+    fs.chmodSync(directory, 0o700);
+    const hardened = fs.lstatSync(directory, { bigint: true });
+    if (stat.dev !== hardened.dev || stat.ino !== hardened.ino || (hardened.mode & 0o777n) !== 0o700n) {
+      throw new Error('The ShellPuppet home changed during permission hardening.');
+    }
+    return { directory, stat: hardened };
+  }
+  return { directory, stat };
+}
+
+/** The daemon can run the initial hardening in its long-lived configuration ACL reader. */
+export async function ensureWatchedHome(home: string, harden: (script: string, env: NodeJS.ProcessEnv) => Promise<string>): Promise<HomeDirectory> {
+  const { directory, stat } = prepareHomeDirectory(home);
+  if (process.platform !== 'win32') return { directory, stat };
+  try {
+    privateWindowsHome = windowsHomeIdentity(directory, await harden(windowsAclScript, windowsHomeEnv(directory)));
+    return { directory, stat };
+  } catch {
+    throw new Error('Could not verify owner-only Windows permissions in the ShellPuppet home.');
+  }
+}
+
 /** Repair existing homes too, before reading a credential or publishing one. */
 export function ensureHome(home: string, deadline?: number, reserveLauncher = false): string | undefined {
-  fs.mkdirSync(home, { recursive: true, mode: 0o700 });
+  const { directory } = prepareHomeDirectory(home);
   if (process.platform === 'win32') {
-    const secured = secureWindowsHome(fs.realpathSync.native(home), deadline, reserveLauncher ? path.resolve(home) : undefined);
+    const secured = secureWindowsHome(directory, deadline, reserveLauncher ? path.resolve(home) : undefined);
     privateWindowsHome = secured;
     return secured.launcher;
-  } else {
-    fs.chmodSync(home, 0o700);
   }
   return undefined;
 }
@@ -224,11 +264,37 @@ export type DaemonStateFile =
   | { kind: 'missing' }
   | { kind: 'unreadable' };
 
-export function inspectDaemonState(home: string): DaemonStateFile {
+export interface VerifiedHome {
+  verifiedHome(): string;
+}
+
+export class HomeIdentityError extends Error {}
+
+function directoryOf(home: string | VerifiedHome): string {
+  return typeof home === 'string' ? home : home.verifiedHome();
+}
+
+/** Bind the opened record to its entry in the directory this daemon hardened. */
+export function readHomeRecord(home: VerifiedHome, name: string): string {
+  const file = path.join(home.verifiedHome(), name);
+  try {
+    const fd = fs.openSync(file, 'r');
+    try {
+      const opened = fs.fstatSync(fd, { bigint: true });
+      home.verifiedHome();
+      const entry = fs.statSync(file, { bigint: true });
+      if (opened.dev !== entry.dev || opened.ino !== entry.ino) throw new Error('Private record changed during the read.');
+      return fs.readFileSync(fd, 'utf8');
+    } finally { fs.closeSync(fd); }
+  } finally { home.verifiedHome(); }
+}
+
+export function inspectDaemonState(home: string | VerifiedHome): DaemonStateFile {
   let raw: string;
   try {
-    raw = fs.readFileSync(daemonStatePath(home), 'utf8');
+    raw = typeof home === 'string' ? fs.readFileSync(daemonStatePath(home), 'utf8') : readHomeRecord(home, 'daemon.json');
   } catch (error) {
+    if (error instanceof HomeIdentityError) throw error;
     return (error as NodeJS.ErrnoException).code === 'ENOENT'
       ? { kind: 'missing' }
       : { kind: 'unreadable' };
@@ -266,7 +332,7 @@ function parseDaemonState(raw: string): DaemonStateFile {
   return { kind: 'not-a-record', raw };
 }
 
-export function readDaemonState(home: string): DaemonState | null {
+export function readDaemonState(home: string | VerifiedHome): DaemonState | null {
   const file = inspectDaemonState(home);
   return file.kind === 'record' ? file.state : null;
 }
@@ -284,11 +350,11 @@ export function removeDaemonState(home: string): void {
  * clearing a stale record cannot delete one that another daemon has just
  * claimed in its place.
  */
-export function removeDaemonStateIf(home: string, record: { pid: number; port: number; instanceId?: string }): void {
+export function removeDaemonStateIf(home: string | VerifiedHome, record: { pid: number; port: number; instanceId?: string }): void {
   const current = readDaemonState(home);
   if (current !== null && current.pid === record.pid && current.port === record.port &&
       (record.instanceId === undefined || current.instanceId === record.instanceId)) {
-    removeDaemonState(home);
+    removeDaemonState(directoryOf(home));
   }
 }
 
@@ -298,10 +364,10 @@ export function removeDaemonStateIf(home: string, record: { pid: number; port: n
  * into place, so a record claimed in the meantime stays; a writer outside
  * ShellPuppet that rewrites the file in place can still lose its write.
  */
-export function removeDaemonStateIfNotARecord(home: string, raw: string): void {
+export function removeDaemonStateIfNotARecord(home: string | VerifiedHome, raw: string): void {
   const current = inspectDaemonState(home);
   if (current.kind === 'not-a-record' && current.raw === raw) {
-    removeDaemonState(home);
+    removeDaemonState(directoryOf(home));
   }
 }
 

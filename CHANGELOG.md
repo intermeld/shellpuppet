@@ -7,6 +7,10 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+### Added
+
+- The daemon applies schedules and the profile launch rate together after validating the whole configuration file. `shellpuppet daemon status` reports rejected edits and settings that need a restart.
+
 ### Changed
 
 - Waiting notices now stay at the top of dashboard panes and the single-session viewer. Collapse the heading to see the whole terminal. The notice scrolls only when its content exceeds the available space.

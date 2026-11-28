@@ -487,12 +487,14 @@ describe('dashboard session names', () => {
 });
 
 describe('a bad profile is left out and its siblings load', () => {
+  const badProfile = { name: 'bad-entry', command: 'cmd.exe', surprise: true };
+
   it('names every bad entry and still starts the valid one', async () => {
     const dir = makeDir('dash-launch-good-');
     const { config, problems } = parseDaemonConfig({
       launcher: {
         profiles: [
-          { name: 'unknown-key', command: 'cmd.exe', surprise: true },
+          badProfile,
           { name: 'Bad Name', command: 'cmd.exe' },
           { name: 'both-ready', command: 'cmd.exe', readyText: 'x', readyQuiet: 10 },
           { name: 'ask-no-folders', command: 'cmd.exe', cwd: 'ask' },
@@ -507,7 +509,7 @@ describe('a bad profile is left out and its siblings load', () => {
       },
     });
     const text = problems.join('\n');
-    for (const name of ['unknown-key', 'Bad Name', 'both-ready', 'ask-no-folders']) {
+    for (const name of [badProfile.name, 'Bad Name', 'both-ready', 'ask-no-folders']) {
       expect(text).toContain(name);
     }
     expect(text).not.toContain('unknown key "launcher"');
@@ -521,15 +523,15 @@ describe('a bad profile is left out and its siblings load', () => {
       problems: string[];
     };
     expect(body.profiles.map((profile) => profile.name)).toEqual(['good']);
-    expect(body.problems.join('\n')).toContain('unknown-key');
+    expect(body.problems).toContain('launcher.profiles[0] ("bad-entry") was left out: it has an unknown key "surprise"');
 
-    const bad = await launch(daemon, { profile: 'unknown-key' });
+    const bad = await launch(daemon, { profile: badProfile.name });
     expect(bad.status).toBe(400);
     const good = await launch(daemon, { profile: 'good' });
     expect(good.status).toBe(200);
   });
 
-  it('the real daemon names a bad entry in daemon.log at start', async () => {
+  it('the real daemon logs the index and reason for a bad profile at start', async () => {
     const home = makeTempHome('dash-launch-log-');
     const tmp = path.join(home, 'tmp');
     fs.mkdirSync(tmp, { recursive: true });
@@ -539,7 +541,7 @@ describe('a bad profile is left out and its siblings load', () => {
         viewer: { launchMode: 'no-window' },
         launcher: {
           profiles: [
-            { name: 'bad-entry', command: 'cmd.exe', surprise: true },
+            badProfile,
             { name: 'good-entry', command: process.execPath, shell: false },
           ],
         },
@@ -550,9 +552,13 @@ describe('a bad profile is left out and its siblings load', () => {
         env: { ...process.env, SHELLPUPPET_HOME: home, TEMP: tmp, TMP: tmp },
         timeout: 30_000,
       });
-      const log = fs.readFileSync(path.join(home, 'daemon.log'), 'utf8');
-      expect(log).toContain('bad-entry');
-      expect(log).toContain('surprise');
+      const logPath = path.join(home, 'daemon.log');
+      const problem = 'launcher.profiles[0] contains an unsupported key.';
+      const log = fs.readFileSync(logPath, 'utf8');
+      const entries = log.trim().split('\n').map(line => JSON.parse(line) as { message: string; meta?: { problem?: string } });
+      expect(entries.filter(entry => entry.message === 'CONFIG PROBLEM').map(entry => entry.meta?.problem)).toEqual([problem]);
+      expect(log).not.toContain(badProfile.name);
+      expect(log).not.toContain('surprise');
       expect(log).not.toContain('unknown key "launcher"');
     } finally {
       const state = readDaemonState(home);
@@ -601,8 +607,9 @@ describe('policy sees the real command, and both caps bite', () => {
 
     const denied = await launch(daemon, { profile: 'denied' });
     expect(denied.status).toBe(403);
-    expect(denied.body).toContain('deny rule');
-    expect(denied.body).toContain('--dangerously');
+    expect(JSON.parse(denied.body)).toEqual({
+      error: 'Command refused by deny rule launcher.profiles[1].policy.deny[0].',
+    });
 
     const allowed = await launch(daemon, { profile: 'allowed' });
     expect(allowed.status).toBe(200);

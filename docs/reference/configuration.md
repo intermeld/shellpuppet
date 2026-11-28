@@ -32,10 +32,32 @@ reserved for outside claims. A session name never grants messaging rights.
 
 All configuration lives in one optional file: `~/.shellpuppet/config.json`
 (override the directory with the `SHELLPUPPET_HOME` environment variable).
-No file means all defaults. The daemon reloads `schedules` and
-`launcher.launchesPerMinute` when the file changes. Run
-`shellpuppet daemon restart` for every other daemon setting. The MCP adapter
-reads its own `mcp` section at launch.
+A new daemon uses defaults when the file is absent. After startup, saving a valid
+file applies `schedules` and `launcher.launchesPerMinute` together.
+
+On Windows, one persistent local PowerShell process checks the directory and
+file ACLs on every reread. The daemon reuses that process for later checks.
+
+Run `shellpuppet daemon status` (or add `--json`) for the effective revision,
+watcher health, last attempt, last acceptance and any rejected edit. The daemon
+checks the whole file, including settings that need a restart. Invalid JSON, a
+malformed entry, an unreadable replacement or a missing file keeps the previous
+settings. Omit a section in a valid file to restore its defaults, or save `{}`
+to reset all live settings. The audit records the changed section names.
+Authenticated API clients can request `GET /environment?include=config` for the
+same reload status and the effective messaging switch. `GET /environment` returns
+the session environment mode and exposed variable names.
+
+The following settings need a daemon restart for the daemon to use the new
+configuration. Status identifies the changed fields, including removals.
+
+| Settings | When the change takes effect |
+|---|---|
+| `messaging` | The next daemon loads the messaging switch, permissions and limits. |
+| `launcher.profiles`, `launcher.sessionLaunch`, `policy` | The next daemon loads the launch catalogue, grants and command policy. |
+| `sessionEnv`, `envNames`, `agents`, `prompts` | The next daemon loads its environment and reader settings. At each session start, the CLI and MCP adapter read `envNames` and `agents.passEnv` from the saved file, even when the daemon rejected the save. |
+| `idleMinutes`, `audit`, `viewer`, `dashboard` | The next daemon uses the new idle threshold, capture flag and display settings. |
+| `daemon`, `mcp` | The wrapper applies when starting a daemon. The MCP adapter reads its framing setting at adapter startup. |
 
 Dashboard launch profiles (`launcher.profiles`, decided in
 [ADR-009](../decisions/ADR-009-dashboard-and-sessions-you-start-yourself.md))
@@ -90,11 +112,9 @@ send urxvt 1015 reports, so that shape counts as typing. A confirmed typed
 submission ends the wait early. During the wait a scheduled run skips with reason
 `recent-input`, including when `whenBusy` is `queue`.
 
-Save the file to apply an edit. Removing the section or file removes all
-schedules. An unreadable file, invalid JSON, or a section of the wrong type
-keeps the previous schedules. An invalid entry is named in `daemon.log`
-and its valid siblings run. Duplicate names exclude every entry with that name.
-The log lists added, changed and removed names. Use `shellpuppet schedule list`
+Remove `schedules` in a valid save to clear the list. A malformed entry or a
+duplicate schedule name rejects the entire edit. An unchanged schedule keeps
+its last outcome and any delivery already in progress. Use `shellpuppet schedule list`
 to see the next run and the last outcome. The audit records the schedule name,
 target and outcome, including a reason for a skipped or aborted run.
 
@@ -569,10 +589,10 @@ list refuses the start. A listed name that is not set in the client's
 environment is reported by name, and the session starts without it. An agent
 with no entry receives nothing.
 
-The MCP server and the CLI read the lists at every start, so a change applies
-to the next session started, with no restart. A session already running keeps
-the environment it started with: start it again to give it a variable added
-since. Values are never shown in tool results, the
+The CLI and MCP adapter read `envNames` and `agents.passEnv` from the private
+configuration file at each session start. A saved change applies to the next
+start even if another field kept the daemon from accepting that revision. A running session keeps its initial environment. Start it again
+to give it a variable added since. Values are never shown in tool results, the
 CLI's output, logs, the audit trail or the viewer; the audit trail records the
 names, and the agent when the start named one. Naming an agent at start gives
 the session that agent's list whatever it runs, so list a key only for agents
@@ -779,10 +799,9 @@ Launch profiles and dashboard launches never wait for readiness and do not
 accept `waitReady` or `readyTimeout`. Their explicit readiness conditions
 only track state; a person can see the session and type immediately.
 
-An entry that cannot be read whole is left out and named in `daemon.log`; its
-siblings still load. The dashboard's profile list shows the problem sentence
-beside the entries that did load, so a mistyped profile is visible without
-reading the log. A profile with `"cwd": "ask"` needs `folders` or
+At startup, the daemon leaves out an invalid profile and logs its array index
+and a redacted reason. Its valid siblings still load. The authenticated
+dashboard profile list names the entry and gives the detailed reason. A profile with `"cwd": "ask"` needs `folders` or
 `folderRoots`. The page filters offered folders as you type, starts the
 highlighted choice on Enter, and puts the five most recent choices for each
 profile first in its browser profile. Recent choice buttons start in one click.
@@ -816,9 +835,10 @@ that number is the live cap instead, and the rate still applies. A refusal
 starts nothing. These caps apply to both profile launch routes: a client token's
 `POST /sessions` keeps its existing behaviour.
 Set `launcher.launchesPerMinute` to an integer from 1 to 60. An invalid value
-is reported as a configuration problem and uses eight. Pending starts count
-towards the allowance; failed and cancelled starts release their slot at once.
-Changes to this setting take effect when you save `config.json`.
+at startup uses the default of eight. An invalid edit leaves the current
+limit in force. A valid save changes the allowance and counts pending starts
+and earlier launches within the same minute. Failed and cancelled starts
+release their slot at once.
 
 Under the Windows default shell, ShellPuppet joins `command` and `args` with
 spaces and runs the line through `cmd.exe /d /s /c`. The array keeps each

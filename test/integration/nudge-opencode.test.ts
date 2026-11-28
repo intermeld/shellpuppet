@@ -4,6 +4,7 @@ import { expect, it } from 'vitest';
 import { buildNudge } from '../../src/core/mailbox.js';
 import { auditLogPath, createAuditor } from '../../src/daemon/audit.js';
 import { api, eventually, makeTempHome, repoRoot, startTestDaemon } from './helpers.js';
+import { nudgeExitArgs, stopNudgeFixtures } from './nudge-fixture.js';
 
 it.each(['idle', 'busy', 'sidebar'])('submits one nudge while the OpenCode PTY is %s', async state => {
   const home = makeTempHome('nudge-opencode-');
@@ -22,7 +23,8 @@ it.each(['idle', 'busy', 'sidebar'])('submits one nudge while the OpenCode PTY i
       setInterval(() => {}, 1000);
     `;
     const start = await api(td.port, td.token, '/sessions', { body: { command: process.execPath,
-      args: ['-e', parent, fixture, input, state], label: sender, shell: false, openViewer: false } });
+      args: [...nudgeExitArgs, '-e', parent, '--', ...nudgeExitArgs, fixture, input, state],
+      label: sender, shell: false, openViewer: false } });
     expect(start.status).toBe(200);
     const audit = () => readFileSync(auditLogPath(home), 'utf8').trimEnd().split('\n').map(row =>
       JSON.parse(row) as { action: string; meta?: { messageIds: string[]; queued?: boolean } });
@@ -35,6 +37,6 @@ it.each(['idle', 'busy', 'sidebar'])('submits one nudge while the OpenCode PTY i
     expect(line.length).toBeGreaterThan(80);
     await eventually(() => existsSync(input) && readFileSync(input, 'utf8') === line + '\r');
   } finally {
-    await td.stop();
+    await stopNudgeFixtures(td);
   }
 });

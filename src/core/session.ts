@@ -844,6 +844,7 @@ export class Session implements WaitTarget {
   private pendingTurnSubmitted = false;
   private pendingTurnBusy = false;
   private pendingQuietSince = 0;
+  private readonly pendingClock = () => performance.now();
   private readonly pendingNudgeSettleMs: number;
   private screenRevision = 0;
   private nudgeComposerKey = '';
@@ -1051,7 +1052,7 @@ export class Session implements WaitTarget {
     this.stallPtyRows = this.pty.rows;
     this.pty.onData((data) => {
       if (this.exitedFlag || this.isKilled) return;
-      if (this.pendingNudgeLine !== null) this.pendingQuietSince = Date.now();
+      if (this.pendingNudgeLine !== null) this.pendingQuietSince = this.pendingClock();
       // node-pty can apply a requested resize later, after its first output.
       // Observe the dimensions it reports as well as our explicit requests.
       if (this.pty.cols !== this.stallPtyCols || this.pty.rows !== this.stallPtyRows) {
@@ -1476,10 +1477,10 @@ export class Session implements WaitTarget {
     const verdict = this.pendingComposerVerdict();
     if (!verdict.ready && verdict.reason === 'busy' && this.pendingTurnSubmitted) this.pendingTurnBusy = true;
     if (!verdict.ready) {
-      this.pendingQuietSince = Date.now();
+      this.pendingQuietSince = this.pendingClock();
       return false;
     }
-    if (!(this.pendingTurnBusy || Date.now() - this.pendingQuietSince >= this.pendingNudgeSettleMs)) return false;
+    if (!(this.pendingTurnBusy || this.pendingClock() - this.pendingQuietSince >= this.pendingNudgeSettleMs)) return false;
     this.pendingNudgeLine = null;
     this.pendingNudgeIds = [];
     this.pendingNudgeTypedChars = 0;
@@ -1737,7 +1738,7 @@ export class Session implements WaitTarget {
         this.pendingTouchRefusalAudited = false;
         this.pendingTurnSubmitted = false;
         this.pendingTurnBusy = false;
-        this.pendingQuietSince = Date.now();
+        this.pendingQuietSince = this.pendingClock();
       }
       await this.writeData(body, nudge ? (accepted) => { this.pendingNudgeTypedChars += accepted.length; } : undefined);
       if (nudge) this.pendingNudgeWholeBody = this.pendingNudgeTypedChars === body.length;
@@ -1810,7 +1811,7 @@ export class Session implements WaitTarget {
               message: "Submit key sent; the agent's composer was not on screen when the text was typed." });
         }
         if (!nudge && this.pendingNudgeLine !== null) {
-          this.pendingQuietSince = Date.now();
+          this.pendingQuietSince = this.pendingClock();
           this.pendingTurnSubmitted = true;
         }
         if (nudge) {
@@ -1902,7 +1903,7 @@ export class Session implements WaitTarget {
 
   private async writeData(data: string, onAccepted?: (data: string) => void): Promise<void> {
     if (data.length <= WRITE_CHUNK_CHARS) {
-      if (data !== '' && this.pendingNudgeLine !== null) this.pendingQuietSince = Date.now();
+      if (data !== '' && this.pendingNudgeLine !== null) this.pendingQuietSince = this.pendingClock();
       this.pty.write(data);
       onAccepted?.(data);
       return;
@@ -1918,7 +1919,7 @@ export class Session implements WaitTarget {
       const body = newlineAt === -1 ? data : data.slice(0, newlineAt);
       const trailer = newlineAt === -1 ? '' : data.slice(newlineAt);
       this.lastWriteWrapped = true;
-      if (this.pendingNudgeLine !== null) this.pendingQuietSince = Date.now();
+      if (this.pendingNudgeLine !== null) this.pendingQuietSince = this.pendingClock();
       this.pty.write(`${PASTE_START}${body}${PASTE_END}${trailer}`);
       onAccepted?.(data);
       return;
@@ -1939,7 +1940,7 @@ export class Session implements WaitTarget {
         if (code >= 0xd800 && code <= 0xdbff) end -= 1;
       }
 
-      if (this.pendingNudgeLine !== null) this.pendingQuietSince = Date.now();
+      if (this.pendingNudgeLine !== null) this.pendingQuietSince = this.pendingClock();
       this.pty.write(data.slice(offset, end));
       onAccepted?.(data.slice(offset, end));
       offset = end;
@@ -2025,7 +2026,7 @@ export class Session implements WaitTarget {
     const oldCols = this.renderer.cols;
     const oldRows = this.renderer.rows;
     this.pty.resize(cols, rows);
-    if (this.pendingNudgeLine !== null) this.pendingQuietSince = Date.now();
+    if (this.pendingNudgeLine !== null) this.pendingQuietSince = this.pendingClock();
     this.screenRevision++;
     this.stallPtyCols = this.pty.cols; this.stallPtyRows = this.pty.rows;
     this.noteStallResize(cols !== this.renderer.cols || rows !== this.renderer.rows);

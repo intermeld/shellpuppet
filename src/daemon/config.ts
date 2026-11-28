@@ -132,8 +132,11 @@ export interface MessagingRelations {
 }
 
 export interface ParsedDaemonConfig {
+  scheduleDiagnostics?: string[];
+  /** Safe per-entry messages keyed by the position of their detailed problem in problems. */
+  diagnosticsByProblem?: ReadonlyMap<number, string[]>;
   config: DaemonConfig;
-  /** Human-readable problems. The daemon logs each one loudly at startup. */
+  /** Detailed parser problems for callers. Daemon logs use redacted diagnostics. */
   problems: string[];
 }
 
@@ -312,23 +315,24 @@ function denyAllPolicy(reason: string): PolicyConfig {
 }
 
 function parsePolicy(raw: unknown, problems: string[]): PolicyConfig {
-  const invalid = (detail: string): PolicyConfig => {
-    problems.push(`policy ${detail}: refusing all commands until it is fixed`);
-    return denyAllPolicy(`the policy section is invalid: ${detail}.`);
+  const invalid = (details: string[]): PolicyConfig => {
+    for (const detail of details) problems.push(`policy ${detail}: refusing all commands until it is fixed`);
+    return denyAllPolicy(`the policy section is invalid: ${details[0]!}.`);
   };
 
-  if (!isRecord(raw)) return invalid('is not an object');
+  if (!isRecord(raw)) return invalid(['is not an object']);
+  const errors: string[] = [];
   for (const key of Object.keys(raw)) {
-    if (!POLICY_KEYS.has(key)) return invalid(`has an unknown key "${key}"`);
+    if (!POLICY_KEYS.has(key)) errors.push(`has an unknown key "${key}"`);
   }
   const mode = raw['mode'] ?? 'allow-all';
   if (typeof mode !== 'string' || !POLICY_MODES.includes(mode as PolicyMode)) {
-    return invalid(`mode must be one of ${POLICY_MODES.join(' | ')}`);
+    errors.push(`mode must be one of ${POLICY_MODES.join(' | ')}`);
   }
   for (const listName of ['allow', 'deny'] as const) {
     const list = raw[listName];
     if (list !== undefined && !isStringArray(list)) {
-      return invalid(`${listName} must be an ARRAY of regex strings (e.g. ["^goose"])`);
+      errors.push(`${listName} must be an ARRAY of regex strings (e.g. ["^goose"])`);
     }
   }
   const maxSessions = raw['maxSessions'];
@@ -336,8 +340,9 @@ function parsePolicy(raw: unknown, problems: string[]): PolicyConfig {
     maxSessions !== undefined &&
     (typeof maxSessions !== 'number' || !Number.isInteger(maxSessions) || maxSessions < 1)
   ) {
-    return invalid('maxSessions must be a positive integer');
+    errors.push('maxSessions must be a positive integer');
   }
+  if (errors.length) return invalid(errors);
   return {
     mode: mode as PolicyMode,
     ...(isStringArray(raw['allow']) ? { allow: raw['allow'] } : {}),
@@ -468,7 +473,7 @@ export function buildMessagingPolicy(
 }
 
 /** The fail-closed result for a config whose intent is unknowable. */
-function unknowableConfig(reason: string, problem: string): ParsedDaemonConfig {
+export function unknowableConfig(reason: string, problem: string): ParsedDaemonConfig {
   return {
     config: { policy: denyAllPolicy(reason), sessionEnv: 'clean' },
     problems: [problem],
@@ -487,6 +492,8 @@ export function parseDaemonConfig(raw: unknown): ParsedDaemonConfig {
 
   const problems: string[] = [];
   const config: DaemonConfig = {};
+  let scheduleDiagnostics: string[] | undefined;
+  const diagnosticsByProblem = new Map<number, string[]>();
   for (const key of Object.keys(raw)) {
     if (!TOP_LEVEL_KEYS.has(key)) {
       problems.push(`config.json has an unknown key "${key}": ignored (typo?)`);
@@ -497,7 +504,9 @@ export function parseDaemonConfig(raw: unknown): ParsedDaemonConfig {
 
   if (raw['schedules'] !== undefined) {
     const store = new ScheduleStore();
-    problems.push(...store.replace(raw['schedules']).problems);
+    const changes = store.replace(raw['schedules']);
+    problems.push(...changes.problems);
+    scheduleDiagnostics = changes.diagnostics;
     config.schedules = store.read();
   }
 
@@ -526,9 +535,9 @@ export function parseDaemonConfig(raw: unknown): ParsedDaemonConfig {
         problems.push('daemon.startWithOnlyIfEnvContains must be a non-blank string of at most 256 characters: starting directly');
         valid = false;
       }
-      if (valid && isStringArray(startWith)) {
+      if (valid && (isStringArray(startWith) || typeof condition === 'string')) {
         config.daemon = {
-          startWith,
+          ...(isStringArray(startWith) ? { startWith } : {}),
           ...(typeof condition === 'string' ? { startWithOnlyIfEnvContains: condition } : {}),
         };
       }
@@ -666,13 +675,24 @@ export function parseDaemonConfig(raw: unknown): ParsedDaemonConfig {
     if (!Array.isArray(envNames)) {
       problems.push('envNames in config.json must be an array of variable names: passing none');
     } else {
-      const valid = envNames.filter((name): name is string => typeof name === 'string' && ENV_NAME_PATTERN.test(name));
-      if (valid.length !== envNames.length) {
+      const malformed: number[] = [];
+      const reserved: { index: number; name: string }[] = [];
+      const allowed: string[] = [];
+      for (const [index, name] of (envNames as unknown[]).entries()) {
+        if (typeof name !== 'string' || !ENV_NAME_PATTERN.test(name)) malformed.push(index);
+        else if (SESSION_IDENTITY_ENV_NAMES.has(name.toUpperCase())) reserved.push({ index, name });
+        else allowed.push(name);
+      }
+      if (malformed.length) {
+        diagnosticsByProblem.set(problems.length, malformed.map(index => `envNames[${String(index)}] is not a valid variable name.`));
         problems.push('envNames in config.json: ignoring entries that are not variable names');
       }
-      const reserved = valid.filter((name) => SESSION_IDENTITY_ENV_NAMES.has(name.toUpperCase()));
-      if (reserved.length > 0) problems.push(`envNames: ${SESSION_IDENTITY_ENV_RULE} Ignoring ${reserved.join(', ')}.`);
-      config.envNames = valid.filter((name) => !SESSION_IDENTITY_ENV_NAMES.has(name.toUpperCase()));
+      if (reserved.length) {
+        diagnosticsByProblem.set(problems.length, reserved.map(({ index }) => `envNames[${String(index)}] is reserved for the daemon.`));
+        const names = reserved.map(({ name }) => name);
+        problems.push(`envNames: ${SESSION_IDENTITY_ENV_RULE} Ignoring ${names.join(', ')}.`);
+      }
+      config.envNames = allowed;
     }
   }
   // Messages between sessions. A broken section leaves messaging off; a
@@ -700,11 +720,12 @@ export function parseDaemonConfig(raw: unknown): ParsedDaemonConfig {
     );
   }
 
-  return { config, problems };
+  return { config, problems, ...(scheduleDiagnostics?.length ? { scheduleDiagnostics } : {}),
+    ...(diagnosticsByProblem.size ? { diagnosticsByProblem } : {}) };
 }
 
 /** Locate a JSON syntax error without using V8's message, which may quote config text. */
-function jsonErrorLocation(raw: string): { line: number; column: number } {
+export function jsonErrorLocation(raw: string): { line: number; column: number } {
   class InvalidJson extends Error {
     constructor(readonly offset: number) { super('invalid JSON'); }
   }
