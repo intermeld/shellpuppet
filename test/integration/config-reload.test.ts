@@ -311,23 +311,49 @@ it.each(['listen', 'ownership', 'publication'])('rechecks home identity immediat
   } finally { vi.restoreAllMocks(); await daemon.stop(); removeTempHome(home); }
 });
 
-it('binds child sessions to the verified home when the embedded caller uses an alias', async () => {
+function daemonWithHomeAlias() {
   const root = makeTempHome();
-  const parent = join(root, 'real');
-  const directory = join(parent, 'home');
   const alias = join(root, 'alias');
-  fs.mkdirSync(directory, { recursive: true });
-  fs.symlinkSync(parent, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  const home = join(alias, 'home');
+  const pointAliasAt = (name: string) => {
+    const parent = join(root, name);
+    fs.mkdirSync(join(parent, 'home'), { recursive: true });
+    fs.rmSync(alias, { force: true });
+    fs.symlinkSync(parent, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  };
+  pointAliasAt('original');
+  return { root, home, pointAliasAt, daemon: new Daemon({ home, logger: NULL_LOGGER }) };
+}
+
+it('gives a child session the caller\'s spelling of the home alias', async () => {
+  const { root, home, daemon } = daemonWithHomeAlias();
   const output = join(root, 'child-home');
-  const daemon = new Daemon({ home: join(alias, 'home'), logger: NULL_LOGGER });
   try {
     const { port, token } = await daemon.start();
     const response = await api(port, token, '/sessions', { body: { command: process.execPath, shell: false, openViewer: false,
       args: ['-e', "require('node:fs').writeFileSync(process.argv[1], process.env.SHELLPUPPET_HOME)", output] } });
     expect(response.status).toBe(200);
     await eventually(() => fs.existsSync(output), 5_000);
-    expect(fs.readFileSync(output, 'utf8')).toBe(fs.realpathSync.native(directory));
+    expect(fs.readFileSync(output, 'utf8')).toBe(home);
   } finally { await daemon.stop(); removeTempHome(root); }
+}, 30_000);
+
+it('refuses a session before PTY spawn when the home alias is retargeted after startup', async () => {
+  const { root, pointAliasAt, daemon } = daemonWithHomeAlias();
+  const spawnPty = vi.fn(() => { throw new Error('Reached PTY spawn after the home alias changed'); });
+  daemon['manager']['sessionDeps'].spawn = spawnPty;
+  try {
+    const { port, token } = await daemon.start();
+    pointAliasAt('other');
+    const response = await api(port, token, '/sessions', { body: { command: process.execPath, args: ['-v'], shell: false, openViewer: false } });
+    expect(spawnPty.mock.calls.length).toBe(0);
+    expect(response.status).toBe(500);
+    expect(response.body['error']).toMatch(/cannot verify owner-only permissions/i);
+  } finally {
+    pointAliasAt('original');
+    await daemon.stop();
+    removeTempHome(root);
+  }
 }, 30_000);
 
 it('reports the schema locations of malformed agent and launch profile expressions', () => {
