@@ -4794,6 +4794,7 @@ export class Daemon {
         // tab can badge itself without subscribing to the daemon stream.
         this.broadcastControl(session.id, {
           type: 'prompt-stall',
+          since: previous.since,
           waitingMs,
           question: detected.question,
           // The options travel to viewers as well as to /events, so the badge
@@ -5477,6 +5478,7 @@ export class Daemon {
       ws.send(
         JSON.stringify({
           type: 'prompt-stall',
+          since: held.since,
           waitingMs: Date.now() - held.since,
           question: held.prompt.question,
           options: held.prompt.options,

@@ -43,12 +43,8 @@ window.ShellPuppetPane = (() => {
   // A printable base (including space or a supplementary character) can carry combining marks.
   const PRINTABLE_KEY = /^[\p{L}\p{M}\p{N}\p{P}\p{S}\p{Zs}]\p{M}*$/u;
   const recentClipboardAge = (age, limit = CLIPBOARD_GESTURE_MS) => age >= 0 && age <= limit;
-  const NOTICE_HISTORY_MS = 10000;
-  const NOTICE_DECISION_MS = 1200;
-  const NOTICE_COVER_MARGIN_MS = 20;
-  const NOTICE_DELIVERY_GUARD_MS = 5;
-  const NOTICE_QUIET_MS = 1000;
   const scaledEvents = new WeakSet();
+  const wheelViewportPositions = new WeakMap();
   let scaledSelection = null;
   const cellMetrics = new Map();
   const fontListeners = new Set();
@@ -116,6 +112,7 @@ window.ShellPuppetPane = (() => {
       passive = false,
       redactedCapture = false,
       elements = {},
+      promptChoice = { since: null, collapsed: false },
       initialFontOverride = null,
       onTitleChange = () => {},
       onFontOverrideChange = () => {},
@@ -137,6 +134,7 @@ window.ShellPuppetPane = (() => {
     let sessionEnded = false;
     let inputFailed = false;
     let promptWaiting = false;
+    let lastPromptContent = null;
     let providerStall = null;
     let gridCols = 0;
     let gridRows = 0;
@@ -177,7 +175,6 @@ window.ShellPuppetPane = (() => {
       const text = elements.banner.querySelector('.pane-banner-message') || elements.banner;
       text.textContent = message;
       elements.banner.hidden = false;
-      positionNotices();
     };
 
     const refreshTitle = () => {
@@ -189,7 +186,7 @@ window.ShellPuppetPane = (() => {
     const showEnded = (exitCode) => {
       if (sessionEnded) return;
       sessionEnded = true;
-      disposeNoticeTracking();
+      if (promptWaiting) clearPromptAlert();
       if (elements.readonly) elements.readonly.disabled = true;
       const withCode = typeof exitCode === 'number';
       if (elements.readonly) {
@@ -236,16 +233,74 @@ window.ShellPuppetPane = (() => {
       refreshTitle();
     };
 
-    const showPromptAlert = (question, waitingMs, options) => {
+    const renderDisclosure = () => {
+      elements.promptToggle.setAttribute('aria-expanded', String(!promptChoice.collapsed));
+      elements.promptToggle.title = promptChoice.collapsed ? 'Expand waiting notice' : 'Collapse waiting notice';
+      elements.promptAlert.hidden = promptChoice.collapsed;
+    };
+    const togglePrompt = (event) => {
+      event.stopPropagation();
+      promptChoice.collapsed = !promptChoice.collapsed;
+      renderDisclosure();
+    };
+    const onPromptKeyDown = (event) => {
+      if (event.key !== 'Enter' || event.isComposing || event.defaultPrevented) return;
+      // A raw Enter can arrive without the keypress that generates a native click.
+      event.preventDefault();
+      event.stopPropagation();
+      if (!event.repeat) event.currentTarget.click();
+    };
+    elements.promptToggle?.addEventListener('click', togglePrompt);
+    elements.promptToggle?.addEventListener('keydown', onPromptKeyDown);
+
+    // Passive notice text lets terminal clicks through. Route the wheel to
+    // the notice only over its visible, overflowing rectangle.
+    const notices = elements.notices;
+    const noticeViewport = notices?.parentElement;
+    // A capped stack can keep the same size while its contents grow or shrink.
+    // Observe both so only an overflowing touch surface captures a swipe.
+    const noticeResize = notices && !captureMode && new window.ResizeObserver(() => {
+      notices.classList.toggle('scrollable', notices.scrollHeight > notices.clientHeight);
+    });
+    if (noticeResize) {
+      noticeResize.observe(notices);
+      for (const child of notices.children) noticeResize.observe(child);
+    }
+    const scrollNotice = (event) => {
+      if (event.ctrlKey || event.shiftKey || !event.deltaY || notices.scrollHeight <= notices.clientHeight) return;
+      const box = notices.getBoundingClientRect();
+      const { clientX, clientY } = wheelViewportPositions.get(event) ?? event;
+      if (clientX < box.left || clientX >= box.right || clientY < box.top || clientY >= box.bottom) return;
+      event.preventDefault();
+      event.stopPropagation();
+      const unit = event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? notices.clientHeight : 1;
+      notices.scrollTop += event.deltaY * unit;
+    };
+    noticeViewport?.addEventListener('wheel', scrollNotice, { capture: true, passive: false });
+
+    const showPromptAlert = ({ question, waitingMs, options, since }) => {
       const seconds = Math.round((waitingMs || 0) / 1000);
-      if (!elements.promptAlert) return;
-      elements.promptAlert.textContent = '';
-      const heading = document.createElement('div');
-      heading.textContent = `Waiting for you: ${String(seconds)}s unanswered`;
+      if (sessionEnded || !elements.promptAlert || !elements.promptToggle) return;
+      const samePrompt = Number.isFinite(since) ? since === promptChoice.since : promptWaiting;
+      // An identical stall frame need not change the live region or announce it again.
+      const content = JSON.stringify([seconds, question, options]);
+      if (promptWaiting && samePrompt && lastPromptContent === content) return;
+      lastPromptContent = content;
+      if (!samePrompt) {
+        promptChoice.collapsed = false;
+      }
+      promptChoice.since = since ?? null;
+      const heading = `Waiting for you: ${String(seconds)}s unanswered`;
+      elements.promptToggle.textContent = heading;
+      elements.promptToggle.hidden = false;
+      const details = document.createDocumentFragment();
+      const spokenHeading = document.createElement('span');
+      spokenHeading.className = 'prompt-announcement-heading';
+      spokenHeading.textContent = heading;
       const question_ = document.createElement('div');
       question_.className = 'question';
       question_.textContent = question || '(the session is holding a prompt)';
-      elements.promptAlert.append(heading, question_);
+      details.append(spokenHeading, question_);
 
       if (Array.isArray(options) && options.length > 0) {
         const list = document.createElement('ul');
@@ -255,14 +310,10 @@ window.ShellPuppetPane = (() => {
           item.textContent = option;
           list.append(item);
         }
-        elements.promptAlert.append(list);
+        details.append(list);
       }
-      if (elements.promptAlert.hidden || noticeKind !== 'prompt') {
-        noticeNewEpisode = noticeKind !== 'prompt' || noticeHiddenLong();
-      }
-      noticeKind = 'prompt';
-      elements.promptAlert.hidden = false;
-      positionNotices();
+      elements.promptAlert.replaceChildren(details);
+      renderDisclosure();
       promptWaiting = true;
       onAttentionChange(true);
       refreshTitle();
@@ -270,12 +321,14 @@ window.ShellPuppetPane = (() => {
 
     const clearPromptAlert = () => {
       promptWaiting = false;
+      lastPromptContent = null;
+      promptChoice.since = null;
+      promptChoice.collapsed = false;
+      if (elements.promptToggle) elements.promptToggle.hidden = true;
       if (providerStall) { showStallAlert(providerStall); return; }
       if (!elements.promptAlert) return;
-      if (!elements.promptAlert.hidden) noticeHiddenAt = window.performance.now();
       elements.promptAlert.hidden = true;
       elements.promptAlert.textContent = '';
-      promptWaiting = false;
       onAttentionChange(false);
       refreshTitle();
     };
@@ -284,12 +337,7 @@ window.ShellPuppetPane = (() => {
       providerStall = stalled;
       if (!elements.promptAlert || promptWaiting) return;
       elements.promptAlert.textContent = `Stalled: ${stalled.reason} since ${stalled.since}. ${stalled.description}`;
-      if (elements.promptAlert.hidden || noticeKind !== 'stall') {
-        noticeNewEpisode = noticeKind !== 'stall' || noticeHiddenLong();
-      }
-      noticeKind = 'stall';
       elements.promptAlert.hidden = false;
-      positionNotices();
       onAttentionChange(true);
       refreshTitle();
     };
@@ -297,7 +345,6 @@ window.ShellPuppetPane = (() => {
     const clearStallAlert = () => {
       providerStall = null;
       if (!promptWaiting && elements.promptAlert) {
-        if (!elements.promptAlert.hidden) noticeHiddenAt = window.performance.now();
         elements.promptAlert.hidden = true;
         elements.promptAlert.textContent = '';
       }
@@ -365,6 +412,8 @@ window.ShellPuppetPane = (() => {
       const screen = term.element?.querySelector('.xterm-screen');
       if (!screen) return;
       const rect = screen.getBoundingClientRect();
+      // The notice compares the wheel position with a viewport rectangle.
+      if (event.type === 'wheel') wheelViewportPositions.set(event, { clientX: event.clientX, clientY: event.clientY });
       const clientX = rect.left + (event.clientX - rect.left) / fontScale;
       const clientY = rect.top + (event.clientY - rect.top) / fontScale;
       // Keep the original event, target and pointer id so native capture works.
@@ -486,7 +535,6 @@ window.ShellPuppetPane = (() => {
       }
       if (destroyed || !elements.copyNotice) return;
       elements.copyNotice.hidden = false;
-      positionNotices();
       clearTimeout(copyNoticeTimer);
       copyNoticeTimer = setTimeout(() => { elements.copyNotice.hidden = true; }, 1500);
     };
@@ -526,329 +574,6 @@ window.ShellPuppetPane = (() => {
       }
       return true;
     });
-
-    let noticeBottom = null;
-    let noticeLastMove = null;
-    let noticeLastRepaint = -Infinity;
-    let noticeLegMoved = false;
-    let noticeStayPreviousRepaint;
-    let noticeStayEdge = null;
-    let noticeStaySince = null;
-    let noticeStayMoved = false;
-    let noticeAnchor = null;
-    let noticeCycle = null;
-    let noticeCycleVisits = [];
-    let noticeCycleMoves = 0;
-    const noticeVisits = [];
-    let noticeGeometry = null;
-    let noticeSeen = false;
-    let noticeNewEpisode = false;
-    let noticeHiddenAt = null;
-    // The kind of the last alert shown: a different kind is a new notice.
-    let noticeKind = null;
-    // An alert shown after the notice was hidden for the whole retained history
-    // is a new notice: none of its cadence evidence remains. A shorter gap, such
-    // as the daemon re-announcing a prompt whose choices a repaint changed,
-    // keeps the cadence.
-    const noticeHiddenLong = () => noticeHiddenAt === null ||
-      window.performance.now() - noticeHiddenAt >= NOTICE_HISTORY_MS;
-    let noticeFrame = null;
-    let noticeTimer = null;
-    let noticeEvidenceTimer = null;
-    let noticeDisposed = false;
-
-    function clearNoticeTimer() {
-      clearTimeout(noticeTimer);
-      noticeTimer = null;
-      clearTimeout(noticeEvidenceTimer);
-      noticeEvidenceTimer = null;
-    }
-
-    function trimNoticeVisits(now) {
-      const cutoff = now - NOTICE_HISTORY_MS;
-      while (noticeVisits.length > 1 && noticeVisits[1].since <= cutoff) noticeVisits.shift();
-      if (noticeVisits.length && noticeVisits[0].since < cutoff) {
-        noticeVisits[0].since = cutoff;
-        noticeVisits[0].clipped = true;
-      }
-    }
-
-    function noticeCoversRow(row, bottom) {
-      if (!noticeGeometry) return false;
-      const distance = bottom ? term.rows - row - 1 : row;
-      return distance * noticeGeometry.cell < noticeGeometry.height - 0.01;
-    }
-
-    function noticeWeights(visits, now) {
-      let top = 0, bottom = 0;
-      for (let i = 0; i < visits.length; i++) {
-        const visit = visits[i];
-        const duration = Math.max(0, (visits[i + 1]?.since ?? now) - visit.since);
-        if (noticeCoversRow(visit.row, false)) top += duration;
-        if (noticeCoversRow(visit.row, true)) bottom += duration;
-      }
-      return { top, bottom };
-    }
-
-    function noticeClearEdge({ top, bottom }) {
-      // Cursor events are observed after this pane's listener has run. Keep
-      // a small clear lead beyond the ratio boundary for delivered evidence.
-      if (top + NOTICE_DELIVERY_GUARD_MS <= bottom * 2 / 3 &&
-          bottom - top >= NOTICE_COVER_MARGIN_MS) return false;
-      if (bottom + NOTICE_DELIVERY_GUARD_MS <= top * 2 / 3 &&
-          top - bottom >= NOTICE_COVER_MARGIN_MS) return true;
-      return null;
-    }
-
-    function finishNoticeRest() {
-      // A completed rectangle stay reclassifies an earlier move in any of
-      // its rows. Rest follows do not spend the repaint budget.
-      if (noticeStayPreviousRepaint !== undefined) {
-        noticeLastRepaint = noticeStayPreviousRepaint;
-        noticeStayPreviousRepaint = undefined;
-      }
-    }
-
-    function rememberNoticeCycle(row, now) {
-      if (row !== noticeAnchor || !noticeGeometry) return;
-      // Keep the current anchor-return word outside the ten-second weight
-      // window. A full delivered cycle can be longer than that window.
-      let visits = noticeCycleVisits.map(visit => ({ ...visit }));
-      if (!visits.length) return;
-      const half = visits.length / 2;
-      const repeated = Number.isInteger(half) && visits.slice(0, half).every((visit, i) =>
-        visit.row === visits[i + half].row);
-      if (repeated) visits = visits.slice(half);
-      const duration = now - visits[0].since;
-      const weights = noticeWeights(visits, now);
-      let longestLeg = 0;
-      for (let i = 0; i < visits.length; i++) {
-        longestLeg = Math.max(longestLeg, (visits[i + 1]?.since ?? now) - visits[i].since);
-      }
-      noticeCycleMoves = 0;
-      if (repeated) noticeCycleVisits = noticeCycleVisits.slice(half);
-      if (weights.top <= 0 || weights.bottom <= 0) return;
-      // A repeated row word renews its evidence even when delivery makes
-      // this occurrence slightly shorter than the previous one.
-      const sameWord = noticeCycle && visits.length === noticeCycle.visits.length &&
-        visits.every((visit, i) => visit.row === noticeCycle.visits[i].row);
-      if (!noticeCycle || sameWord || now - noticeCycle.end >= noticeCycle.validFor || duration >= noticeCycle.duration) {
-        noticeCycle = { visits, end: now, duration,
-          validFor: Math.max(NOTICE_HISTORY_MS, duration + longestLeg) };
-      }
-    }
-
-    function placeNotices(now, immediate = false) {
-      if (!noticeGeometry || noticeGeometry.height <= 0) return;
-      const { notices, top, bottom } = noticeGeometry;
-      const row = term.buffer.active.cursorY;
-      noticeBottom ??= row < term.rows / 2;
-      trimNoticeVisits(now);
-      const quiet = noticeStayEdge !== null && now - noticeStaySince >= NOTICE_QUIET_MS;
-      if (quiet) finishNoticeRest();
-      if (!noticeLegMoved && (noticeStayEdge === null || !noticeStayMoved)) {
-        let destination = noticeBottom;
-        const initial = !noticeVisits.length || (immediate && noticeVisits.length === 1);
-        if (initial || quiet) {
-          if (noticeCoversRow(row, noticeBottom)) destination = !noticeBottom;
-        } else if (now - noticeVisits[0].since >= NOTICE_DECISION_MS &&
-            now - noticeLastRepaint >= NOTICE_HISTORY_MS && noticeCycleMoves === 0) {
-          const whole = noticeClearEdge(noticeWeights(noticeVisits, now));
-          // A short complete cycle represents a repeated cadence. Apply the
-          // absolute margin over the decision horizon, so a 24/9 ms cycle
-          // cannot veto a clear lead accumulated across many repetitions.
-          const cycle = noticeCycle && now - noticeCycle.end < noticeCycle.validFor ? (() => {
-            const weights = noticeWeights(noticeCycle.visits, noticeCycle.end);
-            const scale = Math.max(1, NOTICE_DECISION_MS / Math.max(1, noticeCycle.duration));
-            return noticeClearEdge({ top: weights.top * scale, bottom: weights.bottom * scale });
-          })() : undefined;
-          // Whole-history hysteresis and the absolute budget apply even at
-          // startup. A retained cycle can veto a move, never authorise
-          // one against the whole history.
-          if (whole !== null && (cycle === undefined || cycle === whole)) {
-            destination = whole;
-          }
-        }
-        if (destination !== noticeBottom && !noticeCoversRow(row, destination)) {
-          noticeBottom = destination;
-          noticeLegMoved = true;
-          if (noticeStayEdge !== null) noticeStayMoved = true;
-          if (!initial && !quiet) {
-            if (noticeStayEdge !== null && noticeStayPreviousRepaint === undefined) {
-              noticeStayPreviousRepaint = noticeLastRepaint;
-            }
-            noticeLastRepaint = now;
-            noticeCycleMoves++;
-          }
-        }
-      }
-      notices.style.top = noticeBottom ? 'auto' : `${String(top)}px`;
-      notices.style.bottom = noticeBottom ? `${String(bottom)}px` : 'auto';
-    }
-
-    // Cursor events record occupancy without measuring the DOM. A frame
-    // coalesces placement decisions and uses the last measured geometry.
-    function sampleNoticeCursor() {
-      noticeFrame = null;
-      if (destroyed || sessionEnded) return;
-      const now = window.performance.now();
-      placeNotices(now);
-      // A frame can be delivered before an overdue timer after a long pause.
-      // Keep a callback armed while a covered stay is waiting for its deadline.
-      if (noticeStayEdge === (noticeBottom ? 'bottom' : 'top') &&
-          now - noticeStaySince < NOTICE_QUIET_MS) {
-        noticeFrame = window.requestAnimationFrame(sampleNoticeCursor);
-      }
-    }
-
-    function settleNoticeCursor() {
-      noticeTimer = null;
-      if (destroyed || sessionEnded) return;
-      // Timer deadlines can round down relative to performance.now(). Do not
-      // consume the only quiet check a fraction before its deadline.
-      const remaining = NOTICE_QUIET_MS - (window.performance.now() - noticeStaySince);
-      if (remaining > 100) {
-        noticeTimer = setTimeout(settleNoticeCursor, remaining - 100);
-        return;
-      }
-      if (noticeFrame === null) noticeFrame = window.requestAnimationFrame(sampleNoticeCursor);
-      if (remaining > 0) {
-        // The armed frame can start just before the deadline and finish just
-        // after it. Check at the deadline too, before that frame is delivered.
-        noticeTimer = setTimeout(settleNoticeCursor, remaining);
-      } else {
-        placeNotices(window.performance.now());
-      }
-    }
-
-    function checkNoticeEvidence() {
-      noticeEvidenceTimer = null;
-      if (destroyed || sessionEnded || (noticeStayEdge !== null &&
-          window.performance.now() - noticeStaySince >= NOTICE_QUIET_MS)) return;
-      // An active leg accumulates covered time even without cursor events.
-      // Bound decision latency without adding DOM measurements or a timer
-      // that continues after rest, disposal or the session ending.
-      if (noticeFrame === null) noticeFrame = window.requestAnimationFrame(sampleNoticeCursor);
-      noticeEvidenceTimer = setTimeout(checkNoticeEvidence, 50);
-    }
-
-    function scheduleNoticeCursor() {
-      if (destroyed || sessionEnded) return;
-      const row = term.buffer.active.cursorY;
-      // Horizontal typing and animation cannot distinguish a repaint from
-      // rest. Only a new row starts another leg or restarts the quiet timer.
-      const now = window.performance.now();
-      if (noticeVisits[noticeVisits.length - 1]?.row === row) return;
-      const edge = noticeCoversRow(row, false) ? 'top' : noticeCoversRow(row, true) ? 'bottom' : null;
-      if (noticeStayEdge !== null && edge !== noticeStayEdge && now - noticeStaySince >= NOTICE_QUIET_MS) {
-        // A genuine rest ends the preceding repaint. Its idle time must not
-        // outweigh the evidence delivered by the next staged redraw.
-        // Retain a zero-duration boundary so a later layout is not mistaken
-        // for the first placement of a newly shown notice.
-        noticeVisits.splice(0, noticeVisits.length - 1);
-        if (noticeVisits.length) noticeVisits[0].since = now;
-        finishNoticeRest();
-        noticeCycle = null;
-        noticeCycleVisits = [];
-        noticeCycleMoves = 0;
-        noticeAnchor = edge === null ? null : row;
-      }
-      if (edge !== noticeStayEdge) {
-        noticeStayEdge = edge;
-        noticeStaySince = edge === null ? null : now;
-        noticeStayMoved = false;
-        noticeStayPreviousRepaint = undefined;
-      }
-      trimNoticeVisits(now);
-      // An uncovered preparation row can recur within a longer repaint.
-      // Anchor a complete cycle at the first row inside either rectangle.
-      if (noticeAnchor === null && edge !== null) {
-        noticeAnchor = row;
-        noticeCycleVisits = [];
-        noticeCycleMoves = 0;
-      }
-      rememberNoticeCycle(row, now);
-      noticeLegMoved = false;
-      noticeVisits.push({ row, since: now });
-      if (noticeAnchor !== null) noticeCycleVisits.push({ row, since: now });
-      trimNoticeVisits(now);
-      noticeLastMove = now;
-      clearNoticeTimer();
-      // The final move must win even when no more cursor events arrive.
-      if (noticeStayEdge !== null) noticeTimer = setTimeout(settleNoticeCursor,
-        Math.max(0, NOTICE_QUIET_MS - (now - noticeStaySince) - 100));
-      noticeEvidenceTimer = setTimeout(checkNoticeEvidence, 50);
-      if (noticeFrame === null) noticeFrame = window.requestAnimationFrame(sampleNoticeCursor);
-    }
-
-    function disposeNoticeTracking() {
-      if (noticeDisposed) return;
-      noticeDisposed = true;
-      noticeCursorListener.dispose();
-      noticeResizeObserver.disconnect();
-      if (noticeFrame !== null) window.cancelAnimationFrame(noticeFrame);
-      noticeFrame = null;
-      clearNoticeTimer();
-      noticeVisits.length = 0;
-    }
-
-    // Alerts and layout changes measure once and place from existing evidence.
-    // A held grid can be centred, so anchor to its screen, not the outer box.
-    function positionNotices(initialPlacement = false) {
-      if (destroyed) return;
-      const notices = elements.promptAlert?.parentElement || elements.banner?.parentElement;
-      const wrap = container.parentElement;
-      const screen = term.element?.querySelector('.xterm-screen');
-      if (!notices || !wrap || !screen || term.rows < 1) return;
-      const screenRect = screen.getBoundingClientRect();
-      const wrapRect = wrap.getBoundingClientRect();
-      notices.style.maxHeight = `${String(screenRect.height / 3)}px`;
-      const noticeHeight = notices.getBoundingClientRect().height;
-      const firstVisibleNotice = (!noticeSeen || noticeNewEpisode) && noticeHeight > 0;
-      if (noticeHeight > 0) { noticeSeen = true; noticeNewEpisode = false; }
-      noticeGeometry = { notices, top: screenRect.top - wrapRect.top,
-        bottom: wrapRect.bottom - screenRect.bottom, cell: screenRect.height / term.rows,
-        height: noticeHeight };
-      const now = window.performance.now();
-      const row = term.buffer.active.cursorY;
-      if (firstVisibleNotice && !sessionEnded) {
-        // Cursor time before a notice exists cannot decide its repaint edge.
-        noticeVisits.length = 0;
-        noticeVisits.push({ row, since: now });
-        noticeLastRepaint = -Infinity;
-        noticeLegMoved = false;
-        noticeStayPreviousRepaint = undefined;
-        noticeStayEdge = null;
-        noticeStaySince = null;
-        noticeStayMoved = false;
-        noticeAnchor = null;
-        noticeCycle = null;
-        noticeCycleVisits = [];
-        noticeCycleMoves = 0;
-      }
-      const edge = noticeCoversRow(row, false) ? 'top' : noticeCoversRow(row, true) ? 'bottom' : null;
-      if (edge !== noticeStayEdge) {
-        noticeStayEdge = edge;
-        noticeStaySince = edge === null ? null : now;
-        noticeStayMoved = false;
-        noticeStayPreviousRepaint = undefined;
-        clearNoticeTimer();
-        if (edge !== null && !noticeDisposed) {
-          noticeTimer = setTimeout(settleNoticeCursor, NOTICE_QUIET_MS - 100);
-          if (noticeFrame === null) noticeFrame = window.requestAnimationFrame(sampleNoticeCursor);
-        }
-      }
-      // A repeated prompt control or resize must use the existing cadence.
-      // Only first visibility (including an alert after a hidden period longer
-      // than the retained history) and a completed snapshot can place immediately.
-      placeNotices(now, firstVisibleNotice || initialPlacement === true);
-    }
-    const noticeCursorListener = term.onCursorMove(scheduleNoticeCursor);
-    // Content can change height without a cursor move (including font loads).
-    const noticeResizeObserver = new window.ResizeObserver(positionNotices);
-    const noticeContainer = elements.promptAlert?.parentElement || elements.banner?.parentElement;
-    if (noticeContainer) noticeResizeObserver.observe(noticeContainer);
-    positionNotices();
 
     if (redactedCapture) {
       window.__shellpuppetCoverRows = (hiddenRows) => {
@@ -909,7 +634,6 @@ window.ShellPuppetPane = (() => {
       } else {
         requestFit();
       }
-      positionNotices();
     }
 
     function requestFit() {
@@ -1127,7 +851,6 @@ window.ShellPuppetPane = (() => {
 
     function applyGeometry(cols, rows, max) {
       if (!Number.isInteger(cols) || !Number.isInteger(rows)) return;
-      const resized = term.cols !== cols || term.rows !== rows;
       gridCols = cols;
       gridRows = rows;
       if (max && Number.isInteger(max.cols) && Number.isInteger(max.rows)) {
@@ -1135,12 +858,6 @@ window.ShellPuppetPane = (() => {
       }
       // Compare at the parser boundary: another geometry frame may be queued.
       resizeTerminal(cols, rows);
-      if (resized) {
-        // A resize during a header excursion must not discard the prompt's
-        // occupancy. Clamp rows lost from a smaller grid; subsequent cursor
-        // events and the quiet fallback account for the arriving snapshot.
-        for (const visit of noticeVisits) visit.row = Math.min(visit.row, rows - 1);
-      }
       if (controlMode === 'yours' && !captureMode && dashboardProof === null) {
         updateZoomButtons();
       } else {
@@ -1152,7 +869,6 @@ window.ShellPuppetPane = (() => {
           (controlMode === 'held' ? ' (fixed)' : controlMode === 'adopt' ? ' (following)' : '');
         elements.size.title = elements.size.textContent;
       }
-      positionNotices();
       onGeometryChange();
     }
 
@@ -1214,16 +930,13 @@ window.ShellPuppetPane = (() => {
 
       ws.onopen = () => {
         if (destroyed) return;
-        // A reconnect may have missed a clear. The daemon replays the current
-        // prompt and stall with a fresh snapshot, so drop both and place what
-        // it replays as a new notice from that snapshot.
-        const reconnected = everConnected;
-        if (reconnected) {
-          promptWaiting = false;
-          firstFrameSeen = false;
-        }
+        // A reconnect may have missed a clear. Only the daemon's replay can
+        // show the prompt again and identify it as the one the person folded.
+        firstFrameSeen = false;
+        promptWaiting = false;
+        lastPromptContent = null;
+        if (elements.promptToggle) elements.promptToggle.hidden = true;
         clearStallAlert();
-        if (reconnected) noticeHiddenAt = null;
         everConnected = true;
         if (elements.dot) elements.dot.classList.remove('off');
         if (elements.banner) elements.banner.hidden = true;
@@ -1242,31 +955,10 @@ window.ShellPuppetPane = (() => {
         if (destroyed) return;
         if (event.data instanceof ArrayBuffer) {
           if (redactedCapture && window.__shellpuppetPainted === true) return;
-          if (!firstFrameSeen) {
+          if (captureMode && !firstFrameSeen) {
             firstFrameSeen = true;
             writeTerminal(new Uint8Array(event.data), () => {
               if (destroyed) return;
-              // Snapshot parsing is asynchronous and may follow an ended
-              // identity or an alert. Its intermediate rows are not repaint
-              // history. Place once at its final cursor, even after tracking
-              // has been disposed; ordinary stream chunks need no layout.
-              noticeVisits.length = 0;
-              noticeLegMoved = false;
-              noticeStayPreviousRepaint = undefined;
-              noticeLastRepaint = -Infinity;
-              noticeCycle = null;
-              noticeAnchor = null;
-              noticeCycleVisits = [];
-              noticeCycleMoves = 0;
-              noticeStayEdge = null;
-              noticeStaySince = null;
-              noticeStayMoved = false;
-              if (!noticeDisposed) {
-                noticeLastMove = window.performance.now();
-                noticeVisits.push({ row: term.buffer.active.cursorY, since: noticeLastMove });
-              }
-              positionNotices(true);
-              if (!captureMode) return;
               window.requestAnimationFrame(() => {
                 if (destroyed) return;
                 window.requestAnimationFrame(() => {
@@ -1392,7 +1084,7 @@ window.ShellPuppetPane = (() => {
             if (control.reason === 'exited') showEnded(control.exitCode);
             else if (control.reason === 'input-failed') showInputFailed();
           } else if (control && control.type === 'prompt-stall') {
-            showPromptAlert(control.question, control.waitingMs, control.options);
+            showPromptAlert(control);
           } else if (control && control.type === 'prompt-clear') {
             clearPromptAlert();
           } else if (control && control.type === 'session-stalled') {
@@ -1443,12 +1135,17 @@ window.ShellPuppetPane = (() => {
           term.textarea.removeEventListener('blur', forgetGesture);
           window.removeEventListener('blur', forgetGesture);
         }
+        noticeViewport?.removeEventListener('wheel', scrollNotice, true);
+        if (noticeResize) noticeResize.disconnect();
+        elements.promptToggle?.removeEventListener('click', togglePrompt);
+        elements.promptToggle?.removeEventListener('keydown', onPromptKeyDown);
+        if (elements.promptToggle) elements.promptToggle.hidden = true;
+        if (elements.promptAlert) elements.promptAlert.hidden = true;
         clearTimeout(copyNoticeTimer);
         if (elements.copyNotice) elements.copyNotice.hidden = true;
         fontListeners.delete(refreshFontMetrics);
         resolutionListener.dispose();
         if (metricsFrame !== null) window.cancelAnimationFrame(metricsFrame);
-        disposeNoticeTracking();
         if (scaledSelection === container) scaledSelection = null;
         for (const type of scaledMouseEvents) document.removeEventListener(type, scaleMouseEvent, true);
         outerScroll?.removeEventListener('wheel', scrollOversizedPane, true);
@@ -1503,7 +1200,6 @@ window.ShellPuppetPane = (() => {
         if (destroyed) return;
         dashboardFontLimit = font;
         if (geometryDecided) applyFontPreference(gridCols, gridRows);
-        positionNotices();
       },
       registerLayout(eligible, real = true) {
         if (real && (!ws || ws.readyState !== 1 || !geometryDecided)) pendingRealLayout = true;

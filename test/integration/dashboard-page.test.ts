@@ -153,6 +153,45 @@ describe('passive dashboard page', () => {
     expect(result.pair.uniqueIds).toBe(2);
   }, 180_000);
 
+  it('preserves the waiting count text node when a launch opens in Focus', async (context) => {
+    if (!browser) { context.skip(); return; }
+    const shot = await captureDashboard({ browser, viewerUrl: await dashboardUrl(), width: 1920, height: 1080,
+      drive: true, probeOnly: true, timeoutMs: 60_000,
+      beforeNavigateScript: `const nativeFetch = window.fetch;
+        window.fetch = (url, options) => {
+          if (url === '/dashboard/profiles') return Promise.resolve(Response.json({ profiles: [{ name: 'shell' }] }));
+          if (url === '/dashboard/launch') return Promise.resolve(Response.json({ id: 'two', open: 'focus' }));
+          return nativeFetch(url, options);
+        };`,
+      probe: `document.getElementById('profile')?.value === 'shell' && !document.getElementById('start').disabled`,
+      interact: async ({ evaluate }) => evaluate(`(async () => {
+        const feed = window.__dashboardDiagnostics.streams.find(s => s.url.endsWith('/dashboard/events')).socket;
+        window.__dashboardDiagnostics.snapshot(feed, [
+          { id: 'one', label: 'Waiting pane', waitingOnPrompt: { waitingMs: 20000 } },
+          { id: 'two', label: 'Focus target' },
+        ]);
+        const attention = document.getElementById('attention-count');
+        const node = attention.firstChild;
+        const title = document.title;
+        // Read as soon as Focus arranges the panes, before any later feed or stream updates.
+        await new Promise(resolve => {
+          const observer = new MutationObserver(() => {
+            if (document.querySelector('#main-pane .pane.selected')?.dataset.session === 'two') {
+              observer.disconnect();
+              resolve();
+            }
+          });
+          observer.observe(document.getElementById('panes'), { childList: true });
+          document.getElementById('start').click();
+        });
+        return { before: node?.textContent, after: attention.textContent, sameNode: attention.firstChild === node,
+          beforeTitle: title, afterTitle: document.title };
+      })()`),
+    });
+    const title = '1 waiting · Waiting pane · ShellPuppet';
+    expect(shot.probe).toEqual({ before: '1 waiting', after: '1 waiting', sameNode: true, beforeTitle: title, afterTitle: title });
+  }, 90_000);
+
   it('uses a hint colour with at least 4.5 to 1 contrast', () => {
     const css = fs.readFileSync(path.join(repoRoot, 'src', 'viewer', 'dashboard.css'), 'utf8');
     const hint = /\.hint\s*\{[^}]*color:\s*(#[0-9a-f]{6})/i.exec(css)?.[1];

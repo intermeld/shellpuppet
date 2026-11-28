@@ -47,15 +47,14 @@ function captureFacts(message: string) {
       const data = JSON.parse(reply) as Record<string, unknown> | null;
       if (data && typeof data === 'object') {
         for (const key of ['loaded', 'paneCount', 'streamCount', 'arrangements', 'pendingFrames', 'longTasks', 'longestTaskMs',
-          'scriptErrors', 'resourceErrors', 'unhandledRejections', 'fixtureLoaded', 'virtual', 'pageMs', 'panes']) {
+          'scriptErrors', 'resourceErrors', 'unhandledRejections', 'pageMs', 'panes']) {
           if (typeof data[key] === 'boolean' || Number.isFinite(data[key])) page[key] = data[key];
         }
         if (Array.isArray(data['openPaneStreams'])) page['openPaneStreams'] = data['openPaneStreams'].length;
-        for (const key of ['mode', 'visibility', 'documentVisibility', 'readyState', 'fonts', 'paneScript', 'terminalScript', 'step']) {
+        for (const key of ['mode', 'visibility', 'documentVisibility', 'readyState', 'fonts', 'paneScript', 'terminalScript']) {
           const value = data[key];
           if (typeof value === 'string' && ['viewer', 'dashboard', 'visible', 'hidden', 'loading', 'loaded', 'interactive', 'complete', 'object', 'function',
-            'undefined', 'waiting for fonts', 'running fixture', 'creating pane', 'first cursor write', 'clearing first prompt',
-            'lower cursor write', 'first frame after provider stall', 'upper cursor write', 'first frame after replacement prompt']
+            'undefined']
             .includes(value)) page[key] = value;
         }
       }

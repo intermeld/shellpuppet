@@ -42,15 +42,16 @@
   <span id="identity-purpose"></span>
   <span id="identity-meta"></span>
 </div>
-<div id="wrap">
-  <div id="term"></div>
+<button id="prompt-toggle" class="prompt-toggle" type="button" aria-controls="prompt-alert" aria-expanded="true" hidden></button>
+<div id="viewport">
+  <div id="wrap"><div id="term"></div></div>
   <div id="notices">
     <div id="banner" hidden></div>
     <div id="copy-notice" role="status" hidden>Copied to clipboard.</div>
     <!-- Raised when the daemon reports this session has been sitting on a permission
          prompt nobody has answered. role=status (not alert) so a screen reader
          announces it without stealing focus from the terminal the human is typing into. -->
-    <div id="prompt-alert" role="status" hidden></div>
+    <div role="status" aria-atomic="true"><div id="prompt-alert" hidden></div></div>
   </div>
 </div>
 
