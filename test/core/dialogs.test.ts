@@ -357,7 +357,7 @@ describe('dialog signatures from config', () => {
     expect(dialogs.map((dialog) => dialog.name)).toEqual(['Fine']);
     expect(usable).toEqual([5]);
     expect(problems).toHaveLength(5);
-    expect(problems[0]).toContain('prompts.dialogs[0] (Broken)');
+    expect(problems[0]).toBe('prompts.dialogs[0] (Broken) has a pattern that does not compile: ignored');
   });
 
   it('sets aside a pattern that runs past its budget for a minute, keeps the others working, then tries it again', () => {

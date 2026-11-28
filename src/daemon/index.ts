@@ -7,62 +7,16 @@
 
 import { removeClaimCredentials } from '../core/types.js';
 import { Daemon, AlreadyRunningError } from './server.js';
-import * as path from 'node:path';
-import { createAuditor } from './audit.js';
-import { DEFAULT_VIEWER_LAUNCH_MODE, readDaemonConfig, signatureOverBudgetLog } from './config.js';
-import { useDialogSignatures } from '../core/dialogs.js';
-import { useAgentSignatures } from '../core/reasoning.js';
-import { createFileLogger } from './logger.js';
 import { assertNodeVersion } from './meta.js';
-import { daemonLogPath, shellpuppetHome } from './paths.js';
-import { releaseWrappedDaemon, WRAPPED_START_IPC } from './wrappedStart.js';
+import { shellpuppetHome } from './paths.js';
+import { WRAPPED_START_IPC } from './wrappedStart.js';
 
 async function main(): Promise<void> {
   assertNodeVersion();
   removeClaimCredentials(process.env);
   const supervised = process.env[WRAPPED_START_IPC] === '1' && process.send !== undefined;
   delete process.env[WRAPPED_START_IPC];
-  const home = path.resolve(shellpuppetHome());
-  const logger = createFileLogger(daemonLogPath(home));
-  // Shape-validated (design §4.3 fail-closed): a malformed policy section
-  // arrives here as deny-all with the problem in its refusal reason. It must
-  // never be silently ignored, because ignoring it is fail-open.
-  const { config, problems } = readDaemonConfig(home);
-  // Recognised by every session's prompt detection from here on. The entries
-  // that did not compile are included in the configuration problems. A signature
-  // built-in or from config, that runs past its time budget on a screen is
-  // reported then and set aside for a minute at a time.
-  useDialogSignatures(config.dialogs ?? [], (name, builtIn) => {
-    const { message, meta } = signatureOverBudgetLog('dialog', name, builtIn);
-    logger.warn(message, meta);
-  });
-
-  // How hideReasoning and terminal_result read each agent's screen: the
-  // built-in signatures, plus or replaced by the config's.
-  useAgentSignatures(config.agentSignatures ?? [], (name, builtIn) => {
-    const { message, meta } = signatureOverBudgetLog('agent', name, builtIn);
-    logger.warn(message, meta);
-  });
-
-  const daemon = new Daemon({
-    home,
-    logger,
-    ...(supervised ? { afterPublish: releaseWrappedDaemon } : {}),
-    audit: createAuditor(home, { captureContent: config.audit?.captureContent ?? false }, logger),
-    ...(config.messaging !== undefined ? { messaging: config.messaging } : {}),
-    ...(config.policy !== undefined ? { policy: config.policy } : {}),
-    ...(config.sessionEnv !== undefined ? { sessionEnv: config.sessionEnv } : {}),
-    ...(config.idleMinutes !== undefined ? { idleMs: config.idleMinutes * 60_000 } : {}),
-    // The product default is to open the dashboard; the library default in
-    // DaemonOptions stays "no-window" so a test daemon can never put browser
-    // windows on someone's desktop by forgetting to opt out. Set
-    // `viewer.launchMode` to "no-window" in config.json for unattended machines.
-    viewer: { launchMode: DEFAULT_VIEWER_LAUNCH_MODE, ...config.viewer },
-    ...(config.dashboard?.fontSize !== undefined ? { dashboardFontSize: config.dashboard.fontSize } : {}),
-    ...(config.launcher !== undefined ? { launchProfiles: config.launcher } : {}),
-    onSelfStop: () => process.exit(0),
-    exitProcessOnStop: true,
-  });
+  const { daemon, logger } = await Daemon.standalone(shellpuppetHome(), supervised);
 
   const shutdown = (signal: string): void => {
     logger.info('signal received, shutting down', { signal });
@@ -82,9 +36,7 @@ async function main(): Promise<void> {
   });
 
   try {
-    // start() secures this home before publishing the daemon state or writing diagnostics.
     await daemon.start();
-    for (const problem of problems) logger.warn('CONFIG PROBLEM', { problem });
   } catch (error) {
     if (error instanceof AlreadyRunningError) {
       logger.info('deferring to the running daemon', {

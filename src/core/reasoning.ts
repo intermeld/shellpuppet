@@ -210,10 +210,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 function pattern(source: string, at: string): RegExp {
   try {
     return new RegExp(source, 'u');
-  } catch (error) {
-    throw new Error(`${at} does not compile (${error instanceof Error ? error.message : String(error)})`, {
-      cause: error,
-    });
+  } catch {
+    throw new Error(`${at} does not compile`);
   }
 }
 

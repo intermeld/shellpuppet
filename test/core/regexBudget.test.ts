@@ -98,7 +98,7 @@ describe('the budget at each caller', () => {
     const startedAt = Date.now();
     const decision = evaluateCommand(policy, HOSTILE_SCREEN);
     expect(decision.allowed).toBe(false);
-    expect(decision.reason).toContain('Policy configuration error');
+    expect(decision.reason).toBe('policy.deny[0] did not finish evaluating within its budget.');
     // The refusal does not name the budget, so the time shows it: under the
     // suite's budget the rule could not be abandoned this soon.
     expect(Date.now() - startedAt).toBeLessThan(TEST_REGEX_BUDGET_MS);

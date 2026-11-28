@@ -3,22 +3,18 @@ import * as path from 'node:path';
 import { expect, it } from 'vitest';
 import { buildNudge } from '../../src/core/mailbox.js';
 import { createAuditor, auditLogPath } from '../../src/daemon/audit.js';
-import { api, eventually, makeTempHome, repoRoot, startTestDaemon } from './helpers.js';
+import { api, eventually, makeTempHome } from './helpers.js';
+import { startNudgeDaemon } from './nudge-fixture.js';
 
 it('does not submit a pending line after a person has edited and restored it', async () => {
   const home = makeTempHome('nudge-edited-recovery-');
-  const td = await startTestDaemon({ home, audit: createAuditor(home), promptScanIntervalMs: 30_000,
-    messaging: { enabled: true, allow: [{ group: 'peers', members: ['sender'] }],
-      nudgeIntervalMs: 60_000 } });
-  // Nudge delivery is independent of group admission.
-  (td.daemon as unknown as { mailbox: { policy: (from: unknown, to: unknown) => boolean } }).mailbox.policy = () => true;
+  const td = await startNudgeDaemon({ home, audit: createAuditor(home), promptScanIntervalMs: 30_000,
+    messaging: { enabled: true, allow: [{ group: 'peers', members: ['sender'], roles: ['chair'] }],
+      nudgeIntervalMs: 60_000 } }, { recipient: 'ready' });
+
   try {
     const input = path.join(home, 'recipient.input');
-    const fixture = path.join(repoRoot, 'test', 'fixtures', 'nudge-tui.mjs');
-    const started = await api(td.port, td.token, '/sessions', { body: {
-      command: process.execPath, args: [fixture, 'ready', input, path.join(home, 'unused.read')],
-      shell: false, openViewer: false, cols: 120, rows: 34, label: 'recipient', agent: 'claude',
-    } });
+    const started = await td.launch('recipient');
     expect(started.status).toBe(200);
     const id = String(started.body['id']);
     const session = td.daemon['manager'].get(id)!;
@@ -66,18 +62,13 @@ it('does not submit a pending line after a person has edited and restored it', a
 
 it('keeps a late painted body pending after a person types', async () => {
   const home = makeTempHome('nudge-late-person-');
-  const td = await startTestDaemon({ home, audit: createAuditor(home), promptScanIntervalMs: 30_000,
-    messaging: { enabled: true, allow: [{ group: 'peers', members: ['sender'] }],
-      nudgeIntervalMs: 60_000 } });
-  // Nudge delivery is independent of group admission.
-  (td.daemon as unknown as { mailbox: { policy: (from: unknown, to: unknown) => boolean } }).mailbox.policy = () => true;
+  const td = await startNudgeDaemon({ home, audit: createAuditor(home), promptScanIntervalMs: 30_000,
+    messaging: { enabled: true, allow: [{ group: 'peers', members: ['sender'], roles: ['chair'] }],
+      nudgeIntervalMs: 60_000 } }, { recipient: 'late-person' });
+
   try {
     const input = path.join(home, 'recipient.input');
-    const fixture = path.join(repoRoot, 'test', 'fixtures', 'nudge-tui.mjs');
-    const started = await api(td.port, td.token, '/sessions', { body: {
-      command: process.execPath, args: [fixture, 'late-person', input, path.join(home, 'unused.read')],
-      shell: false, openViewer: false, cols: 120, rows: 34, label: 'recipient', agent: 'claude',
-    } });
+    const started = await td.launch('recipient');
     const session = td.daemon['manager'].get(String(started.body['id']))!;
     const claim = await api(td.port, td.token, '/messages/claims', { body: { name: 'sender' } });
     const headers = { 'x-shellpuppet-claim': String(claim.body['claimId']),
@@ -101,20 +92,19 @@ it('keeps a late painted body pending after a person types', async () => {
 
 it('clears a touched body after the quiet period, then types and submits one fresh body', async () => {
   const home = makeTempHome('nudge-person-clear-');
-  const td = await startTestDaemon({ home, audit: createAuditor(home), promptScanIntervalMs: 30_000,
-    messaging: { enabled: true, allow: [{ group: 'peers', members: ['sender'] }],
-      nudgeIntervalMs: 60_000 } });
-  // Nudge delivery is independent of group admission.
-  (td.daemon as unknown as { mailbox: { policy: (from: unknown, to: unknown) => boolean } }).mailbox.policy = () => true;
+  const td = await startNudgeDaemon({ home, audit: createAuditor(home), promptScanIntervalMs: 30_000,
+    messaging: { enabled: true, allow: [{ group: 'peers', members: ['sender'], roles: ['chair'] }],
+      nudgeIntervalMs: 60_000 } }, { recipient: 'ready' });
+
   try {
     const input = path.join(home, 'recipient.input');
-    const fixture = path.join(repoRoot, 'test', 'fixtures', 'nudge-tui.mjs');
-    const started = await api(td.port, td.token, '/sessions', { body: {
-      command: process.execPath, args: [fixture, 'ready', input, path.join(home, 'unused.read')],
-      shell: false, openViewer: false, cols: 120, rows: 34, label: 'recipient', agent: 'claude',
-    } });
+    const started = await td.launch('recipient');
     const session = td.daemon['manager'].get(String(started.body['id']))!;
-    (session as unknown as { pendingNudgeSettleMs: number }).pendingNudgeSettleMs = 1_000;
+    // Drive only the session's quiet clock. The fixture, PTY, scheduler and input writes run in real time.
+    let quietTime = 0;
+    const timing = session as unknown as { pendingClock: () => number; pendingNudgeSettleMs: number };
+    timing.pendingClock = () => quietTime;
+    timing.pendingNudgeSettleMs = 1_000;
     const internal = session as unknown as { agentModule: object };
     internal.agentModule = { ...internal.agentModule, input: { submit: { key: '\r', delayMs: 5_000 } } };
     const claim = await api(td.port, td.token, '/messages/claims', { body: { name: 'sender' } });
@@ -130,11 +120,14 @@ it('clears a touched body after the quiet period, then types and submits one fre
     await firstTick;
     await session.write('\x15', { humanInput: true });
     await eventually(() => fs.readFileSync(input, 'utf8') === `${line}x\x15`, 5_000);
+    await eventually(() => session.nudgeReady(Date.now()), 15_000);
+    await new Promise(resolve => setTimeout(resolve, 1_100));
+    quietTime = 999;
     await td.daemon['nudges'].tick();
     expect(session.nudgePendingLine()).toBe(line);
     expect(fs.readFileSync(input, 'utf8')).toBe(`${line}x\x15`);
     await eventually(() => session.nudgeReady(Date.now()), 15_000);
-    await new Promise((resolve) => setTimeout(resolve, 1_100));
+    quietTime += 1_000;
     await td.daemon['nudges'].tick();
     await eventually(() => fs.readFileSync(input, 'utf8') === `${line}x\x15${line}\r`, 15_000);
     expect(session.nudgePendingLine()).toBe(null);

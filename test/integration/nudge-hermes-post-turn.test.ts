@@ -4,6 +4,7 @@ import { expect, it } from 'vitest';
 import { buildNudge } from '../../src/core/mailbox.js';
 import { auditLogPath, createAuditor } from '../../src/daemon/audit.js';
 import { api, eventually, makeTempHome, repoRoot, startTestDaemon } from './helpers.js';
+import { nudgeExitArgs, stopNudgeFixtures } from './nudge-fixture.js';
 
 it('nudges a waiting message on the clipped post-turn frame through a recording PTY', async () => {
   const home = makeTempHome('nudge-hermes-post-turn-');
@@ -20,7 +21,8 @@ it('nudges a waiting message on the clipped post-turn frame through a recording 
       'setInterval(() => {}, 1000);',
     ].join('\n');
     const sender = await api(td.port, td.token, '/sessions', { body: { command: process.execPath,
-      args: ['-e', parent, receiver, input, 'post-turn-clipped'], label: 'sender', shell: false, openViewer: false } });
+      args: [...nudgeExitArgs, '-e', parent, '--', ...nudgeExitArgs, receiver, input, 'post-turn-clipped'],
+      label: 'sender', shell: false, openViewer: false } });
     expect(sender.status).toBe(200);
     await eventually(() => td.daemon['manager'].list().some(s => s.label === 'recipient'), 10_000);
     const nudges = () => readFileSync(auditLogPath(home), 'utf8').trimEnd().split('\n').map(row =>
@@ -32,6 +34,6 @@ it('nudges a waiting message on the clipped post-turn frame through a recording 
       from: { name: 'sender', id: String(sender.body['id']) } }]);
     await eventually(() => existsSync(input) && readFileSync(input, 'utf8') === line + '\r');
   } finally {
-    await td.stop();
+    await stopNudgeFixtures(td);
   }
 }, 60_000);

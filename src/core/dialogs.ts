@@ -135,8 +135,8 @@ export function compileDialogs(list: readonly unknown[], builtIn = false): {
         builtIn,
       });
       usable.push(index);
-    } catch (error) {
-      problems.push(`${at} (${name}) has a pattern that does not compile (${String(error)}): ignored`);
+    } catch {
+      problems.push(`${at} (${name}) has a pattern that does not compile: ignored`);
     }
   });
   return { dialogs, problems, usable };
