@@ -29,11 +29,11 @@ it('accepts one whole revision, preserves rejected and pending state, and redact
   const td = await startTestDaemon({ home, logger: createFileLogger(log), audit: createAuditor(home) });
   const status = async () => (await api(td.port, td.token, '/environment?include=config')).body['configReload'] as
     { revision: number; outcome: string; reason?: string; needsDaemonRestart: string[] };
-  const audits = () => {
+  const audits = ({ allowMissing = false } = {}) => {
     let log: string;
     try { log = fs.readFileSync(join(home, 'audit.log'), 'utf8'); }
     catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      if (allowMissing && (error as NodeJS.ErrnoException).code === 'ENOENT') return [];
       throw error;
     }
     return log.split('\n').filter(l => l.includes('"config-reload"')).map(l => JSON.parse(l) as { meta: unknown });
@@ -58,7 +58,7 @@ it('accepts one whole revision, preserves rejected and pending state, and redact
       save(initial);
       await eventually(async () => (await status()).outcome === 'unchanged', 3000);
     }
-    expect(audits()).toHaveLength(0);
+    expect(audits({ allowMissing: true })).toHaveLength(0);
     save(changed);
     await eventually(async () => (await status()).revision === 2, 3000);
     expect(td.daemon['launchesPerMinute']).toBe(3);
