@@ -130,8 +130,11 @@ it.skipIf(process.platform === 'win32')('hardens and reads a home selected throu
   const reader = new ConfigPermissions(alias);
   try {
     expect(await reader.secureHome()).toBe(fs.realpathSync.native(directory));
+    expect(reader.homePath).toBe(alias);
     expect(fs.statSync(directory).mode & 0o777).toBe(0o700);
     expect((await reader.read()).text).toBe('{}');
+    fs.unlinkSync(alias);
+    expect(() => reader.homePath).toThrow(/permission/i);
   } finally { reader.close(); removeTempHome(root); }
 });
 
@@ -150,6 +153,7 @@ it.skipIf(process.platform === 'win32')('hardens and reads the filesystem destin
   const reader = new ConfigPermissions(root + '/alias/../home');
   try {
     expect(await reader.secureHome()).toBe(fs.realpathSync.native(target));
+    expect(reader.homePath).toBe(fs.realpathSync.native(target));
     expect(fs.statSync(target).mode & 0o777).toBe(0o700);
     expect(fs.statSync(lexical).mode & 0o777).toBe(0o755);
     expect((await reader.read()).text).toBe(fs.readFileSync(join(target, 'config.json'), 'utf8'));

@@ -2,7 +2,7 @@ import * as fs from 'node:fs';
 import { spawn } from 'node:child_process';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { configPath, ensureWatchedHome, HomeIdentityError } from './paths.js';
 
 export interface ConfigRead {
@@ -39,32 +39,51 @@ const argsFor = (script: string) => ['-NoProfile', '-NonInteractive', '-EncodedC
   Buffer.from(windowsPermissions + script, 'utf16le').toString('base64')];
 const aclEnv = (home: string) => ({ SystemRoot: process.env['SystemRoot'], SP_HOME: home });
 
+function namesDirectory(spelling: string, expected: fs.BigIntStats): boolean {
+  try {
+    const named = fs.statSync(spelling, { bigint: true });
+    return named.dev === expected.dev && named.ino === expected.ino;
+  } catch { return false; }
+}
+
 /** Reuse the Windows ACL reader. Requests check only this daemon's fixed home and config. */
 export class ConfigPermissions {
   private child?: ChildProcessWithoutNullStreams;
   private reply?: (line?: string) => void;
-  private secured?: { directory: string; stat: fs.BigIntStats };
+  private secured?: { directory: string; spelling: string; stat: fs.BigIntStats };
 
   constructor(private readonly home: string) {}
 
   async secureHome(): Promise<string> {
     this.secured = undefined;
     try {
-      this.secured = await ensureWatchedHome(this.home, (script, env) => {
+      const spelling = resolve(this.home);
+      const secured = await ensureWatchedHome(this.home, (script, env) => {
         this.close();
         this.startReader(env['SP_PRIVATE_HOME']!, script, env);
         return this.waitForReply(15_000);
       });
+      // Normalising a path can collapse ".." across a symbolic link.
+      // Use that spelling only if it reaches the directory we actually hardened.
+      const useSpelling = spelling === secured.directory || namesDirectory(spelling, secured.stat);
+      this.secured = { ...secured, spelling: useSpelling ? spelling : secured.directory };
       return this.verifiedHome();
     } catch (error) { this.secured = undefined; this.close(); throw error; }
   }
 
   verifiedHome(): string {
     if (!this.secured) throw new HomeIdentityError(permissionProblem);
-    const { directory, stat } = this.secured;
+    const { directory, spelling, stat } = this.secured;
     const current = fileStat(directory);
     if (!current?.isDirectory() || stat.dev !== current.dev || stat.ino !== current.ino) throw new HomeIdentityError(permissionProblem);
+    if (spelling !== directory && !namesDirectory(spelling, stat)) throw new HomeIdentityError(permissionProblem);
     return directory;
+  }
+
+  /** The caller's absolute spelling, while it still names the secured directory. */
+  get homePath(): string {
+    this.verifiedHome();
+    return this.secured!.spelling;
   }
 
   /** Inspect the opened file and its entry under the directory we hardened. */

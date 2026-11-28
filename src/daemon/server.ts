@@ -27,7 +27,7 @@ import { ConfigPermissions, ConfigWatcher } from './configWatcher.js';
 import { standaloneOptions } from './standaloneOptions.js';
 import { ScheduleStore, PromptScheduler } from './schedules.js';
 import type { Schedule, ScheduleOutcome } from './schedules.js';
-import type { NudgeAbortReason, SessionDeps } from '../core/session.js';
+import type { NudgeAbortReason } from '../core/session.js';
 import type { MessagingConfig } from './config.js';
 import {
   CommandNotFoundError,
@@ -653,7 +653,6 @@ export class Daemon {
   private readonly logger: Logger;
   private readonly tokens = new TokenStore();
   private readonly manager: SessionManager;
-  private readonly sessionIdentity: NonNullable<SessionDeps['identity']>;
   private readonly mailbox: Mailbox;
   private readonly nudges: NudgeScheduler;
   private readonly queuedMessageNudges = new Map<string, { at: number; messageIds: string[]; heldIds: Set<string> }>();
@@ -844,11 +843,10 @@ export class Daemon {
     this.omitInheritedNoColor = hasAgentShellNoColor(this.daemonEnv);
     this.cliPath = fileURLToPath(new URL('../../dist/cli/index.js', import.meta.url));
     this.compiledPolicy = compilePolicy(options.policy);
-    this.sessionIdentity = { token: '', instanceId: this.instanceId, cliPath: this.cliPath };
     this.manager = new SessionManager(this.compiledPolicy, this.logger, {
       sessionEnv: this.sessionEnv,
       omitInheritedNoColor: this.omitInheritedNoColor,
-      identity: this.sessionIdentity,
+      identity: { token: '', instanceId: this.instanceId, cliPath: this.cliPath, home: () => this.configPermissions!.homePath },
     }, (id) => {
       this.endMailboxParticipant(id);
       this.sessionFeed.remove(id);
@@ -956,8 +954,6 @@ export class Daemon {
     this.preparedBoot = undefined;
     this.configPermissions = permissions;
     const home = permissions.verifiedHome();
-    this.options.home = home;
-    this.sessionIdentity.home = home;
     // Embedded callers can supply initial live settings independently of the file.
     const boot = standalone ? candidate : { ...candidate, config: { ...candidate.config,
       messaging: this.options.messaging ?? candidate.config.messaging,
@@ -991,7 +987,6 @@ export class Daemon {
 
   private async startInHome(): Promise<{ port: number; token: string }> {
     const diagnostics = await this.prepareConfig();
-    const { home } = this.options;
     // Defer to an incumbent that is running, even one too busy to answer its
     // health check; clear a record whose daemon has gone (design §2.3).
     const permissions = this.configPermissions!;
@@ -1064,10 +1059,10 @@ export class Daemon {
       for (const problem of diagnostics) this.logger.warn('CONFIG PROBLEM', { problem });
       permissions.verifiedHome();
       if (file.kind === 'missing') {
-        if (!claimDaemonState(home, state)) throw new Error('Another daemon claimed daemon.json first.');
+        if (!claimDaemonState(permissions.homePath, state)) throw new Error('Another daemon claimed daemon.json first.');
       } else {
         // A failed rename leaves the entire predecessor record in place.
-        writePrivateRecord(daemonStatePath(home), state);
+        writePrivateRecord(daemonStatePath(permissions.homePath), state);
       }
       if (this.options.afterPublish) {
         await this.options.afterPublish();
@@ -1119,7 +1114,7 @@ export class Daemon {
     // Capture profiles an earlier daemon on this home could not remove, which
     // Windows can refuse while a browser's last processes hold them. Only
     // folders a capture names, untouched for longer than any capture runs.
-    void sweepCaptureProfiles(captureProfileRoot(home), this.logger);
+    void sweepCaptureProfiles(captureProfileRoot(permissions.homePath), this.logger);
 
     // Said once, at start, because passthrough leaks silently otherwise
     // (ADR-008): the names only, never the values.
@@ -1225,7 +1220,6 @@ export class Daemon {
     if (published === null || this.stopping || this.statePublishRunning || !this.homeOwner?.held()) return;
     this.statePublishRunning = true;
     try {
-      const { home } = this.options;
       const file = inspectDaemonState(this.configPermissions!);
       if (file.kind === 'unreadable') return;
       if (file.kind === 'record') {
@@ -1250,7 +1244,7 @@ export class Daemon {
       } else if (file.kind === 'not-a-record') {
         removeDaemonStateIfNotARecord(this.configPermissions!, file.raw);
       }
-      if (this.stopPromise === null && claimDaemonState(home, published)) {
+      if (this.stopPromise === null && claimDaemonState(this.configPermissions!.homePath, published)) {
         this.foreignOwnerReported = null;
         this.logger.warn(
           'daemon.json was missing, held no daemon record or named a daemon that has gone; published it again',
@@ -1312,7 +1306,7 @@ export class Daemon {
         if (opts.restart) {
           this.writeShutdownRecord('restart-source.json', () => {
             this.requireHomeOwner();
-            writePrivateRecord(path.join(this.options.home, 'restart-source.json'), { restartFrom: this.instanceId });
+            writePrivateRecord(path.join(this.configPermissions!.homePath, 'restart-source.json'), { restartFrom: this.instanceId });
           });
           this.writeShutdownRecord('previous-sessions.json', () => this.savePreviousSessions());
         }
@@ -1331,7 +1325,7 @@ export class Daemon {
     if (handoff.restartFrom || handoff.restartCandidates) {
       // If replacement fails, the live record can still confirm a snapshot
       // stamped by this instance after the storage fault clears.
-      writePrivateRecord(daemonStatePath(this.options.home), handoff);
+      writePrivateRecord(daemonStatePath(this.configPermissions!.homePath), handoff);
     } else if (discovery.kind === 'not-a-record') {
       removeDaemonStateIfNotARecord(this.configPermissions!, discovery.raw);
     } else {
@@ -1641,7 +1635,7 @@ export class Daemon {
     const launch = this.options.launcher ?? launchDashboard;
     let opened: ViewerLaunchResult;
     try {
-      opened = await launch(pageUrl, this.options.home, this.options.viewer ?? {}, this.logger, {
+      opened = await launch(pageUrl, this.configPermissions!.homePath, this.options.viewer ?? {}, this.logger, {
         shouldLaunch: () => !this.stopping,
       });
     } catch {
@@ -2827,7 +2821,6 @@ export class Daemon {
     let discovery;
     try { discovery = this.requireHomeOwner(); } catch { return false; }
     if (state.restartCandidates) {
-      const home = this.options.home;
       const resolved = retryRestartSource(this.configPermissions!, state, snapshot, this.logger, () => this.requireHomeOwner());
       if (resolved.restartCandidates) return false;
       // Remember a verified writer even when it rules out the rows just read.
@@ -2837,7 +2830,7 @@ export class Daemon {
       Object.assign(state, resolved);
       if (discovery.kind === 'record') {
         try {
-          writePrivateRecord(daemonStatePath(home), state, () => {
+          writePrivateRecord(daemonStatePath(this.configPermissions!.homePath), state, () => {
             if (this.requireHomeOwner().kind !== 'record') throw new Error('Discovery changed during recovery.');
           });
         } catch (error) {
@@ -2860,12 +2853,12 @@ export class Daemon {
       return [{ ...session.launchProfile, name: participant.name === session.id ? null : participant.name,
         agent: session.agent, resumeId: session.resumeId, endedAt }];
     });
-    writePrivateRecord(path.join(this.options.home, 'previous-sessions.json'), { version: 1, outgoingInstanceId: this.instanceId, sessions });
+    writePrivateRecord(path.join(this.configPermissions!.homePath, 'previous-sessions.json'), { version: 1, outgoingInstanceId: this.instanceId, sessions });
   }
 
   private saveLauncherClaims(excludeId?: string, next?: SavedClaim, beforePublish?: () => void): void {
     const grants = this.launchProfiles.sessionLaunch ?? [];
-    const file = path.join(this.configPermissions!.verifiedHome(), 'launcher-claims.json');
+    const file = path.join(this.configPermissions!.homePath, 'launcher-claims.json');
     if (!this.claimsRestored) throw new Error('Saved launcher claims could not be restored.');
     if (grants.length || fs.existsSync(file)) {
       let discovery = this.requireHomeOwner();
@@ -3622,7 +3615,7 @@ export class Daemon {
             width,
             height,
             timeoutMs,
-            profileRoot: captureProfileRoot(this.options.home),
+            profileRoot: captureProfileRoot(this.configPermissions!.homePath),
             ...(redactedRows === undefined ? {} : { hiddenRows: [...redactedRows.keys()] }),
             logger: this.logger,
           });
@@ -4398,7 +4391,7 @@ export class Daemon {
       }
     } else {
       try {
-        opened = await launch(viewerUrl, this.options.home, this.options.viewer ?? {}, this.logger);
+        opened = await launch(viewerUrl, this.configPermissions!.homePath, this.options.viewer ?? {}, this.logger);
       } catch (error: unknown) {
         this.logger.warn('viewer launch failed', { id: session.id, error: String(error) });
         opened = {

@@ -517,7 +517,7 @@ export interface SessionDeps {
   /** Pending-body quiet period override for tests. */
   pendingNudgeSettleMs?: number;
   /** Identity allocated by the daemon for this session. */
-  identity?: { token: string; instanceId: string; cliPath: string; home?: string };
+  identity?: { token: string; instanceId: string; cliPath: string; home?: string | (() => string) };
   /** A retry retains the identity resolved by its first start attempt. */
   resolvedAgent?: { agent: string; agentSource: AgentSource };
   logger?: Logger;
@@ -990,7 +990,8 @@ export class Session implements WaitTarget {
       sessionEnv['SHELLPUPPET_DAEMON_INSTANCE'] = deps.identity.instanceId;
       sessionEnv['SHELLPUPPET_CLI'] = deps.identity.cliPath;
       if (deps.identity.home !== undefined) {
-        setEnvValue(sessionEnv, this.platform, 'SHELLPUPPET_HOME', deps.identity.home);
+        const home = typeof deps.identity.home === 'function' ? deps.identity.home() : deps.identity.home;
+        setEnvValue(sessionEnv, this.platform, 'SHELLPUPPET_HOME', home);
       }
     }
     const spawnOptions = {
