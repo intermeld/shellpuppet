@@ -51,7 +51,7 @@ export interface HomeOwner {
 }
 
 export async function acquireHomeOwner(home: VerifiedHome, port: number, instanceId: string): Promise<HomeOwner> {
-  const base = home.verifiedHome();
+  const base = home.homePath;
   const directory = join(base, 'daemon-owner');
   const staging = join(base, 'daemon-owner.' + instanceId);
   const marker = [process.pid, port, instanceId].join('.');

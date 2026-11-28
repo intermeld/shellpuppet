@@ -79,7 +79,7 @@ function recover(home: VerifiedHome, handoff: RestartHandoff, saved: string | nu
   if (result.restartCandidates || !selected || selected === saved) return result;
   if (saved !== undefined) {
     try {
-      writePrivateRecord(path.join(home.verifiedHome(), 'restart-source.json'), { restartFrom: selected }, beforePublish);
+      writePrivateRecord(path.join(home.homePath, 'restart-source.json'), { restartFrom: selected }, beforePublish);
       return result;
     } catch (error) {
       logger.warn('Could not update restart-source.json.', { code: (error as NodeJS.ErrnoException).code });

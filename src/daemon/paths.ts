@@ -265,24 +265,24 @@ export type DaemonStateFile =
   | { kind: 'unreadable' };
 
 export interface VerifiedHome {
+  readonly homePath: string;
   verifiedHome(): string;
 }
 
 export class HomeIdentityError extends Error {}
 
 function directoryOf(home: string | VerifiedHome): string {
-  return typeof home === 'string' ? home : home.verifiedHome();
+  return typeof home === 'string' ? home : home.homePath;
 }
 
 /** Bind the opened record to its entry in the directory this daemon hardened. */
 export function readHomeRecord(home: VerifiedHome, name: string): string {
-  const file = path.join(home.verifiedHome(), name);
+  const file = path.join(home.homePath, name);
   try {
     const fd = fs.openSync(file, 'r');
     try {
       const opened = fs.fstatSync(fd, { bigint: true });
-      home.verifiedHome();
-      const entry = fs.statSync(file, { bigint: true });
+      const entry = fs.statSync(path.join(home.verifiedHome(), name), { bigint: true });
       if (opened.dev !== entry.dev || opened.ino !== entry.ino) throw new Error('Private record changed during the read.');
       return fs.readFileSync(fd, 'utf8');
     } finally { fs.closeSync(fd); }
