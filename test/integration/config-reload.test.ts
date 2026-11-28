@@ -29,8 +29,15 @@ it('accepts one whole revision, preserves rejected and pending state, and redact
   const td = await startTestDaemon({ home, logger: createFileLogger(log), audit: createAuditor(home) });
   const status = async () => (await api(td.port, td.token, '/environment?include=config')).body['configReload'] as
     { revision: number; outcome: string; reason?: string; needsDaemonRestart: string[] };
-  const audits = () => fs.readFileSync(join(home, 'audit.log'), 'utf8').split('\n')
-    .filter(l => l.includes('"config-reload"')).map(l => JSON.parse(l) as { meta: unknown });
+  const audits = () => {
+    let log: string;
+    try { log = fs.readFileSync(join(home, 'audit.log'), 'utf8'); }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return [];
+      throw error;
+    }
+    return log.split('\n').filter(l => l.includes('"config-reload"')).map(l => JSON.parse(l) as { meta: unknown });
+  };
   const cli = async (...args: string[]) => (await promisify(execFile)(process.execPath,
     [join(repoRoot, 'dist/cli/index.js'), 'daemon', 'status', ...args], { env: { ...process.env, SHELLPUPPET_HOME: home } })).stdout;
   try {
