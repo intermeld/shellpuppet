@@ -37,6 +37,7 @@ button.active { background: #3d2c14; border-color: #8a6d3b; color: #e8c284; }
   border-bottom: 1px solid #22303c; font-size: 12px;
   display: flex; gap: 14px; align-items: center; white-space: nowrap; overflow: hidden;
 }
+#identity:has(+ .prompt-toggle:not([hidden])) { flex-basis: 13px; height: 13px; padding-block: 0; font-size: 11px; line-height: 12px; }
 #identity-purpose { color: #d7e3ee; font-weight: 600; }
 #identity-meta { color: #7d93a6; font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   overflow: hidden; text-overflow: ellipsis; }
@@ -63,19 +64,27 @@ button.active { background: #3d2c14; border-color: #8a6d3b; color: #e8c284; }
    by FONT SIZE rather than by changing the grid: see fitGridByFont in viewer.js.
    Centring keeps any leftover margin even instead of stranding the content in
    the top-left corner. */
+#viewport { flex: 1; min-height: 0; position: relative; }
 #wrap {
-  flex: 1 1 auto; min-height: 0; padding: 6px 8px; box-sizing: border-box;
+  height: 100%; padding: 6px 8px; box-sizing: border-box;
   overflow: hidden; position: relative;
 }
 /* Notices paint above the terminal and never participate in its fit box.
-   The pane keeps the cursor's resting row clear. */
+   The heading uses the fixed-height space above the grid. */
 #notices {
   position: absolute; z-index: 2; left: 8px; right: 8px;
+  top: 0; max-height: calc(100% - 6px); overflow-wrap: anywhere;
   box-sizing: border-box; overflow-y: auto; pointer-events: none;
   box-shadow: 0 4px 14px #0009;
 }
-#notices:has(> :not([hidden])) { border: 1px solid #27313d; }
+#notices:has(:is(#banner, #copy-notice, #prompt-alert):not([hidden])) { border: 1px solid #27313d; }
 #notices :is(button, a) { pointer-events: auto; }
+@media (any-pointer: coarse) {
+  #notices.scrollable { pointer-events: auto; touch-action: pan-y pinch-zoom; overscroll-behavior-y: contain; }
+}
+.prompt-announcement-heading {
+  position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap;
+}
 /* #term must keep filling the available box so the fit addon measures the real
    space. So the centring has to happen INSIDE it, on the .xterm element
    the addon actually sizes. Centring #wrap's children does nothing, because
@@ -83,7 +92,7 @@ button.active { background: #3d2c14; border-color: #8a6d3b; color: #e8c284; }
 #term { width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
 
 /* Capture mode (headless screenshot): the terminal and nothing else. */
-body.capture header, body.capture #identity, body.capture #notices {
+body.capture header, body.capture #identity, body.capture .prompt-toggle, body.capture #notices {
   display: none;
 }
 #term .xterm { margin: 0 auto; }
@@ -93,3 +102,13 @@ body.capture header, body.capture #identity, body.capture #notices {
 .xterm-viewport { overflow-y: auto !important; }
 .xterm-viewport::-webkit-scrollbar { width: 10px; }
 .xterm-viewport::-webkit-scrollbar-thumb { background: #2d3542; border-radius: 5px; }
+
+.prompt-toggle {
+  flex: 0 0 16px; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  border: 0; border-radius: 0; padding: 0 7px; background: #3d2f14; color: #ffd479;
+  text-align: left; font: inherit; font-size: 12px; line-height: 16px;
+}
+.prompt-toggle::before { content: ''; display: inline-block; width: 0; height: 0; margin-right: 6px;
+  border-left: 4px solid transparent; border-right: 4px solid transparent; border-top: 6px solid currentColor; }
+.prompt-toggle[aria-expanded="false"]::before { transform: rotate(-90deg); }
+.prompt-toggle:focus-visible { outline: 2px solid #79b8f5; outline-offset: -2px; }

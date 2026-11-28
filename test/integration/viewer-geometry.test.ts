@@ -172,7 +172,7 @@ describe('geometry in the browser (design §5)', () => {
     }
   }, 120_000);
 
-  it('keeps notices off the cursor at both ends without resizing, and lets clicks through', async (context) => {
+  it('keeps notices at the top at both cursor positions without resizing, and lets clicks through', async (context) => {
     if (browser === null) { context.skip(); return; }
     const started = await api(td.port, td.token, '/sessions', {
       body: { command: process.execPath, args: ['-e',
@@ -210,21 +210,21 @@ describe('geometry in the browser (design §5)', () => {
                 const rows = document.querySelectorAll('#term .xterm-rows > div');
                 const row = rows[${edge === 'TOP' ? 0 : 29}];
                 if (!row?.textContent.includes('${edge}')) return null;
-                const cursor = row.getBoundingClientRect();
+                const wrap = document.getElementById('wrap').getBoundingClientRect();
                 const box = document.getElementById('notices').getBoundingClientRect();
                 const screen = document.querySelector('#term .xterm-screen').getBoundingClientRect();
-                if (!box.height || box.top < cursor.bottom && box.bottom > cursor.top) return null;
+                if (!box.height || Math.abs(box.top - wrap.top) > 1) return null;
                 const left = Math.max(box.left, screen.left, 0), right = Math.min(box.right, screen.right, innerWidth);
                 const top = Math.max(box.top, screen.top, 0), bottom = Math.min(box.bottom, screen.bottom, innerHeight);
                 if (right <= left || bottom <= top) return null;
                 const target = document.elementFromPoint((left + right) / 2, (top + bottom) / 2);
-                return { through: !!target?.closest('#term'), height: box.height, screenHeight: screen.height };
-              })()`) as { through: boolean; height: number; screenHeight: number } | null;
+                return { through: !!target?.closest('#term'), height: box.height, available: wrap.height };
+              })()`) as { through: boolean; height: number; available: number } | null;
               if (!sample) return false;
               expect(sample.through).toBe(true);
-              expect(sample.height).toBeLessThanOrEqual(sample.screenHeight / 3 + 1);
+              expect(sample.height).toBeLessThanOrEqual(sample.available);
               return true;
-            }, 10_000, 50, `visible notice clear of ${edge}`);
+            }, 10_000, 50, `visible notice at the top with cursor at ${edge}`);
           }
           return evaluate('window.__noticeResizes');
         },
@@ -361,27 +361,36 @@ describe('geometry in the browser (design §5)', () => {
         // The session starts at 100 columns. Wait for the wide page's own fit
         // to be acknowledged before another document can become its driver.
         probe: `(() => { const label = ${size}; return /^[0-9]+×[0-9]+$/.test(label) && parseInt(label, 10) !== 100; })()`,
-        interact: async ({ evaluate: first }) => {
+        interact: async ({ evaluate: first, send }) => {
           const wide = String(await first(size));
-          await captureViewer({
-            browser: chromium, viewerUrl: await freshViewerUrl(id), width: 380, height: 640,
-            drive: true, probeOnly: true, timeoutMs: 120_000,
-            probe: `${size} === ${JSON.stringify(wide + ' (following)')}`,
-            interact: async ({ evaluate: second }) => {
-              await second("window.dispatchEvent(new Event('resize'))");
-              let owned = '';
-              await eventually(async () => {
-                owned = String(await second(size));
-                return /^\d+×\d+$/.test(owned);
-              }, 30_000, 50, 'narrow viewer to own the grid', () => owned);
-              await eventually(async () => await first(size) === owned + ' (following)',
-                30_000, 50, 'first viewer to follow the narrow grid', () => first(size));
-              const [cols, rows] = owned.split('×').map(Number);
-              expect(cols).toBeLessThan(100);
-              const after = await api(td.port, td.token, `/sessions/${id}/snapshot`);
-              expect(after.body).toMatchObject({ cols, rows });
-            },
-          });
+          const { targetId } = await send('Target.createTarget', { url: 'about:blank' }, true) as { targetId: string };
+          try {
+            const { sessionId } = await send('Target.attachToTarget', { targetId, flatten: true }, true) as { sessionId: string };
+            await send('Emulation.setDeviceMetricsOverride', { width: 380, height: 640, deviceScaleFactor: 1, mobile: false }, sessionId);
+            await send('Page.navigate', { url: await freshViewerUrl(id) }, sessionId);
+            const second = async (expression: string) => {
+              const reply = await send('Runtime.evaluate', { expression, returnByValue: true }, sessionId) as {
+                result: { value: unknown }; exceptionDetails?: unknown;
+              };
+              if (reply.exceptionDetails) throw new Error(JSON.stringify(reply.exceptionDetails));
+              return reply.result.value;
+            };
+            await eventually(async () => await second(size) === wide + ' (following)', 30_000);
+            await second("window.dispatchEvent(new Event('resize'))");
+            let owned = '';
+            await eventually(async () => {
+              owned = String(await second(size));
+              return /^\d+×\d+$/.test(owned);
+            }, 30_000, 50, 'narrow viewer to own the grid', () => owned);
+            await eventually(async () => await first(size) === owned + ' (following)',
+              30_000, 50, 'first viewer to follow the narrow grid', () => first(size));
+            const [cols, rows] = owned.split('×').map(Number);
+            expect(cols).toBeLessThan(100);
+            const after = await api(td.port, td.token, `/sessions/${id}/snapshot`);
+            expect(after.body).toMatchObject({ cols, rows });
+          } finally {
+            await send('Target.closeTarget', { targetId }, true);
+          }
         },
       });
     } finally {

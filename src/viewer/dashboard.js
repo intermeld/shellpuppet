@@ -795,6 +795,8 @@
       event.dataTransfer.setData('application/x-shellpuppet-pane', JSON.stringify({ id: item.id, source: ownPair() }));
       event.dataTransfer.effectAllowed = 'move';
     });
+    const viewport = document.createElement('div');
+    viewport.className = 'pane-viewport';
     const wrap = document.createElement('div');
     wrap.className = 'pane-wrap';
     const term = document.createElement('div');
@@ -814,16 +816,28 @@
     }));
     const prompt = document.createElement('div');
     prompt.className = 'pane-prompt';
+    prompt.id = `prompt-alert-${summary.id}`;
+    const promptStatus = document.createElement('div');
+    promptStatus.setAttribute('role', 'status');
+    promptStatus.setAttribute('aria-atomic', 'true');
+    promptStatus.append(prompt);
+    const promptToggle = document.createElement('button');
+    promptToggle.type = 'button';
+    promptToggle.className = 'prompt-toggle';
+    promptToggle.setAttribute('aria-expanded', 'true');
+    promptToggle.setAttribute('aria-controls', prompt.id);
+    promptToggle.hidden = true;
     prompt.hidden = true;
     const copyNotice = document.createElement('div');
     copyNotice.className = 'pane-copy-notice';
     copyNotice.setAttribute('role', 'status');
     copyNotice.hidden = true;
     copyNotice.textContent = 'Copied to clipboard.';
-    notices.append(banner, copyNotice, prompt);
-    wrap.append(term, notices);
-    card.append(head, menu, overflowNote, wrap);
-    Object.assign(item, { term, banner, copyNotice, prompt });
+    notices.append(banner, copyNotice, promptStatus);
+    wrap.append(term);
+    viewport.append(wrap, notices);
+    card.append(head, menu, overflowNote, promptToggle, viewport);
+    Object.assign(item, { term, notices, banner, copyNotice, prompt, promptToggle, promptChoice: { since: null, collapsed: false } });
     card.addEventListener('click', () => select(item.id, true));
     card.addEventListener('focus', () => select(item.id));
     updateCard(item);
@@ -923,7 +937,8 @@
     item.client = ShellPuppetPane.create({
       container: item.term, sessionId: item.id, dashboardProof: proof,
       initialFontOverride: fontSize,
-      elements: { banner: item.banner, copyNotice: item.copyNotice, promptAlert: item.prompt,
+      promptChoice: item.promptChoice,
+      elements: { notices: item.notices, promptToggle: item.promptToggle, banner: item.banner, copyNotice: item.copyNotice, promptAlert: item.prompt,
         size: item.size, overflowNote: item.overflowNote },
       onAttentionChange: () => updateAttention(),
       onGeometryReady: (reason) => scheduleAutoFit([item], reason === 'connect' ? 'connect' : 'ready'),
@@ -1808,6 +1823,7 @@
   });
   window.addEventListener('pagehide', () => { endActiveDivider?.(); });
   document.addEventListener('keydown', (event) => {
+    if (event.target.closest?.('.prompt-toggle') && ['Enter', ' ', 'Tab'].includes(event.key)) return;
     if (choosingPrefix) {
       event.preventDefault(); event.stopPropagation();
       choosingPrefix = false;

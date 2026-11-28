@@ -2,7 +2,7 @@ import { defineConfig } from 'vitest/config';
 
 // DevTools and page waits expired while these files overlapped other browser
 // suites on CI. Give each file the runner for its capture and cleanup.
-const isolatedCaptures = ['dashboard-auto-fit', 'dashboard-geometry', 'dashboard-name-page', 'viewer-notice-occupancy']
+const isolatedCaptures = ['dashboard-auto-fit', 'dashboard-geometry', 'dashboard-name-page']
   .map(name => `test/integration/${name}.test.ts`);
 const capturePass = process.env['SP_CI_CAPTURE_PASS'];
 

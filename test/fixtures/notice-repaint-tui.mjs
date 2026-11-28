@@ -1,33 +1,26 @@
-// A held permission prompt with a status row repainted at 40 frames a second.
-// Split writes deliberately expose the cursor's journey between screen halves.
+// A synthetic permission prompt can repaint, move to either edge or be replaced.
 process.stdin.setRawMode?.(true);
 process.stdin.resume();
-let frame = 0;
-let repaint = null;
-let returnToPrompt = null;
-const prompt = '\x1b[28;1HPermission Required\x1b[29;1HAllow this command to run?' +
-  '\x1b[30;1H  ❯ 1. Allow once\x1b[31;1H    2. Reject';
-const stop = () => { clearInterval(repaint); clearTimeout(returnToPrompt); };
-const animate = () => {
-  stop();
-  repaint = setInterval(() => {
-    process.stdout.write(`\x1b[1;1HRepainting ${String(++frame)}`);
-    returnToPrompt = setTimeout(() => process.stdout.write(prompt), 8);
-  }, 25);
-};
-process.stdout.write('\x1b[2J' + prompt);
-animate();
-process.stdin.on('data', (bytes) => {
-  for (const key of bytes.toString('utf8')) {
-    if (key === 'r') animate();
-    if (key === 't' || key === 'b') {
-      stop();
-      // A real move reaches rows a notice on the old edge would cover.
-      process.stdout.write(key === 't' ? '\x1b[5;1H' : '\x1b[49;1H');
-    }
-    if (key === 'j') {
-      stop();
-      repaint = setInterval(() => process.stdout.write(++frame % 2 ? '\x1b[24;1H' : '\x1b[26;1H'), 80);
+const rows = Number(process.argv[2] ?? 24);
+let lower = false;
+let question = 'Allow this command to run?';
+function draw() {
+  const start = lower ? rows - 3 : 1;
+  const lines = ['Permission Required', question, '  ❯ 1. Allow once', '    2. Reject'];
+  const at = row => '\x1b[' + row + ';1H';
+  process.stdout.write('\x1b[2J' + lines.map((line, i) => at(start + i) + line).join('') + at(lower ? rows : 1) + (lower ? ' ' : 'P'));
+}
+// A pointer event leaking through the heading would produce a terminal mouse report.
+process.stdout.write('\x1b[?1000h\x1b[?1006h');
+draw();
+process.stdin.on('data', data => {
+  for (const key of data.toString()) {
+    if (key === 'q') process.exit(0);
+    if (key === 'c') process.stdout.write('\x1b[2J\x1b[HReady');
+    if (key === 't' || key === 'b' || key === 'n') {
+      lower = key === 'b';
+      if (key === 'n') question = 'Replace this file?';
+      draw();
     }
   }
 });

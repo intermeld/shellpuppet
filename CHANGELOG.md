@@ -7,6 +7,10 @@ version may change behaviour, and every such change is listed here.
 
 ## [Unreleased]
 
+### Changed
+
+- Waiting notices now stay at the top of dashboard panes and the single-session viewer. Collapse the heading to see the whole terminal. The notice scrolls only when its content exceeds the available space.
+
 ## [0.5.2] - 2026-11-27
 
 Mouse movement over a viewer or dashboard pane no longer types stray characters into sessions that use SGR mouse reports, and the local owner can list unread messages by age.

@@ -56,6 +56,7 @@
       }
     },
     elements: {
+      notices: document.getElementById('notices'),
       dot: document.getElementById('dot'),
       banner,
       copyNotice: document.getElementById('copy-notice'),
@@ -68,6 +69,7 @@
       identityPurpose: document.getElementById('identity-purpose'),
       identityMeta: document.getElementById('identity-meta'),
       sessionAgent: document.getElementById('session-agent'),
+      promptToggle: document.getElementById('prompt-toggle'),
       promptAlert: document.getElementById('prompt-alert'),
     },
   });

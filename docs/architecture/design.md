@@ -876,68 +876,18 @@ shows the same question and options, even if the rendered dialog signature
 changes with its width or nearby text. An incomplete screen gets a one-second
 grace period; a one-off check clears a prompt that is still absent then, without
 waiting for the next five-second scan. A different question or choice set starts
-a new prompt. Viewer notice placement gives genuine rests priority over repaint
-steadiness, and steadiness priority over clear-edge deadlines. Every move leaves
-the sampled cursor outside its destination notice rectangle, and a delivered
-vertical leg permits at most one move. A continuous stay within either notice
-rectangle lasting at least one second is a genuine rest, even when the cursor
-changes rows within that rectangle. The notice clears that rectangle by the
-first completed frame at or after the deadline, plus at most one frame, with
-at most one move in the rest. Horizontal typing does not restart the stay.
-Repaint moves are at least ten seconds apart, including startup moves, and at
-most one occurs within an anchor-return cycle. A move
-requires the destination to cover at most two thirds of the cursor time covered
-by the current edge over the whole retained history, with a 20 ms difference
-floor. The pane requires another 5 ms of covered-time advantage at the ratio
-boundary because its cursor listener runs before the delivered observer.
-History begins when the notice first becomes visible and contains up to ten
-seconds of delivered vertical visits. Cursor time before a hidden notice appears
-does not influence its repaint edge. Repeated prompt controls that briefly hide
-and show the same notice keep that history. A notice shown after it was
-hidden for the whole retained history, a notice of a different kind, and the
-alert the daemon replays after the pane reconnects start a new history and are
-placed clear of the cursor at once. No
-short cycle, recent slice, horizontal event or layout can bypass that comparison.
-An active leg requests evidence every 50 ms and placement uses a coalesced frame,
-without reading layout on cursor events. Startup evidence accumulates for
-1.2 seconds; a clearly leading edge is reached within 2.5 seconds, or the first
-complete cycle plus 250 ms for a longer cycle, subject to the higher priorities.
-An indistinguishable startup prefix may spend the repaint budget on an edge
-that a longer cycle later disproves. That correction waits for the budget,
-whole-history hysteresis and a clear destination, as does a genuine change of
-the preferred edge during a sustained repaint. The accepted response window is
-up to ten seconds, with the same destination and cycle guards taking precedence.
-A contiguous run of covered rows can contain several short legs, so a blocked
-destination has no one-leg deadline. The advantage is re-evaluated while waiting;
-an obsolete destination is not queued for a later move.
+a new prompt.
 
-A retained complete anchor-return summary guards repaint moves against a partial
-history tail. The first row inside either notice rectangle after a genuine
-rest is the anchor. On a return,
-the longest complete span that visits both covered edges can replace the
-summary, even when the cycle exceeds the ten-second covered-time window. Its
-row durations survive history trimming and are compared using the current
-notice rectangle. Repeated row words renew the summary despite delivery jitter.
-For a cycle shorter than the 1.2 second decision horizon, its covered weights
-are projected to that horizon before applying the absolute 20 ms floor. An
-unrenewed summary expires after the longer of ten seconds and its own duration
-plus its longest delivered leg. This allows delivery jitter at the next return.
-The summary must corroborate the whole-history target before a repaint move,
-including the first, is eligible. It can veto a move, never authorise a
-move against the whole history. This preserves a complete in-band cycle while
-its partial tail favours an edge. A genuine rest refunds any provisional
-repaint move made during its continuous stay; a subsequent vertical move starts
-fresh evidence
-and discards the cycle summary, excluding the preceding idle time. The cycle
-budget and absolute spacing prevent repeated hopping on a stationary cadence
-of any delivered cycle length. Notices may cover an
-intermediate panel in a repaint; total covered cursor time decides the edge.
-The initial snapshot
-places notices when parsing completes, including on an ended pane. Explicit
-layout still anchors notices after a session ends, with cursor tracking disposed.
-Notices scroll within at most
-one third of the terminal's height, and pass clicks through
-to the terminal except on their own buttons and links. The identity strip has a
+The dashboard and single-session viewer show the waiting notice at the top of
+the pane. Its heading is a button. Click it or use Enter or Space to hide
+the question and options and see the whole terminal. Each pane remembers its
+choice for that prompt through repaints and reattachment. A new prompt opens
+expanded. The session stream includes the prompt's start time (`since`) on its
+live and replayed `prompt-stall` frames so the pane can recognise a replacement.
+A reconnect leaves keyboard focus where the browser puts it. The heading stays in the tab order when the prompt reappears.
+Clicking the heading moves focus like other header controls, so xterm sends its usual focus-out report when the program has enabled focus reporting.
+Notices scroll when their contents exceed the available pane height. Passive
+notice text lets clicks through to the terminal. The identity strip has a
 fixed height, so badges never change the terminal grid. A window resize or a
 person taking control can still change the grid.
 

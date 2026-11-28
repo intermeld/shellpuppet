@@ -3,13 +3,11 @@ import * as vm from 'node:vm';
 import { describe, expect, it, vi } from 'vitest';
 
 /** Exercise the shipped pane script without starting a browser or a daemon. */
-function fixture(captureMode = false, withNotice = false, initialRow = 0) {
+function fixture(captureMode = false, withScreen = false) {
   const fonts = new EventTarget();
   const cell = { width: 8, height: 16 };
   let glyphWidth = cell.width;
   const screen = { clientWidth: 889, clientHeight: 606, addEventListener() {}, removeEventListener() {}, getBoundingClientRect: () => ({ top: 0, bottom: 240, height: 240 }) };
-  const notice = { style: { top: '', bottom: '' }, getBoundingClientRect: () => ({ height: 20 }) };
-  let move: (row: number) => void = () => {};
   let input: (data: string) => void = () => {};
   let binaryInput: (data: string) => void = () => {};
   const sent: (string | Uint8Array)[] = [];
@@ -25,13 +23,13 @@ function fixture(captureMode = false, withNotice = false, initialRow = 0) {
     cols = 80;
     rows = 24;
     options = { fontSize: 13 };
-    element = Object.assign(element, { querySelector: (selector: string) => withNotice && selector === '.xterm-screen' ? screen : null, style: {} });
+    element = Object.assign(element, { querySelector: (selector: string) => withScreen && selector === '.xterm-screen' ? screen : null, style: {} });
     textarea = textarea;
     parser = { registerOscHandler: (code: number, handler: typeof osc) => {
       expect(code).toBe(52);
       osc = handler;
     } };
-    buffer = { active: { cursorX: 0, cursorY: initialRow, baseY: 0, viewportY: 0 } };
+    buffer = { active: { cursorX: 0, cursorY: 0, baseY: 0, viewportY: 0 } };
     _core = {
       _coreBrowserService: { onDprChange: () => ({ dispose() {} }) },
       _viewport: { queueSync() {} },
@@ -40,10 +38,6 @@ function fixture(captureMode = false, withNotice = false, initialRow = 0) {
     };
     open() {}
     attachCustomKeyEventHandler() {}
-    onCursorMove(callback: () => void) {
-      move = row => { this.buffer.active.cursorY = row; callback(); };
-      return { dispose() {} };
-    }
     onData(callback: (data: string) => void) { input = callback; }
     onBinary(callback: (data: string) => void) { binaryInput = callback; }
     write(data: string | Uint8Array, done: () => void) {
@@ -70,9 +64,7 @@ function fixture(captureMode = false, withNotice = false, initialRow = 0) {
     getComputedStyle: () => ({ paddingLeft: 0, paddingRight: 0, paddingTop: 0, paddingBottom: 0 }),
     requestAnimationFrame: (callback: () => void) => { frames.push(callback); },
     cancelAnimationFrame() {},
-    // Browser APIs the pane uses for notice placement.
     performance: { now: () => Date.now() },
-    ResizeObserver: class { observe() {} disconnect() {} },
   });
   vm.runInNewContext(fs.readFileSync('src/viewer/pane.js', 'utf8'), {
     window, document,
@@ -82,11 +74,11 @@ function fixture(captureMode = false, withNotice = false, initialRow = 0) {
   const pane = (Reflect.get(window, 'ShellPuppetPane') as { create(config: unknown): {
     belowDashboardFloor(): boolean; destroy(): void; relayout(deliberate: boolean): void;
     setFontOverride(value: number): void; setReadOnly(value: boolean): void;
-  } }).create({ container: { parentElement: withNotice ? screen : null, dataset: {} },
-    elements: withNotice ? { promptAlert: { parentElement: notice } } : {}, sessionId: 'fixture',
+  } }).create({ container: { parentElement: withScreen ? screen : null, dataset: {} },
+    sessionId: 'fixture',
     captureMode, initialFontOverride: 13 });
   return {
-    pane, calls, window, move, notice, clipboard, document, textarea, sent,
+    pane, calls, window, clipboard, document, textarea, sent,
     input: (data: string) => input(data), binaryInput: (data: string) => binaryInput(data),
     osc: (data: string) => osc(data),
     gesture(type = 'keydown', trusted = true, values: Record<string, unknown> = {}) {
@@ -279,47 +271,6 @@ describe('pane parser lifetime', () => {
       expect({ beforeRefresh, afterRefresh: f.pane.belowDashboardFloor() })
         .toEqual({ beforeRefresh: true, afterRefresh: true });
     } finally { f.pane.destroy(); }
-  });
-
-  it('clears a covered rest on the first delivered frame even if its timer has not run', () => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(0);
-      const f = fixture(false, true);
-      try {
-        f.move(23);
-        vi.setSystemTime(300);
-        f.frame();
-        expect(f.notice.style.top).toBe('auto');
-        vi.setSystemTime(1100);
-        f.frame();
-        expect(f.notice.style.bottom).toBe('auto');
-      } finally { f.pane.destroy(); }
-    } finally { vi.useRealTimers(); }
-  });
-
-  it.each([
-    { word: 'rlong', nextRowAt: 906, earlyFrame: 990, deadlineFrame: 1001 },
-    { word: 'rrest', nextRowAt: null, earlyFrame: 300, deadlineFrame: 1065 },
-  ])('clears the observed $word upper rest before the delayed timer', ({ nextRowAt, earlyFrame, deadlineFrame }) => {
-    vi.useFakeTimers();
-    try {
-      vi.setSystemTime(0);
-      const f = fixture(false, true, 22);
-      try {
-        f.move(0);
-        if (nextRowAt !== null) {
-          vi.setSystemTime(nextRowAt);
-          f.move(1);
-        }
-        vi.setSystemTime(earlyFrame);
-        f.frame();
-        expect(f.notice.style.bottom).toBe('auto');
-        vi.setSystemTime(deadlineFrame);
-        f.frame();
-        expect(f.notice.style.top).toBe('auto');
-      } finally { f.pane.destroy(); }
-    } finally { vi.useRealTimers(); }
   });
 
   it('defers dashboard disposal, drops late frames and disposes once', async () => {
